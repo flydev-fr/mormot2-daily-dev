@@ -1,30 +1,139 @@
-name: Daily mORMot2 Monitor (Fetch Only)
+name: mORMot2 Daily
+
+# The scheduled task: fetch new upstream commits, have Jules review them, validate
+# what it produced, merge it, publish the site. Runs early enough that the edition
+# is online before the first coffee in Europe.
 
 on:
   schedule:
-    - cron: '0 8 * * *' # Run daily at 08:00 UTC
-  workflow_dispatch: # Allow manual triggering
+    - cron: '30 4 * * *'   # 04:30 UTC — ~06:30 Paris
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: 'Edition date (YYYY-MM-DD, default: today UTC)'
+        required: false
+      since_days:
+        description: 'Look back this many days when there is no state yet'
+        required: false
+        default: '1'
+      skip_jules:
+        description: 'Fetch and publish without the AI review'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: mormot2-daily
+  cancel-in-progress: false
 
 jobs:
-  fetch-commits:
+  digest:
     runs-on: ubuntu-latest
-
+    outputs:
+      edition: ${{ steps.fetch.outputs.edition }}
+      new_commits: ${{ steps.fetch.outputs.new_commits }}
+      reviewed: ${{ steps.merge.outputs.reviewed }}
+    env:
+      JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Fetch Commits
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: python fetch_commits.py
+      - name: Install dependencies
+        run: pip install --quiet jsonschema
 
-    - name: Upload Commits Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: mormot2-commits-payload
-        path: commits.json
+      - name: Fetch upstream commits
+        id: fetch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SINCE_DAYS: ${{ inputs.since_days || '1' }}
+        run: |
+          python scripts/fetch_commits.py ${{ inputs.edition && format('--date {0}', inputs.edition) || '' }}
+
+      - name: Commit the raw payload
+        id: push_raw
+        if: steps.fetch.outputs.new_commits != '0'
+        run: |
+          git config user.name  "mormot2-monitor[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/raw data/state.json
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "data: upstream commits for ${{ steps.fetch.outputs.edition }}"
+            git push origin HEAD:main
+          fi
+
+      - name: Ask Jules to review the edition
+        id: jules
+        if: steps.fetch.outputs.new_commits != '0' && env.JULES_API_KEY != '' && inputs.skip_jules != true
+        env:
+          JULES_SOURCE: ${{ vars.JULES_SOURCE }}
+          JULES_TIMEOUT: '3600'
+        run: python scripts/run_jules_analysis.py start --edition ${{ steps.fetch.outputs.edition }}
+
+      - name: Validate, repair and merge the review
+        id: merge
+        if: steps.jules.outputs.pr_number != ''
+        env:
+          ED: ${{ steps.fetch.outputs.edition }}
+          PR: ${{ steps.jules.outputs.pr_number }}
+          SESSION: ${{ steps.jules.outputs.session_id }}
+        run: |
+          set -o pipefail
+          echo "reviewed=false" >> "$GITHUB_OUTPUT"
+
+          check() {
+            git fetch --force origin "pull/$PR/head"
+            git show "FETCH_HEAD:data/analysis/$ED.json" > /tmp/analysis.json 2>/dev/null || {
+              echo "the pull request does not contain data/analysis/$ED.json" > /tmp/errors.txt
+              return 1
+            }
+            python scripts/validate_analysis.py /tmp/analysis.json \
+              --raw "data/raw/$ED.json" --errors-file /tmp/errors.txt
+          }
+
+          if ! check; then
+            echo "::warning::validation failed, sending the errors back to Jules"
+            cat /tmp/errors.txt
+            python scripts/run_jules_analysis.py feedback \
+              --session "$SESSION" --errors-file /tmp/errors.txt || true
+            if ! check; then
+              echo "::warning::still invalid — leaving PR #$PR open and publishing the unreviewed edition"
+              cat /tmp/errors.txt
+              exit 0
+            fi
+          fi
+
+          gh pr merge "$PR" --squash --delete-branch \
+            || gh pr merge "$PR" --squash --delete-branch --admin
+          echo "reviewed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### mORMot2 Daily — ${{ steps.fetch.outputs.edition }}"
+            echo ""
+            echo "- new commits: ${{ steps.fetch.outputs.new_commits }}"
+            echo "- Jules session: ${{ steps.jules.outputs.session_id || 'skipped' }}"
+            echo "- pull request: ${{ steps.jules.outputs.pr_url || 'none' }}"
+            echo "- reviewed: ${{ steps.merge.outputs.reviewed || 'false' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: digest
+    if: always()
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

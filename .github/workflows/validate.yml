@@ -1,0 +1,47 @@
+name: Validate analysis
+
+# Runs on every pull request that touches an analysis file — including the ones
+# Jules opens. A review that does not satisfy schema/analysis.schema.json fails
+# here, and the daily workflow reads the same errors to ask for a repair.
+
+on:
+  pull_request:
+    paths:
+      - 'data/analysis/**'
+      - 'schema/**'
+      - 'scripts/**'
+      - 'site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install --quiet jsonschema
+
+      - name: Validate every analysis payload
+        run: python scripts/validate_analysis.py --all
+
+      - name: Build the site (catches generator errors)
+        run: python scripts/build_site.py --out /tmp/_site
+
+      - name: Check the generated pages
+        run: |
+          test -s /tmp/_site/index.html
+          test -s /tmp/_site/feed.xml
+          test -s /tmp/_site/data.json
+          python - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET, json
+          ET.parse('/tmp/_site/feed.xml')
+          json.loads(pathlib.Path('/tmp/_site/data.json').read_text())
+          print('site artefacts are well formed')
+          PY

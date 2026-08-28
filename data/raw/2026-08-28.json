@@ -1,0 +1,643 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-08-28",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-08-28T16:24:32Z",
+  "range": {
+    "since": "2026-08-28T00:00:00Z",
+    "until": "2026-08-28T23:59:59Z",
+    "head_sha": "4c702f55d7187ea5838f09bfde49e23e0f48d631"
+  },
+  "version": {
+    "after": "2.4.16618",
+    "before": "2.4.16604"
+  },
+  "totals": {
+    "commits": 11,
+    "additions": 467,
+    "deletions": 280
+  },
+  "commits": [
+    {
+      "sha": "4c702f55d7187ea5838f09bfde49e23e0f48d631",
+      "short_sha": "4c702f55",
+      "subject": "net: new lockless acoThreadSmooting implementation - use two CAS counters to avoid spinning on contention during thread wakeup",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T14:08:51+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/4c702f55d7187ea5838f09bfde49e23e0f48d631",
+      "parents": [
+        "73cb954316383ae82ad4fef47d78c91be3de29b0"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 98c124a..ac135bd 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16617\n+16618\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex bb059f9..c0c6ee2 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16617'\n+'2.4.16618'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "diff --git a/src/net/mormot.net.async.pas b/src/net/mormot.net.async.pas\nindex 693ec1e..c7e833e 100644\n--- a/src/net/mormot.net.async.pas\n+++ b/src/net/mormot.net.async.pas\n@@ -641,8 +641,8 @@ type\n     function ProcessClientStart(Sender: TPollAsyncConnection): boolean;\n     procedure IdleEverySecond; virtual;\n     {$ifndef USE_WINIOCP}\n-    procedure ThreadPollingWakeupOne; inline;\n-    procedure ThreadPollingWakeupEvents(Events: integer); inline;\n+    procedure ThreadPollingWakeupOne; {$ifdef HASINLINE} inline; {$endif}\n+    procedure ThreadPollingWakeupEvents(Events: integer);\n     procedure ThreadPollingWakeupLocked;\n     {$endif USE_WINIOCP}\n   public\n@@ -2672,7 +2672,7 @@ end;\n \n procedure TAsyncConnections.ThreadPollingWakeupOne; // here for inlining\n begin\n-  // after accept() or on idle server, we always wake up one thread\n+  // wake up one thread after accept() on idle server or on slow REST process\n   if acoThreadSmooting in fOptions then\n     fThreadPollingLastWakeUpTix := mormot.core.os.GetTickCount64; // 16ms / 4ms\n   if LockedExc32(fWakeupOne, 1, 0) then // if not already notified\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "73cb954316383ae82ad4fef47d78c91be3de29b0",
+      "short_sha": "73cb9543",
+      "subject": "core: new LockedGet32() wrapper function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T14:03:40+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/73cb954316383ae82ad4fef47d78c91be3de29b0",
+      "parents": [
+        "ca302d17401b19ed28122209d9c0b55af72d0882"
+      ],
+      "stats": {
+        "additions": 150,
+        "deletions": 116,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "diff --git a/src/core/mormot.core.base.pas b/src/core/mormot.core.base.pas\nindex 2f514ae..1730ce4 100644\n--- a/src/core/mormot.core.base.pas\n+++ b/src/core/mormot.core.base.pas\n@@ -3078,6 +3078,9 @@ procedure LockedDec(var Target: PtrUInt; Decrement: PtrUInt);\n procedure LockedAdd32(var Target: cardinal; Increment: cardinal);\n   {$ifndef ASMINTEL} inline; {$endif}\n \n+/// fast atomic \"result := Target^; Target^ := 0;\" on a 32-bit integer value\n+function LockedGet32(Target: PInteger): integer;\n+\n {$ifdef ISDELPHI}\n \n /// return the position of the leftmost set bit in a 32-bit value\n@@ -11591,6 +11594,13 @@ end;\n \n {$endif ASMINTEL}\n \n+function LockedGet32(Target: PInteger): integer;\n+begin\n+  repeat\n+    result := Target^;\n+  until LockedExc32(PCardinal(Target)^, 0, result);\n+end;\n+\n {$ifndef ASMINTELNOTPIC}\n \n // fallback to pure pascal version for ARM or Intel PIC\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 01d9c0b..98c124a 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16616\n+16617\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex a2ae46e..bb059f9 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16616'\n+'2.4.16617'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 138,
+          "deletions": 114,
+          "patch": "diff --git a/src/net/mormot.net.async.pas b/src/net/mormot.net.async.pas\nindex d64da38..693ec1e 100644\n--- a/src/net/mormot.net.async.pas\n+++ b/src/net/mormot.net.async.pas\n@@ -585,12 +585,13 @@ type\n     fConnection: TAsyncConnectionDynArray; // sorted by TAsyncConnection.Handle\n     fSockets: TAsyncConnectionsSockets;\n     fThreads: TAsyncConnectionsThreads;\n-    fConnectionLock: TRWLock; // write lock/block only on connection add/remove\n+    fConnectionLock: TRWLock;  // write lock/block only on connection add/remove\n     fConnectionCount: integer; // only subscribed - not just after accept()\n     fConnectionHigh: integer;\n+    fWakeupSafe: TLightLock;   // protect ThreadPollingWakeupLocked\n+    fWakeupOne, fWakeupEvents: cardinal; // CAS counters to wakeup threads\n     fThreadPoolCount: integer;\n     fLastConnectionFind: integer;\n-    fThreadPollingWakeupSafe: TLightLock; // topmost to ensure aarch64 alignment\n     fLastHandle: integer;\n     fOptions: TAsyncConnectionsOptions;\n     fLastOperationSec: TAsyncConnectionSec;\n@@ -640,7 +641,9 @@ type\n     function ProcessClientStart(Sender: TPollAsyncConnection): boolean;\n     procedure IdleEverySecond; virtual;\n     {$ifndef USE_WINIOCP}\n-    function ThreadPollingWakeup(Events: integer): PtrInt;\n+    procedure ThreadPollingWakeupOne; inline;\n+    procedure ThreadPollingWakeupEvents(Events: integer); inline;\n+    procedure ThreadPollingWakeupLocked;\n     {$endif USE_WINIOCP}\n   public\n     /// initialize the multiple connections\n@@ -2667,6 +2670,30 @@ end;\n \n {$ifndef USE_WINIOCP}\n \n+procedure TAsyncConnections.ThreadPollingWakeupOne; // here for inlining\n+begin\n+  // after accept() or on idle server, we always wake up one thread\n+  if acoThreadSmooting in fOptions then\n+    fThreadPollingLastWakeUpTix := mormot.core.os.GetTickCount64; // 16ms / 4ms\n+  if LockedExc32(fWakeupOne, 1, 0) then // if not already notified\n+    if fWakeupSafe.TryLock then\n+      ThreadPollingWakeupLocked; // only a single thread does the wakeup\n+end;\n+\n+procedure TAsyncConnections.ThreadPollingWakeupEvents(Events: integer);\n+begin\n+  // after poll/epoll pending events\n+  if acoThreadSmooting in fOptions then\n+  begin\n+    fThreadPollingLastWakeUpTix := mormot.core.os.GetTickCount64; // 16ms / 4ms\n+    LockedAdd32(fWakeupEvents, Events); // up to ThreadPollingWakeupLoad events\n+  end\n+  else\n+    LockedAdd32(fWakeupOne, Events); // default/legacy is one thread per event\n+  if fWakeupSafe.TryLock then\n+    ThreadPollingWakeupLocked;\n+end;\n+\n function TAsyncConnectionsThread.GetNextRead(\n   out notif: TPollSocketResult): boolean;\n begin\n@@ -2681,7 +2708,7 @@ begin\n       // - slow down a little bit the wrk RPS\n       // - but seems to reduce the wrk max latency\n       include(fWakeUp, wuFromSlowProcess); // do it once per Execute loop\n-      fOwner.ThreadPollingWakeup(1);       // one thread is enough\n+      fOwner.ThreadPollingWakeupOne;       // one thread is enough\n     end;\n end;\n \n@@ -2761,12 +2788,11 @@ begin\n             new := fOwner.fSockets.fRead.PollForPendingEvents(ms);\n             if Terminated then\n               break;\n-            if (new = 0) and\n-               (fOwner.fSockets.fRead.fPending.Count <> 0) then\n-              new := 1; // wake up one thread if some reads are still pending\n             fEvent.ResetEvent;\n             if new <> 0 then\n-              fOwner.ThreadPollingWakeup(new);\n+              fOwner.ThreadPollingWakeupEvents(new) // distribute those events\n+            else if fOwner.fSockets.fRead.fPending.Count <> 0 then\n+              fOwner.ThreadPollingWakeupOne; // scale up by waking a new thread\n             // wait for the sub-threads to wake up this one\n             if Terminated then\n               break;\n@@ -3185,111 +3211,6 @@ begin\n     FreeAndNil(result);\n end;\n \n-// NOTICE on the acoThreadSmooting scheduling algorithm (genuine AFAICT)\n-// - in TAsyncConnectionsThread.Execute, the R0/atpReadPoll main thread calls\n-// PollForPendingEvents (e.g. the epoll \n... [truncated, 9748 more chars]",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Network"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ca302d17401b19ed28122209d9c0b55af72d0882",
+      "short_sha": "ca302d17",
+      "subject": "tests: better TFTP server coverage - refactored #556 pull request",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T09:43:40+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/ca302d17401b19ed28122209d9c0b55af72d0882",
+      "parents": [
+        "0acf8522b4e07dda8b814dc15a2bdd7b750e409b"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 72549d6..01d9c0b 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16615\n+16616\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 7745d67..a2ae46e 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16615'\n+'2.4.16616'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 6,
+          "patch": "diff --git a/test/test.net.proto.pas b/test/test.net.proto.pas\nindex 93526d8..7298bdd 100644\n--- a/test/test.net.proto.pas\n+++ b/test/test.net.proto.pas\n@@ -116,9 +116,11 @@ type\n     procedure DoRtspOverHttp(options: TAsyncConnectionsOptions);\n     // helper invoked from OpenAPI to verify YAML dispatch\n     procedure OpenApiYamlDispatch;\n-    {$ifdef OSPOSIX}\n     /// validate mormot.net.tftp.server using libcurl (so only POSIX by now)\n     procedure DoTFTPServer(Sender: TObject);\n+    /// validate that a TFTP server owns all connection threads until shutdown\n+    procedure DoTFTPShutdown;\n+    {$ifdef OSPOSIX}\n     /// validate Unix domain socket server bind and stale .socket file cleanup\n     procedure DoUnixDomainSocket(Sender: TObject);\n     {$endif OSPOSIX}\n@@ -127,8 +129,6 @@ type\n     /// validate 'Range:' file responses, especially against invalid offsets\n     procedure DoHttpFileRange(Sender: TObject);\n   published\n-    /// validate that a TFTP server owns all connection threads until shutdown\n-    procedure TFTPShutdown;\n     /// Engine.IO and Socket.IO regression tests\n     procedure _SocketIO;\n     /// validate DNS and LDAP clients (and NTP/SNTP)\n@@ -184,7 +184,7 @@ begin\n     SleepHiRes(1);\n   // remain alive past the deliberately short server timeout, then access owner\n   SleepHiRes(100);\n-  if fOwner.MaxRetry >= 0 then\n+  if fOwner.MaxRetry >= 0 then\n     InterlockedIncrement(TftpOwnerAccessed);\n end;\n \n@@ -207,7 +207,7 @@ begin\n   inherited TerminateAndWaitFinished(1);\n end;\n \n-procedure TNetworkProtocols.TFTPShutdown;\n+procedure TNetworkProtocols.DoTFTPShutdown;\n var\n   context: TTftpContext;\n   connection: TSlowTftpConnection;\n@@ -259,9 +259,9 @@ begin\n   // start some slow tests in background if /multithread is enabled\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\n+  Run(DoTFTPServer, self, 'TFTPServer', true, false);\n   {$ifdef OSPOSIX}\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\n-  Run(DoTFTPServer, self, 'TFTPServer', true, false);\n   {$endif OSPOSIX}\n   // from https://datatracker.ietf.org/doc/html/rfc6455#section-1.3\n   ComputeChallenge('dGhlIHNhbXBsZSBub25jZQ==', ws);\n@@ -5261,6 +5261,7 @@ var\n   timer: TPrecisionTimer;\n   orig, rd: RawByteString;\n begin\n+  DoTFTPShutdown; // this test needs no TFTP client\n   {$ifdef OSDARWINARM}\n   if true then // mac M1 libcurl seems not tftp compatible\n   {$else}\n@@ -5356,6 +5357,11 @@ begin\n     http.Free;\n   end;\n end;\n+{$else}\n+procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\n+begin\n+  DoTFTPShutdown; // no real TFTP client is needed\n+end;\n {$endif OSPOSIX}\n \n \n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 556,
+      "is_merge": false
+    },
+    {
+      "sha": "0acf8522b4e07dda8b814dc15a2bdd7b750e409b",
+      "short_sha": "0acf8522",
+      "subject": "net: fixed TFTP server compilation under Delphi 7/2007 - after #556 fix",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T09:42:35+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/0acf8522b4e07dda8b814dc15a2bdd7b750e409b",
+      "parents": [
+        "e42d4a3c6bb80068b2dbd73a6a84f984711296ee"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 25,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 274a650..72549d6 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16614\n+16615\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 2152c3d..7745d67 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16614'\n+'2.4.16615'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tftp.server.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 23,
+          "patch": "diff --git a/src/net/mormot.net.tftp.server.pas b/src/net/mormot.net.tftp.server.pas\nindex 03543cb..86a190d 100644\n--- a/src/net/mormot.net.tftp.server.pas\n+++ b/src/net/mormot.net.tftp.server.pas\n@@ -93,7 +93,6 @@ type\n     fLastSent: pointer;\n     fLastSentLen: integer;\n     procedure DoExecute; override;\n-    function HasFinished: boolean;\n   public\n     /// initialize this connection\n     constructor Create(const Source: TTftpContext; Owner: TTftpServerThread); reintroduce;\n@@ -289,11 +288,6 @@ begin\n   FreeMem(fContext.Frame);\n end;\n \n-function TTftpConnectionThread.HasFinished: boolean;\n-begin\n-  result := Finished;\n-end;\n-\n procedure TTftpConnectionThread.DoExecute;\n var\n   len: integer;\n@@ -507,7 +501,7 @@ begin\n   fConnection.Safe.WriteLock;\n   try\n     for i := fConnection.Count - 1 downto 0 do\n-      if TTftpConnectionThread(fConnection.List[i]).HasFinished then\n+      if TTftpConnectionThread(fConnection.List[i]).ExecuteDone then\n         fConnection.Delete(i); // OwnObjects=true: release the finished thread\n   finally\n     fConnection.Safe.WriteUnLock;\n@@ -524,16 +518,16 @@ begin\n     exit;\n   fConnection.Safe.WriteLock;\n   try\n-    t := pointer(fConnection.List);\n-    for i := 1 to fConnection.Count do\n-    begin\n-      try\n-        t^.Terminate;\n-      except\n-        // ignore any exception here and notify the remaining workers\n-      end;\n-      inc(t);\n-    end;\n+    t := pointer(fConnection.List);\n+    for i := 1 to fConnection.Count do\n+    begin\n+      try\n+        t^.Terminate;\n+      except\n+        // ignore any exception here and notify the remaining workers\n+      end;\n+      inc(t);\n+    end;\n   finally\n     fConnection.Safe.WriteUnLock;\n   end;\n@@ -980,7 +974,7 @@ var\n   range, retry: integer;\n   nr: TNetResult;\n   local: TNetAddr;\n-  connection: TTftpConnectionThread;\n+  new: TTftpConnectionThread;\n begin\n   // is called from TTftpServerThread.DoExecute context (so fLog is set)\n   // with a RRQ/WRQ incoming UDP frame on port 69\n@@ -1067,17 +1061,17 @@ begin\n   if nr = nrOk then\n   begin\n     // register before Start so that the owner never misses a short-lived worker\n-    connection := TTftpConnectionThread.Create(c, self);\n+    new := TTftpConnectionThread.Create(c, self); // suspended\n     try\n-      fConnection.Add(connection);\n+      fConnection.Add(new);\n     except\n-      connection.Free;\n+      new.Free;\n       raise;\n     end;\n     try\n-      connection.Start;\n+      new.Start;\n     except\n-      fConnection.Remove(connection); // OwnObjects=true: also frees it\n+      fConnection.Remove(new); // paranoid (OwnObjects=true: also frees it)\n       raise;\n     end;\n   end\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tftp.server"
+      ],
+      "pr": 556,
+      "is_merge": false
+    },
+    {
+      "sha": "e42d4a3c6bb80068b2dbd73a6a84f984711296ee",
+      "short_sha": "e42d4a3c",
+      "subject": "core: new TLoggedThread.ExecuteDone property",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T09:42:10+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/e42d4a3c6bb80068b2dbd73a6a84f984711296ee",
+      "parents": [
+        "a4bad08e43d9adf79d6470b19c3850ba3fc05a54"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "diff --git a/src/core/mormot.core.threads.pas b/src/core/mormot.core.threads.pas\nindex b2bf261..f51ae65 100644\n--- a/src/core/mormot.core.threads.pas\n+++ b/src/core/mormot.core.threads.pas\n@@ -1446,7 +1446,7 @@ type\n     fLogClass: TSynLogClass;\n     fLog: TSynLog; // the logging instance within the DoExecute thread context\n     fExecuteMessage: RawUtf8;\n-    fProcessing: boolean;\n+    fProcessing, fExecuteDone: boolean;\n     procedure Execute; override;\n     procedure DoExecute; virtual; abstract; // overriden for background process\n     procedure DoTerminate; override; // overriden for fLog.NotifyThreadEnded\n@@ -1466,6 +1466,9 @@ type\n     /// internal flag set by Execute, and used e.g. by TerminateAndWaitFinished\n     property Processing: boolean\n       read fProcessing;\n+    /// mimics Finished property of newer Delphi/FPC RTL\n+    property ExecuteDone: boolean\n+      read fExecuteDone;\n   published\n     /// the name of this thread, as supplied to SetCurrentThreadName()\n     property ProcessName: RawUtf8\n@@ -4302,6 +4305,7 @@ begin\n       end;\n   end;\n   fProcessing := false;\n+  fExecuteDone := true;\n end; // don't reset fLog := nil here - done in DoTerminate\n \n procedure TLoggedThread.DoTerminate;\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 1768aa7..274a650 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16613\n+16614\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 94e3e5d..2152c3d 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16613'\n+'2.4.16614'\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a4bad08e43d9adf79d6470b19c3850ba3fc05a54",
+      "short_sha": "a4bad08e",
+      "subject": "core: new ShortStringToVariant() function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T09:41:34+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/a4bad08e43d9adf79d6470b19c3850ba3fc05a54",
+      "parents": [
+        "a92e864941356725a6f5dc132a2b487427ad1a8c"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 0,
+          "patch": "diff --git a/src/core/mormot.core.base.pas b/src/core/mormot.core.base.pas\nindex 0ad1621..2f514ae 100644\n--- a/src/core/mormot.core.base.pas\n+++ b/src/core/mormot.core.base.pas\n@@ -4410,6 +4410,10 @@ procedure RawUtf8ToVariant(const Txt: RawUtf8; var Value: variant); overload;\n function RawUtf8ToVariant(const Txt: RawUtf8): variant; overload;\n   {$ifdef HASINLINE}inline;{$endif}\n \n+/// convert an UTF-8 encoded ShortString into a variant RawUtf8 varString\n+procedure ShortStringToVariant(const Txt: ShortString; var Value: variant);\n+  {$ifdef HASINLINE}inline;{$endif}\n+\n /// convert a Variant varString value into RawUtf8 encoded String\n // - works as the exact reverse of RawUtf8ToVariant() function\n // - non varString variants (e.g. UnicodeString, WideString, numbers, empty and\n@@ -13730,6 +13734,11 @@ begin\n   RawUtf8ToVariant(Txt, result{%H-});\n end;\n \n+procedure ShortStringToVariant(const Txt: ShortString; var Value: variant);\n+begin\n+  RawUtf8ToVariant(@Txt[1], length(Txt), Value);\n+end;\n+\n procedure VariantStringToUtf8(const V: Variant; var result: RawUtf8);\n var\n   vd: PVarData;\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex e247cdc..1768aa7 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16609\n+16613\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex fbd5ce0..94e3e5d 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16609'\n+'2.4.16613'\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a92e864941356725a6f5dc132a2b487427ad1a8c",
+      "short_sha": "a92e8649",
+      "subject": "Merge pull request #556 from Moonbot-Tech/fix/tftp-worker-lifetime",
+      "body": "net: own and join TFTP connection threads before server teardown",
+      "author": "ab",
+      "date": "2026-08-28T09:16:53+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/a92e864941356725a6f5dc132a2b487427ad1a8c",
+      "parents": [
+        "7813f0482b7e5cc1e678b841fb2636538110790a",
+        "2e3a95227a2e5ae30ecd70f4c8d427d8e565c5aa"
+      ],
+      "stats": {
+        "additions": 153,
+        "deletions": 19,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.tftp.server.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 18,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 95,
+          "deletions": 1,
+          "patch": "",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.tftp.server"
+      ],
+      "pr": 556,
+      "is_merge": true
+    },
+    {
+      "sha": "7813f0482b7e5cc1e678b841fb2636538110790a",
+      "short_sha": "7813f048",
+      "subject": "orm: some refactoring about variant values",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T09:14:19+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/7813f0482b7e5cc1e678b841fb2636538110790a",
+      "parents": [
+        "5530a593a291c5a6d78d4b7b769e471d0ef08324"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 14,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex 2beda25..e247cdc 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16608\n+16609\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 6601d7c..fbd5ce0 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16608'\n+'2.4.16609'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 11,
+          "patch": "diff --git a/src/orm/mormot.orm.base.pas b/src/orm/mormot.orm.base.pas\nindex 944d09d..b32f1a2 100644\n--- a/src/orm/mormot.orm.base.pas\n+++ b/src/orm/mormot.orm.base.pas\n@@ -6638,7 +6638,7 @@ procedure TOrmPropInfoRttiVariant.CopySameClassProp(Source: TObject;\n var\n   off: PtrUInt;\n   v: PVariant;\n-  value: TVarData;\n+  value: TSynVarData;\n begin\n   off := TOrmPropInfoRttiVariant(DestInfo).fSetterIsFieldPropOffset;\n   if off <> 0 then // avoid any temporary variable\n@@ -6649,10 +6649,10 @@ begin\n   end\n   else\n   begin\n-    PCardinal(@value)^ := varEmpty; // real temp variant for a setter\n+    value.VType := varEmpty; // temp variant for a setter\n     fPropInfo.GetVariantProp(Source, variant(value), {byref=}false);\n     TOrmPropInfoRttiVariant(DestInfo).fPropInfo.SetVariantProp(Dest, variant(value));\n-    VarClearProc(value);\n+    VarClear(variant(value));\n   end;\n end;\n \n@@ -6719,7 +6719,7 @@ end;\n \n function TOrmPropInfoRttiVariant.IsValueVoid(Instance: TObject): boolean;\n var\n-  value: TVarData;\n+  value: TSynVarData;\n   off: PtrUInt;\n begin\n   off := fGetterIsFieldPropOffset;\n@@ -6727,17 +6727,17 @@ begin\n     result := VarIsEmptyOrNull(PVariant(PtrUInt(Instance) + off)^)\n   else\n   begin\n-    PCardinal(@value)^ := varEmpty;\n+    value.VType := varEmpty; // temp variant for a setter\n     fPropInfo.GetVariantProp(Instance, variant(value), {byref=}true);\n     result := VarIsEmptyOrNull(variant(value));\n-    VarClearProc(value);\n+    VarClear(variant(value));\n   end;\n end;\n \n function TOrmPropInfoRttiVariant.CompareValue(Item1, Item2: TObject;\n   CaseInsensitive: boolean): integer;\n var\n-  V1, V2: TVarData;\n+  V1, V2: TSynVarData;\n   off: PtrUInt;\n begin\n   if Item1 = Item2 then\n@@ -6754,13 +6754,13 @@ begin\n                                 PVarData(PtrUInt(Item2) + off), CaseInsensitive)\n     else\n     begin\n-      PCardinal(@V1)^ := varEmpty;\n-      PCardinal(@V2)^ := varEmpty;\n+      V1.VType := varEmpty;\n+      V2.VType := varEmpty;\n       fPropInfo.GetVariantProp(Item1, variant(V1), {byref=}true);\n       fPropInfo.GetVariantProp(Item2, variant(V2), {byref=}true);\n       result := FastVarDataComp(@V1, @V2, CaseInsensitive);\n-      VarClearProc(V1);\n-      VarClearProc(V2);\n+      VarClear(variant(V1));\n+      VarClear(variant(V2));\n     end;\n   end;\n end;\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/test/test.core.data.pas b/test/test.core.data.pas\nindex 0bae711..5df7ef6 100644\n--- a/test/test.core.data.pas\n+++ b/test/test.core.data.pas\n@@ -533,7 +533,7 @@ begin\n   TextToVariant('1e308', true, v);\n   Check(VarIsStr(v));\n   Check(VarIsString(v));\n-  s := FormatUtf8('value-%', [123]); // ensure a regular ref-counted string\n+  FormatUtf8('value-%', [123], s); // ensure a regular ref-counted string\n   TextToVariant(s, true, v);\n   VariantToRawByteString(v, r);\n   rc := GetRefCount(r);\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "ORM",
+        "Tests"
+      ],
+      "units": [
+        "mormot.orm.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5530a593a291c5a6d78d4b7b769e471d0ef08324",
+      "short_sha": "5530a593",
+      "subject": "orm: optimize TOrmTable variant generation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T08:52:45+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/5530a593a291c5a6d78d4b7b769e471d0ef08324",
+      "parents": [
+        "d7a5c87dbf7da70640d799c319e9cbb51e6d244b"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 59,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex f80e58d..2beda25 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16605\n+16608\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 6872c54..6601d7c 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16605'\n+'2.4.16608'\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 67,
+          "deletions": 57,
+          "patch": "diff --git a/src/orm/mormot.orm.base.pas b/src/orm/mormot.orm.base.pas\nindex a16ff2d..944d09d 100644\n--- a/src/orm/mormot.orm.base.pas\n+++ b/src/orm/mormot.orm.base.pas\n@@ -2296,7 +2296,7 @@ type\n     /// retrieve a field value as a variant\n     // - returns null if the row/field is incorrect\n     // - expand* methods will allow to return human-friendly representations\n-    procedure GetAsVariant(row, field: PtrInt; out value: variant;\n+    procedure GetAsVariant(row, field: PtrInt; var value: variant;\n       expandTimeLogAsText, expandEnumsAsText, expandHugeIDAsUniqueIdentifier: boolean;\n       options: TDocVariantOptions = JSON_FAST);\n \n@@ -2307,7 +2307,7 @@ type\n     // - expand* methods will allow to return human-friendly representations\n     // - if your purpose is to create a TDocVariant array from ORM/SQL JSON,\n     // consider using faster TDocVariantData.InitArrayFromResults() method\n-    procedure ToDocVariant(Row: PtrInt; out doc: variant;\n+    procedure ToDocVariant(Row: PtrInt; var doc: variant;\n       options: TDocVariantOptions = JSON_FAST;\n       expandTimeLogAsText: boolean = false; expandEnumsAsText: boolean = false;\n       expandHugeIDAsUniqueIdentifier: boolean = false); overload;\n@@ -8307,19 +8307,42 @@ begin\n     QuickSortIndexedPUtf8Char(pointer(fFieldNames), fFieldCount, fFieldNameOrder);\n end;\n \n-procedure TOrmTableAbstract.GetAsVariant(row, field: PtrInt; out value: variant;\n+procedure ValueVarTimeAsText(oft: TOrmFieldType; V: PUtf8Char; value: PVariant);\n+var\n+  t: TTimeLogBits;\n+  time: RawUtf8;\n+begin\n+  SetInt64(V, {%H-}t.Value);\n+  if t.Value = 0 then\n+    value^ := 0\n+  else\n+  begin\n+    if oft = oftUnixTime then\n+      t.FromUnixTime(t.Value);\n+    if oft <> oftUnixMSTime then\n+      time := t.Text(true)\n+    else\n+      // no TTimeLog use for milliseconds resolution\n+      time := UnixMSTimeToString(t.Value);\n+    PDocVariantData(value)^.InitObject([\n+      'Time',  time,\n+      'Value', t.Value], JSON_FAST);\n+  end;\n+end;\n+\n+procedure TOrmTableAbstract.GetAsVariant(row, field: PtrInt; var value: variant;\n   expandTimeLogAsText, expandEnumsAsText, expandHugeIDAsUniqueIdentifier: boolean;\n   options: TDocVariantOptions);\n const\n   JAN2015_UNIX = 1420070400;\n var\n-  t: TTimeLogBits;\n   id: TSynUniqueIdentifierBits;\n   V: PUtf8Char;\n+  vd: TSynVarData absolute value;\n   ft: POrmTableFieldType;\n   enum, err: integer;\n-  time: RawUtf8;\n begin\n+  VarClearAndSetType(value, varNull);\n   if (self = nil) or\n      (row < 1) or\n      (row > fRowCount) or\n@@ -8331,69 +8354,56 @@ begin\n   row := row * fFieldCount + field;\n   V := GetResults(row);\n   if V = nil then\n-    TSynVarData(value).VType := varNull\n-  else\n-    if expandHugeIDAsUniqueIdentifier and\n-       (field = fFieldIndexID) then\n-    begin\n-      SetInt64(V, PInt64(@id)^);\n-      if id.CreateTimeUnix > JAN2015_UNIX then\n-        id.ToVariant(value)\n-      else\n-        value := id.Value;\n-    end\n+    exit;\n+  vd.VType := varInt64;\n+  if expandHugeIDAsUniqueIdentifier and\n+     (field = fFieldIndexID) then\n+  begin\n+    SetInt64(V, PInt64(@id)^);\n+    if id.CreateTimeUnix > JAN2015_UNIX then\n+      id.ToVariant(value)\n     else\n+      vd.VInt64 := id.Value;\n+  end\n+  else\n+  begin\n+    if expandEnumsAsText and\n+       (ft^.ContentType = oftEnumerate) then\n     begin\n-      if expandEnumsAsText and\n-         (ft^.ContentType = oftEnumerate) then\n+      enum := GetInteger(V, err);\n+      if (err = 0) and\n+         (ft^.ContentTypeInfo <> nil) then\n       begin\n-        enum := GetInteger(V, err);\n-        if (err = 0) and\n-           (ft^.ContentTypeInfo <> nil) then\n-        begin\n-          value := PRttiEnumType(ft^.ContentTypeInfo)^.GetEnumNameOrd(enum)^;\n-          exit;\n-        end;\n-      end\n-      else if expandTimeLogAsText then\n-        case ft^.ContentType of\n-          oftTimeLog,\n-          oftModTime,\n-          oftCreateTime,\n-          oftUnixTime,\n-          oftUnixMSTime:\n-            begin\n-              SetInt64(V, {%H-}t.V\n... [truncated, 1843 more chars]",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "ORM"
+      ],
+      "units": [
+        "mormot.orm.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d7a5c87dbf7da70640d799c319e9cbb51e6d244b",
+      "short_sha": "d7a5c87d",
+      "subject": "Merge pull request #558 from Moonbot-Tech/fix/valuevartovariant-null-lifetime",
+      "body": "orm: fix ValueVarToVariant managed value leak on NULL",
+      "author": "ab",
+      "date": "2026-08-28T08:31:31+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/d7a5c87dbf7da70640d799c319e9cbb51e6d244b",
+      "parents": [
+        "fdb5f3783da4e8aaf0774ce0d934068522406856",
+        "1d68cdff28ccaeea2a5a466a18c71c51703b2755"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "ORM",
+        "Tests"
+      ],
+      "units": [
+        "mormot.orm.base"
+      ],
+      "pr": 558,
+      "is_merge": true
+    },
+    {
+      "sha": "fdb5f3783da4e8aaf0774ce0d934068522406856",
+      "short_sha": "fdb5f378",
+      "subject": "crypt: fixed compilation in PUREMORMOT2 mode - the Lecuyer function should move to mormot.crypt.core and use the better RandomLecuyer() factory",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T08:28:38+02:00",
+      "url": "https://github.com/synopse/mORMot2/commit/fdb5f3783da4e8aaf0774ce0d934068522406856",
+      "parents": [
+        "41d58ff115f70f84510fb65b06869cddb4b86b99"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 28,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 18,
+          "patch": "diff --git a/src/core/mormot.core.base.pas b/src/core/mormot.core.base.pas\nindex 2904317..0ad1621 100644\n--- a/src/core/mormot.core.base.pas\n+++ b/src/core/mormot.core.base.pas\n@@ -3509,14 +3509,6 @@ type\n   end;\n   PLecuyer = ^TLecuyer;\n \n-{$ifndef PUREMORMOT2}\n-/// return the gsl_rng_taus2 Pierre L'Ecuyer generator of the current thread\n-// - was an alternative to SharedRandom/Random32 functions from mormot.core.os\n-// - you should better define your own local threadvar for any specific purpose\n-// or use ThreadRandom function from mormot.crypt.core.pas\n-function Lecuyer: PLecuyer;\n-{$endif PUREMORMOT2}\n-\n /// internal function used e.g. by TLecuyer.FillShort/FillShort31\n procedure AdjustShortStringFromRandom(dest: PByteArray; size: PtrUInt);\n \n@@ -10595,16 +10587,6 @@ begin\n   gen.Fill(dest, destsize); // XOR dest\n end;\n \n-{$ifndef PUREMORMOT2}\n-threadvar // do not publish for compilation within Delphi packages\n-  _Lecuyer: TLecuyer; // uses only 16 bytes per thread\n-\n-function Lecuyer: PLecuyer;\n-begin\n-  result := @_Lecuyer;\n-end;\n-{$endif PUREMORMOT2}\n-\n \n { MultiEvent* functions }\n \n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 8,
+          "patch": "diff --git a/src/crypt/mormot.crypt.core.pas b/src/crypt/mormot.crypt.core.pas\nindex e7ad64a..808330b 100644\n--- a/src/crypt/mormot.crypt.core.pas\n+++ b/src/crypt/mormot.crypt.core.pas\n@@ -2822,7 +2822,10 @@ function IsIdentifierGuid(u: PHash128): boolean;\n // - e.g. so that tests won't interfere with SharedRandom actual framework process\n // - as used e.g. by RandomByteString(), RandomUtf8() or RandomIdentifier()\n function ThreadRandom: PLecuyer;\n-  {$ifdef PUREMORMOT2} {$ifdef HASINLINE} inline; {$endif} {$endif}\n+\n+{$ifndef PUREMORMOT2}\n+function Lecuyer: PLecuyer; {$ifdef HASINLINE} inline; {$endif}\n+{$endif PUREMORMOT2}\n \n /// fill a RawByteString with random bytes from per-thread gsl_rng_taus2 generator\n // - content is really binary, i.e. would contain the whole #0..#255 byte range\n@@ -10619,22 +10622,23 @@ begin\n   result := (u[7] and $f0) = $50; // version 5 = name-based GUID\n end;\n \n-{$ifdef PUREMORMOT2}\n-threadvar\n+threadvar // do not make public for compilation within Delphi packages\n   _RandomTests: TLecuyer; // 16 bytes per thread for each TLecuyer generator\n-{$endif PUREMORMOT2}\n \n function ThreadRandom: PLecuyer;\n begin\n-  {$ifdef PUREMORMOT2}\n   result := @_RandomTests;\n-  {$else}\n-  result := mormot.core.base.Lecuyer; // use existing mORMot 1 threadvar\n-  {$endif PUREMORMOT2}\n   if PPtrUInt(result)^ = 0 then\n     RandomLecuyer(result^); // 88-bit seed from our CSPRNG once per thread\n end;\n \n+{$ifndef PUREMORMOT2}\n+function Lecuyer: PLecuyer;\n+begin\n+  result := ThreadRandom;\n+end;\n+{$endif PUREMORMOT2}\n+\n function RandomByteString(Count: integer; var Dest; CodePage: cardinal): pointer;\n begin\n   FastSetStringCP(Dest, nil, Count, CodePage);\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit-num.inc b/src/mormot.commit-num.inc\nindex d855ec6..f80e58d 100644\n--- a/src/mormot.commit-num.inc\n+++ b/src/mormot.commit-num.inc\n@@ -1 +1 @@\n-16604\n+16605\n",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "diff --git a/src/mormot.commit.inc b/src/mormot.commit.inc\nindex 391af4b..6872c54 100644\n--- a/src/mormot.commit.inc\n+++ b/src/mormot.commit.inc\n@@ -1 +1 @@\n-'2.4.16604'\n+'2.4.16605'\n",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
