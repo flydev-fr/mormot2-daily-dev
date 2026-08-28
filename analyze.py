@@ -2,6 +2,7 @@ import urllib.request
 import json
 import datetime
 import os
+import html
 
 def fetch_commits():
     yesterday_dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
@@ -87,7 +88,9 @@ def analyze_commits():
         f.write("<ul class=\"commit-list\">\n")
         for msg in commit_messages:
             first_line = msg.splitlines()[0]
-            f.write(f"<li>{first_line}</li>\n")
+            # Escape HTML characters in commit messages to prevent issues
+            escaped_line = html.escape(first_line)
+            f.write(f"<li>{escaped_line}</li>\n")
         f.write("</ul>\n")
 
         f.write("</body>\n</html>\n")
