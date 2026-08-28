@@ -1,14 +1,11 @@
 # mORMot2 Daily
 
-A daily, plain-English read of what changed in
-[synopse/mORMot2](https://github.com/synopse/mORMot2) — for Delphi and FPC developers
-who run mORMot2 in production and would rather drink their coffee than parse 30 terse
-commit subjects.
+Daily digest of [synopse/mORMot2](https://github.com/synopse/mORMot2) commits,
+published as a static site on GitHub Pages.
 
-Every morning a scheduled workflow pulls the new upstream commits with their diffs,
-[Jules](https://jules.google) reviews the code and writes one structured JSON file,
-that file is validated against a schema, and a static site is generated from it and
-published to GitHub Pages.
+A scheduled workflow pulls new upstream commits with their diffs,
+[Jules](https://jules.google) reviews them and writes one JSON file per edition, the
+file is validated against a schema, and the site is generated from it.
 
 ```
                  fetch_commits.py            Jules REST API            build_site.py
@@ -17,24 +14,21 @@ synopse/mORMot2 ─────────────────► data/raw 
                                                validation
 ```
 
-The reviewer never writes HTML. It writes JSON against
-`schema/analysis.schema.json`, the JSON is contract-checked before it is merged, and
-the site is generated deterministically from it — so a bad review can be wrong, but it
-cannot break the page.
+The reviewer never writes HTML — it writes JSON against
+`schema/analysis.schema.json`, checked before merge, and the site is generated from
+it. A bad review can be wrong; it cannot break the page.
 
-## What the site gives a reader
+Per edition: headline, intro, TL;DR, risk level, upstream build number, entries
+grouped by category (breaking, security, fixes, features, performance, compiler,
+under the hood, tests, housekeeping) with *what changed*, *impact*, an action and the
+public API moves. Entries carry `interpretation` when a claim is the reviewer's
+reading and `auto-classified` when they never got a review pass. Plus unit index,
+archive, activity chart, filter and search, RSS and JSON feeds, light and dark themes.
 
-- **An edition per day**: a headline, a two-minute intro, a scannable TL;DR, and a
-  risk level for a team running mORMot2 in production.
-- **Entries grouped editorially** — breaking changes, security, fixes, new features,
-  performance, compiler and platform, under the hood, tests, housekeeping — each with
-  *what changed*, *what it means for you*, an action, and the public API moves.
-- **Honesty markers**: `interpretation` when a claim is the reviewer's reading rather
-  than something the commit states, `auto-classified` when an entry never got a
-  review pass.
-- Upstream build number (`2.4.16618`), diffstat, unit index, archive, activity chart,
-  full-text filter, **RSS** (`feed.xml`) and **JSON** (`data.json`) feeds, light and
-  dark themes.
+Type is [Lekton](https://fonts.google.com/specimen/Lekton) (ISIA Urbino, OFL),
+self-hosted in `site/assets/fonts/` — no external request. Swap `--font-prose` /
+`--font-ui` at the top of `site/assets/style.css` to change it; the reading column is
+`--column` in the same block.
 
 ## Local use
 
@@ -94,7 +88,4 @@ set this repository up, following the same `PROMPT.md` and schema Jules uses fro
 next run on. `data/raw/2026-08-27.json` is deliberately left unreviewed so the
 fallback rendering is visible.
 
-## Caveats
-
-Summaries are machine-written and can be wrong. The commit links are the source of
-truth. 
+Summaries are machine-written and can be wrong; the commit links are authoritative.

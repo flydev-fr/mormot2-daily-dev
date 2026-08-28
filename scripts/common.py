@@ -19,7 +19,7 @@ SITE_OUT = ROOT / "_site"
 
 UPSTREAM = os.environ.get("UPSTREAM_REPO", "synopse/mORMot2")
 SITE_TITLE = "mORMot2 Daily"
-SITE_TAGLINE = "What changed in mORMot2, in plain English."
+SITE_TAGLINE = "Daily read of upstream commits"
 # Overridden by the SITE_BASE_URL env var in CI (used for RSS absolute links).
 SITE_BASE_URL = os.environ.get("SITE_BASE_URL", "").rstrip("/")
 

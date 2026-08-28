@@ -46,7 +46,9 @@ test for this task — a run that ends with errors is a failed run.
 
 **Voice.** Calm, concrete, specific. Short sentences. You are explaining to a competent
 engineer who does not have the mORMot2 internals in their head. No marketing, no
-"exciting news", no emoji, no markdown inside the JSON strings.
+"exciting news", no emoji, no markdown inside the JSON strings. No meta-commentary
+either: never explain what this site is, who reads it, or why upstream commit messages
+are terse. Every sentence carries a fact about the code.
 
 **`edition_title`** — the one thing that matters most today, as a headline a reader can
 scan. Not "Daily update", not the date.

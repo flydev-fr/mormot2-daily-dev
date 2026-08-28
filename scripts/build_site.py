@@ -30,20 +30,20 @@ from heuristics import classify
 # --------------------------------------------------------------------------- taxonomy
 
 SECTIONS = [
-    ("breaking", "Breaking changes", "Application code may need to change."),
-    ("security", "Security", "Anything with a security angle."),
-    ("fix", "Fixes", "Bugs squashed upstream."),
-    ("feature", "New features", "New capabilities you can start using."),
-    ("performance", "Performance", "Same behaviour, less time or memory."),
-    ("compat", "Compiler & platform", "Delphi / FPC / OS compatibility."),
-    ("deprecation", "Deprecations", "Still there, on the way out."),
-    ("refactor", "Under the hood", "Internal reshaping, no API promise broken."),
-    ("tests", "Tests", "Coverage and regression work."),
-    ("docs", "Docs", "Documentation and comments."),
-    ("chore", "Housekeeping", "Merges, bookkeeping, small chores."),
+    ("breaking", "Breaking changes"),
+    ("security", "Security"),
+    ("fix", "Fixes"),
+    ("feature", "New features"),
+    ("performance", "Performance"),
+    ("compat", "Compiler & platform"),
+    ("deprecation", "Deprecations"),
+    ("refactor", "Under the hood"),
+    ("tests", "Tests"),
+    ("docs", "Docs"),
+    ("chore", "Housekeeping"),
 ]
-SECTION_ORDER = {key: i for i, (key, _, _) in enumerate(SECTIONS)}
-SECTION_TITLE = {key: title for key, title, _ in SECTIONS}
+SECTION_ORDER = {key: i for i, (key, _) in enumerate(SECTIONS)}
+SECTION_TITLE = dict(SECTIONS)
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 SEVERITY_LABEL = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
@@ -54,15 +54,15 @@ ACTION_LABEL = {
     "migration-required": "Migration required",
 }
 RISK_LABEL = {
-    "calm": ("Calm day", "Nothing here demands your attention today."),
-    "worth-a-look": ("Worth a look", "Something in here is likely relevant to you."),
-    "act-now": ("Act now", "There is a change here that can bite a running system."),
+    "calm": ("Calm", "internal churn"),
+    "worth-a-look": ("Worth a look", "fix or feature you may want"),
+    "act-now": ("Act now", "can affect a running system"),
 }
 
 
-# Rounded square in the accent blue, as a data: URI — no extra request, no 404.
+# Square mark in the accent blue, as a data: URI — no extra request, no 404.
 FAVICON = ("%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
-           "%3Crect width='32' height='32' rx='8' fill='%232a78d6'/%3E"
+           "%3Crect width='32' height='32' fill='%232a78d6'/%3E"
            "%3Cpath d='M8 22V10h3l5 7 5-7h3v12h-3v-7l-5 7-5-7v7z' fill='white'/%3E"
            "%3C/svg%3E")
 
@@ -147,13 +147,13 @@ class Edition:
         return min((e.severity for e in self.entries),
                    key=lambda s: SEVERITY_ORDER.get(s, 9), default="low")
 
-    def sections(self) -> list[tuple[str, str, str, list[Entry]]]:
+    def sections(self) -> list[tuple[str, str, list[Entry]]]:
         out = []
-        for key, title, blurb in SECTIONS:
+        for key, title in SECTIONS:
             bucket = sorted([e for e in self.entries if e.category == key],
                             key=lambda e: e.sort_key)
             if bucket:
-                out.append((key, title, blurb, bucket))
+                out.append((key, title, bucket))
         return out
 
 
@@ -204,8 +204,7 @@ def build_edition(date: str, raw: dict, analysis: dict) -> Edition:
     fallback_title = ("A quiet day upstream" if count == 0
                       else f"{count} commit{'s' if count != 1 else ''} landed upstream")
     fallback_intro = (
-        "No commits were pushed to the upstream repository in this window. "
-        "Nothing to read today — enjoy the coffee."
+        "No commits in this window."
         if count == 0 else
         "This edition has not been reviewed yet: the entries below are classified "
         "automatically from commit messages and diffs, without an editorial pass. "
@@ -304,7 +303,7 @@ def entry_card(entry: Entry) -> str:
 
     what = (f'<div class="block"><h4>What changed</h4><p>{esc(entry.what_changed)}</p></div>'
             if entry.what_changed else "")
-    impact = (f'<div class="block impact"><h4>What it means for you</h4>'
+    impact = (f'<div class="block impact"><h4>Impact</h4>'
               f'<p>{esc(entry.impact)}</p></div>' if entry.impact else "")
     unreviewed = ('<span class="chip warn" title="Classified automatically from the '
                   'commit message and diff — no editorial pass">auto-classified</span>'
@@ -384,7 +383,7 @@ def category_chart(edition: Edition) -> str:
     counts = edition.counts
     rows = []
     peak = max(counts.values(), default=1) or 1
-    for key, title, _ in SECTIONS:
+    for key, title in SECTIONS:
         value = counts.get(key, 0)
         if not value:
             continue
@@ -395,7 +394,7 @@ def category_chart(edition: Edition) -> str:
             f'<span class="cat-value">{value}</span></div>')
     if not rows:
         return ""
-    return f'<div class="cat-chart"><h3>What this edition is made of</h3>{"".join(rows)}</div>'
+    return f'<div class="cat-chart"><h3>Categories</h3>{"".join(rows)}</div>'
 
 
 # ----------------------------------------------------------------------------- pages
@@ -446,11 +445,9 @@ def layout(title: str, body: str, *, description: str, base: str = "",
 </main>
 <footer class="site-footer">
   <div class="wrap">
-    <p>Generated from public commits of
-       <a href="https://github.com/{UPSTREAM}">{UPSTREAM}</a>.
-       Summaries are written by an AI reviewer and can be wrong — the commit links are
-       the source of truth. Not affiliated with Synopse.</p>
-    <p class="stamp">Built {esc(iso(utcnow()))} ·
+    <p><a href="https://github.com/{UPSTREAM}">{UPSTREAM}</a> ·
+       summaries machine-written, commits authoritative ·
+       built {esc(iso(utcnow()))} ·
        <a href="{base}feed.xml">RSS</a> · <a href="{base}data.json">JSON</a></p>
   </div>
 </footer>
@@ -487,7 +484,7 @@ def edition_header(edition: Edition, base: str, *, permalink: bool) -> str:
     tldr = ""
     if edition.tldr:
         items = "".join(f"<li>{esc(item)}</li>" for item in edition.tldr)
-        tldr = f'<div class="tldr"><h2>The short version</h2><ul>{items}</ul></div>'
+        tldr = f'<div class="tldr"><h2>TL;DR</h2><ul>{items}</ul></div>'
     banner = ("" if edition.reviewed else
               '<p class="banner">Not reviewed yet — entries below are auto-classified '
               'from commit messages and diffs.</p>')
@@ -515,14 +512,14 @@ def themes_block(edition: Edition) -> str:
         blocks.append(f'<div class="theme"><h3>{esc(theme.get("title", ""))}</h3>'
                       f'<p>{esc(theme.get("summary", ""))}</p>'
                       f'<p class="theme-links">{links}</p></div>')
-    return f'<section class="themes"><h2>The thread of the day</h2>{"".join(blocks)}</section>'
+    return f'<section class="themes"><h2>Themes</h2>{"".join(blocks)}</section>'
 
 
 def filters_bar(edition: Edition) -> str:
     counts = edition.counts
     buttons = ['<button class="f active" data-filter="all">'
                f'All <span>{len(edition.entries)}</span></button>']
-    for key, title, _ in SECTIONS:
+    for key, title in SECTIONS:
         if counts.get(key):
             buttons.append(f'<button class="f" data-filter="{esc(key)}">'
                            f'{esc(title)} <span>{counts[key]}</span></button>')
@@ -539,19 +536,19 @@ def edition_body(edition: Edition, base: str) -> str:
         return ('<section class="empty"><h2>Nothing shipped</h2>'
                 '<p>No commits landed upstream in this window.</p></section>')
     parts = [themes_block(edition), category_chart(edition), filters_bar(edition)]
-    for key, title, blurb, bucket in edition.sections():
+    for key, title, bucket in edition.sections():
         cards = "".join(entry_card(e) for e in bucket)
         parts.append(f"""
 <section class="section" data-section="{esc(key)}">
-  <div class="section-head"><h2>{esc(title)}</h2><p>{esc(blurb)}</p>
+  <div class="section-head"><h2>{esc(title)}</h2>
     <span class="count">{len(bucket)}</span></div>
   {cards}
 </section>""")
     if edition.upgrade_advice:
-        parts.append(f'<section class="advice"><h2>Should you pull this?</h2>'
+        parts.append(f'<section class="advice"><h2>Upgrade advice</h2>'
                      f'<p>{esc(edition.upgrade_advice)}</p></section>')
     if edition.notes:
-        parts.append(f'<section class="notes"><h2>Reviewer notes</h2>'
+        parts.append(f'<section class="notes"><h2>Notes</h2>'
                      f'<p>{esc(edition.notes)}</p></section>')
     return "".join(parts)
 
@@ -604,7 +601,7 @@ def page_archive(editions: list[Edition]) -> str:
             f'<td>{severity_chip(edition.top_severity)}</td></tr>')
     body = f"""
 <section class="page-head"><h1>Archive</h1>
-  <p>Every edition since the monitor started. {len(editions)} in total.</p></section>
+  <p>{len(editions)} editions.</p></section>
 {activity_chart(editions, 60)}
 <table class="archive-table">
   <thead><tr><th>Date</th><th>Edition</th><th class="num">Commits</th><th>Top severity</th></tr></thead>
@@ -650,8 +647,7 @@ def page_units(editions: list[Edition]) -> str:
 
     body = f"""
 <section class="page-head"><h1>Units</h1>
-  <p>Which mORMot2 units have moved, and where to read about it.
-     {len(index)} units tracked.</p></section>
+  <p>{len(index)} units tracked.</p></section>
 {"".join(blocks)}"""
     return layout(f"{SITE_TITLE} — Units", body,
                   description="Changes by mORMot2 unit.", nav_active="units")
@@ -661,44 +657,34 @@ def page_about() -> str:
     body = f"""
 <section class="page-head"><h1>About</h1></section>
 <section class="prose">
-  <p><strong>{esc(SITE_TITLE)}</strong> is a daily read of what changed in
-     <a href="https://github.com/{UPSTREAM}">{UPSTREAM}</a> — the Synopse mORMot2
-     framework for Delphi and FPC. Upstream commits are terse and written for the
-     people who wrote them. This site rewrites them for everyone else: what changed,
-     what it means for a backend already in production, and whether you need to do
-     anything about it.</p>
-
-  <h2>How an edition is made</h2>
+  <h2>Pipeline</h2>
   <ol>
-    <li>A scheduled job pulls every new upstream commit with its diff.</li>
-    <li>A first pass classifies each commit deterministically from its message and
-        the files it touches.</li>
-    <li><a href="https://jules.google">Jules</a> reads the diffs — and the surrounding
-        source when the diff is not enough — and writes one structured JSON file per
-        edition, following a fixed schema.</li>
-    <li>That JSON is validated against the schema (SHAs must resolve to real commits,
-        every non-merge commit must be covered) before it is merged. Anything that
-        fails goes back to the reviewer with the errors.</li>
-    <li>This site is generated from the validated JSON. The reviewer never writes
-        HTML, so a bad review can be wrong — it cannot break the page.</li>
+    <li>A scheduled job pulls new commits of
+        <a href="https://github.com/{UPSTREAM}">{UPSTREAM}</a> with their diffs.</li>
+    <li>A deterministic pass classifies each commit from its message and files.</li>
+    <li><a href="https://jules.google">Jules</a> reads the diffs and writes one JSON
+        file per edition against a fixed schema.</li>
+    <li>That JSON is validated — SHAs must resolve, every non-merge commit covered —
+        before it is merged.</li>
+    <li>This site is generated from the validated JSON.</li>
   </ol>
 
-  <h2>How to read it</h2>
-  <p>Entries carry a severity, a category and an action. <em>Interpretation</em>
-     marks a claim that is the reviewer's reading rather than something the commit
-     states. <em>Auto-classified</em> marks an entry that never got an editorial pass.
-     Both are shown on purpose: you should know which sentences to trust.</p>
+  <h2>Markers</h2>
+  <ul>
+    <li><em>interpretation</em> — the reviewer's reading, not stated by the commit.</li>
+    <li><em>auto-classified</em> — no review pass; classified from the message and diff.</li>
+    <li><em>severity</em> / <em>action</em> — assigned per entry, see the schema.</li>
+  </ul>
 
-  <h2>Caveats</h2>
-  <p>Summaries are machine-written and can be wrong or incomplete. The commit links
-     are the source of truth. This site is an independent read of a public
-     repository; it is not affiliated with Synopse or with the mORMot project.</p>
+  <h2>Feeds</h2>
+  <p><a href="feed.xml">feed.xml</a> (RSS) · <a href="data.json">data.json</a>
+     (every edition and entry, machine-readable).</p>
 
-  <p>Feeds: <a href="feed.xml">RSS</a> · <a href="data.json">JSON</a></p>
+  <p>Summaries are machine-written and can be wrong; the commit links are
+     authoritative.</p>
 </section>"""
     return layout(f"{SITE_TITLE} — About", body,
-                  description="How this daily mORMot2 digest is produced.",
-                  nav_active="about")
+                  description="How this digest is produced.", nav_active="about")
 
 
 def build_feed(editions: list[Edition], base_url: str) -> str:
