@@ -36,40 +36,6 @@ cannot break the page.
   full-text filter, **RSS** (`feed.xml`) and **JSON** (`data.json`) feeds, light and
   dark themes.
 
-## Setup
-
-### 1. Secrets and variables
-
-| Kind | Name | Value |
-|------|------|-------|
-| Secret | `JULES_API_KEY` | from <https://jules.google.com/settings#api> |
-| Variable *(optional)* | `JULES_SOURCE` | `sources/github/<owner>/<repo>` — skips source lookup |
-
-`GITHUB_TOKEN` is provided by Actions; nothing to create.
-
-### 2. Connect the repository to Jules
-
-Install the Jules GitHub app on **this** repository (not on mORMot2 — the reviewer
-works here and reads the upstream diffs from `data/raw/`). Then check it is visible:
-
-```bash
-JULES_API_KEY=… python scripts/jules_api.py sources
-```
-
-### 3. Enable Pages
-
-*Settings → Pages → Build and deployment → Source: **GitHub Actions***.
-
-### 4. Repository permissions
-
-*Settings → Actions → General → Workflow permissions*: **Read and write**, and allow
-Actions to create and approve pull requests.
-
-### 5. First run
-
-*Actions → mORMot2 Daily → Run workflow*. Useful inputs: `edition` to pick a date,
-`since_days` to backfill a longer window, `skip_jules` to publish without a review.
-
 ## Local use
 
 ```bash
@@ -131,5 +97,4 @@ fallback rendering is visible.
 ## Caveats
 
 Summaries are machine-written and can be wrong. The commit links are the source of
-truth. This is an independent read of a public repository, not affiliated with
-Synopse or the mORMot project.
+truth. 
