@@ -739,12 +739,28 @@ def build_data(editions: list[Edition]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def normalise_base_url(value: str) -> str:
+    """Canonical public origin for the absolute links in feed.xml.
+
+    GitHub Pages reports http:// until "Enforce HTTPS" finishes provisioning, and
+    it reports whichever custom domain was set when the build ran — a feed full of
+    http:// or of a retired hostname is dead links in someone's reader.
+    """
+    url = (value or "").strip().rstrip("/")
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
+    if url and not url.startswith("https://"):
+        url = "https://" + url
+    return url
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default=str(SITE_OUT))
     parser.add_argument("--base-url", default="")
     args = parser.parse_args()
 
+    base_url = normalise_base_url(args.base_url)
     editions = load_editions()
     if not editions:
         print("no data yet — run scripts/fetch_commits.py first", file=sys.stderr)
@@ -760,8 +776,7 @@ def main() -> int:
     (out / "archive.html").write_text(page_archive(editions), encoding="utf-8")
     (out / "units.html").write_text(page_units(editions), encoding="utf-8")
     (out / "about.html").write_text(page_about(), encoding="utf-8")
-    (out / "feed.xml").write_text(build_feed(editions, args.base_url.rstrip("/")),
-                                  encoding="utf-8")
+    (out / "feed.xml").write_text(build_feed(editions, base_url), encoding="utf-8")
     (out / "data.json").write_text(build_data(editions), encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")
 

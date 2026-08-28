@@ -30,6 +30,11 @@ self-hosted in `site/assets/fonts/` — no external request. Swap `--font-prose`
 `--font-ui` at the top of `site/assets/style.css` to change it; the reading column is
 `--column` in the same block.
 
+With a custom domain, set the `SITE_URL` repository variable to the canonical public
+origin (e.g. `https://mormot2daily.fsb.dev`). `feed.xml` carries absolute links, and
+the Pages output alone reports `http://` until *Enforce HTTPS* is provisioned and
+keeps whatever domain was configured when the build ran.
+
 ## Local use
 
 ```bash
