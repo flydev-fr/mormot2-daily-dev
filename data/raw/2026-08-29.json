@@ -1,0 +1,706 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-08-29",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-08-29T04:36:25Z",
+  "range": {
+    "since": "2026-08-28T14:08:51+02:00",
+    "until": "2026-08-29T04:36:25Z",
+    "head_sha": "cabcd0ec77baf48dc3404c77ef5f1b0524c921f7"
+  },
+  "version": {
+    "after": "2.4.16628",
+    "before": "2.4.16618"
+  },
+  "totals": {
+    "commits": 10,
+    "additions": 404,
+    "deletions": 312
+  },
+  "commits": [
+    {
+      "sha": "cabcd0ec77baf48dc3404c77ef5f1b0524c921f7",
+      "short_sha": "cabcd0ec",
+      "subject": "core: another pass of TOsLightLock",
+      "body": "",
+      "author": "Arnaud",
+      "date": "2026-08-28T22:35:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cabcd0ec77baf48dc3404c77ef5f1b0524c921f7",
+      "parents": [
+        "87dbb9fc40ceb7dc568467cd2b688c662892e830"
+      ],
+      "stats": {
+        "additions": 41,
+        "deletions": 40,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 7,
+          "patch": "@@ -4776,17 +4776,14 @@   TOSLock = record\n   POSLock = ^TOSLock;\r\n \r\n   /// the fastest non-reentrant lock supplied by the Operating System\r\n-  // - on Windows, calls Slim Reader/Writer (SRW) Win32 API in exclusive mode\r\n+  // - on Windows, calls WaitOnAddress/WakeByAddresssingle Win8+ API\r\n   // - on Linux, uses 32-bit futex syscall; on BSD, calls pthread_mutex_*()\r\n   // - other systems fallback to TRTLCriticalSection\r\n   // - don't forget to call Init and Done to properly initialize the structure\r\n   // - to protect a very small code section of a few CPU cycles with no Init/Done\r\n   // needed, and a lower footprint, you may consider our TLightLock\r\n   // - same signature as TOSLock/TLightLock, usable as compile time alternatives\r\n   // - warning: non-reentrant, i.e. nested Lock calls would block, as TLightLock\r\n-  // - no TryLock is defined on Windows, because TryAcquireSRWLockExclusive()\r\n-  // raised some unexpected EExternalException C000026 NT_STATUS_RESOURCE_NOT_OWNED\r\n-  // (\"Attempt to release mutex not owned by caller\") during testing\r\n   {$ifdef USERECORDWITHMETHODS}\r\n   TOSLightLock = record\r\n   {$else}\r\n@@ -4799,7 +4796,7 @@   TOSLightLock = record\n     {$endif OSFUTEX}\r\n   public\r\n     /// to be called to setup the instance\r\n-    // - mandatory in all cases, even if TOSLock is part of a class\r\n+    // - mandatory in all cases, even if TOSLightLock is part of a class\r\n     procedure Init;\r\n     /// to be called to finalize the instance\r\n     procedure Done;\r\n@@ -11695,7 +11692,7 @@ procedure TOSLock.UnLock;\n   mormot.core.os.LeaveCriticalSection(CS);\r\n end;\r\n \r\n-\r\n+{$ifndef HAS_TOSLIGHTLOCK}\r\n {$ifdef OSFUTEX}\r\n \r\n { TOSLightLock }\r\n@@ -11772,13 +11769,41 @@ procedure TOSLightLock.LockSpin;\n   else\r\n   begin\r\n     spin := SPIN_COUNT;\r\n-    repeat // TLightLock-like fallback on very old Linux kernel\r\n+    repeat // TLightLock-like fallback on very old Linux/Windows kernel\r\n       spin := SpinAndWait(spin); // regular SwitchToThread spin\r\n     until TryLock;\r\n   end;\r\n end;\r\n \r\n+{$else} // fallback to plain TRTLCriticalSection on Android or Delphi POSIX\r\n+\r\n+procedure TOSLightLock.Init;\r\n+begin\r\n+  InitCriticalSection(fMutex);\r\n+end;\r\n+\r\n+procedure TOSLightLock.Done;\r\n+begin\r\n+  DeleteCriticalSectionIfNeeded(fMutex);\r\n+end;\r\n+\r\n+procedure TOSLightLock.Lock;\r\n+begin\r\n+  EnterCriticalSection(fMutex);\r\n+end;\r\n+\r\n+function TOSLightLock.TryLock: boolean;\r\n+begin\r\n+  result := TryEnterCriticalSection(fMutex) <> 0;\r\n+end;\r\n+\r\n+procedure TOSLightLock.UnLock;\r\n+begin\r\n+  LeaveCriticalSection(fMutex);\r\n+end;\r\n+\r\n {$endif OSFUTEX}\r\n+{$endif HAS_TOSLIGHTLOCK}\r\n \r\n { TLockedList }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 30,
+          "patch": "@@ -1486,11 +1486,15 @@ begin\n   result := not IsZero(@cs, SizeOf(cs));\r\n end;\r\n \r\n-{ TOSLightLock }\r\n+{$endif FPCLINUX}\r\n \r\n {$ifdef HAS_OSPTHREADS}\r\n+{$ifndef OSFUTEX}\r\n \r\n // on Mac/BSD TOSLightLock uses pthreads_mutex - FPCLINUX is handled just above\r\n+{$define HAS_TOSLIGHTLOCK}\r\n+\r\n+{ TOSLightLock }\r\n \r\n procedure TOSLightLock.Init;\r\n begin\r\n@@ -1526,37 +1530,9 @@ begin\n   pthread_mutex_unlock(@fMutex);\r\n end;\r\n \r\n-{$else} // fallback to plain recursive TRTLCriticalSection on Android or Delphi\r\n-\r\n-procedure TOSLightLock.Init;\r\n-begin\r\n-  InitCriticalSection(fMutex);\r\n-end;\r\n-\r\n-procedure TOSLightLock.Done;\r\n-begin\r\n-  DeleteCriticalSectionIfNeeded(fMutex);\r\n-end;\r\n-\r\n-procedure TOSLightLock.Lock;\r\n-begin\r\n-  EnterCriticalSection(fMutex);\r\n-end;\r\n-\r\n-function TOSLightLock.TryLock: boolean;\r\n-begin\r\n-  result := TryEnterCriticalSection(fMutex) <> 0;\r\n-end;\r\n-\r\n-procedure TOSLightLock.UnLock;\r\n-begin\r\n-  LeaveCriticalSection(fMutex);\r\n-end;\r\n-\r\n+{$endif OSFUTEX}\r\n {$endif HAS_OSPTHREADS}\r\n \r\n-{$endif FPCLINUX}\r\n-\r\n procedure PosixSetThreadName(ThreadID: TThreadID; const Name: RawByteString);\r\n var\r\n   {%H-}trunc: TTemp16; // trunc to 16 non space chars (including #0)\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16627\n+16628",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16627'\r\n+'2.4.16628'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1428,7 +1428,7 @@   TPollSockets = class(TPollAbstract)\n   protected\r\n     fMergeSubscribeEventsLock: TLightLock; // topmost to ensure aarch64 alignment\r\n     fSubscriptionSafe: TLightLock; // dedicated not to block Accept()\r\n-    fPendingSafe: TOSLightLock; // more likely benefit from futex/SRW\r\n+    fPendingSafe: TOSLightLock; // more likely benefit from light futex\r\n     fGettingOne: integer;\r\n     fPoll: array of TPollSocketAbstract; // each track up to fPoll[].MaxSockets\r\n     fPending: TPollSocketResults;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Network"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "87dbb9fc40ceb7dc568467cd2b688c662892e830",
+      "short_sha": "87dbb9fc",
+      "subject": "core: fix deadlock in TIcuLibrary",
+      "body": "",
+      "author": "Arnaud",
+      "date": "2026-08-28T21:44:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/87dbb9fc40ceb7dc568467cd2b688c662892e830",
+      "parents": [
+        "1f1fe8dfe9d2857b5f4e7be1d69192ace90ce667"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -678,7 +678,7 @@ begin\n       inc(fSharedCount); // should be set last\r\n     end;\r\n   finally\r\n-    TLightLock(fSharedLock[i]).UnLock;\r\n+    TLightLock(fSharedMainLock).UnLock;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16626\n+16627",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16626'\r\n+'2.4.16627'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1f1fe8dfe9d2857b5f4e7be1d69192ace90ce667",
+      "short_sha": "1f1fe8df",
+      "subject": "core: fixed TIcuLibrary locking code",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T19:45:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1f1fe8dfe9d2857b5f4e7be1d69192ace90ce667",
+      "parents": [
+        "a426a84d6fc33528368334fcd9a04a2e62d5e1d7"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 12,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -2402,10 +2402,10 @@   TIcuLibrary = record\n     procedure SharedUcnvUnLock(ndx: PtrInt);\r\n   private\r\n     // implement a thread-safe cache of up to 32 shared ICU text converters\r\n-    fSharedMainLock: PtrUInt; // = TLightLock\r\n-    fSharedCP:   array[0 .. 31] of word;    // CPU cache-friendly lookup\r\n-    fSharedLock: array[0 .. 31] of PtrUInt; // = TLightLock\r\n-    fSharedCnv:  array[0 .. 31] of pointer; // = ICU converter instance\r\n+    fSharedMainLock: cardinal; // = TLightLock\r\n+    fSharedCP:   array[0 .. 31] of word;     // CPU cache-friendly lookup\r\n+    fSharedLock: array[0 .. 31] of cardinal; // = TLightLock\r\n+    fSharedCnv:  array[0 .. 31] of pointer;  // = ICU converter instance\r\n     fSharedCount, fSharedLast: integer;\r\n   end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -656,12 +656,12 @@ begin\n   begin\r\n     ndx := i; // for eventual SharedUcnvUnLock()\r\n     fSharedLast := i; // optimistic usage\r\n-    if PLightLock(@fSharedLock[i])^.TryLock then\r\n+    if TLightLock(fSharedLock[i]).TryLock then\r\n       result := fSharedCnv[i]; // this thread acquired this converter\r\n     exit;\r\n   end;\r\n   // first time we see this codepage: try to add in our internal cache\r\n-  PLightLock(@fSharedMainLock)^.Lock; // main write lock\r\n+  TLightLock(fSharedMainLock).Lock; // main write lock\r\n   try\r\n     n := fSharedCount;\r\n     if (n <> length(fSharedCP)) and // cache up to 32 instances\r\n@@ -678,14 +678,14 @@ begin\n       inc(fSharedCount); // should be set last\r\n     end;\r\n   finally\r\n-    PLightLock(@fSharedMainLock)^.UnLock;\r\n+    TLightLock(fSharedLock[i]).UnLock;\r\n   end;\r\n end;\r\n \r\n procedure TIcuLibrary.SharedUcnvUnLock(ndx: PtrInt);\r\n begin\r\n   ucnv_reset(fSharedCnv[ndx]); // clean-up from this thread (before unlock)\r\n-  PLightLock(@fSharedLock[ndx])^.UnLock;\r\n+  TLightLock(fSharedLock[ndx]).UnLock;\r\n end;\r\n \r\n procedure syslog(priv: integer; fmt: PAnsiChar; arg: array of const);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16625\n+16626",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16625'\r\n+'2.4.16626'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 2,
+          "patch": "@@ -154,7 +154,7 @@\n     OSWINDOWS OSWINTEL OSWINARM\r\n     OSPOSIX OSBSD OSDARWIN OSBSDDARWIN OSOPENBSD OSFREEBSD\r\n     OSLINUX OSANDROID OSLINUXINTEL OSLINUXX64 OSLINUXX86\r\n-    OSLINUXANDROID OSANDROIDARM64 OSELF\r\n+    OSLINUXANDROID OSANDROIDARM64 OSELF OSFUTEX\r\n     PUREMORMOT2\r\n \r\n   FPC only:\r\n@@ -944,13 +944,17 @@\n     {$define OSWINARM}\r\n   {$endif ABIARM}\r\n   {$define THREADID32}    // TThreadID always 32-bit DWORD on all Windows archs\r\n+  {$define OSFUTEX}       // WaitForValue() futex-like API appeared with Win8\r\n {$else}\r\n   {$ifdef CPU32}\r\n-    {$define THREADID32}    // TThreadID 32-bit on 32-bit systems\r\n+    {$define THREADID32}  // TThreadID is 32-bit on 32-bit POSIX systems\r\n   {$endif CPU32}\r\n   {$ifdef OSLINUX}\r\n     {$define OSLINUXANDROID}\r\n     {$define OSELF}\r\n+    {$ifdef FPC}\r\n+      {$define OSFUTEX}   // direct futex syscall on FPC Linux\r\n+    {$endif FPC}\r\n     {$ifdef ABIX86}\r\n       {$define OSLINUXINTEL}\r\n       {$define OSLINUXX86}\r\n@@ -969,6 +973,7 @@\n   {$ifdef OSANDROID}\r\n     {$define OSLINUXANDROID}\r\n     {$define OSELF}\r\n+    {.$define OSFUTEX}        // untested\r\n     {$ifdef ABIA64}\r\n       {$define OSANDROIDARM64}\r\n     {$endif ABIA64}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Other"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a426a84d6fc33528368334fcd9a04a2e62d5e1d7",
+      "short_sha": "a426a84d",
+      "subject": "core: fixed API-MS-Win-Core-Synch-l1-2-0.dll loading",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T19:41:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a426a84d6fc33528368334fcd9a04a2e62d5e1d7",
+      "parents": [
+        "17a26fa92c4b0ed7b97fdbd0764d6118d713d469"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "@@ -5198,18 +5198,6 @@ begin\n     AcquireSRWLockExclusive := @AcquireSRWLockExclusiveForXP;\r\n     ReleaseSRWLockExclusive := @ReleaseSRWLockExclusiveForXP;\r\n   end;\r\n-  if OSVersion >= wEight then\r\n-  begin\r\n-    h := Windows.LoadLibrary('API-MS-Win-Core-Synch-l1-2-0.dll'); // Win8+\r\n-    WaitOnAddress := LibraryResolve(h, 'WaitOnAddress');\r\n-    WakeByAddressSingle := LibraryResolve(h, 'WakeByAddressSingle');\r\n-    if Assigned(WaitOnAddress) and\r\n-       Assigned(WakeByAddressSingle) then\r\n-    begin\r\n-      OsWaitOnValue := @_OsWaitOnValue;\r\n-      OsWakeOnValue := @WakeByAddressSingle; // defined as stdcall\r\n-    end;\r\n-  end;\r\n   // 3. retrieve system information\r\n   TimeZoneLocalBias := -GetLocalTimeOffset;\r\n   FillcharFast(SystemInfo, SizeOf(SystemInfo), 0);\r\n@@ -5297,6 +5285,18 @@ begin\n   OSVersion32.os := osWindows;\r\n   OSVersion32.win := Vers;\r\n   OSVersion32.winbuild := OSVersionInfo.dwBuildNumber;\r\n+  if OSVersion >= wEight then\r\n+  begin\r\n+    h := Windows.LoadLibrary('API-MS-Win-Core-Synch-l1-2-0.dll'); // Win8+\r\n+    WaitOnAddress := LibraryResolve(h, 'WaitOnAddress');\r\n+    WakeByAddressSingle := LibraryResolve(h, 'WakeByAddressSingle');\r\n+    if Assigned(WaitOnAddress) and\r\n+       Assigned(WakeByAddressSingle) then\r\n+    begin\r\n+      OsWaitOnValue := @_OsWaitOnValue;\r\n+      OsWakeOnValue := @WakeByAddressSingle; // defined as stdcall\r\n+    end;\r\n+  end;\r\n   h := GetModuleHandle(ntdll); // late binding over unstable / altered API\r\n   if h > 0 then\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16624\n+16625",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16624'\r\n+'2.4.16625'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "17a26fa92c4b0ed7b97fdbd0764d6118d713d469",
+      "short_sha": "17a26fa9",
+      "subject": "core: TOSLightLock now uses WaitOnAddress/WakeByAddressSingle on Win8+",
+      "body": "- instead of the SRW lock which purpose is not this\n- very high CAS fast path - just like TLIghtLock\n- use of Windows 32-bit futex API only on contention\n- the very same logic used on Linux did work directly!",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T19:39:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/17a26fa92c4b0ed7b97fdbd0764d6118d713d469",
+      "parents": [
+        "440d9e9d39c7d461ef56255b93b9a6d30357bd73"
+      ],
+      "stats": {
+        "additions": 106,
+        "deletions": 124,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.mvc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -199,7 +199,7 @@   TExpressionHtmlTableStyleBootstrap = class(TExpressionHtmlTableStyle)\n \r\n   // mustache view status for one fFactory.Methods[]\r\n   TMvcViewMustache = record\r\n-    Safe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n+    Safe: TOSLightLock; // = TOSLightMutex = futex on Linux and Win8+\r\n     Mustache: TSynMustache;\r\n     Template: RawUtf8;\r\n     MethodName: TFileName;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 98,
+          "deletions": 16,
+          "patch": "@@ -2564,9 +2564,6 @@ function LinuxSetProcessName(const NewName: RawUtf8): boolean;\n \r\n {$endif ISDELPHI}\r\n \r\n-  /// handle for Slim Reader/Writer (SRW) locks in exclusive mode\r\n-  TOSLightMutex = pointer;\r\n-\r\n /// detect if a file name starts with the long path '\\\\?\\' prefix\r\n // - https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation\r\n function IsExtendedPathName(const Name: TFileName): boolean;\r\n@@ -2575,7 +2572,7 @@ function IsExtendedPathName(const Name: TFileName): boolean;\n   // Slim Reader/Writer (SRW) API exclusive mode - fallback to TLightLock on XP\r\n   InitializeSRWLock,\r\n   AcquireSRWLockExclusive,\r\n-  ReleaseSRWLockExclusive: procedure(var P: TOSLightMutex); stdcall;\r\n+  ReleaseSRWLockExclusive: procedure(var P: pointer); stdcall;\r\n   // documented since Windows Vista, but actually available on Windows XP SP3 :)\r\n   RtlIpv6StringToAddress: function(s: PUtf8Char; var term: PUtf8Char;\r\n     in6: PByte): integer; stdcall;\r\n@@ -2642,12 +2639,14 @@   TRTLCriticalSection = class(TObject);\n type\r\n   /// system-specific type returned by FileAge(): UTC 64-bit Epoch on POSIX\r\n   TFileAge = TUnixTime;\r\n-  /// system-specific structure holding a non-recursive mutex\r\n-  // - is a futex 32-bit flag on Linux or a pthread_mutex on BSD\r\n-  TOSLightMutex = {$ifdef FPCLINUX} cardinal {$else} TRTLCriticalSection {$endif};\r\n \r\n {$endif OSWINDOWS}\r\n \r\n+type\r\n+  /// system-specific structure holding a non-recursive mutex e.g. for TOSLightLock\r\n+  // - is a futex 32-bit flag on Linux/Windows or a pthread_mutex on BSD\r\n+  TOSLightMutex = {$ifdef OSFUTEX} cardinal {$else} TRTLCriticalSection {$endif};\r\n+\r\n /// raw cross-platform library loading function\r\n // - alternative to LoadLibrary() and SafeLoadLibrary() Windows API and RTL\r\n // - on Windows, set the SEM_NOOPENFILEERRORBOX and SEM_FAILCRITICALERRORS flags\r\n@@ -4794,10 +4793,10 @@   TOSLightLock = record\n   TOSLightLock = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    fMutex: TOSLightMutex;\r\n-    {$ifdef FPCLINUX}\r\n-    procedure LockSpin; // for Linux futex support\r\n-    {$endif FPCLINUX}\r\n+    fMutex: TOSLightMutex; // futex on Linux and Win8+ or TRtlCriticalSection\r\n+    {$ifdef OSFUTEX}\r\n+    procedure LockSpin;    // for futex support\r\n+    {$endif OSFUTEX}\r\n   public\r\n     /// to be called to setup the instance\r\n     // - mandatory in all cases, even if TOSLock is part of a class\r\n@@ -4809,15 +4808,13 @@   TOSLightLock = record\n     // would deadlock\r\n     procedure Lock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n-    {$ifdef OSPOSIX}\r\n     /// access to raw pthread_mutex_trylock() method\r\n     // - TryAcquireSRWLockExclusive() seems not stable on all Windows revisions\r\n     function TryLock: boolean;\r\n-      {$ifndef FPCLINUX} {$ifdef HASINLINE} inline; {$endif} {$endif}\r\n-    {$endif OSPOSIX}\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n     /// leave an OS lock\r\n     procedure UnLock;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n+      {$ifdef FPC_OR_DELPHIXE} inline; {$endif} // fail on Delphi 2006-2010\r\n   end;\r\n   POSLightLock = ^TOSLightLock;\r\n \r\n@@ -5242,7 +5239,7 @@   TObjectOSLock = class(TSynPersistent)\n   // - publishes the fastest available non-reentrant Operating System lock\r\n   TObjectOSLightLock = class(TSynPersistent)\r\n   protected\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = futex on Linux and Win8+\r\n   public\r\n     /// initialize the instance, and its associated OS lock\r\n     constructor Create; override;\r\n@@ -5291,6 +5288,7 @@ function NewSynLocker: PSynLocker;\n /// raw cross-platform futex-like to wait while Value^ = Expected\r\n // - use futex on Linux, WaitOnAddress() on Win8+, or equal nil otherwise\r\n // - caller should ensure Value <> nil and eventually make LockedExc32() CAS\r\n+// - see also OSFUTEX conditional defined only on Linux and Windows\r\n var OsWaitOnValue: procedure(Value: PCardinal; Expected, TimeoutMS: cardinal);\r\n \r\n\n... [truncated, 2322 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 77,
+          "patch": "@@ -1472,83 +1472,6 @@ begin\n   result := cs.__m_kind <> 0;\r\n end;\r\n \r\n-{ TOSLightLock }\r\n-\r\n-// on FPC Linux, TOSLightLock uses a futex syscall or fallback to SpinAndWait()\r\n-\r\n-const\r\n-  EV_NONE   = 0;\r\n-  EV_LOCKED = 1;\r\n-  EV_WAITER = 2;\r\n-\r\n-  SPIN_FUTEX = {$ifdef CPUINTEL} 24 {$else} 127 {$endif};\r\n-\r\n-procedure TOSLightLock.Init;\r\n-begin\r\n-  fMutex := EV_NONE; // single 32-bit field\r\n-end;\r\n-\r\n-procedure TOSLightLock.Done;\r\n-begin // just for compatibility with TOSLock\r\n-end;\r\n-\r\n-procedure TOSLightLock.Lock;\r\n-begin\r\n-  if not LockedExc32(fMutex, {to=}EV_LOCKED, {from=}EV_NONE) then\r\n-    LockSpin;\r\n-end;\r\n-\r\n-procedure TOSLightLock.UnLock;\r\n-begin\r\n-  {$ifdef CPUINTEL}\r\n-  if fMutex = EV_LOCKED then\r\n-  begin\r\n-    fMutex := EV_NONE; // fast path is allowed on Intel (and noticeably faster)\r\n-    exit;\r\n-  end;\r\n-  {$else}\r\n-  if LockedExc32(fMutex, {to=}EV_NONE, {from=}EV_LOCKED) then\r\n-    exit; // uncontended CAS path is needed on non-ordered ARM\r\n-  {$endif CPUINTEL}\r\n-  fMutex := EV_NONE;\r\n-  if Assigned(OsWakeOnValue) then\r\n-    OsWakeOnValue(@fMutex);\r\n-end;\r\n-\r\n-function TOSLightLock.TryLock: boolean;\r\n-begin\r\n-  result := (fMutex = EV_NONE) and\r\n-            LockedExc32(fMutex, {to=}EV_LOCKED, {from=}EV_NONE);\r\n-end;\r\n-\r\n-procedure TOSLightLock.LockSpin;\r\n-var\r\n-  spin: PtrUInt;\r\n-begin\r\n-  if Assigned(OsWaitOnValue) then // use pattern with Linux futex syscall\r\n-  begin\r\n-    spin := SPIN_FUTEX;\r\n-    repeat\r\n-      DoPause;\r\n-      dec(spin);\r\n-      if spin = 0 then\r\n-      begin\r\n-        if fMutex <> EV_NONE then\r\n-        begin\r\n-          if fMutex = EV_LOCKED then\r\n-            LockedExc32(fMutex, EV_WAITER, EV_LOCKED); // mark contention\r\n-          OsWaitOnValue(@fMutex, EV_WAITER, INFINITE); // wait until UnLock\r\n-        end;\r\n-        spin := SPIN_FUTEX;\r\n-      end;\r\n-    until LockedExc32(fMutex, EV_WAITER, EV_NONE);\r\n-  end\r\n-  else\r\n-    repeat // TLightLock-like fallback on very old Linux kernel\r\n-      spin := SpinAndWait(spin); // regular SwitchToThread spin\r\n-    until TryLock;\r\n-end;\r\n-\r\n {$else}\r\n \r\n procedure _SetShell(var a, b: RawUtf8);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 26,
+          "patch": "@@ -1495,17 +1495,17 @@ begin\n   result := p^.V;\r\n end; // warning: FPC's GetTickCount64 doesn't handle 49.7 days wrap on XP :(\r\n \r\n-procedure InitializeSRWLockForXP(var P: TOSLightMutex); stdcall;\r\n+procedure InitializeSRWLockForXP(var P: pointer); stdcall;\r\n begin\r\n   PLightLock(@P)^.Init; // our TLightLock is good enough on XP\r\n end;\r\n \r\n-procedure AcquireSRWLockExclusiveForXP(var P: TOSLightMutex); stdcall;\r\n+procedure AcquireSRWLockExclusiveForXP(var P: pointer); stdcall;\r\n begin\r\n   PLightLock(@P)^.Lock;\r\n end;\r\n \r\n-procedure ReleaseSRWLockExclusiveForXP(var P: TOSLightMutex); stdcall;\r\n+procedure ReleaseSRWLockExclusiveForXP(var P: pointer); stdcall;\r\n begin\r\n   PLightLock(@P)^.UnLock;\r\n end;\r\n@@ -1529,29 +1529,6 @@ begin\n end;\r\n \r\n \r\n-{ TOSLightLock }\r\n-\r\n-procedure TOSLightLock.Init;\r\n-begin\r\n-  fMutex := nil;\r\n-  InitializeSRWLock(fMutex); // fallback to TLightLock on XP\r\n-end;\r\n-\r\n-procedure TOSLightLock.Done;\r\n-begin // nothing needed\r\n-end;\r\n-\r\n-procedure TOSLightLock.Lock;\r\n-begin\r\n-  AcquireSRWLockExclusive(fMutex);\r\n-end;\r\n-\r\n-procedure TOSLightLock.UnLock;\r\n-begin\r\n-  ReleaseSRWLockExclusive(fMutex);\r\n-end;\r\n-\r\n-\r\n // Win8+ WaitOnAddress/WakeByAddressSingle futex-like efficient API\r\n // see also warnings at https://devblogs.microsoft.com/oldnewthing/20160826-00\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -505,7 +505,7 @@   TSqlDBServerClass = class of TSqlDBServerAbstract;\n   // TSqlDBServerSockets - this abstract class won't set any HTTP server\r\n   TSqlDBServerAbstract = class\r\n   protected\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = futex on Linux and Win8+\r\n     fServer: THttpServerGeneric;\r\n     fThreadPoolCount: integer;\r\n     fPort, fDatabaseName: RawUtf8;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16623\n+16624",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16623'\r\n+'2.4.16624'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2926,7 +2926,7 @@   TOrmPropertiesAbstract = class\n     fBlobFields: TOrmPropInfoRttiRawBlobDynArray;\r\n     fSqlTableName: RawUtf8;\r\n     fLastFieldsSafe: TLightLock; // topmost to ensure proper aarch64 alignment\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n+    fSafe: TOSLightLock;         // = TOSLightMutex = futex on Linux and Win8+\r\n     fHasNotSimpleFields: boolean;\r\n     fDynArrayFieldsHasObjArray: boolean;\r\n     fHasTypeFields: TOrmFieldTypes;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Database",
+        "ORM"
+      ],
+      "units": [
+        "mormot.core.mvc",
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows",
+        "mormot.db.proxy",
+        "mormot.orm.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "440d9e9d39c7d461ef56255b93b9a6d30357bd73",
+      "short_sha": "440d9e9d",
+      "subject": "net: fixed potential out of range in TAsyncConnections.ThreadPollingWakeupLocked;",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T17:33:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/440d9e9d39c7d461ef56255b93b9a6d30357bd73",
+      "parents": [
+        "043d364d9fa06d4b23880afd9b20d8499e4aa99c"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16622\n+16623",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16622'\r\n+'2.4.16623'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3846,7 +3846,7 @@ procedure TAsyncConnections.ThreadPollingWakeupLocked;\n         begin\r\n           t := fThreads[i];\r\n           if (wuPossible in t.fWakeUp) or                 // not running\r\n-             (t.fThreadPollingLastWakeUpEvents = 0) or    // no spare event\r\n+             (t.fThreadPollingLastWakeUpEvents <= 0) or   // no spare process\r\n              (t.fThreadPollingLastWakeUpTix <> tix) then  // slow process\r\n             continue;\r\n           // this thread is likely to be available very soon: consider it done\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "043d364d9fa06d4b23880afd9b20d8499e4aa99c",
+      "short_sha": "043d364d",
+      "subject": "core: fixed TOSLightLock usage comments in code",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T17:33:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/043d364d9fa06d4b23880afd9b20d8499e4aa99c",
+      "parents": [
+        "64d1d6dbd21fd95f46eb8cd2a61a5d8868d0eda0"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.mvc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -199,7 +199,7 @@   TExpressionHtmlTableStyleBootstrap = class(TExpressionHtmlTableStyle)\n \r\n   // mustache view status for one fFactory.Methods[]\r\n   TMvcViewMustache = record\r\n-    Safe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex\r\n+    Safe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n     Mustache: TSynMustache;\r\n     Template: RawUtf8;\r\n     MethodName: TFileName;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -505,7 +505,7 @@   TSqlDBServerClass = class of TSqlDBServerAbstract;\n   // TSqlDBServerSockets - this abstract class won't set any HTTP server\r\n   TSqlDBServerAbstract = class\r\n   protected\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n     fServer: THttpServerGeneric;\r\n     fThreadPoolCount: integer;\r\n     fPort, fDatabaseName: RawUtf8;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16621\n+16622",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16621'\r\n+'2.4.16622'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1428,8 +1428,8 @@   TPollSockets = class(TPollAbstract)\n   protected\r\n     fMergeSubscribeEventsLock: TLightLock; // topmost to ensure aarch64 alignment\r\n     fSubscriptionSafe: TLightLock; // dedicated not to block Accept()\r\n+    fPendingSafe: TOSLightLock; // more likely benefit from futex/SRW\r\n     fGettingOne: integer;\r\n-    fPendingSafe: TOSLightLock; // TLightLock seems less stable on high-end HW\r\n     fPoll: array of TPollSocketAbstract; // each track up to fPoll[].MaxSockets\r\n     fPending: TPollSocketResults;\r\n     fPendingIndex: PtrInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2926,7 +2926,7 @@   TOrmPropertiesAbstract = class\n     fBlobFields: TOrmPropInfoRttiRawBlobDynArray;\r\n     fSqlTableName: RawUtf8;\r\n     fLastFieldsSafe: TLightLock; // topmost to ensure proper aarch64 alignment\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n     fHasNotSimpleFields: boolean;\r\n     fDynArrayFieldsHasObjArray: boolean;\r\n     fHasTypeFields: TOrmFieldTypes;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Database",
+        "Network",
+        "ORM"
+      ],
+      "units": [
+        "mormot.core.mvc",
+        "mormot.db.proxy",
+        "mormot.net.sock",
+        "mormot.orm.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "64d1d6dbd21fd95f46eb8cd2a61a5d8868d0eda0",
+      "short_sha": "64d1d6db",
+      "subject": "core: TOsLightLock uses a futex on Linux",
+      "body": "- is as fast as TLightLock on its fast CAS path\n- using a futex syscall is a perfect match in comparison with SpinAndWait/SwitchToThread\n- fallback to TLightLock logic on very old kernel (from 20 years ago)\n- validated against our TFB sample to give the best RPS with good stability\n- it makes Linus happy\n- but any feedback is welcome!",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T17:29:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/64d1d6dbd21fd95f46eb8cd2a61a5d8868d0eda0",
+      "parents": [
+        "4cd5cff17480f1ed06c37de0481129e932c53c8a"
+      ],
+      "stats": {
+        "additions": 106,
+        "deletions": 23,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 14,
+          "patch": "@@ -2643,7 +2643,8 @@   TRTLCriticalSection = class(TObject);\n   /// system-specific type returned by FileAge(): UTC 64-bit Epoch on POSIX\r\n   TFileAge = TUnixTime;\r\n   /// system-specific structure holding a non-recursive mutex\r\n-  TOSLightMutex = TRTLCriticalSection;\r\n+  // - is a futex 32-bit flag on Linux or a pthread_mutex on BSD\r\n+  TOSLightMutex = {$ifdef FPCLINUX} cardinal {$else} TRTLCriticalSection {$endif};\r\n \r\n {$endif OSWINDOWS}\r\n \r\n@@ -4776,10 +4777,9 @@   TOSLock = record\n   POSLock = ^TOSLock;\r\n \r\n   /// the fastest non-reentrant lock supplied by the Operating System\r\n-  // - calls Slim Reader/Writer (SRW) Win32 API in exclusive mode or directly\r\n-  // the pthread_mutex_*() library calls in non-recursive/fast mode on Linux\r\n-  // - on XP, where SRW are not available, fallback to a TLightLock\r\n-  // - on non-Linux POSIX, fallback to regular cthreads/TRTLCriticalSection\r\n+  // - on Windows, calls Slim Reader/Writer (SRW) Win32 API in exclusive mode\r\n+  // - on Linux, uses 32-bit futex syscall; on BSD, calls pthread_mutex_*()\r\n+  // - other systems fallback to TRTLCriticalSection\r\n   // - don't forget to call Init and Done to properly initialize the structure\r\n   // - to protect a very small code section of a few CPU cycles with no Init/Done\r\n   // needed, and a lower footprint, you may consider our TLightLock\r\n@@ -4795,6 +4795,9 @@   TOSLightLock = record\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n     fMutex: TOSLightMutex;\r\n+    {$ifdef FPCLINUX}\r\n+    procedure LockSpin; // for Linux futex support\r\n+    {$endif FPCLINUX}\r\n   public\r\n     /// to be called to setup the instance\r\n     // - mandatory in all cases, even if TOSLock is part of a class\r\n@@ -4810,7 +4813,7 @@   TOSLightLock = record\n     /// access to raw pthread_mutex_trylock() method\r\n     // - TryAcquireSRWLockExclusive() seems not stable on all Windows revisions\r\n     function TryLock: boolean;\r\n-     {$ifdef HASINLINE} inline; {$endif}\r\n+      {$ifndef FPCLINUX} {$ifdef HASINLINE} inline; {$endif} {$endif}\r\n     {$endif OSPOSIX}\r\n     /// leave an OS lock\r\n     procedure UnLock;\r\n@@ -4838,7 +4841,7 @@   TLockedList = record\n   TLockedList = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   public\r\n-    /// thread-safe access to the list - single pointer size field\r\n+    /// thread-safe access to the list - single 32-bit field\r\n     Safe: TLightLock;\r\n     /// how many TLockedListOne instances are currently stored in this list\r\n     // - excluding the instances in the recycle bin\r\n@@ -5199,7 +5202,7 @@   TSynLocked = class(TSynPersistent)\n   // - publishes our lightweight exclusive non-reentrant lock\r\n   TObjectLightLock = class(TSynPersistent)\r\n   protected\r\n-    fSafe: TLightLock; // single pointer size field\r\n+    fSafe: TLightLock; // single 32-bit field\r\n   public\r\n     /// access to the associated lightweight exclusive non-reentrant lock instance\r\n     property Safe: TLightLock\r\n@@ -5239,7 +5242,7 @@   TObjectOSLock = class(TSynPersistent)\n   // - publishes the fastest available non-reentrant Operating System lock\r\n   TObjectOSLightLock = class(TSynPersistent)\r\n   protected\r\n-    fSafe: TOSLightLock; // = TOSLightMutex = SRW lock or direct pthread mutex\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = SRW on Windows or futex on Linux\r\n   public\r\n     /// initialize the instance, and its associated OS lock\r\n     constructor Create; override;\r\n@@ -5303,7 +5306,7 @@   TCachedValue = record\n   TCachedValue = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   public\r\n-    Safe: TLightLock; // single pointer size field\r\n+    Safe: TLightLock; // single 32-bit field\r\n     Tix32: cardinal;\r\n     Value: RawByteString;\r\n     procedure Reset;\r\n@@ -11239,15 +11242,12 @@ function SpinAndWait(spin: PtrUInt): PtrUInt;\n   result := SPIN_COUNT;  // try again\r\n end;\r\n \r\n-const // CAS bits for the TSynEvent futex API\r\n-  EV_SIGNAL = 1;\r\n-  EV_WAIT   = 2;\r\n \r\n { TLightLock }\r\n \r\n procedure TLightLock.Init;\r\n begin\r\n-  Flags := 0; // single pointer size field\r\n+  Flags :=\n... [truncated, 355 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 86,
+          "deletions": 7,
+          "patch": "@@ -1454,6 +1454,7 @@ function pthread_mutex_unlock(mutex: pointer): integer;      cdecl; external;\n {$endif OSPTHREADSSTATIC}\r\n \r\n {$ifdef FPCLINUX}\r\n+\r\n procedure _SetShell(var a, b: RawUtf8);\r\n var\r\n   pw: PPasswd; // from the pwd.pp unit\r\n@@ -1470,7 +1471,86 @@ function IsInitializedCriticalSection(var cs: TRTLCriticalSection): boolean;\n begin\r\n   result := cs.__m_kind <> 0;\r\n end;\r\n+\r\n+{ TOSLightLock }\r\n+\r\n+// on FPC Linux, TOSLightLock uses a futex syscall or fallback to SpinAndWait()\r\n+\r\n+const\r\n+  EV_NONE   = 0;\r\n+  EV_LOCKED = 1;\r\n+  EV_WAITER = 2;\r\n+\r\n+  SPIN_FUTEX = {$ifdef CPUINTEL} 24 {$else} 127 {$endif};\r\n+\r\n+procedure TOSLightLock.Init;\r\n+begin\r\n+  fMutex := EV_NONE; // single 32-bit field\r\n+end;\r\n+\r\n+procedure TOSLightLock.Done;\r\n+begin // just for compatibility with TOSLock\r\n+end;\r\n+\r\n+procedure TOSLightLock.Lock;\r\n+begin\r\n+  if not LockedExc32(fMutex, {to=}EV_LOCKED, {from=}EV_NONE) then\r\n+    LockSpin;\r\n+end;\r\n+\r\n+procedure TOSLightLock.UnLock;\r\n+begin\r\n+  {$ifdef CPUINTEL}\r\n+  if fMutex = EV_LOCKED then\r\n+  begin\r\n+    fMutex := EV_NONE; // fast path is allowed on Intel (and noticeably faster)\r\n+    exit;\r\n+  end;\r\n+  {$else}\r\n+  if LockedExc32(fMutex, {to=}EV_NONE, {from=}EV_LOCKED) then\r\n+    exit; // uncontended CAS path is needed on non-ordered ARM\r\n+  {$endif CPUINTEL}\r\n+  fMutex := EV_NONE;\r\n+  if Assigned(OsWakeOnValue) then\r\n+    OsWakeOnValue(@fMutex);\r\n+end;\r\n+\r\n+function TOSLightLock.TryLock: boolean;\r\n+begin\r\n+  result := (fMutex = EV_NONE) and\r\n+            LockedExc32(fMutex, {to=}EV_LOCKED, {from=}EV_NONE);\r\n+end;\r\n+\r\n+procedure TOSLightLock.LockSpin;\r\n+var\r\n+  spin: PtrUInt;\r\n+begin\r\n+  if Assigned(OsWaitOnValue) then // use pattern with Linux futex syscall\r\n+  begin\r\n+    spin := SPIN_FUTEX;\r\n+    repeat\r\n+      DoPause;\r\n+      dec(spin);\r\n+      if spin = 0 then\r\n+      begin\r\n+        if fMutex <> EV_NONE then\r\n+        begin\r\n+          if fMutex = EV_LOCKED then\r\n+            LockedExc32(fMutex, EV_WAITER, EV_LOCKED); // mark contention\r\n+          OsWaitOnValue(@fMutex, EV_WAITER, INFINITE); // wait until UnLock\r\n+        end;\r\n+        spin := SPIN_FUTEX;\r\n+      end;\r\n+    until LockedExc32(fMutex, EV_WAITER, EV_NONE);\r\n+  end\r\n+  else\r\n+    repeat // TLightLock-like fallback on very old Linux kernel\r\n+      spin := SpinAndWait(spin); // regular SwitchToThread spin\r\n+    until TryLock;\r\n+end;\r\n+\r\n {$else}\r\n+\r\n procedure _SetShell(var a, b: RawUtf8);\r\n begin\r\n   if not GetSystemEnv('SHELL', a) then\r\n@@ -1482,11 +1562,12 @@ function IsInitializedCriticalSection(var cs: TRTLCriticalSection): boolean;\n begin\r\n   result := not IsZero(@cs, SizeOf(cs));\r\n end;\r\n-{$endif FPCLINUX}\r\n+\r\n+{ TOSLightLock }\r\n \r\n {$ifdef HAS_OSPTHREADS}\r\n \r\n-{ TOSLightLock }\r\n+// on Mac/BSD TOSLightLock uses pthreads_mutex - FPCLINUX is handled just above\r\n \r\n procedure TOSLightLock.Init;\r\n begin\r\n@@ -1522,9 +1603,7 @@ begin\n   pthread_mutex_unlock(@fMutex);\r\n end;\r\n \r\n-{$else} // fallback to plain recursive TRTLCriticalSection\r\n-\r\n-{ TOSLightLock }\r\n+{$else} // fallback to plain recursive TRTLCriticalSection on Android or Delphi\r\n \r\n procedure TOSLightLock.Init;\r\n begin\r\n@@ -1553,6 +1632,7 @@ end;\n \r\n {$endif HAS_OSPTHREADS}\r\n \r\n+{$endif FPCLINUX}\r\n \r\n procedure PosixSetThreadName(ThreadID: TThreadID; const Name: RawByteString);\r\n var\r\n@@ -2253,7 +2333,6 @@ end;\n // seems a better solution, and also prevents pathological spinning if the\r\n // scheduler policy actually is not adapted to this usage\r\n { $define OSLINUX_SCHEDYIELD}     // force sched_yield syscall on Linux\r\n-{ $define OSLINUX_SCHEDYIELDONCE} // yield once during DoSpin() - no benefit\r\n \r\n {$ifdef OSLINUX_SCHEDYIELD}\r\n procedure SwitchToThread;\r\n@@ -2289,7 +2368,7 @@ begin\n       // reported as unreliable by Alan on most POSIX, and despitable by Linus\r\n       // - from our testing, it gives worse performance than fpnanosleep()\r\n       // when waiting for some event (but may be sometimes used for spinning)\r\n-      ThreadSwitch; // FPC RTL redirects to\n... [truncated, 121 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16620\n+16621",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16620'\r\n+'2.4.16621'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4cd5cff17480f1ed06c37de0481129e932c53c8a",
+      "short_sha": "4cd5cff1",
+      "subject": "core: let publish a raw DoPause procedure",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T17:28:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4cd5cff17480f1ed06c37de0481129e932c53c8a",
+      "parents": [
+        "268d86007dd1f9791a64d1ae6563dccd3880e2ff"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 0,
+          "patch": "@@ -3131,6 +3131,9 @@ procedure Base64DecodeAvx2(var b64: PAnsiChar; var b64len: PtrInt; var b: PAnsiC\n \r\n {$endif ASMX64NOTPIC}\r\n \r\n+/// calls the pause asm opcode on Intel/AMD, or yield on ARM, or do nothing\r\n+procedure DoPause;\r\n+\r\n const\r\n   // default adaptive spin count: up to 992 \"pause\"/\"yield\" instructions\r\n   // - on Intel, this is typically a few microseconds on older CPUs, but newer\r\n@@ -10989,6 +10992,12 @@ procedure DelphiPause(n: PtrUInt);\n end;\r\n {$endif WIN64DELPHI}\r\n \r\n+procedure DoPause; {$ifdef FPC}assembler; nostackframe;{$endif}\r\n+asm\r\n+     pause\r\n+     pause\r\n+end;\r\n+\r\n {$else not ASMINTEL}\r\n \r\n // fallback to pure pascal (or FPC RTL) for non-Intel CPUs\r\n@@ -11641,6 +11650,12 @@ function HasHWAes: boolean;\n \r\n {$endif CPUARM3264}\r\n \r\n+{$ifndef HASPAUSEOPCODE}\r\n+procedure DoPause;\r\n+begin\r\n+end;\r\n+{$endif HASPAUSEOPCODE}\r\n+\r\n {$endif ASMINTEL}\r\n \r\n function LockedGet32(Target: PInteger): integer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16619\n+16620",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16619'\r\n+'2.4.16620'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "268d86007dd1f9791a64d1ae6563dccd3880e2ff",
+      "short_sha": "268d8600",
+      "subject": "core: moved NextSpin() to mormot.core.base",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-28T17:27:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/268d86007dd1f9791a64d1ae6563dccd3880e2ff",
+      "parents": [
+        "4c702f55d7187ea5838f09bfde49e23e0f48d631"
+      ],
+      "stats": {
+        "additions": 91,
+        "deletions": 85,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 0,
+          "patch": "@@ -2971,6 +2971,9 @@ function HasHWAes: boolean;\n   // - e.g. '13th Gen Intel(R) Core(TM) i5-13500'\r\n   IntelBrand: RawUtf8;\r\n \r\n+  /// as used by NextSpin() - default is 1 for Intel - set to 10 on AMD Zen3+\r\n+  SPIN_FACTOR: PtrUInt = 1;\r\n+\r\n /// twelve-character ASCII hypervisor string returned by Intel/AMD cpuid\r\n // - returns '' if cfHYP is not part of CpuFeatures\r\n // - typical values are 'Microsoft Hv', 'VMwareVMware' or 'VBoxVBoxVBox'\r\n@@ -3027,6 +3030,9 @@ function hashsse42(seed: cardinal; buf: PAnsiChar; len: cardinal): cardinal;\n \r\n {$else}\r\n \r\n+const\r\n+  SPIN_FACTOR = 2; // ARM yield has smaller latency than Intel's pause\r\n+\r\n {$ifdef ISDELPHI}\r\n /// redirect to Delphi AtomicIncrement() on non Intel CPU\r\n function InterlockedIncrement(var I: integer): integer; inline;\r\n@@ -3125,6 +3131,18 @@ procedure Base64DecodeAvx2(var b64: PAnsiChar; var b64len: PtrInt; var b: PAnsiC\n \r\n {$endif ASMX64NOTPIC}\r\n \r\n+const\r\n+  // default adaptive spin count: up to 992 \"pause\"/\"yield\" instructions\r\n+  // - on Intel, this is typically a few microseconds on older CPUs, but newer\r\n+  // CPUs may have longer pause latency (tens of cycles)\r\n+  // - AMD Zen 3+ has shorter pause latency, detected via CPUID at startup\r\n+  // to adjust SPIN_FACTOR variable and keep a similar waiting duration\r\n+  // - this 5-50us range matches the eventual nanosleep(10us) fallback\r\n+  SPIN_COUNT = pred(6 shl 5); // = 191\r\n+\r\n+/// adaptative spinning depending on the actual CPU architecture involved\r\n+function NextSpin(spin: PtrUInt): PtrUInt;\r\n+\r\n \r\n { ************ Faster Alternative to RTL Standard Functions }\r\n \r\n@@ -10682,6 +10700,8 @@ function EventEquals(const eventA, eventB): boolean;\n \r\n { ************ Low-level CPU Detection and Intrinsics }\r\n \r\n+{$undef HASPAUSEOPCODE}\r\n+\r\n type\r\n   // 16KB/32KB hash table used by SynLZ - as used by the asm .inc files below\r\n   TOffsets = array[0..4095] of PAnsiChar;\r\n@@ -10950,8 +10970,25 @@ procedure TestCpuFeatures;\n   end;\r\n   {$endif HASNOSSE2}\r\n   {$endif ASMX86NOTPIC}\r\n+  if (CpuManufacturer = icmAmd) and\r\n+     (CpuFamily = $19) and\r\n+     (CpuModel >= $30) then // Zen 3 or later\r\n+    SPIN_FACTOR := 10;       // \"pause\" opcode is only 1-2 cycles\r\n end;\r\n \r\n+{$define HASPAUSEOPCODE}\r\n+// on Intel/AMD, the pause CPU instruction would relax the core\r\n+// - \"pause\" is expected to be inlined within the spinning loop itself\r\n+// - sadly, Delphi does not support inlined asm on Win64 so we use a function\r\n+{$ifdef WIN64DELPHI}\r\n+procedure DelphiPause(n: PtrUInt);\r\n+asm\r\n+@s:   pause          // = \"rep nop\" opcode\r\n+      dec     rcx\r\n+      jnz     @s     // within its own 1..16x loop (better than nothing)\r\n+end;\r\n+{$endif WIN64DELPHI}\r\n+\r\n {$else not ASMINTEL}\r\n \r\n // fallback to pure pascal (or FPC RTL) for non-Intel CPUs\r\n@@ -11490,6 +11527,18 @@ function IntegerScanExists(P: PCardinalArray; Count: PtrInt; Value: cardinal): b\n \r\n {$ifdef CPUARM3264} // ARM-specific code\r\n \r\n+{$ifdef FPC_CPUARM}\r\n+{$ifndef OSANDROID}\r\n+{$define HASPAUSEOPCODE}\r\n+// \"yield\" is available since ARMv6K architecture, including ARMv7-A and ARMv8-A\r\n+// - but our FPC arm32 asm seems not knowledgable of this\r\n+procedure DoPause; assembler; nostackframe;\r\n+asm\r\n+     yield // a few cycles, but helps modern CPU adjust their power requirements\r\n+end;\r\n+{$endif OSANDROID}\r\n+{$endif FPC_CPUARM}\r\n+\r\n {$ifdef OSLINUXANDROID} // read CpuFeatures + auxv from Linux envp\r\n \r\n {$ifdef FPC}\r\n@@ -11601,6 +11650,34 @@ function LockedGet32(Target: PInteger): integer;\n   until LockedExc32(PCardinal(Target)^, 0, result);\r\n end;\r\n \r\n+function NextSpin(spin: PtrUInt): PtrUInt;\r\n+begin\r\n+  {$ifdef HASPAUSEOPCODE} // adaptive spinning to reduce cache coherence traffic\r\n+  result := (SPIN_COUNT - spin) shr 5; // 0..5 range, each 32 times\r\n+  if result <> 0 then     // no pause up to 32 times (low latency acquisition)\r\n+  begin                   // exponential backoff: 1,2,4,8,16 x DoPause\r\n+    result := SPIN_FACTOR shl pred(result);\r\n+    // \"pause\" called 99\n... [truncated, 616 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 83,
+          "patch": "@@ -5466,6 +5466,9 @@ function SleepStepTime(var start, tix: Int64; endtix: PInt64 = nil): PtrInt;\n procedure SwitchToThread;\r\n   {$ifdef OSWINDOWS} stdcall; {$endif}\r\n \r\n+/// calls NextSpin() and eventually SwitchToThread when reached 0\r\n+function SpinAndWait(spin: PtrUInt): PtrUInt; {$ifdef HASINLINE} inline; {$endif}\r\n+\r\n /// try LockedExc() in a loop, calling SwitchToThread after some spinning\r\n procedure SpinExc(var Target: PtrUInt; NewValue, Comperand: PtrUInt);\r\n \r\n@@ -6538,6 +6541,14 @@ procedure _AppendShortUuid(const u: TGuid; var s: ShortString);\n   AppendShortAnsi7String(AnsiString(LowerCase(copy(GUIDToString(u), 2, 36))), s);\r\n end;\r\n \r\n+function _DoWideCharToUtf8Temp(w: PWideChar; wc: PtrInt; var u: TSynTempBuffer): PUtf8Char;\r\n+begin\r\n+  u.len := UnicodeToUtf8(u.Init(wc * 3), wc * 3 + 16, w, wc); // RTL as default\r\n+  if u.len <> 0 then\r\n+    dec(u.len); // RTL UnicodeToUtf8() result includes the null terminator\r\n+  result := u.buf;\r\n+end; // warning: Delphi 7/2007 UnicodeToUtf8() RTL don't handle surrogates\r\n+\r\n function OsDateTimeToText(dt: TDateTime): RawUtf8;\r\n var\r\n   tmp: TShort23; // avoid to link mormot.core.datetime\r\n@@ -11213,83 +11224,13 @@ function DecodeSmbios(var raw: TRawSmbiosInfo; var info: TSmbiosBasicInfos): Ptr\n \r\n { **************** TSynLocker Threading Features }\r\n \r\n-const\r\n-  // default adaptive spin count: up to 992 \"pause\"/\"yield\" instructions\r\n-  // - on Intel, this is typically a few microseconds on older CPUs, but newer\r\n-  // CPUs may have longer pause latency (tens of cycles)\r\n-  // - AMD Zen 3+ has shorter pause latency, detected via CPUID at startup\r\n-  // to adjust SpinFactor variable and keep a similar waiting duration\r\n-  // - this 5-50us range matches the eventual nanosleep(10us) fallback\r\n-  SPIN_COUNT = pred(6 shl 5); // = 191\r\n-\r\n // as reference, take a look at Linus insight (TL&WR: better use futex)\r\n // from https://www.realworldtech.com/forum/?threadid=189711&curpostid=189755\r\n \r\n-{$undef HASPAUSEOPCODE}\r\n-{$ifdef ASMINTEL}\r\n-{$define HASPAUSEOPCODE}\r\n-var\r\n-  SpinFactor: PtrUInt = 1; // default value on Intel - set to 10 on AMD Zen3+\r\n-\r\n-// on Intel/AMD, the pause CPU instruction would relax the core\r\n-// - \"pause\" is expected to be inlined within the spinning loop itself\r\n-// - sadly, Delphi does not support inlined asm on Win64 so we use a function\r\n-{$ifdef WIN64DELPHI}\r\n-procedure DoPause(n: PtrUInt);\r\n-asm\r\n-@s:   pause          // = \"rep nop\" opcode\r\n-      dec     rcx\r\n-      jnz     @s     // within its own 1..16x loop (better than nothing)\r\n-end;\r\n-{$endif WIN64DELPHI}\r\n-{$endif ASMINTEL}\r\n-{$ifdef FPC_CPUARM}\r\n-{$ifndef OSANDROID}\r\n-{$define HASPAUSEOPCODE}\r\n-const\r\n-  SpinFactor = 2; // ARM yield has smaller latency than Intel's pause\r\n-\r\n-// \"yield\" is available since ARMv6K architecture, including ARMv7-A and ARMv8-A\r\n-// - but our FPC arm32 asm seems not knowledgable of this\r\n-procedure DoPause; assembler; nostackframe;\r\n-asm\r\n-     yield // a few cycles, but helps modern CPU adjust their power requirements\r\n-end;\r\n-{$endif OSANDROID}\r\n-{$endif FPC_CPUARM}\r\n-\r\n-function NextSpin(spin: PtrUInt): PtrUInt;\r\n-begin\r\n-  {$ifdef HASPAUSEOPCODE} // adaptive spinning to reduce cache coherence traffic\r\n-  result := (SPIN_COUNT - spin) shr 5; // 0..5 range, each 32 times\r\n-  if result <> 0 then     // no pause up to 32 times (low latency acquisition)\r\n-  begin                   // exponential backoff: 1,2,4,8,16 x DoPause\r\n-    result := SpinFactor shl pred(result);\r\n-    // \"pause\" called 992 times until SwithToThread = up to 50us on modern CPU\r\n-    {$ifdef WIN64DELPHI}\r\n-    DoPause(result);\r\n-    {$else}\r\n-    repeat\r\n-      {$ifdef ASMINTEL}\r\n-      asm\r\n-        pause // \"rep nop\" opcode should be inlined within the spinning loop\r\n-      end;\r\n-      {$else}\r\n-      DoPause; // FPC_CPUARM \"yield\" arm/aarch64 opcode\r\n-      {$endif ASMINTEL}\r\n-      dec(result);\r\n-    until result = 0;\r\n-    {$endif WIN64DELPHI}\r\n-  end;\r\n-  {$endif HASPAUSEOPCODE}\r\n-  dec(s\n... [truncated, 1408 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16618\n+16619",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16618'\r\n+'2.4.16619'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
