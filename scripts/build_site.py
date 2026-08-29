@@ -436,7 +436,7 @@ def entry_row(entry: Entry, index: int, base: str = "",
         parse_iso(entry.date).strftime("%H:%M UTC") if entry.date else "",
         f'PR #{entry.pr}' if entry.pr else "") if x)
     detail.append(f'<p class="d-meta">{meta} · '
-                  f'<a href="{esc(entry.url)}">{esc(_('view_commit'))}</a></p>')
+                  f'<a href="{esc(entry.url)}">{esc(_("view_commit"))}</a></p>')
 
     # The diffstat rides the commit column rather than owning one: it is useful
     # context, not something a reader scans by, and its 5.2rem went to the entry
@@ -677,7 +677,7 @@ def edition_header(edition: Edition, base: str, *, permalink: bool,
                  f'<span class="v"><span class="add">+{edition.totals.get("additions", 0)}</span> '
                  f'<span class="del">-{edition.totals.get("deletions", 0)}</span></span></div>')
     facts.append(f'<div class="fact"><span class="k">{esc(_("fact_read"))}</span>'
-                 f'<span class="v">{esc(_('read_min', n=edition.read_minutes))}</span></div>')
+                 f'<span class="v">{esc(_("read_min", n=edition.read_minutes))}</span></div>')
 
     title = esc(edition.title)
     if permalink:
@@ -791,7 +791,7 @@ def theme_filters(edition: Edition) -> tuple[str, str]:
             f'<div class="theme-summary hidden" data-theme="{i}">'
             f'<span class="s-label">{esc(theme.get("title", ""))}</span>'
             f'<p>{esc(theme.get("summary", ""))}</p></div>')
-    return (f'<div class="themes-row"><span class="themes-label">{esc(_('stories'))}</span>'
+    return (f'<div class="themes-row"><span class="themes-label">{esc(_("stories"))}</span>'
             f'{"".join(chips)}</div>', "".join(summaries))
 
 
