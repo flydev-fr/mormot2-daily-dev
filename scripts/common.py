@@ -15,6 +15,8 @@ ANALYSIS_DIR = DATA / "analysis"
 STATE_FILE = DATA / "state.json"
 SCHEMA_FILE = ROOT / "schema" / "analysis.schema.json"
 SITE_SRC = ROOT / "site"
+# Generated audio editions, one per language, dropped here out of band.
+MEDIA_SRC = SITE_SRC / "medias"
 SITE_OUT = ROOT / "_site"
 
 UPSTREAM = os.environ.get("UPSTREAM_REPO", "synopse/mORMot2")

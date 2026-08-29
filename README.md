@@ -25,10 +25,82 @@ public API moves. Entries carry `interpretation` when a claim is the reviewer's
 reading and `auto-classified` when they never got a review pass. Plus unit index,
 archive, activity chart, filter and search, RSS and JSON feeds, light and dark themes.
 
-Type is [Lekton](https://fonts.google.com/specimen/Lekton) (ISIA Urbino, OFL),
-self-hosted in `site/assets/fonts/` — no external request. Swap `--font-prose` /
-`--font-ui` at the top of `site/assets/style.css` to change it; the reading column is
-`--column` in the same block.
+Type is two self-hosted faces, no external request:
+[Lekton](https://fonts.google.com/specimen/Lekton) (ISIA Urbino, OFL) for
+everything the generator computed — nav, labels, chips, counts, diffstats, SHAs,
+unit names, and every description — and **Serrif**
+([Displaay](https://displaay.net), licensed) for the titles only: the edition
+headline, theme titles, page titles. Because the interface face is monospaced
+there is no separate code stack and no third font file. Lekton has a 0.5 em
+advance and a 0.475 em x-height, both small, so interface sizes are set about
+8 % larger in `rem` than the same optical size would need elsewhere — change the
+face and that scale has to move with it. Serrif defaults to Thin, so its
+`@font-face` declares the full weight range or every title renders at 100. Swap
+`--font-prose` / `--font-ui` at the top of `site/assets/style.css` to change them.
+
+The page is not an article. An edition is a list of independent findings, so it
+uses the full width — a sticky control rail beside a grid of entry cards that
+reflows from one to three columns. `--shell` is the page, `--rail` the control
+column, and `--measure` caps only the two places prose actually runs long (the
+intro and the TL;DR).
+
+## Audio editions
+
+If `site/medias/` holds an episode for an edition, the masthead offers it. Two
+names are recognised, in order:
+
+| name | attached to |
+|------|-------------|
+| `<date>_<LANG>.m4a` | that edition, forever |
+| `daily_<LANG>.m4a` | the newest edition only |
+
+`daily_*` is the rolling file the generator overwrites each morning, so it is
+deliberately not attached to older editions — tomorrow it is a different
+recording, and yesterday's page would be offering audio that no longer matches
+its text. Rename to `<date>_<LANG>.m4a` to keep an episode with its edition.
+
+Where the page's language has no episode the English one is offered, labelled
+with its language, the same fallback the prose uses. The player is a native
+`<audio>` with `preload="none"`: nothing is fetched until the reader presses
+play — verified, 0 audio requests on load.
+
+> **Size.** These files are large: 42 MB and 31 MB today, 97 % of the built
+> site. GitHub blocks files over 100 MB and warns over 50 MB, and every daily
+> regeneration adds a new blob to git history even though the working tree
+> keeps one copy — roughly 25 GB a year at this rate. Before this runs daily,
+> the audio wants to live somewhere other than the repository: object storage,
+> a GitHub Release, or the Render service, with `build_site.py` linking out to
+> it instead of copying it in.
+
+## Languages
+
+The site is published in English, French, Chinese and Russian. English is
+canonical and lives at the root; the others sit under `/fr/`, `/zh/` and `/ru/`
+as complete trees, cross-linked with `hreflang` and a switcher in the masthead.
+`assets/` and `data.json` are shared and stay at the root.
+
+Two different things are translated. The **interface** — nav, column headings,
+filter labels, severity and category names, dates, the About page — lives in
+`scripts/i18n.py`. The **review** is written by the reviewer: every
+reader-facing field in `data/analysis/<edition>.json` may be a plain string
+(English) or an object keyed by language, and `en` is always required. Machine
+fields — `sha`, `category`, `severity`, `action`, `units`, API symbols — are
+never translated.
+
+Where a translation is missing the English text is shown, the block carries
+`lang="en"` so a screen reader does not read English with the page language's
+phonetics, and an edition with no translation at all says so at the top. That
+means older editions keep working unchanged: they are plain strings, and they
+render as English inside a translated interface.
+
+```bash
+python scripts/build_site.py                 # all four languages
+python scripts/build_site.py --langs en,fr   # a subset, while iterating
+```
+
+Adding a language means adding it to `LANGS` in `scripts/i18n.py` with its
+string table, month and weekday names, and to the language list in `PROMPT.md`
+so the reviewer writes it.
 
 With a custom domain, set the `SITE_URL` repository variable to the canonical public
 origin (e.g. `https://mormot2daily.fsb.dev`). `feed.xml` carries absolute links, and

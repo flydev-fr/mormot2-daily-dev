@@ -65,6 +65,56 @@ def _fallback_structural(payload: dict) -> list[str]:
     return errors[:40]
 
 
+LANGS = ["en", "fr", "zh", "ru"]
+
+# Fields the reviewer may write per language. Keep in step with
+# schema/analysis.schema.json and the Languages section of PROMPT.md.
+I18N_FIELDS = ["edition_title", "intro", "tldr", "upgrade_advice", "notes"]
+I18N_ENTRY_FIELDS = ["headline", "what_changed", "impact", "action_detail"]
+
+
+def en(value):
+    """The English text of a field the reviewer may have written per language."""
+    if isinstance(value, dict):
+        return value.get("en", "")
+    return value or ""
+
+
+def language_warnings(payload: dict) -> list[str]:
+    """Translations left as a copy of the English.
+
+    Reported, never fatal. The site already treats an echoed translation as
+    absent and marks the edition untranslated, so there is nothing here worth
+    throwing away an otherwise good review for — the English is the part that
+    matters, and failing the run would lose it.
+    """
+    errors: list[str] = []
+
+    def check(value, where: str) -> None:
+        if not isinstance(value, dict):
+            return
+        for lang, text in value.items():
+            if lang == "en" or not text:
+                continue
+            same = (text == value.get("en")) if not isinstance(text, list) else (
+                text == value.get("en"))
+            if same:
+                errors.append(f"{where}/{lang}: identical to the English; shown "
+                              f"as untranslated")
+
+    for f in I18N_FIELDS:
+        check(payload.get(f), f)
+    for i, theme in enumerate(payload.get("themes") or []):
+        for f in ("title", "summary"):
+            check(theme.get(f), f"themes/{i}/{f}")
+    for i, entry in enumerate(payload.get("entries") or []):
+        for f in I18N_ENTRY_FIELDS:
+            check(entry.get(f), f"entries/{i}/{f}")
+        for j, api in enumerate(entry.get("api_changes") or []):
+            check(api.get("note"), f"entries/{i}/api_changes/{j}/note")
+    return errors
+
+
 def semantic_errors(payload: dict, raw: dict | None) -> list[str]:
     errors: list[str] = []
     entries = payload.get("entries") or []
@@ -87,7 +137,7 @@ def semantic_errors(payload: dict, raw: dict | None) -> list[str]:
                 errors.append(f"entries/{i}/sha: duplicate entry for {sha[:8]}")
             reviewed.add(full)
             subject = (by_sha[full].get("subject") or "").strip().lower()
-            headline = (entry.get("headline") or "").strip().lower()
+            headline = en(entry.get("headline")).strip().lower()
             if headline and headline == subject:
                 errors.append(f"entries/{i}/headline: identical to the commit subject; "
                               f"rewrite it in plain English for a reader who does not "
@@ -105,7 +155,7 @@ def semantic_errors(payload: dict, raw: dict | None) -> list[str]:
 
     for i, entry in enumerate(entries):
         if entry.get("action") in ("upgrade-recommended", "migration-required") \
-                and not entry.get("action_detail"):
+                and not en(entry.get("action_detail")):
             errors.append(f"entries/{i}/action_detail: required when action is "
                           f"'{entry['action']}'")
         if entry.get("category") in ("breaking", "security") \
@@ -149,6 +199,9 @@ def main() -> int:
     for target in targets:
         raw_path = pathlib.Path(args.raw) if args.raw else RAW_DIR / target.name
         errors = validate(target, raw_path)
+        payload = read_json(target)
+        for warning in (language_warnings(payload) if payload else []):
+            print(f"  ~ {warning}")
         if errors:
             print(f"FAIL {target.name}")
             for err in errors:

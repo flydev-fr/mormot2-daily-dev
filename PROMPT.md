@@ -82,6 +82,37 @@ there is a fix or feature a team would want soon. `calm` for internal churn.
 - `confidence` — `confirmed` for what the diff or commit message states, `interpretation`
   for your reading of the consequences. Be honest here; the site displays it.
 
+## Languages
+
+Every reader-facing field is published in four languages: English (`en`),
+French (`fr`), Chinese Simplified (`zh`) and Russian (`ru`). Write each one as
+an object keyed by language code instead of a bare string:
+
+```json
+"headline": {
+  "en": "Read-write lock could corrupt shared state under contention",
+  "fr": "Le verrou lecture-écriture pouvait corrompre l'état partagé en cas de contention",
+  "zh": "读写锁在争用时可能破坏共享状态",
+  "ru": "Блокировка чтения-записи могла портить общее состояние при конкуренции"
+}
+```
+
+That applies to `edition_title`, `intro`, `tldr` (an object of arrays),
+`upgrade_advice`, `notes`, `themes[].title`, `themes[].summary`,
+`entries[].headline`, `entries[].what_changed`, `entries[].impact`,
+`entries[].action_detail` and `entries[].api_changes[].note`.
+
+`en` is required; the rest are optional and the site falls back to English,
+marking the edition as untranslated. Everything else — `sha`, `category`,
+`severity`, `action`, `units`, `api_changes[].symbol` and `.change` — is a
+machine field and is never translated.
+
+Translate the *meaning*, not the words. Identifiers stay verbatim in every
+language: unit names (`mormot.core.os`), type and method names
+(`TOSLightLock.Lock`), API symbols, compiler and platform names. A Chinese
+sentence that renames `TRWLightLock` is worse than no translation at all. Keep
+the same register in each language — calm, concrete, no marketing.
+
 **`themes`** — when several commits are one story (a refactor spread over six commits,
 a new subsystem landing piece by piece), group them so the reader gets the narrative
 instead of six disconnected lines.

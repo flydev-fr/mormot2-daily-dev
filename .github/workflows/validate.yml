@@ -45,3 +45,50 @@ jobs:
           json.loads(pathlib.Path('/tmp/_site/data.json').read_text())
           print('site artefacts are well formed')
           PY
+
+      # Pages live at two depths - / and /edition/ - so every relative href has
+      # to carry the right base. Getting that wrong produces links that work on
+      # the front page and 404 from a permalink, which no other check catches.
+      - name: Check every internal link resolves
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys, urllib.parse
+          root = pathlib.Path('/tmp/_site')
+          bad, checked = [], 0
+          for page in sorted(root.rglob('*.html')):
+              html = page.read_text(encoding='utf-8')
+              for href in sorted(set(re.findall(r'(?:href|src)="([^"]+)"', html))):
+                  if href.startswith(('http://', 'https://', 'data:', 'mailto:', '#')):
+                      continue
+                  path = urllib.parse.unquote(href.split('#')[0].split('?')[0])
+                  if not path:
+                      continue
+                  checked += 1
+                  if not (page.parent / path).resolve().exists():
+                      bad.append(f'{page.relative_to(root)} -> {href}')
+          print(f'{checked} internal links checked')
+          for b in bad:
+              print('  BROKEN', b)
+          sys.exit(1 if bad else 0)
+          PY
+
+      # A link or button inside <summary> is not reliably focusable or
+      # activatable, and a click on it toggles the disclosure as often as it
+      # does what it says. The entry rows are <details>, so this is easy to
+      # reintroduce by adding a column that happens to contain a link.
+      - name: Check no interactive element sits inside a summary
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          summary = re.compile(r'<summary.*?</summary>', re.S)
+          interactive = re.compile(r'<(a[^>]*href|button|input|select|textarea|details)', re.I)
+          bad = []
+          for page in sorted(pathlib.Path('/tmp/_site').rglob('*.html')):
+              for block in summary.findall(page.read_text(encoding='utf-8')):
+                  for tag in interactive.findall(block):
+                      bad.append(f'{page.name}: <{tag.split()[0]}> inside <summary>')
+          for b in sorted(set(bad)):
+              print('  ' + b)
+          print(f'{len(bad)} interactive elements inside <summary>')
+          sys.exit(1 if bad else 0)
+          PY
