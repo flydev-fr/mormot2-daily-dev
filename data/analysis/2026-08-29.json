@@ -1,0 +1,184 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-08-29",
+  "edition_title": "Native futex for TOSLightLock and ICU deadlock fix",
+  "intro": "Today's commits bring a major evolution to the mORMot 2 core synchronization primitives. TOSLightLock now leverages native futex on Linux and WaitOnAddress on Windows 8+, promising significant contention performance gains. In addition, an ICU library deadlock was fixed and the async networking polling got a boundary check.",
+  "tldr": [
+    "TOSLightLock uses native futex on Linux and WaitOnAddress on Windows 8+.",
+    "TIcuLibrary fixes a deadlock during shared converter creation.",
+    "TAsyncConnections fixes a potential out-of-range bug in thread polling.",
+    "Adaptive spin-wait mechanisms are extracted to the core base unit."
+  ],
+  "risk_level": "worth-a-look",
+  "upgrade_advice": "Teams pushing heavy multithreaded workloads on Linux or Windows 8+ should benefit from the TOSLightLock upgrade. The ICU deadlock fix is recommended for applications dealing with internationalization.",
+  "themes": [
+    {
+      "title": "Futex-based TOSLightLock",
+      "summary": "The TOSLightLock structure was heavily refactored across several commits. On Linux, it now uses a 32-bit futex syscall instead of falling back to thread yielding. On Windows 8 and later, it replaces the Slim Reader/Writer (SRW) locks with the faster WaitOnAddress API. A fallback to TRTLCriticalSection remains for older kernels or Android.",
+      "shas": [
+        "64d1d6dbd21fd95f46eb8cd2a61a5d8868d0eda0",
+        "17a26fa92c4b0ed7b97fdbd0764d6118d713d469",
+        "a426a84d6fc33528368334fcd9a04a2e62d5e1d7",
+        "cabcd0ec77baf48dc3404c77ef5f1b0524c921f7",
+        "043d364d9fa06d4b23880afd9b20d8499e4aa99c"
+      ]
+    },
+    {
+      "title": "Adaptive spinning refactoring",
+      "summary": "The CPU-specific adaptive spin loop functions were centralized. NextSpin() and a new raw DoPause procedure are now public in mormot.core.base, allowing better code reuse across the framework.",
+      "shas": [
+        "268d86007dd1f9791a64d1ae6563dccd3880e2ff",
+        "4cd5cff17480f1ed06c37de0481129e932c53c8a"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "cabcd0ec77baf48dc3404c77ef5f1b0524c921f7",
+      "headline": "Fixed TOSLightLock fallback on Android and Delphi POSIX",
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": "Restores the TRTLCriticalSection fallback for TOSLightLock on platforms without native futex or pthread_mutex support, like Android and Delphi POSIX. The previous commits inadvertently broke this fallback.",
+      "impact": "Applications running on Android or compiled with Delphi for POSIX will compile and run correctly again. No impact on Windows or FPC Linux.",
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "87dbb9fc40ceb7dc568467cd2b688c662892e830",
+      "headline": "Fixed a deadlock when loading ICU converters",
+      "category": "fix",
+      "severity": "high",
+      "what_changed": "Corrects the unlock logic in TIcuLibrary.SharedUcnvGet(). The previous code mistakenly released a converter-specific lock instead of the main library lock after populating the converter cache.",
+      "impact": "Prevents deadlocks when multiple threads request text converters from the ICU library simultaneously.",
+      "action": "upgrade-recommended",
+      "action_detail": "Pull this commit if your server relies heavily on ICU internationalization functions.",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1f1fe8dfe9d2857b5f4e7be1d69192ace90ce667",
+      "headline": "Refactored TIcuLibrary internal locking fields",
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": "Changes the internal locking fields in TIcuLibrary from PtrUInt to cardinal to match the expected types for TLightLock primitives.",
+      "impact": "No impact on application code, internal refactoring only.",
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a426a84d6fc33528368334fcd9a04a2e62d5e1d7",
+      "headline": "Fixed late loading of Windows 8 synchronization API",
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": "Moves the runtime loading of API-MS-Win-Core-Synch-l1-2-0.dll to happen after the OS version has been properly populated into OSVersion32.",
+      "impact": "Resolves a bug where the new futex API was not initialized correctly on modern Windows versions because the version check failed at initialization time.",
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "17a26fa92c4b0ed7b97fdbd0764d6118d713d469",
+      "headline": "TOSLightLock uses WaitOnAddress on Windows 8+",
+      "category": "performance",
+      "severity": "high",
+      "what_changed": "Upgrades TOSLightLock on Windows to use the WaitOnAddress and WakeByAddressSingle API (introduced in Windows 8), moving away from Slim Reader/Writer (SRW) locks.",
+      "impact": "Faster lock acquisition on Windows 8 and newer, especially under high contention, by avoiding SRW lock overhead.",
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.mvc",
+        "mormot.db.proxy",
+        "mormot.orm.base"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "440d9e9d39c7d461ef56255b93b9a6d30357bd73",
+      "headline": "Fixed potential bounds error in asynchronous connections",
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": "Updates TAsyncConnections.ThreadPollingWakeupLocked to check for <= 0 instead of exactly 0 when inspecting spare events.",
+      "impact": "Prevents potential out-of-range errors or negative event counters from causing issues in the async polling thread loop.",
+      "action": "none",
+      "units": [
+        "mormot.net.async"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "043d364d9fa06d4b23880afd9b20d8499e4aa99c",
+      "headline": "Updated TOSLightLock usage comments",
+      "category": "chore",
+      "severity": "low",
+      "what_changed": "Updates code comments referencing TOSLightLock across several units to reflect the new Windows 8+ and Linux futex behaviors.",
+      "impact": "No impact on application code, internal refactoring only.",
+      "action": "none",
+      "units": [
+        "mormot.core.mvc",
+        "mormot.db.proxy",
+        "mormot.net.sock",
+        "mormot.orm.base"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "64d1d6dbd21fd95f46eb8cd2a61a5d8868d0eda0",
+      "headline": "TOSLightLock upgraded to use native futex on Linux",
+      "category": "performance",
+      "severity": "high",
+      "what_changed": "Replaces the underlying Linux implementation of TOSLightLock with a direct 32-bit futex syscall instead of a TRTLCriticalSection. It falls back to spin-and-wait on older kernels.",
+      "impact": "Significantly improves requests-per-second and threading stability on Linux backends. It is now as fast as TLightLock on the uncontended fast path.",
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4cd5cff17480f1ed06c37de0481129e932c53c8a",
+      "headline": "Published a raw DoPause procedure",
+      "category": "feature",
+      "severity": "low",
+      "what_changed": "Extracts the CPU pause logic (the pause opcode on x86, yield on ARM) into a globally available DoPause procedure in mormot.core.base.",
+      "impact": "Developers can now explicitly call DoPause in custom spin loops to reduce CPU power consumption and cache traffic.",
+      "action": "none",
+      "units": [
+        "mormot.core.base"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DoPause",
+          "change": "added",
+          "note": "A cross-platform procedure that invokes CPU pause or yield instructions."
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "268d86007dd1f9791a64d1ae6563dccd3880e2ff",
+      "headline": "Moved NextSpin to mormot.core.base",
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": "Moves the adaptive spin-wait function NextSpin() and its associated SPIN_FACTOR and SPIN_COUNT constants from mormot.core.os into the lower-level mormot.core.base unit.",
+      "impact": "No direct impact on application code. It allows simpler units without OS dependencies to use the adaptive spin logic.",
+      "action": "none",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    }
+  ],
+  "notes": "Everything reviewed cleanly."
+}
