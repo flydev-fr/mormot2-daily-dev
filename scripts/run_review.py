@@ -156,6 +156,11 @@ def main() -> int:
     parser.add_argument("--edition", required=True)
     parser.add_argument("--clone", required=True, help="mORMot2 working tree")
     parser.add_argument("--only", help="review just this sha")
+    parser.add_argument("--shas",
+                        help="review these commits (comma-separated) instead of the "
+                             "edition's. They need not belong to the edition, or to "
+                             "any edition: this is how recall is measured against "
+                             "commits whose bug is already known.")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the prompts and report their size, call nothing")
     parser.add_argument("--prepare", metavar="DIR",
@@ -165,11 +170,23 @@ def main() -> int:
     parser.add_argument("--max-body-chars", type=int, default=60000)
     args = parser.parse_args()
 
-    raw = read_json(RAW_DIR / f"{args.edition}.json")
-    if not raw:
-        print(f"error: data/raw/{args.edition}.json not found", file=sys.stderr)
-        return 2
-    commits = [c for c in raw.get("commits", []) if not c.get("is_merge")]
+    if args.shas:
+        commits = []
+        for ref in (r.strip() for r in args.shas.split(",")):
+            if not ref:
+                continue
+            sha = (git(args.clone, "rev-parse", "--verify", f"{ref}^{{commit}}") or "").strip()
+            if not sha:
+                print(f"error: {ref} is not a commit in {args.clone}", file=sys.stderr)
+                return 2
+            subject = (git(args.clone, "show", "-s", "--format=%s", sha) or "").strip()
+            commits.append({"sha": sha, "subject": subject})
+    else:
+        raw = read_json(RAW_DIR / f"{args.edition}.json")
+        if not raw:
+            print(f"error: data/raw/{args.edition}.json not found", file=sys.stderr)
+            return 2
+        commits = [c for c in raw.get("commits", []) if not c.get("is_merge")]
     if args.only:
         commits = [c for c in commits if c["sha"].startswith(args.only)]
     if not commits:

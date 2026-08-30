@@ -22,6 +22,9 @@ on:
       thinking:
         description: 'MAX_THINKING_TOKENS — the biggest cost knob'
         required: false
+      shas:
+        description: 'Review these commits instead of the edition (comma-separated). For measuring recall on commits whose bug is already known.'
+        required: false
 
 permissions:
   contents: read
@@ -48,16 +51,34 @@ jobs:
           git clone --filter=blob:none --no-checkout \
             https://github.com/synopse/mORMot2 upstream
           git -C upstream fetch --depth 200 origin master
+          # A commit named explicitly is usually far outside the 200-commit window:
+          # that is the point of naming it. Fetch each one and its parent.
+          for ref in $(echo "${{ inputs.shas }}" | tr ',' ' '); do
+            git -C upstream fetch --depth 2 origin "$ref" \
+              || { echo "::error::cannot fetch $ref from upstream"; exit 1; }
+          done
 
       - name: List the commits to review
         id: plan
         run: |
           ED="${{ inputs.edition }}"; [ -n "$ED" ] || ED=$(date -u +%F)
           echo "edition=$ED" >> "$GITHUB_OUTPUT"
-          python - "$ED" <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys, pathlib
-          raw = json.loads(pathlib.Path(f"data/raw/{sys.argv[1]}.json").read_text())
-          shas = [c["sha"] for c in raw["commits"] if not c.get("is_merge")]
+          python - "$ED" "${{ inputs.shas }}" <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib, subprocess, sys
+          edition, explicit = sys.argv[1], sys.argv[2].strip()
+          if explicit:
+              # Resolve here so the matrix, the contexts and the findings all name the
+              # same full sha, whatever abbreviation was typed into the dispatch form.
+              shas = []
+              for ref in (r.strip() for r in explicit.split(",")):
+                  if ref:
+                      shas.append(subprocess.run(
+                          ["git", "-C", "upstream", "rev-parse", "--verify",
+                           f"{ref}^{{commit}}"],
+                          capture_output=True, text=True, check=True).stdout.strip())
+          else:
+              raw = json.loads(pathlib.Path(f"data/raw/{edition}.json").read_text())
+              shas = [c["sha"] for c in raw["commits"] if not c.get("is_merge")]
           print(f"shas={json.dumps(shas)}")
           print(f"count={len(shas)}")
           PY
@@ -115,8 +136,10 @@ jobs:
       - name: Build one context per commit
         if: steps.plan.outputs.count != '0'
         run: |
+          SHAS=$(python -c 'import json,sys; print(",".join(json.loads(sys.argv[1])))' \
+                 '${{ steps.plan.outputs.shas }}')
           python scripts/run_review.py \
-            --edition "${{ steps.plan.outputs.edition }}" \
+            --edition "${{ steps.plan.outputs.edition }}" --shas "$SHAS" \
             --clone upstream --prepare contexts/
 
       - uses: actions/upload-artifact@v4
