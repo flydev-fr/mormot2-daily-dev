@@ -141,18 +141,24 @@ jobs:
           # or half-written database restored from another build is a whole class of
           # bug that simply cannot happen here. `time` so the first run tells us what
           # it actually costs on a runner rather than on a workstation.
-          time tokensave init
+          time tokensave init 2>&1 | tee "$RUNNER_TEMP/tokensave-init.log"
           du -sh .tokensave
 
-      - name: Probe an .inc symbol
+      # Read it off the indexer's own report rather than a query: the CLI verbs move
+      # (`callers` was one, then it was not) and a probe that breaks on a renamed
+      # subcommand says nothing about the graph. tokensave lists every extension it
+      # skipped -- .inc appearing there is the failure we care about.
+      - name: Check the .inc files made it into the graph
         if: vars.REVIEW_TOKENSAVE == 'true' && steps.plan.outputs.count != '0'
         continue-on-error: true
         run: |
-          export PATH="$PWD/tokensave-bin:$PATH"
-          cd upstream
-          tokensave callers PosixOpen | tee /tmp/probe.txt
-          grep -qi "posix" /tmp/probe.txt \
-            || { echo "::warning::.inc files did not make it into the graph"; exit 1; }
+          log="$RUNNER_TEMP/tokensave-init.log"
+          grep -E 'indexing done|Skipped' "$log" || true
+          if grep -qE '\.inc \(' "$log"; then
+            echo "::warning::.inc was skipped -- ci/tokensave-inc.py did not take"
+            exit 1
+          fi
+          echo ".inc is not in the skipped list: the patch took"
 
       - name: Build one context per commit
         if: steps.plan.outputs.count != '0'
