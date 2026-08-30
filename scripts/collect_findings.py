@@ -47,10 +47,12 @@ def main() -> int:
                       f"took the {len(expected)} sha(s) found in {args.parts}. "
                       f"A job that produced nothing cannot be detected this way.")
 
-    findings, unverified, reviewed, missing, usage = [], [], [], [], []
+    findings, unverified, reviewed, missing, usage, notes = [], [], [], [], [], []
     for sha in expected:
-        part = None
-        for candidate in pathlib.Path(args.parts).rglob(f"{sha[:8]}*.json"):
+        # A commit is hunted once and verified once per suspicion, so several parts can
+        # carry the same sha. Accumulate; taking the last one silently dropped findings.
+        parts = []
+        for candidate in sorted(pathlib.Path(args.parts).rglob(f"{sha[:8]}*.json")):
             if candidate.name.endswith(".usage.json"):
                 # Claude Code's execution log: a list of events, or the result object.
                 # Keep the fields that answer "what did this commit cost".
@@ -60,6 +62,7 @@ def main() -> int:
                     result = result[-1] if result else {}
                 usage.append({
                     "sha": sha,
+                    "pass": "hunt" if ".hunt." in candidate.name else "verify",
                     "num_turns": result.get("num_turns"),
                     "duration_ms": result.get("duration_ms"),
                     "total_cost_usd": result.get("total_cost_usd"),
@@ -68,11 +71,16 @@ def main() -> int:
                 })
                 continue
             part = read_json(candidate)
-        if part is None:
+            if part is not None:
+                parts.append(part)
+        if not parts:
             missing.append(sha)          # the job failed: say so, do not imply "clean"
             continue
-        findings += part.get("findings", []) or []
-        unverified += part.get("unverified", []) or []
+        for part in parts:
+            findings += part.get("findings", []) or []
+            unverified += part.get("unverified", []) or []
+            if part.get("notes"):
+                notes.append(f"{sha[:8]}: {part['notes']}")
         reviewed.append(sha)
 
     payload = {
@@ -82,9 +90,13 @@ def main() -> int:
         "findings": findings,
         "unverified": unverified,
     }
+    said = []
     if missing:
-        payload["notes"] = ("Not reviewed, the job did not produce a result: "
-                            + ", ".join(s[:8] for s in missing))[:600]
+        said.append("Not reviewed, the job did not produce a result: "
+                    + ", ".join(s[:8] for s in missing))
+    said += notes                       # refutations from the verify pass
+    if said:
+        payload["notes"] = " | ".join(said)[:600]
     write_json(FINDINGS_DIR / f"{args.edition}.json", payload)
     if usage:
         total = sum(u.get("total_cost_usd") or 0 for u in usage)
@@ -92,11 +104,14 @@ def main() -> int:
         seconds = sum((u.get("duration_ms") or 0) for u in usage) / 1000
         write_json(USAGE_DIR / f"{args.edition}.json", {
             "edition": args.edition,
-            "totals": {"commits": len(usage), "cost_usd": round(total, 4),
+            "totals": {"commits": len({u["sha"] for u in usage}),
+                       "sessions": len(usage), "cost_usd": round(total, 4),
                        "turns": turns, "seconds": round(seconds)},
             "commits": usage,
         })
-        print(f"usage: {len(usage)} commit(s), {total:.2f} USD equivalent, "
+        hunt = sum(u.get("total_cost_usd") or 0 for u in usage if u["pass"] == "hunt")
+        print(f"usage: {len({u['sha'] for u in usage})} commit(s), {len(usage)} session(s), "
+              f"{total:.2f} USD equivalent ({hunt:.2f} hunt / {total - hunt:.2f} verify), "
               f"{turns} turns, {seconds / 60:.0f} min")
 
     print(f"{len(reviewed)}/{len(expected)} commit(s) reviewed, "

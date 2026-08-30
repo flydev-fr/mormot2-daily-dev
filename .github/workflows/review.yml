@@ -30,7 +30,10 @@ on:
         type: boolean
         default: false
       max_turns:
-        description: 'Per-commit turn cap (default 30). Reverse mode needs more: with no commit message there is no hint to follow.'
+        description: 'Per-session turn cap (default 30). Reverse mode needs more: with no commit message there is no hint to follow.'
+        required: false
+      hunt_model:
+        description: 'Model for the hunt pass (default claude-sonnet-5). The verify pass uses `model`.'
         required: false
 
 permissions:
@@ -175,20 +178,22 @@ jobs:
         with: { name: review-contexts, path: contexts/ }
 
 
-  review:
+  # Two passes, because one prompt cannot both maximise recall and refuse to claim
+  # anything it cannot prove. The hunt pass guesses; the verify pass kills the guesses.
+  hunt:
     needs: plan
     if: needs.plan.outputs.count != '0'
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false          # one bad commit must not cancel the others
-      max-parallel: 4           # keep a lid on concurrent plan usage
+      fail-fast: false
+      max-parallel: 4
       matrix:
         sha: ${{ fromJson(needs.plan.outputs.shas) }}
     permissions:
       contents: read
-      id-token: write           # claude-code-action's GitHub App authentication
+      id-token: write
     steps:
-      - uses: actions/checkout@v4     # must precede the action: the skill lives in the repo
+      - uses: actions/checkout@v4     # must precede the action: the skills live here
 
       - name: Check out mORMot2 at this commit
         run: |
@@ -197,7 +202,11 @@ jobs:
           git -C upstream fetch --depth 50 origin ${{ matrix.sha }}
           git -C upstream checkout --detach \
             ${{ inputs.reverse && format('{0}^', matrix.sha) || matrix.sha }}
-          echo "REVIEW_SHA=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_ENV"
+          sha=$(git -C upstream rev-parse HEAD)
+          echo "REVIEW_SHA=$sha" >> "$GITHUB_ENV"
+          # The unit under review, not `git show`: in reverse mode those are different
+          # commits entirely, and reading the wrong one silently reviews the wrong diff.
+          echo "REVIEW_CONTEXT=$PWD/contexts/${sha:0:8}.context.md" >> "$GITHUB_ENV"
 
       - uses: actions/download-artifact@v4
         with: { name: review-contexts, path: contexts/ }
@@ -216,8 +225,6 @@ jobs:
           chmod +x tokensave-bin/tokensave
           export PATH="$PWD/tokensave-bin:$PATH"
           cd upstream
-          # 10s for 1031 files, measured. Cheaper than moving a 153 MB graph twice,
-          # and it matches the tree this job actually checked out.
           time tokensave init
 
       - name: Point Claude Code at the graph
@@ -230,52 +237,154 @@ jobs:
               "cwd": "$PWD/upstream" } } }
           JSON
 
-      - name: Review this commit
+      - name: Hunt this commit
         uses: anthropics/claude-code-action@v1
         env:
-          REVIEW_OUTPUT: ${{ github.workspace }}/parts/${{ matrix.sha }}.json
+          REVIEW_OUTPUT: ${{ github.workspace }}/suspicions/${{ matrix.sha }}.json
           MAX_THINKING_TOKENS: ${{ inputs.thinking || vars.REVIEW_THINKING || '8000' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: /mormot-review
+          prompt: /mormot-hunt
           claude_args: >-
             --max-turns ${{ inputs.max_turns || vars.REVIEW_MAX_TURNS || '30' }}
-            --model ${{ inputs.model || vars.REVIEW_MODEL || 'claude-sonnet-5' }}
+            --model ${{ inputs.hunt_model || vars.REVIEW_HUNT_MODEL || 'claude-sonnet-5' }}
             --allowedTools "Read,Grep,Glob,Bash,Write${{ vars.REVIEW_TOKENSAVE == 'true' && ',mcp__tokensave__tokensave_callers,mcp__tokensave__tokensave_callees,mcp__tokensave__tokensave_affected,mcp__tokensave__tokensave_diff_context' || '' }}"
             ${{ vars.REVIEW_TOKENSAVE == 'true' && '--mcp-config .mcp.json' || '' }}
 
-      # The action has no usage output, but Claude Code writes its execution log to
-      # a known path under RUNNER_TEMP: turns, duration, cost, per-model usage. That
-      # file is the per-commit consumption figure, and collecting it is the whole
-      # point of the measured week.
+      - name: Keep the execution log
+        if: always()
+        run: |
+          mkdir -p parts suspicions
+          log="$RUNNER_TEMP/claude-execution-output.json"
+          [ -f "$log" ] && cp "$log" "parts/${{ matrix.sha }}.hunt.usage.json" \
+            || echo "::warning::no execution log at $log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: suspicions-${{ matrix.sha }}
+          path: suspicions/
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parts-hunt-${{ matrix.sha }}
+          path: parts/
+          if-no-files-found: warn
+
+  # One verify job per suspicion. A clean day produces none and costs nothing here.
+  plan_verify:
+    needs: [plan, hunt]
+    if: always() && needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.units.outputs.matrix }}
+      count: ${{ steps.units.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/download-artifact@v4
+        with: { pattern: suspicions-*, path: suspicions/, merge-multiple: true }
+      - id: units
+        run: |
+          python scripts/plan_verify.py --suspicions suspicions/ --units units/
+      - uses: actions/upload-artifact@v4
+        with: { name: verify-units, path: units/, if-no-files-found: warn }
+
+  verify:
+    needs: [plan, plan_verify]
+    if: needs.plan_verify.outputs.count != '0' && needs.plan_verify.outputs.count != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        unit: ${{ fromJson(needs.plan_verify.outputs.matrix) }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out mORMot2 at this commit
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/synopse/mORMot2 upstream
+          git -C upstream fetch --depth 50 origin ${{ matrix.unit.sha }}
+          git -C upstream checkout --detach \
+            ${{ inputs.reverse && format('{0}^', matrix.unit.sha) || matrix.unit.sha }}
+          sha=$(git -C upstream rev-parse HEAD)
+          echo "REVIEW_SHA=$sha" >> "$GITHUB_ENV"
+          # The unit under review, not `git show`: in reverse mode those are different
+          # commits entirely, and reading the wrong one silently reviews the wrong diff.
+          echo "REVIEW_CONTEXT=$PWD/contexts/${sha:0:8}.context.md" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with: { name: review-contexts, path: contexts/ }
+      - uses: actions/download-artifact@v4
+        with: { name: verify-units, path: units/ }
+
+      - name: Restore the patched tokensave binary
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        uses: actions/cache@v4
+        with:
+          path: tokensave-bin/tokensave
+          key: tokensave-${{ vars.REVIEW_TOKENSAVE_REF || 'main' }}-${{ hashFiles('ci/tokensave-inc.py') }}
+
+      - name: Index this commit's tree
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x tokensave-bin/tokensave
+          export PATH="$PWD/tokensave-bin:$PATH"
+          cd upstream
+          time tokensave init
+
+      - name: Point Claude Code at the graph
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        run: |
+          chmod +x tokensave-bin/tokensave
+          cat > .mcp.json <<JSON
+          { "mcpServers": { "tokensave": {
+              "command": "$PWD/tokensave-bin/tokensave", "args": ["serve"],
+              "cwd": "$PWD/upstream" } } }
+          JSON
+
+      - name: Verify this suspicion
+        uses: anthropics/claude-code-action@v1
+        env:
+          REVIEW_SUSPICION: ${{ github.workspace }}/units/${{ matrix.unit.sha }}.${{ matrix.unit.id }}.json
+          REVIEW_OUTPUT: ${{ github.workspace }}/parts/${{ matrix.unit.sha }}.${{ matrix.unit.id }}.json
+          MAX_THINKING_TOKENS: ${{ inputs.thinking || vars.REVIEW_THINKING || '8000' }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: /mormot-verify
+          claude_args: >-
+            --max-turns ${{ inputs.max_turns || vars.REVIEW_MAX_TURNS || '30' }}
+            --model ${{ inputs.model || vars.REVIEW_MODEL || 'claude-opus-5' }}
+            --allowedTools "Read,Grep,Glob,Bash,Write${{ vars.REVIEW_TOKENSAVE == 'true' && ',mcp__tokensave__tokensave_callers,mcp__tokensave__tokensave_callees,mcp__tokensave__tokensave_affected,mcp__tokensave__tokensave_diff_context' || '' }}"
+            ${{ vars.REVIEW_TOKENSAVE == 'true' && '--mcp-config .mcp.json' || '' }}
+
       - name: Keep the execution log
         if: always()
         run: |
           mkdir -p parts
           log="$RUNNER_TEMP/claude-execution-output.json"
-          if [ -f "$log" ]; then
-            cp "$log" "parts/${{ matrix.sha }}.usage.json"
-            python3 - "$log" <<'PY'
-          import json, sys
-          d = json.load(open(sys.argv[1]))
-          r = d if isinstance(d, dict) else (d[-1] if d else {})
-          for k in ("num_turns", "duration_ms", "total_cost_usd"):
-              if k in r:
-                  print(f"{k}: {r[k]}")
-          PY
-          else
-            echo "::warning::no execution log at $log"
-          fi
+          [ -f "$log" ] && \
+            cp "$log" "parts/${{ matrix.unit.sha }}.${{ matrix.unit.id }}.usage.json" \
+            || echo "::warning::no execution log at $log"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: findings-${{ matrix.sha }}
+          name: parts-verify-${{ matrix.unit.sha }}-${{ matrix.unit.id }}
           path: parts/
           if-no-files-found: warn
 
   collect:
-    needs: [plan, review]
+    needs: [plan, hunt, plan_verify, verify]
     if: always() && needs.plan.outputs.count != '0'
     runs-on: ubuntu-latest
     permissions:
@@ -287,7 +396,7 @@ jobs:
       - run: pip install --quiet jsonschema
 
       - uses: actions/download-artifact@v4
-        with: { pattern: findings-*, path: parts/, merge-multiple: true }
+        with: { pattern: parts-*, path: parts/, merge-multiple: true }
 
       - name: Merge the parts
         run: |

@@ -52,6 +52,16 @@ Style, naming, dead code and "this could be clearer" are not findings. The autho
 terse code on purpose. Performance is a finding only when the change makes something
 unbounded, not when it is merely slower.
 
+## The change under review
+
+`$REVIEW_CONTEXT` holds the unit to review: the diff, then the full body of every
+routine it touches. **Read that file first, and treat it as the change.**
+
+Do not take the diff from `git show $REVIEW_SHA`. The two differ whenever the run is a
+synthetic one -- a reversed fix, a replayed change -- and there `git show` hands you a
+completely different commit. Use git freely for everything else: callers, history,
+the other platform's `.inc`, the state of any file at `$REVIEW_SHA`.
+
 ## The diff is the suspect
 
 Start from the assumption that this change is where the bug is. It is not a baseline to
@@ -77,7 +87,7 @@ acquire/release, alloc/free, open/close, enter/leave.
 
 ## Method
 
-1. `git show $REVIEW_SHA` — what moved.
+1. Read `$REVIEW_CONTEXT` — the diff and the routines it touches.
 2. **Read the whole body of every routine the diff touches.** A hunk never shows what
    the rest of the function already does. A clearing call on the first line, or a guard
    three lines above your hunk, changes the answer completely. Most false positives come
