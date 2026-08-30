@@ -1,6 +1,6 @@
 # ci/
 
-`tokensave-inc.patch` — teaches tokensave that `.inc` files are Object Pascal.
+`tokensave-inc.py` — teaches tokensave that `.inc` files are Object Pascal.
 
 Upstream maps `.pas`, `.pp`, `.dpr` and `.lpr` to the Pascal extractor and leaves
 `.inc` as "Other". mORMot2 keeps 61,642 lines across 15 `.inc` files — 11% of `src/`,
