@@ -47,6 +47,8 @@ jobs:
         with: { python-version: '3.11' }
 
       - name: Check out the upstream tree at the edition head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git clone --filter=blob:none --no-checkout \
             https://github.com/synopse/mORMot2 upstream
@@ -57,9 +59,16 @@ jobs:
           git -C upstream checkout --detach FETCH_HEAD
           # A commit named explicitly is usually far outside the 200-commit window:
           # that is the point of naming it. Fetch each one and its parent.
+          # GitHub only serves a fetch by *full* sha, so expand the abbreviation
+          # first -- `git fetch origin b61d9db` answers "couldn't find remote ref".
           for ref in $(echo "${{ inputs.shas }}" | tr ',' ' '); do
-            git -C upstream fetch --depth 2 origin "$ref" \
-              || { echo "::error::cannot fetch $ref from upstream"; exit 1; }
+            full=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+                     "https://api.github.com/repos/synopse/mORMot2/commits/$ref" \
+                   | python -c 'import json,sys; print(json.load(sys.stdin)["sha"])') \
+              || { echo "::error::$ref is not a commit of synopse/mORMot2"; exit 1; }
+            echo "$ref -> $full"
+            git -C upstream fetch --depth 2 origin "$full" \
+              || { echo "::error::cannot fetch $full from upstream"; exit 1; }
           done
 
       - name: List the commits to review
