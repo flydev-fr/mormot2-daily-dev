@@ -22,6 +22,11 @@ next pass; the cost of a missing one is a defect in production.
 Do not, however, pad. Twelve is the cap and reaching it means you are guessing at
 random. Style, naming, dead code and "this could be clearer" are not suspicions.
 
+**One defect, one suspicion.** If a change breaks a routine three ways, or the same
+missing guard shows up at four call sites, that is one entry naming the routine and all
+of it — not four. Each suspicion costs a full verification session, and duplicates come
+back as the same finding repeated, which is worse than useless to whoever reads it.
+
 ## The change under review
 
 `$REVIEW_CONTEXT` holds the unit to review: the diff, then the full body of every

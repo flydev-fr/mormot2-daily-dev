@@ -41,16 +41,37 @@ def main() -> int:
         except (OSError, json.JSONDecodeError) as e:
             skipped.append(f"{path.name}: {e}")
             continue
-        sha = payload.get("sha") or path.name.split(".")[0]
+        # The FILE name, not the payload's sha. The hunt job names its output after the
+        # commit the matrix gave it; the payload carries whatever tree was actually
+        # checked out, which in reverse mode is the parent. Keying on the payload made
+        # the verify job apply the parent step a second time and review the grandparent.
+        sha = path.name.split(".")[0]
+        review_sha = payload.get("sha") or sha
         items = payload.get("suspicions") or []
-        for i, suspicion in enumerate(items):
+
+        # One defect reliably produces several suspicions -- same routine, different
+        # wording. Verifying each separately costs a full session per duplicate and
+        # returns the same finding N times. Keep the first per location.
+        seen, kept = set(), []
+        for suspicion in items:
+            key = (suspicion.get("path"), suspicion.get("symbol") or "",
+                   suspicion.get("line"))
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(suspicion)
+
+        for i, suspicion in enumerate(kept):
             unit_id = f"v{i}"
-            (units_dir / f"{sha[:8]}.{unit_id}.json").write_text(
-                json.dumps({"sha": sha, "id": unit_id, "suspicion": suspicion},
-                           indent=2, ensure_ascii=False), encoding="utf-8")
+            (units_dir / f"{sha}.{unit_id}.json").write_text(
+                json.dumps({"sha": sha, "review_sha": review_sha, "id": unit_id,
+                            "suspicion": suspicion}, indent=2, ensure_ascii=False),
+                encoding="utf-8")
             matrix.append({"sha": sha, "id": unit_id})
-        print(f"{sha[:8]}: {len(items)} suspicion(s), "
-              f"{len(payload.get('accounted') or [])} accounted")
+        dropped = len(items) - len(kept)
+        print(f"{sha[:8]}: {len(kept)} suspicion(s)"
+              + (f", {dropped} duplicate(s) merged" if dropped else "")
+              + f", {len(payload.get('accounted') or [])} accounted")
 
     for line in skipped:
         print(f"warning: {line}", file=sys.stderr)

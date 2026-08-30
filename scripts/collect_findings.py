@@ -51,8 +51,10 @@ def main() -> int:
     for sha in expected:
         # A commit is hunted once and verified once per suspicion, so several parts can
         # carry the same sha. Accumulate; taking the last one silently dropped findings.
-        parts = []
+        parts, hunted = [], False
         for candidate in sorted(pathlib.Path(args.parts).rglob(f"{sha[:8]}*.json")):
+            if ".hunt." in candidate.name:
+                hunted = True
             if candidate.name.endswith(".usage.json"):
                 # Claude Code's execution log: a list of events, or the result object.
                 # Keep the fields that answer "what did this commit cost".
@@ -74,7 +76,12 @@ def main() -> int:
             if part is not None:
                 parts.append(part)
         if not parts:
-            missing.append(sha)          # the job failed: say so, do not imply "clean"
+            if hunted:
+                # Hunted and raised nothing, so no verify job ran and no part exists.
+                # That is a clean commit, not a crashed job -- do not report it as one.
+                reviewed.append(sha)
+            else:
+                missing.append(sha)      # the job failed: say so, do not imply "clean"
             continue
         for part in parts:
             findings += part.get("findings", []) or []
