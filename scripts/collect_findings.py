@@ -34,7 +34,20 @@ def main() -> int:
         part = None
         for candidate in pathlib.Path(args.parts).rglob(f"{sha[:8]}*.json"):
             if candidate.name.endswith(".usage.json"):
-                usage.append(read_json(candidate) or {"sha": sha})
+                # Claude Code's execution log: a list of events, or the result object.
+                # Keep the fields that answer "what did this commit cost".
+                log = read_json(candidate)
+                result = log if isinstance(log, dict) else (log[-1] if log else {})
+                if isinstance(result, list):
+                    result = result[-1] if result else {}
+                usage.append({
+                    "sha": sha,
+                    "num_turns": result.get("num_turns"),
+                    "duration_ms": result.get("duration_ms"),
+                    "total_cost_usd": result.get("total_cost_usd"),
+                    "model_usage": result.get("modelUsage"),
+                    "is_error": result.get("is_error"),
+                })
                 continue
             part = read_json(candidate)
         if part is None:
@@ -56,8 +69,17 @@ def main() -> int:
                             + ", ".join(s[:8] for s in missing))[:600]
     write_json(FINDINGS_DIR / f"{args.edition}.json", payload)
     if usage:
-        write_json(USAGE_DIR / f"{args.edition}.json",
-                   {"edition": args.edition, "commits": usage})
+        total = sum(u.get("total_cost_usd") or 0 for u in usage)
+        turns = sum(u.get("num_turns") or 0 for u in usage)
+        seconds = sum((u.get("duration_ms") or 0) for u in usage) / 1000
+        write_json(USAGE_DIR / f"{args.edition}.json", {
+            "edition": args.edition,
+            "totals": {"commits": len(usage), "cost_usd": round(total, 4),
+                       "turns": turns, "seconds": round(seconds)},
+            "commits": usage,
+        })
+        print(f"usage: {len(usage)} commit(s), {total:.2f} USD equivalent, "
+              f"{turns} turns, {seconds / 60:.0f} min")
 
     print(f"{len(reviewed)}/{len(expected)} commit(s) reviewed, "
           f"{len(findings)} finding(s), {len(unverified)} unverified")

@@ -192,6 +192,29 @@ jobs:
             --allowedTools "Read,Grep,Glob,Bash,Write${{ vars.REVIEW_TOKENSAVE == 'true' && ',mcp__tokensave__tokensave_callers,mcp__tokensave__tokensave_callees,mcp__tokensave__tokensave_affected,mcp__tokensave__tokensave_diff_context' || '' }}"
             ${{ vars.REVIEW_TOKENSAVE == 'true' && '--mcp-config .mcp.json' || '' }}
 
+      # The action has no usage output, but Claude Code writes its execution log to
+      # a known path under RUNNER_TEMP: turns, duration, cost, per-model usage. That
+      # file is the per-commit consumption figure, and collecting it is the whole
+      # point of the measured week.
+      - name: Keep the execution log
+        if: always()
+        run: |
+          mkdir -p parts
+          log="$RUNNER_TEMP/claude-execution-output.json"
+          if [ -f "$log" ]; then
+            cp "$log" "parts/${{ matrix.sha }}.usage.json"
+            python3 - "$log" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          r = d if isinstance(d, dict) else (d[-1] if d else {})
+          for k in ("num_turns", "duration_ms", "total_cost_usd"):
+              if k in r:
+                  print(f"{k}: {r[k]}")
+          PY
+          else
+            echo "::warning::no execution log at $log"
+          fi
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -228,10 +251,8 @@ jobs:
         run: |
           git config user.name  "mormot2-monitor[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # data/usage only exists when the run captured consumption. The action
-          # exposes no usage output, so today it does not — and `git add` on a
-          # missing path is fatal under `bash -e`, which failed the whole step
-          # after the review had already been paid for.
+          # `git add` on a missing path is fatal under `bash -e`, and it failed the
+          # whole step once after the review had already been paid for.
           git add data/findings
           if [ -d data/usage ]; then git add data/usage; fi
           if git diff --cached --quiet; then
