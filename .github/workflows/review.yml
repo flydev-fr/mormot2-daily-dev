@@ -25,6 +25,10 @@ on:
       shas:
         description: 'Review these commits instead of the edition (comma-separated). For measuring recall on commits whose bug is already known.'
         required: false
+      reverse:
+        description: 'Review each commit backwards: the diff that would have introduced what it fixed. Detection test.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -152,6 +156,7 @@ jobs:
                  '${{ steps.plan.outputs.shas }}')
           python scripts/run_review.py \
             --edition "${{ steps.plan.outputs.edition }}" --shas "$SHAS" \
+            ${{ inputs.reverse && '--reverse' || '' }} \
             --clone upstream --prepare contexts/
 
       - uses: actions/upload-artifact@v4
@@ -182,7 +187,9 @@ jobs:
           git clone --filter=blob:none --no-checkout \
             https://github.com/synopse/mORMot2 upstream
           git -C upstream fetch --depth 50 origin ${{ matrix.sha }}
-          git -C upstream checkout --detach ${{ matrix.sha }}
+          git -C upstream checkout --detach \
+            ${{ inputs.reverse && format('{0}^', matrix.sha) || matrix.sha }}
+          echo "REVIEW_SHA=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - uses: actions/download-artifact@v4
         with: { name: review-contexts, path: contexts/ }
@@ -215,7 +222,6 @@ jobs:
       - name: Review this commit
         uses: anthropics/claude-code-action@v1
         env:
-          REVIEW_SHA: ${{ matrix.sha }}
           REVIEW_OUTPUT: ${{ github.workspace }}/parts/${{ matrix.sha }}.json
           MAX_THINKING_TOKENS: ${{ inputs.thinking || vars.REVIEW_THINKING || '8000' }}
         with:

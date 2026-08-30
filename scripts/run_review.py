@@ -48,9 +48,9 @@ def git(clone: str, *args: str, binary: bool = False):
     return r.stdout if binary else r.stdout.decode("utf-8", "replace")
 
 
-def changed_line_numbers(clone: str, sha: str, path: str) -> list[int]:
+def changed_line_numbers(clone: str, base: str, head: str, path: str) -> list[int]:
     """Line numbers touched in the post-image of this file."""
-    diff = git(clone, "show", "-U0", "--format=", sha, "--", path) or ""
+    diff = git(clone, "diff", "-U0", base, head, "--", path) or ""
     lines = []
     for m in re.finditer(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", diff, re.M):
         start, count = int(m.group(1)), int(m.group(2) or 1)
@@ -95,21 +95,31 @@ def enclosing_routines(text: str, line_numbers: list[int]) -> list[tuple[str, in
     return out
 
 
-def build_context(clone: str, sha: str, max_body_chars: int) -> tuple[str, list[str]]:
-    """The review unit: the diff, then the full body of every routine it touches."""
-    diff = git(clone, "show", "-U12", "--format=%s%n%b", sha, "--",
-               ":!src/mormot.commit.inc", ":!src/mormot.commit-num.inc") or ""
-    numstat = git(clone, "show", "--numstat", "--format=", sha) or ""
+def build_context(clone: str, base: str, head: str, max_body_chars: int,
+                  message: bool = True) -> tuple[str, list[str]]:
+    """The review unit: the diff, then the full body of every routine it touches.
+
+    The change reads base -> head. Reversing those two is how a known fix becomes the
+    diff that introduced the bug -- and there `message` must be off, or the commit
+    message hands the reviewer the answer.
+    """
+    NO = (":!src/mormot.commit.inc", ":!src/mormot.commit-num.inc")
+    if message:
+        diff = git(clone, "show", "-U12", "--format=%s%n%b", head, "--", *NO) or ""
+    else:
+        diff = git(clone, "diff", "-U12", base, head, "--", *NO) or ""
+    numstat = git(clone, "diff", "--numstat", base, head) or ""
     paths = [c.split("\t")[2] for c in numstat.splitlines()
              if len(c.split("\t")) == 3 and c.split("\t")[2] not in NOISE]
     sources = [p for p in paths if p.endswith((".pas", ".inc", ".dpr"))]
 
     blocks, budget = [], max_body_chars
     for path in sources:
-        text = git(clone, "show", f"{sha}:{path}")
+        text = git(clone, "show", f"{head}:{path}")
         if text is None or budget <= 0:
             continue
-        for name, begin, end in enclosing_routines(text, changed_line_numbers(clone, sha, path)):
+        for name, begin, end in enclosing_routines(
+                text, changed_line_numbers(clone, base, head, path)):
             body = "\n".join(text.splitlines()[begin - 1:end])
             if len(body) > budget:
                 body = body[:budget] + "\n{ ... body truncated ... }"
@@ -156,6 +166,11 @@ def main() -> int:
     parser.add_argument("--edition", required=True)
     parser.add_argument("--clone", required=True, help="mORMot2 working tree")
     parser.add_argument("--only", help="review just this sha")
+    parser.add_argument("--reverse", action="store_true",
+                        help="review each commit backwards: the diff that would have "
+                             "INTRODUCED what it fixed. The only way to measure "
+                             "detection on a bug whose answer is already known. The "
+                             "commit message is dropped -- it names the bug.")
     parser.add_argument("--shas",
                         help="review these commits (comma-separated) instead of the "
                              "edition's. They need not belong to the edition, or to "
@@ -203,7 +218,19 @@ def main() -> int:
 
     for i, commit in enumerate(commits, 1):
         sha, subject = commit["sha"], commit.get("subject", "")
-        context, paths = build_context(args.clone, sha, args.max_body_chars)
+        if args.reverse:
+            # The tree that results is the parent's, which is a real commit: quotes
+            # then re-check against it, and the finding names the state it is about.
+            base = sha
+            head = (git(args.clone, "rev-parse", "--verify", f"{sha}^") or "").strip()
+            if not head:
+                print(f"error: {sha[:8]} has no parent", file=sys.stderr)
+                return 2
+            sha, subject = head, "(not available)"
+        else:
+            base, head = f"{sha}^", sha
+        context, paths = build_context(args.clone, base, head, args.max_body_chars,
+                                       message=not args.reverse)
         out_path = tmp / f"{sha[:8]}.json"
         prompt = build_prompt(sha, subject, paths, args.edition, str(out_path), context)
         prompt_file = tmp / f"{sha[:8]}.prompt.md"
