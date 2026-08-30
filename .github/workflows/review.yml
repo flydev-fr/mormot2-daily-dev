@@ -1,0 +1,234 @@
+name: Code review
+
+# Reviews the day's upstream commits, one agent session per commit.
+#
+# claude-code-action runs one session per invocation, so the loop is a matrix rather
+# than a single prompt over 25 commits: bounded context each time, nothing skimmed at
+# the end of the batch, and a commit that blows up does not take the day with it.
+#
+# Runs after the daily fetch, so data/raw/<edition>.json exists.
+
+on:
+  schedule:
+    - cron: '15 5 * * *'      # after the 04:30 fetch
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: 'Edition date (YYYY-MM-DD, default: today UTC)'
+        required: false
+      model:
+        description: 'Model for the review'
+        required: false
+      thinking:
+        description: 'MAX_THINKING_TOKENS — the biggest cost knob'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mormot2-review
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      edition: ${{ steps.plan.outputs.edition }}
+      shas: ${{ steps.plan.outputs.shas }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Check out the upstream tree at the edition head
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/synopse/mORMot2 upstream
+          git -C upstream fetch --depth 200 origin master
+
+      - name: List the commits to review
+        id: plan
+        run: |
+          ED="${{ inputs.edition }}"; [ -n "$ED" ] || ED=$(date -u +%F)
+          echo "edition=$ED" >> "$GITHUB_OUTPUT"
+          python - "$ED" <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys, pathlib
+          raw = json.loads(pathlib.Path(f"data/raw/{sys.argv[1]}.json").read_text())
+          shas = [c["sha"] for c in raw["commits"] if not c.get("is_merge")]
+          print(f"shas={json.dumps(shas)}")
+          print(f"count={len(shas)}")
+          PY
+
+      # Opt-in: set the REVIEW_TOKENSAVE repository variable to 'true'. Off by
+      # default so the first measured week has a plain baseline — turning it on later
+      # and comparing is the only way to know what the graph actually changes.
+      - name: Cache the patched tokensave binary
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        id: ts-bin
+        uses: actions/cache@v4
+        with:
+          path: tokensave-bin/tokensave
+          key: tokensave-${{ vars.REVIEW_TOKENSAVE_REF || 'main' }}-${{ hashFiles('ci/tokensave-inc.patch') }}
+
+      - name: Clone, patch and build tokensave
+        if: vars.REVIEW_TOKENSAVE == 'true' && steps.ts-bin.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 \
+            ${{ vars.REVIEW_TOKENSAVE_REF && format('--branch {0}', vars.REVIEW_TOKENSAVE_REF) || '' }} \
+            https://github.com/aovestdipaperino/tokensave.git tokensave-src
+          # .inc files are Object Pascal here: 11% of src/, and the whole posix/windows
+          # layer. See ci/README.md, including why this must not go upstream as is.
+          git -C tokensave-src apply --verbose ../ci/tokensave-inc.patch
+          cd tokensave-src
+          cargo build --release --features medium
+          mkdir -p ../tokensave-bin && cp target/release/tokensave ../tokensave-bin/
+
+      - name: Index the upstream tree
+        if: vars.REVIEW_TOKENSAVE == 'true' && steps.plan.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/tokensave-bin:$PATH"
+          git -C upstream checkout --detach FETCH_HEAD
+          cd upstream
+          # A fresh index every run, on purpose. Indexing this tree is a few seconds,
+          # so caching the database would buy nothing and cost a moving part: a stale
+          # or half-written database restored from another build is a whole class of
+          # bug that simply cannot happen here. `time` so the first run tells us what
+          # it actually costs on a runner rather than on a workstation.
+          time tokensave init
+          du -sh .tokensave
+
+      - name: Probe an .inc symbol
+        if: vars.REVIEW_TOKENSAVE == 'true' && steps.plan.outputs.count != '0'
+        continue-on-error: true
+        run: |
+          export PATH="$PWD/tokensave-bin:$PATH"
+          cd upstream
+          tokensave callers PosixOpen | tee /tmp/probe.txt
+          grep -qi "posix" /tmp/probe.txt \
+            || { echo "::warning::.inc files did not make it into the graph"; exit 1; }
+
+      - name: Build one context per commit
+        if: steps.plan.outputs.count != '0'
+        run: |
+          python scripts/run_review.py \
+            --edition "${{ steps.plan.outputs.edition }}" \
+            --clone upstream --prepare contexts/
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.count != '0'
+        with: { name: review-contexts, path: contexts/ }
+
+      - uses: actions/upload-artifact@v4
+        if: vars.REVIEW_TOKENSAVE == 'true' && steps.plan.outputs.count != '0'
+        with: { name: tokensave-graph, path: upstream/.tokensave/ }
+
+  review:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # one bad commit must not cancel the others
+      max-parallel: 4           # keep a lid on concurrent plan usage
+      matrix:
+        sha: ${{ fromJson(needs.plan.outputs.shas) }}
+    permissions:
+      contents: read
+      id-token: write           # claude-code-action's GitHub App authentication
+    steps:
+      - uses: actions/checkout@v4     # must precede the action: the skill lives in the repo
+
+      - name: Check out mORMot2 at this commit
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/synopse/mORMot2 upstream
+          git -C upstream fetch --depth 50 origin ${{ matrix.sha }}
+          git -C upstream checkout --detach ${{ matrix.sha }}
+
+      - uses: actions/download-artifact@v4
+        with: { name: review-contexts, path: contexts/ }
+
+      # The graph is built once at the day's head and reused by every job. Callers
+      # barely move within a day, and re-indexing 572k lines per commit would cost
+      # more than it saves.
+      - name: Restore the code graph
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        uses: actions/download-artifact@v4
+        with: { name: tokensave-graph, path: upstream/.tokensave/ }
+
+      - name: Restore the patched tokensave binary
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        uses: actions/cache@v4
+        with:
+          path: tokensave-bin/tokensave
+          key: tokensave-${{ vars.REVIEW_TOKENSAVE_REF || 'main' }}-${{ hashFiles('ci/tokensave-inc.patch') }}
+
+      - name: Point Claude Code at the graph
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        run: |
+          chmod +x tokensave-bin/tokensave
+          cat > .mcp.json <<JSON
+          { "mcpServers": { "tokensave": {
+              "command": "$PWD/tokensave-bin/tokensave", "args": ["serve"],
+              "cwd": "$PWD/upstream" } } }
+          JSON
+
+      - name: Review this commit
+        uses: anthropics/claude-code-action@v1
+        env:
+          REVIEW_SHA: ${{ matrix.sha }}
+          REVIEW_OUTPUT: ${{ github.workspace }}/parts/${{ matrix.sha }}.json
+          MAX_THINKING_TOKENS: ${{ inputs.thinking || vars.REVIEW_THINKING || '8000' }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: /mormot-review
+          claude_args: >-
+            --max-turns 30
+            --model ${{ inputs.model || vars.REVIEW_MODEL || 'claude-sonnet-5' }}
+            --allowedTools "Read,Grep,Glob,Bash,Write${{ vars.REVIEW_TOKENSAVE == 'true' && ',mcp__tokensave__tokensave_callers,mcp__tokensave__tokensave_callees,mcp__tokensave__tokensave_affected,mcp__tokensave__tokensave_diff_context' || '' }}"
+            ${{ vars.REVIEW_TOKENSAVE == 'true' && '--mcp-config .mcp.json' || '' }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: findings-${{ matrix.sha }}
+          path: parts/
+          if-no-files-found: warn
+
+  collect:
+    needs: [plan, review]
+    if: always() && needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install --quiet jsonschema
+
+      - uses: actions/download-artifact@v4
+        with: { pattern: findings-*, path: parts/, merge-multiple: true }
+
+      - name: Merge the parts
+        run: |
+          python scripts/collect_findings.py \
+            --edition "${{ needs.plan.outputs.edition }}" --parts parts/
+
+      - name: Re-check every quote against the source
+        run: |
+          python scripts/validate_findings.py \
+            --edition "${{ needs.plan.outputs.edition }}"
+
+      - name: Commit the findings
+        run: |
+          git config user.name  "mormot2-monitor[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/findings data/usage
+          git diff --cached --quiet && exit 0
+          git commit -m "review: findings for ${{ needs.plan.outputs.edition }}"
+          git push origin HEAD:main
