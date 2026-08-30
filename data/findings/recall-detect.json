@@ -2,17 +2,214 @@
   "schema": "mormot2-monitor/findings@1",
   "edition": "recall-detect",
   "reviewed_shas": [
-    "b61d9db4d8259726efc7b307fd765e705f32ed53",
-    "7dd5c8c6d9bdd93d9ea4c8fced099eb7524f0ad2",
-    "00693ed14131e602ce8699ecb245c17a2f82d36b",
-    "5463ae5712f7140f3f41d9271847c00ee8ba1449"
+    "00693ed14131e602ce8699ecb245c17a2f82d36b"
   ],
-  "findings": [],
-  "unverified": [
+  "findings": [
     {
-      "sha": "faf738e260aa388d8621f076b054b3172ad0126c",
-      "suspicion": "In the MaxDestChars overload of Utf8ToWideChar(), the loop stops when dest reaches endDest = @dest0[MaxDestChars], then quit/nosource does dest^ := #0 at that address, i.e. one WideChar past MaxDestChars. mormot.db.rad.ui.pas:374 calls it with Field.DataSize shr 1 for a dest buffer of DataSize bytes, so a field that fills the buffer would take a 2-byte write past its end.",
-      "why_unproven": "Not introduced by this commit: it only rewrites the endDest computation (inc(MaxDestChars,MaxDestChars); inc(MaxDestChars,PtrUInt(dest))) into the equivalent MaxDestChars := PtrUInt(@dest[MaxDestChars]). The doubled bound came from aa8eec32 (PR #552), so the behaviour belongs to that commit; reported here only so a human can look, not as a finding against this sha."
+      "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+      "check": "memory-lifetime",
+      "severity": "critical",
+      "title": "TRWLightLock.WriteLock returns while readers are still inside the critical section",
+      "explanation": "TryWriteLock computes f := Flags and not 1, which clears only the writer bit and keeps the reader count in the upper bits. It then CAS-es Flags from f to f+1. With two readers holding the lock, Flags = 4, f = 4, the (Flags = f) test passes and the CAS 4 -> 5 succeeds, so TryWriteLock returns true while those readers are still running. WriteLock is now just 'if not TryWriteLock then WriteLockSpin', and WriteLockSpin is 'repeat SpinAndWait until TryWriteLock' - neither waits for the reader count to reach zero. The write bit only blocks readers that arrive afterwards, because ReadLock CAS-es from the same masked f and fails once bit 0 is set. Existing readers are never drained. A writer therefore mutates or frees data another thread is dereferencing. The prior code took the write bit the same way but then ran 'while Flags <> 1 do spin := SpinAndWait(spin)' to wait for every reader to leave; that second loop is gone.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "function TRWLightLock.TryWriteLock: boolean;\nvar\n  f: PtrUInt;\nbegin\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock\n  result := (Flags = f) and\n            LockedExc(Flags, {to=}f + 1, {from=}f);\nend;",
+          "why": "f keeps the reader count, so the CAS f -> f+1 succeeds with readers present: Flags=4 gives f=4, (Flags = f) is true, CAS 4->5 succeeds."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRWLightLock.WriteLockSpin;\nvar\n  spin: PtrUInt;\nbegin\n  spin := SPIN_COUNT;\n  repeat\n    spin := SpinAndWait(spin);\n  until TryWriteLock;\nend;",
+          "why": "The only exit condition is TryWriteLock, which does not require the reader count to be zero. No drain loop remains, so WriteLock returns with readers still inside."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRestServer.ResetRoutes;\nbegin\n  if fRouter = nil then\n    exit;\n  fRouterSafe.WriteLock;\n  try\n    FreeAndNil(fRouter);\n  finally\n    fRouterSafe.WriteUnLock;\n  end;\nend;",
+          "why": "A concrete writer that frees the object readers are dereferencing under the same TRWLightLock (fRouterSafe)."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TRestServer.Uri - every HTTP/REST request - racing TRestServer.ResetRoutes, reached from TRestServer.SetOptions/ServiceMethodRegister and TServiceContainerServer.AddServiceInternal/SetPublishSignature",
+        "path_quote": "    fRouterSafe.ReadLock;\n    node := fRouter.Lookup(ctxt);\n    fRouterSafe.ReadUnLock;",
+        "path_sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+        "path_path": "src/rest/mormot.rest.server.pas"
+      },
+      "refuted_by": "Ruled out: (1) 'not 1' masks bit 0 only and LockedExc is a plain InterlockedCompareExchange, so the CAS from f succeeds at any reader count - nothing tests the reader bits; (2) WriteUnLock is LockedDec(Flags, 1), decrementing only the write bit, so it is built to coexist with readers; (3) ReadLock/TryReadLock CAS from the same masked f, blocking only readers that arrive after the bit is set; (4) no {$ifdef} guards these routines; (5) no external serialisation - ResetRoutes relies on fRouterSafe alone while Uri holds only a ReadLock. Upstream 7dd5c8c6d fixes exactly this, citing #557.",
+      "confidence": "proven",
+      "suggested_fix": "Restore the two-phase acquisition in WriteLockSpin: after CAS-ing the write bit on top of the reader count, spin with 'while Flags <> 1 do spin := SpinAndWait(spin)' until all readers have left. TryWriteLock must stay all-or-nothing, i.e. CAS from 0 to 1 only, so a caller that gets true really is exclusive - that is what upstream 7dd5c8c6d does."
+    },
+    {
+      "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+      "check": "other",
+      "severity": "critical",
+      "title": "TRWLightLock.TryWriteLock grants an exclusive write lock while readers still hold it",
+      "explanation": "TryWriteLock computes f := Flags and not 1, which clears only the writer bit and keeps the reader count that lives in bits 1..31/63. It then tests Flags = f, which is true whenever no writer holds the lock no matter how many readers do, and CAS-es f -> f+1. With Flags = 2 (one reader inside its critical section) f = 2, the guard passes, LockedExc(Flags, 3, 2) succeeds, and TryWriteLock returns true; WriteLock returns to its caller while that reader is still running. Nothing drains the readers afterwards: WriteLockSpin is now just 'repeat SpinAndWait until TryWriteLock', and the second loop that used to wait for all readers once the writer bit was taken is gone. New readers and a second writer are still correctly blocked once bit 0 is set (ReadLock's CAS from f fails, and the second TryWriteLock sees Flags <> f), so the breakage is precisely the writer/existing-reader overlap: the writer mutates data that concurrent readers are still dereferencing.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "function TRWLightLock.TryWriteLock: boolean;\nvar\n  f: PtrUInt;\nbegin\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock\n  result := (Flags = f) and\n            LockedExc(Flags, {to=}f + 1, {from=}f);\nend;",
+          "why": "f keeps the reader bits, so 'Flags = f' only asserts that bit 0 (the writer bit) is clear. Any non-zero reader count still satisfies it and the CAS succeeds."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "procedure TRWLightLock.WriteLockSpin;\nvar\n  spin: PtrUInt;\nbegin\n  spin := SPIN_COUNT;\n  repeat\n    spin := SpinAndWait(spin);\n  until TryWriteLock;\nend;",
+          "why": "The blocking path adds no reader drain of its own: it accepts whatever TryWriteLock accepts, so WriteLock inherits the same non-exclusive acquisition."
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "function LockedExc(var Target: PtrUInt; NewValue, Comperand: PtrUInt): boolean;\nbegin\n  result := {$ifdef ISDELPHI}AtomicCmpExchange{$else}InterlockedCompareExchange{$endif}(\n    pointer(Target), pointer(NewValue), pointer(Comperand)) = pointer(Comperand);\nend;",
+          "why": "Confirms LockedExc is a plain CAS returning true on success, so TryWriteLock really does report an acquired write lock in the f<>0 case."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "    fRouterSafe.ReadLock;\n    node := fRouter.Lookup(ctxt);\n    fRouterSafe.ReadUnLock;",
+          "why": "The reader side of the race: every HTTP request dereferences fRouter under a TRWLightLock ReadLock, i.e. with Flags >= 2."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TRestServer.Uri (every HTTP request) racing TRestServer.ResetRoutes, reached from the public ServiceMethodRegister / TServiceFactoryServer.SetOptions paths",
+        "path_quote": "procedure TRestServer.ResetRoutes;\nbegin\n  if fRouter = nil then\n    exit;\n  fRouterSafe.WriteLock;\n  try\n    FreeAndNil(fRouter);\n  finally\n    fRouterSafe.WriteUnLock;\n  end;\nend;",
+        "path_sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+        "path_path": "src/rest/mormot.rest.server.pas"
+      },
+      "refuted_by": "Looked for what would make it safe and found nothing. The old reader-drain 'while Flags <> 1 do spin := SpinAndWait(spin)' is deleted with no replacement; ReadLockSpin, ReadUnLock and IsLocked do not drain either. grep over src/ shows a single TRWLightLock.TryWriteLock / WriteLockSpin implementation, so no asm or per-platform .inc variant escapes it. ReadLock and a second TryWriteLock are correctly rejected once bit 0 is set, which narrows the defect to the existing-reader overlap but does not remove it.",
+      "confidence": "proven",
+      "suggested_fix": "Make the write bit only obtainable on a fully free lock, i.e. 'result := LockedExc(Flags, {to=}1, {from=}0)', or keep the f+1 CAS inside WriteLockSpin and restore the second loop that waits until Flags = 1 before returning - but then TryWriteLock must not report success while reader bits remain set."
+    },
+    {
+      "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+      "check": "other",
+      "severity": "critical",
+      "title": "TRWLightLock.WriteLock now returns while ReadLocks are still held",
+      "explanation": "TryWriteLock computes f := Flags and not 1, which clears only the writer bit and keeps the reader counter in bits 1..31/63. It then requires (Flags = f), i.e. only that no writer holds the lock, and CASes Flags from f to f + 1. With N readers inside their critical section Flags = 2N and f = 2N, so the test passes, the CAS succeeds, and the writer bit is set while those N readers are still reading. WriteLock is now nothing but 'if not TryWriteLock then WriteLockSpin', and WriteLockSpin only retries TryWriteLock: the second loop that used to drain the readers after taking the writer bit ('while Flags <> 1 do spin := SpinAndWait(spin);') was deleted by this change, and the old from=0 comperand that made the fast path require an idle lock is gone too. So a WriteLock call returns to its caller with readers active, and the lock no longer provides the exclusion its callers rely on.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "function TRWLightLock.TryWriteLock: boolean;\nvar\n  f: PtrUInt;\nbegin\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock\n  result := (Flags = f) and\n            LockedExc(Flags, {to=}f + 1, {from=}f);\nend;",
+          "why": "f keeps the reader counter, so the comperand is the current reader count, not 0: the CAS succeeds and sets the writer bit while readers hold the lock."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRWLightLock.WriteLockSpin;\nvar\n  spin: PtrUInt;\nbegin\n  spin := SPIN_COUNT;\n  repeat\n    spin := SpinAndWait(spin);\n  until TryWriteLock;\nend;",
+          "why": "The slow path is now only a retry of TryWriteLock. The 'while Flags <> 1' loop that waited for all readers to leave after acquiring the writer bit no longer exists, so nothing waits for readers anywhere."
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "function LockedExc(var Target: PtrUInt; NewValue, Comperand: PtrUInt): boolean;\nbegin\n  result := {$ifdef ISDELPHI}AtomicCmpExchange{$else}InterlockedCompareExchange{$endif}(\n    pointer(Target), pointer(NewValue), pointer(Comperand)) = pointer(Comperand);\nend;",
+          "why": "Confirms LockedExc returns true whenever Target equalled Comperand, so a non-zero (readers-present) comperand is an accepted acquisition, not a rejection."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRestServer.ResetRoutes;\nbegin\n  if fRouter = nil then\n    exit;\n  fRouterSafe.WriteLock;\n  try\n    FreeAndNil(fRouter);\n  finally\n    fRouterSafe.WriteUnLock;\n  end;\nend;",
+          "why": "A writer that proceeds while readers are active here frees fRouter under a thread that is dereferencing it, turning the exclusion defect into a use-after-free."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TRestServer.Uri, the main REST processing method (every HTTP request), as the reader; TRestServer.ResetRoutes, reached at runtime from SOA registration in mormot.soa.server, as the writer",
+        "path_quote": "    fRouterSafe.ReadLock;\n    node := fRouter.Lookup(ctxt);\n    fRouterSafe.ReadUnLock;",
+        "path_sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+        "path_path": "src/rest/mormot.rest.server.pas"
+      },
+      "refuted_by": "No asm override exists: 'git grep RWLightLock' over *.inc at this sha returns nothing and no other unit implements these methods, so the Pascal bodies run on every platform. LockedExc in mormot.core.base.pas returns true iff Target = Comperand, so a reader-count comperand is accepted. ReadLock/TryReadLock do block new readers while bit 0 is set, but nothing makes an in-flight reader leave. WriteUnLock (LockedDec(Flags, 1)) only clears the writer bit. WriteLockSpin's whole body has no reader-drain loop left.",
+      "confidence": "proven",
+      "suggested_fix": "Restore the two-stage acquisition in WriteLockSpin: after the CAS that sets the writer bit, spin until Flags = 1 so all readers have left; and keep the fast path in WriteLock/TryWriteLock CASing from 0 so it only succeeds on a fully idle lock."
+    },
+    {
+      "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+      "check": "memory-lifetime",
+      "severity": "critical",
+      "title": "TRWLightLock.WriteLock no longer waits for in-flight readers, breaking read/write exclusion",
+      "explanation": "TryWriteLock computes f := Flags and not 1, which keeps the reader counter in the upper bits, then CAS-es Flags from f to f+1: it succeeds as soon as bit 0 (the writer bit) is clear, whatever the reader count is. WriteLockSpin now only spins until that same TryWriteLock succeeds; the previous second loop 'while Flags <> 1' that waited for all readers to drain is gone, as is the old inline fast path LockedExc32(Flags, 1, 0) that only succeeded from an idle Flags=0. WriteLock therefore returns while readers are still inside their critical section. New readers are still blocked and writers still exclude each other, so what is lost is exactly writer-vs-reader exclusion. TRestServer.Uri holds fRouterSafe.ReadLock across fRouter.Lookup(ctxt) on every request, while ResetRoutes takes fRouterSafe.WriteLock and does FreeAndNil(fRouter): a router reset now frees the object under a request thread that is dereferencing it. ComputeRoutes republishes fRouter under live readers the same way.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "function TRWLightLock.TryWriteLock: boolean;\nvar\n  f: PtrUInt;\nbegin\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock\n  result := (Flags = f) and\n            LockedExc(Flags, {to=}f + 1, {from=}f);\nend;\n\nprocedure TRWLightLock.WriteLock;\nbegin\n  if not TryWriteLock then\n    WriteLockSpin;\nend;",
+          "why": "f keeps the reader bits (only bit 0 is masked off), so the CAS from f to f+1 succeeds with readers still counted in Flags: the writer bit is taken without exclusion against active readers."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "procedure TRWLightLock.WriteLockSpin;\nvar\n  spin: PtrUInt;\nbegin\n  spin := SPIN_COUNT;\n  repeat\n    spin := SpinAndWait(spin);\n  until TryWriteLock;\nend;",
+          "why": "The whole body is the acquire loop; there is no remaining loop waiting for Flags to drop to 1, i.e. no drain of the existing readers anywhere in the new implementation."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "procedure TRestServer.ResetRoutes;\nbegin\n  if fRouter = nil then\n    exit;\n  fRouterSafe.WriteLock;\n  try\n    FreeAndNil(fRouter);\n  finally\n    fRouterSafe.WriteUnLock;\n  end;\nend;",
+          "why": "The write side frees fRouter as soon as WriteLock returns, relying entirely on WriteLock having drained the readers."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+          "quote": "    fRouterSafe.ReadLock;\n    node := fRouter.Lookup(ctxt);\n    fRouterSafe.ReadUnLock;",
+          "why": "The read side of the same lock in TRestServer.Uri dereferences fRouter inside the read critical section, on every HTTP request."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TRestServer.Uri (HTTP request entry point) racing any caller of the public TRestServer.ResetRoutes, e.g. the Options setter TRestServer.SetOptions or TServiceContainerServer.AddServiceInternal.",
+        "path_quote": "procedure TRestServer.SetOptions(rso: TRestServerOptions);\nbegin\n  if rso = fOptions then\n    exit;\n  fOptions := rso;\n  ResetRoutes;\nend;",
+        "path_sha": "3f2450f6aa0afafc820fb114c68a765c2c1f8d6e",
+        "path_path": "src/rest/mormot.rest.server.pas"
+      },
+      "refuted_by": "WriteLockSpin's whole body is the TryWriteLock loop; TRWLightLock has one implementation, no per-platform .inc variant; LockedExc is a plain pointer-sized CAS, so 'Flags = f' plus the CAS excludes another writer, not readers; WriteUnLock's LockedDec(Flags, 1) is consistent with readers counted concurrently, confirming the intent rather than fixing it. ResetRoutes' 'if fRouter = nil then exit' does not help (it is the non-nil path that frees) and Uri has no second guard around fRouter.Lookup. The prior code did drain: 'while Flags <> 1 do // second loop to wait for all readers'.",
+      "confidence": "proven",
+      "suggested_fix": "Restore the reader drain: keep TryWriteLock strictly optimistic (CAS from 0 to 1, i.e. no reader and no writer), and in WriteLockSpin keep the two loops -- first CAS the writer bit in from 'Flags and not 1', then spin 'while Flags <> 1' until every reader has left before returning."
+    },
+    {
+      "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+      "check": "other",
+      "severity": "critical",
+      "title": "TRWLightLock.WriteLock returns while read locks are still held",
+      "explanation": "TRWLightLock packs the state in one word: bit 0 is the write flag, bits 1..n are the reader count (ReadLock atomically adds 2). The reviewed TryWriteLock computes f := Flags and not 1, checks only that bit 0 is clear (Flags = f), then CAS-es Flags from f to f + 1 -- so with one reader present (Flags = 2) it takes f = 2, sees Flags = f, swaps 2 -> 3 and returns true. WriteLock is now just 'if not TryWriteLock then WriteLockSpin', and WriteLockSpin spins only 'until TryWriteLock': the second loop that used to wait for the reader count to drain ('while Flags <> 1') is gone. The write lock is therefore granted while readers are inside the critical section. Two consequences. Same thread: a ReadLock followed by WriteLock no longer deadlocks as the header documents, it silently succeeds. Different threads: a writer mutates or frees data a reader is walking. Only the plain Flags = 0 case is still handled correctly.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "function TRWLightLock.TryWriteLock: boolean;\nvar\n  f: PtrUInt;\nbegin\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock\n  result := (Flags = f) and\n            LockedExc(Flags, {to=}f + 1, {from=}f);\nend;\n\nprocedure TRWLightLock.WriteLock;\nbegin\n  if not TryWriteLock then\n    WriteLockSpin;\nend;\n\nprocedure TRWLightLock.WriteUnLock;\nbegin\n  LockedDec(Flags, 1);\nend;\n\nprocedure TRWLightLock.WriteLockSpin;\nvar\n  spin: PtrUInt;\nbegin\n  spin := SPIN_COUNT;\n  repeat\n    spin := SpinAndWait(spin);\n  until TryWriteLock;\nend;",
+          "why": "TryWriteLock only tests bit 0, keeps the reader bits in f, and CAS-es to f + 1; WriteLockSpin loops on TryWriteLock alone, with no wait for readers."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRWLightLock.ReadLock;\nvar\n  f: PtrUInt;\nbegin\n  // if not writing, atomically increase the RD counter in the upper flag bits\n  f := Flags and not 1; // bit 0=WriteLock, >0=ReadLock counter\n  if not LockedExc(Flags, {to=}f + 2, {from=}f) then\n    ReadLockSpin;\nend;",
+          "why": "ReadLock keeps the reader count in the bits above bit 0, so Flags = 2 means one active reader -- exactly the value TryWriteLock accepts."
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "    /// enter a non-reentrant non-upgradable exclusive write lock\n    // - warning: nested WriteLock call after a ReadLock or another WriteLock\n    // would deadlock\n    procedure WriteLock;\n      {$ifdef HASINLINE} inline; {$endif}\n    /// try to enter a non-reentrant non-upgradable exclusive write lock\n    // - if returned true, caller should eventually call WriteUnLock\n    // - warning: nested TryWriteLock call after a ReadLock or another WriteLock\n    // would deadlock\n    function TryWriteLock: boolean;",
+          "why": "The header still promises the old contract -- a nested WriteLock/TryWriteLock after a ReadLock 'would deadlock' -- which the code above no longer honours."
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+          "quote": "procedure TRestServer.ResetRoutes;\nbegin\n  if fRouter = nil then\n    exit;\n  fRouterSafe.WriteLock;\n  try\n    FreeAndNil(fRouter);\n  finally\n    fRouterSafe.WriteUnLock;\n  end;\nend;",
+          "why": "A real writer: ResetRoutes frees fRouter under the write lock it now shares with concurrent readers."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TRestServer.Uri (every HTTP request) reads fRouter under fRouterSafe.ReadLock while public TRestServer.ResetRoutes -- from SetOptions/SetRoutingClass/ServiceMethodRegister -- frees it under WriteLock",
+        "path_quote": "    // 4. decode request URI and validate input\n    fRouterSafe.ReadLock;\n    node := fRouter.Lookup(ctxt);\n    fRouterSafe.ReadUnLock;",
+        "path_sha": "00693ed14131e602ce8699ecb245c17a2f82d36b",
+        "path_path": "src/rest/mormot.rest.server.pas"
+      },
+      "refuted_by": "Read the whole TRWLightLock body at this sha (Init, ReadLock, TryReadLock, ReadUnLock, ReadLockSpin, TryWriteLock, WriteLock, WriteUnLock, WriteLockSpin, IsLocked): no reader drain anywhere, and no {$ifdef} around TryWriteLock, so no platform escapes it. LockedExc in mormot.core.base.pas is a plain PtrUInt CAS, not a stronger primitive. WriteUnLock is LockedDec(Flags, 1), clearing only bit 0 -- itself built on readers coexisting with the write flag. fRouterSafe has no second guard: Uri dereferences fRouter with only ReadLock.",
+      "confidence": "proven",
+      "suggested_fix": "Restore the two-stage acquisition: after winning bit 0, spin until the reader bits are clear (the previous 'while Flags <> 1 do spin := SpinAndWait(spin)' loop), and keep TryWriteLock a straight CAS from 0 to 1 so it fails whenever any reader holds the lock."
     }
-  ]
+  ],
+  "unverified": [],
+  "notes": "Not reviewed, the job did not produce a result: b61d9db4, 7dd5c8c6, 5463ae57 | 00693ed1: Proven, not refuted. The environment was inconsistent: REVIEW_SHA/REVIEW_CONTEXT named 3f2450f6 (an unrelated RetrieveInstance change) while REVIEW_SUSPICION/REVIEW_OUTPUT named 00693ed1; the TRWLightLock change is in contexts/00693ed1.context.md, so that was used. The defective code is byte-identical at both shas, and every quote was re-checked at 00693ed1. | 00693ed1: 3f2450f6 TRWLightLock: suspicion confirmed. The reviewed tree carries the pre-fix lock; upstream 7dd5c8c6d (\"core: fixed TRWLightLock.Writ"
 }
