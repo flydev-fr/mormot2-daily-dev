@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import subprocess
 import sys
 
 from common import (
@@ -171,13 +172,95 @@ def semantic_errors(payload: dict, raw: dict | None) -> list[str]:
     return errors
 
 
-def validate(path: pathlib.Path, raw_path: pathlib.Path | None) -> list[str]:
+def _build_at(clone: str | None, sha: str) -> str | None:
+    """The mORMot build number recorded at a revision, or None when unreachable."""
+    if not clone:
+        return None
+    r = subprocess.run(["git", "-C", clone, "show", f"{sha}:src/mormot.commit-num.inc"],
+                       capture_output=True)
+    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else None
+
+
+def _sha_exists(clone: str | None, sha: str) -> bool | None:
+    if not clone:
+        return None
+    r = subprocess.run(["git", "-C", clone, "cat-file", "-e", f"{sha}^{{commit}}"],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def upgrade_errors(payload: dict, raw: dict | None, clone: str | None) -> list[str]:
+    """Check the upgrade block the same way evidence quotes are checked.
+
+    'Land on build 2.4.16628' is a claim about a revision that either exists or does
+    not. Without this, the one part of the contract telling readers what to do with
+    their tree is also the only part nobody verifies.
+    """
+    upgrade = payload.get("upgrade")
+    if not upgrade:
+        return []
+    errors: list[str] = []
+    known = {c["sha"] for c in (raw or {}).get("commits", [])}
+    short = {s[:8]: s for s in known}
+
+    land = upgrade.get("land_on") or {}
+    if land:
+        sha, build = land.get("sha", ""), str(land.get("build", "")).strip()
+        exists = _sha_exists(clone, sha)
+        if exists is False:
+            errors.append(f"upgrade/land_on/sha: {sha[:8]} is not a commit of the "
+                          f"upstream repository")
+        elif exists:
+            actual = _build_at(clone, sha)
+            wanted = build.split(".")[-1]          # accept 2.4.16628 or 16628
+            if actual and wanted and actual != wanted:
+                errors.append(f"upgrade/land_on/build: {sha[:8]} is build {actual}, "
+                              f"not {build}. Read src/mormot.commit-num.inc at that "
+                              f"revision rather than guessing.")
+        elif exists is None:
+            errors.append("upgrade/land_on: not checked, no --clone given")
+
+    for i, window in enumerate(upgrade.get("avoid") or []):
+        lo = str(window.get("from_build", "")).split(".")[-1]
+        hi = str(window.get("to_build", "")).split(".")[-1]
+        if lo.isdigit() and hi.isdigit():
+            if int(lo) > int(hi):
+                errors.append(f"upgrade/avoid/{i}: from_build {lo} is after to_build "
+                              f"{hi}")
+        else:
+            errors.append(f"upgrade/avoid/{i}: build numbers must be numeric, got "
+                          f"{window.get('from_build')!r} and {window.get('to_build')!r}")
+
+    for i, step in enumerate(upgrade.get("order") or []):
+        for sha in step.get("shas", []):
+            if sha not in known and short.get(sha[:8]) is None:
+                errors.append(f"upgrade/order/{i}: {sha[:8]} is not a commit of this "
+                              f"edition")
+
+    moving = upgrade.get("still_moving") or []
+    if moving and raw:
+        by_sha = {c["sha"]: c for c in raw.get("commits", [])}
+        for sha in moving:
+            full = sha if sha in by_sha else short.get(sha[:8])
+            if full is None:
+                errors.append(f"upgrade/still_moving: {sha[:8]} is not a commit of "
+                              f"this edition")
+            elif not by_sha[full].get("superseded_by"):
+                errors.append(f"upgrade/still_moving: {sha[:8]} has no superseded_by "
+                              f"in the raw payload, so nothing supports calling it "
+                              f"still moving")
+    return errors
+
+
+def validate(path: pathlib.Path, raw_path: pathlib.Path | None,
+             clone: str | None = None) -> list[str]:
     payload = read_json(path)
     if payload is None:
         return [f"{path}: file is missing or is not valid JSON"]
     raw = read_json(raw_path) if raw_path and raw_path.exists() else None
     errors = structural_errors(payload)
     errors += semantic_errors(payload, raw)
+    errors += upgrade_errors(payload, raw, clone)
     return errors
 
 
@@ -188,6 +271,8 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="validate every analysis file")
     parser.add_argument("--raw", help="raw payload to check against "
                                       "(default: data/raw/<same name>)")
+    parser.add_argument("--clone", help="local mORMot2 clone, so land_on can be "
+                                        "checked against the real build numbers")
     parser.add_argument("--errors-file", help="also write the error list to this file")
     args = parser.parse_args()
 
@@ -204,7 +289,7 @@ def main() -> int:
     all_errors: list[str] = []
     for target in targets:
         raw_path = pathlib.Path(args.raw) if args.raw else RAW_DIR / target.name
-        errors = validate(target, raw_path)
+        errors = validate(target, raw_path, args.clone)
         payload = read_json(target)
         for warning in (language_warnings(payload) if payload else []):
             print(f"  ~ {warning}")

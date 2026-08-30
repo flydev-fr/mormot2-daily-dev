@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://mormot2daily.fsb.dev/schema/findings-1.json",
+  "title": "mORMot2 Daily findings payload",
+  "description": "Security and regression review of one edition. Separate from the summary on purpose: a summary that is slightly off is corrected the next morning, a wrong finding is not. Nothing here ships unless it carries evidence the validator can re-check against the source at that sha.",
+  "type": "object",
+  "required": ["schema", "edition", "reviewed_shas", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "mormot2-monitor/findings@1" },
+    "edition": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "reviewed_shas": {
+      "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 7 },
+      "description": "Every commit the reviewer actually looked at. Coverage is checked against the raw payload."
+    },
+    "findings": { "type": "array", "items": { "$ref": "#/definitions/finding" } },
+    "unverified": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sha", "suspicion", "why_unproven"],
+        "additionalProperties": false,
+        "properties": {
+          "sha": { "type": "string", "minLength": 7 },
+          "suspicion": { "type": "string", "maxLength": 400 },
+          "why_unproven": {
+            "type": "string", "maxLength": 400,
+            "description": "What was missing: a caller list, runtime behaviour, a platform build."
+          }
+        }
+      },
+      "description": "Where the reviewer smells something but cannot prove it. Never published as a finding; kept so a human can look."
+    },
+    "notes": { "type": "string", "maxLength": 600 }
+  },
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "required": ["sha", "check", "severity", "title", "explanation", "evidence", "reachability", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "sha": { "type": "string", "minLength": 7 },
+        "check": {
+          "enum": ["lock-not-released", "try-finally-removed", "length-arithmetic",
+                   "signature-changed-callers-stale", "ifdef-asymmetry", "asm-abi",
+                   "crypto-misuse", "protocol-state", "memory-lifetime", "other"],
+          "description": "What kind of defect this is. The list is a filing label, not a filter: the scope of the review is open, and what gates a finding is the evidence, the reachability and the refutation pass. 'other' is legitimate."
+        },
+        "severity": { "enum": ["critical", "high", "medium", "low"] },
+        "title": { "type": "string", "minLength": 10, "maxLength": 110 },
+        "explanation": {
+          "type": "string", "minLength": 60, "maxLength": 1200,
+          "description": "The mechanism, in order: what the code does, what input drives it wrong, what happens then. No speculation about severity."
+        },
+        "evidence": {
+          "type": "array", "minItems": 1, "maxItems": 4,
+          "items": {
+            "type": "object",
+            "required": ["path", "sha", "quote"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "type": "string", "maxLength": 200 },
+              "sha": { "type": "string", "minLength": 7 },
+              "quote": {
+                "type": "string", "minLength": 12, "maxLength": 1200,
+                "description": "Verbatim source, copied character for character. The validator fetches the file at that sha and rejects the finding when the quote is not in it."
+              },
+              "why": { "type": "string", "maxLength": 300 }
+            }
+          }
+        },
+        "reachability": {
+          "type": "object",
+          "required": ["reachable_from", "path_quote"],
+          "additionalProperties": false,
+          "properties": {
+            "reachable_from": {
+              "type": "string", "maxLength": 200,
+              "description": "The public entry point an attacker or a caller can actually touch. 'internal only' is not a finding, it goes to unverified."
+            },
+            "path_quote": {
+              "type": "string", "minLength": 12, "maxLength": 800,
+              "description": "Verbatim source showing the call that connects the entry point to the defect. Re-checked like the rest."
+            },
+            "path_sha": { "type": "string", "minLength": 7 },
+            "path_path": { "type": "string", "maxLength": 200 }
+          }
+        },
+        "refuted_by": {
+          "type": "string", "maxLength": 600,
+          "description": "Filled by the second pass when it tried to refute the finding and failed. States what it checked."
+        },
+        "confidence": { "enum": ["proven", "likely"] },
+        "suggested_fix": { "type": "string", "maxLength": 600 }
+      }
+    }
+  }
+}
