@@ -31,9 +31,15 @@ def structural_errors(payload: dict) -> list[str]:
         import jsonschema  # type: ignore
     except ImportError:
         return _fallback_structural(payload)
-    validator = jsonschema.Draft7Validator(schema)
+    try:
+        validator = jsonschema.Draft7Validator(schema)
+        errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
+    except Exception as exc:  # resolver quirks, older jsonschema, malformed schema
+        # This function is the CI gate: it reports problems, it never dies on one.
+        return [f"(schema): jsonschema could not run ({exc.__class__.__name__}: {exc}); "
+                f"fell back to the built-in checks"] + _fallback_structural(payload)
     out = []
-    for err in sorted(validator.iter_errors(payload), key=lambda e: list(e.path)):
+    for err in errors:
         where = "/".join(str(p) for p in err.path) or "(root)"
         out.append(f"{where}: {err.message}")
     return out[:40]
