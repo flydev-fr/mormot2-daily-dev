@@ -24,10 +24,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--edition", required=True)
     parser.add_argument("--parts", required=True, help="directory holding <sha>.json parts")
+    parser.add_argument("--shas", help="the commits this run was supposed to review "
+                                       "(comma-separated). Needed when the run is a "
+                                       "measurement rather than a dated edition: "
+                                       "without it there is no data/raw payload to "
+                                       "say which parts should exist, and a job that "
+                                       "crashed would silently look like a clean day.")
     args = parser.parse_args()
 
-    raw = read_json(RAW_DIR / f"{args.edition}.json") or {}
-    expected = [c["sha"] for c in raw.get("commits", []) if not c.get("is_merge")]
+    if args.shas:
+        expected = [s.strip() for s in args.shas.split(",") if s.strip()]
+    else:
+        raw = read_json(RAW_DIR / f"{args.edition}.json") or {}
+        expected = [c["sha"] for c in raw.get("commits", []) if not c.get("is_merge")]
+        if not expected:
+            # No payload and no list: fall back to what is on disk. Crashed jobs are
+            # then invisible, so say so rather than printing a confident zero.
+            expected = sorted({f.name.split(".")[0]
+                               for f in pathlib.Path(args.parts).glob("*.json")})
+            if expected:
+                print(f"note: no data/raw/{args.edition}.json and no --shas; "
+                      f"took the {len(expected)} sha(s) found in {args.parts}. "
+                      f"A job that produced nothing cannot be detected this way.")
 
     findings, unverified, reviewed, missing, usage = [], [], [], [], []
     for sha in expected:
