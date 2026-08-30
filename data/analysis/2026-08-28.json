@@ -2,21 +2,24 @@
   "schema": "mormot2-monitor/analysis@1",
   "edition": "2026-08-28",
   "edition_title": "Thread wake-up goes lockless, and two API moves worth grepping for",
-  "intro": "Today is mostly about the asynchronous server core. The thread-wakeup path used by every async HTTP, WebSocket and TFTP server drops its lock in favour of two atomic counters, which should show up as less contention on busy multi-core boxes. Around that, two smaller changes deserve a grep through your own code: TOrmTable.GetAsVariant and ToDocVariant changed their parameter from out to var, and the mORMot 1 compatibility function Lecuyer moved to another unit. Everything else is internal cleanup.",
+  "intro": "Today is mostly about the asynchronous server core. The thread-wakeup path used by every async HTTP, WebSocket and TFTP server drops its lock in favour of two atomic counters, which should show up as less contention on busy multi-core boxes. One smaller change is worth a grep through your own code: the mORMot 1 compatibility function Lecuyer moved to another unit. TOrmTable.GetAsVariant and ToDocVariant also swapped an out parameter for var, with no consequence for callers. Everything else is internal cleanup.",
   "tldr": [
     "Async server thread wake-up is now lockless: two CAS counters replace the TLightLock that guarded acoThreadSmooting.",
-    "TOrmTable.GetAsVariant and TOrmTable.ToDocVariant now take var instead of out — the destination variant is no longer cleared for you.",
+    "TOrmTable.GetAsVariant and ToDocVariant went from out to var: no caller-visible change, one compiler finalization less per call.",
     "The legacy Lecuyer function moved from mormot.core.base to mormot.crypt.core and now returns the shared ThreadRandom generator.",
     "TLoggedThread gained an ExecuteDone property, standing in for the RTL Finished property on older compilers.",
     "The TFTP server compiles again on Delphi 7 and 2007 after last week's worker-lifetime fix."
   ],
   "risk_level": "worth-a-look",
-  "upgrade_advice": "Nothing here forces an emergency upgrade. If you run async servers under load, this batch is worth pulling for the wake-up path alone — but read the two API notes first: a var/out change and a unit move can both compile differently in your tree than they do upstream. If you build with PUREMORMOT2, the Lecuyer removal is a no-op for you.",
+  "upgrade_advice": "Nothing here forces an emergency upgrade. If you run async servers under load, this batch is worth pulling for the wake-up path alone — check the Lecuyer note first, since a unit move can compile differently in your tree than it does upstream. If you build with PUREMORMOT2, the Lecuyer removal is a no-op for you.",
   "themes": [
     {
       "title": "The acoThreadSmooting rewrite",
       "summary": "Two commits land the same idea: the scheduler that decides how many worker threads to wake now works on atomic counters instead of a lock. LockedGet32() is the new primitive — an atomic read-and-reset on a 32-bit value — and mormot.net.async uses it on two new counters, fWakeupOne and fWakeupEvents, in place of fThreadPollingWakeupSafe. The follow-up commit finishes the job and makes the inline directives conditional so older compilers still build.",
-      "shas": ["73cb954316383ae82ad4fef47d78c91be3de29b0", "4c702f55d7187ea5838f09bfde49e23e0f48d631"]
+      "shas": [
+        "73cb954316383ae82ad4fef47d78c91be3de29b0",
+        "4c702f55d7187ea5838f09bfde49e23e0f48d631"
+      ]
     }
   ],
   "entries": [
@@ -28,7 +31,10 @@
       "what_changed": "mormot.core.base gains LockedGet32(Target: PInteger), an atomic read-and-reset built on LockedExc32. mormot.net.async then replaces the fThreadPollingWakeupSafe TLightLock with two cardinal CAS counters, fWakeupOne and fWakeupEvents, and reads them through LockedGet32 inside ThreadPollingWakeupOne and ThreadPollingWakeupEvents. About 250 lines of the wake-up path were reshuffled around those counters.",
       "impact": "No API change for application code. On a busy async HTTP or WebSocket server with acoThreadSmooting enabled, threads no longer serialise on a lock to decide who wakes up, so wake-up latency should flatten out under contention. The effect grows with core count and connection churn; a lightly loaded server will not notice.",
       "action": "none",
-      "units": ["mormot.core.base", "mormot.net.async"],
+      "units": [
+        "mormot.core.base",
+        "mormot.net.async"
+      ],
       "api_changes": [
         {
           "symbol": "LockedGet32(Target: PInteger): integer",
@@ -46,29 +52,32 @@
       "what_changed": "The finishing commit of the lockless wake-up work. ThreadPollingWakeupOne keeps its inline directive but behind {$ifdef HASINLINE}, ThreadPollingWakeupEvents loses inlining altogether, and the comment describing when a thread is woken was rewritten to mention slow REST processing next to accept() on an idle server.",
       "impact": "No behaviour change for application code. The conditional inline matters only if you build with a compiler that has no inlining support, where the previous commit would not have compiled.",
       "action": "none",
-      "units": ["mormot.net.async"],
+      "units": [
+        "mormot.net.async"
+      ],
       "confidence": "confirmed"
     },
     {
       "sha": "5530a593a291c5a6d78d4b7b769e471d0ef08324",
-      "headline": "TOrmTable variant getters now take var instead of out",
+      "headline": "TOrmTable variant getters shed a redundant clear at the call site",
       "category": "performance",
-      "severity": "medium",
-      "what_changed": "TOrmTableAbstract.GetAsVariant and TOrmTableAbstract.ToDocVariant changed their destination parameter from 'out value: variant' to 'var value: variant', and the time-field conversion moved into a new ValueVarTimeAsText helper that fills the variant in place instead of building an intermediate value. The aim is to avoid clearing and re-allocating a variant per row when walking a result set.",
-      "impact": "Faster row-to-variant conversion on large result sets, but the parameter change is a real one: with 'out' the compiler cleared your variable before the call, with 'var' it does not. Code that passes an uninitialised local variant, or that reuses one across calls expecting it to be reset, can now see stale content or a leak. Recompiling is enough for the signature change itself; the initialisation habit is what to check.",
-      "action": "review",
-      "action_detail": "Grep your codebase for GetAsVariant and ToDocVariant. Make sure the variant you pass is either freshly declared in a scope that initialises it, or explicitly VarClear-ed before the call.",
-      "units": ["mormot.orm.base"],
+      "severity": "low",
+      "what_changed": "TOrmTableAbstract.GetAsVariant and TOrmTableAbstract.ToDocVariant changed their destination parameter from 'out value: variant' to 'var value: variant', and the time-field conversion moved into a new ValueVarTimeAsText helper that fills the variant in place. The body still clears the destination itself — VarClearAndSetType(value, varNull) is the first statement of GetAsVariant — so all the change removes is the finalization the compiler inserted at every call site.",
+      "impact": "No change for callers. Because the function clears the destination on entry, a variant you pass in cannot carry stale content and nothing leaks. What disappears is one compiler-inserted finalization per call, which is where the speed-up comes from when walking a large result set row by row. Recompiling is enough.",
+      "action": "none",
+      "units": [
+        "mormot.orm.base"
+      ],
       "api_changes": [
         {
           "symbol": "TOrmTableAbstract.GetAsVariant(row, field: PtrInt; var value: variant; ...)",
           "change": "signature-changed",
-          "note": "out -> var: the destination is no longer cleared by the compiler."
+          "note": "out -> var; the function clears the destination itself, so callers are unaffected."
         },
         {
           "symbol": "TOrmTableAbstract.ToDocVariant(Row: PtrInt; var doc: variant; ...)",
           "change": "signature-changed",
-          "note": "out -> var, same caveat."
+          "note": "out -> var; the function clears the destination itself, so callers are unaffected."
         }
       ],
       "confidence": "confirmed"
@@ -82,7 +91,10 @@
       "impact": "Code still calling Lecuyer — typically old mORMot 1 code — now needs mormot.crypt.core in its uses clause instead of relying on mormot.core.base, and shares the ThreadRandom generator rather than its own threadvar. If you already build with PUREMORMOT2 the symbol never existed for you and nothing changes.",
       "action": "review",
       "action_detail": "Grep for 'Lecuyer' outside the framework. Where it appears, add mormot.crypt.core to the uses clause, or switch to ThreadRandom / RandomLecuyer directly.",
-      "units": ["mormot.core.base", "mormot.crypt.core"],
+      "units": [
+        "mormot.core.base",
+        "mormot.crypt.core"
+      ],
       "api_changes": [
         {
           "symbol": "Lecuyer: PLecuyer",
@@ -100,7 +112,9 @@
       "what_changed": "mormot.core.threads adds a private fExecuteDone flag, set once the thread body returns, exposed as the read-only ExecuteDone property on TLoggedThread. The comment says it mimics the Finished property of newer Delphi and FPC runtimes.",
       "impact": "Useful when you shut a pool of worker threads down and need to know which ones are really out of Execute, on compilers whose RTL has no Finished property. Purely additive: existing code is unaffected.",
       "action": "none",
-      "units": ["mormot.core.threads"],
+      "units": [
+        "mormot.core.threads"
+      ],
       "api_changes": [
         {
           "symbol": "TLoggedThread.ExecuteDone: boolean",
@@ -119,7 +133,9 @@
       "impact": "If you build the TFTP server on an old Delphi, it compiles again. Everyone else gets the same behaviour through a different property. This is the compatibility follow-up to the worker-lifetime fix merged earlier today.",
       "action": "upgrade-recommended",
       "action_detail": "Only relevant if you compile mormot.net.tftp.server on Delphi 7 or 2007 — in that case take this commit together with the ExecuteDone one.",
-      "units": ["mormot.net.tftp.server"],
+      "units": [
+        "mormot.net.tftp.server"
+      ],
       "confidence": "confirmed"
     },
     {
@@ -130,7 +146,9 @@
       "what_changed": "mormot.core.base adds ShortStringToVariant(const Txt: ShortString; var Value: variant), an inlined wrapper over RawUtf8ToVariant that produces a varString RawUtf8 variant from a UTF-8 encoded ShortString.",
       "impact": "Additive convenience, used internally by today's ORM variant work. Nothing to change in existing code; it saves a manual conversion if you convert ShortStrings to variants yourself.",
       "action": "none",
-      "units": ["mormot.core.base"],
+      "units": [
+        "mormot.core.base"
+      ],
       "api_changes": [
         {
           "symbol": "ShortStringToVariant(const Txt: ShortString; var Value: variant)",
@@ -147,7 +165,9 @@
       "what_changed": "Several ORM helpers that used a raw TVarData scratch value now use TSynVarData, set VType directly instead of poking through PCardinal, and release it with VarClear(variant(value)) rather than calling VarClearProc. Same code paths, clearer and less pointer-cast-heavy.",
       "impact": "No impact on application code: these are local temporaries inside the ORM. Worth knowing only if you maintain a patch against these units, where it will conflict.",
       "action": "none",
-      "units": ["mormot.orm.base"],
+      "units": [
+        "mormot.orm.base"
+      ],
       "confidence": "confirmed"
     },
     {
@@ -162,5 +182,5 @@
       "confidence": "confirmed"
     }
   ],
-  "notes": "Two merge commits (pull requests #556 and #558) carry no code of their own and have no entry. The seed edition was written by the assistant that set this repository up, using the same schema and instructions Jules follows from the next run on."
+  "notes": "Two merge commits (pull requests #556 and #558) carry no code of their own and have no entry. Corrected on 2026-08-30: this edition first claimed the out -> var change on TOrmTable.GetAsVariant exposed callers to stale content or a leak. It does not — the function clears the destination on entry. Thanks to Arnaud Bouchez for the correction."
 }
