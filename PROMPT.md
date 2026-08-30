@@ -58,6 +58,25 @@ care. If the day is quiet, say so plainly; a quiet day is a legitimate edition.
 
 **`tldr`** — the takeaways, most important first, one fact each, no filler.
 
+**`upgrade`** — the reader's question is *which revision do I land on*, not *was today
+good*. This framework settles over several days: on 2026-08-28 the digest praised the
+lockless wake-up rewrite with "no action needed", and build 16623 fixed an out of range
+on that very path a few commits later. A reader who followed that advice took the bug.
+
+Each commit in the raw payload may carry `superseded_by`: later commits touching the
+same routines, with their build number and whether they look like a fix. Use it.
+
+- `land_on` — the revision worth taking, which is often *later* than this edition. Name
+  its build number.
+- `avoid` — build ranges to not stop on, when a change is followed by its own fix.
+- `order` — the sequence, when several things matter.
+- `still_moving` — commits of this edition whose subject matter is visibly still being
+  changed upstream. Anything listed here makes your advice about it provisional, and
+  the entry's `action` must not be `upgrade-recommended`.
+
+Never recommend landing on a commit that has a `looks_like_a_fix` successor on the same
+routine. Say to take the fix instead.
+
 **`risk_level`** — `act-now` only for something that can bite a running production
 system (data corruption, race condition, security, breaking API). `worth-a-look` when
 there is a fix or feature a team would want soon. `calm` for internal churn.
