@@ -1,6 +1,6 @@
 ---
 name: mormot-review
-description: Review one upstream mORMot2 commit for security and regression defects, against a closed checklist, and emit a findings JSON where every claim carries the source that proves it. Use when reviewing a commit of synopse/mORMot2.
+description: Hunt security and regression defects in one upstream mORMot2 commit, treating the diff as the suspect, and emit a findings JSON where every claim carries the source that proves it. Use when reviewing a commit of synopse/mORMot2.
 allowed-tools: Read, Grep, Glob, Bash(git *), Write
 ---
 
@@ -52,6 +52,29 @@ Style, naming, dead code and "this could be clearer" are not findings. The autho
 terse code on purpose. Performance is a finding only when the change makes something
 unbounded, not when it is merely slower.
 
+## The diff is the suspect
+
+Start from the assumption that this change is where the bug is. It is not a baseline to
+be explained; it is the hypothesis to be attacked. Most of the time it will be clean —
+but you find that out by trying to break it, not by looking for a reason to accept it.
+
+**Account for every deletion.** Before anything else, list what the diff *removes* or
+*weakens*, and say what each removed line was holding up:
+
+- a `try`, a `finally`, or a line inside one
+- an `UnLock`, `ReadUnLock`, `WriteUnLock`, `Release`, `Free`, `Close`
+- a bounds test, an overflow clamp, a sign test, a nil test, a length check
+- a `{$ifdef}` branch, or one side of a platform pair
+
+For each, one sentence: *what invariant did that line maintain, and what now maintains
+it?* If nothing does, that is your finding. If something does, quote it. A deletion you
+did not mention is a deletion you did not check — every one of them must appear in your
+answer, as a finding or as an accounted-for line.
+
+Watch the substitutions too, not only the removals. `WriteUnLock` becoming `WriteLock`
+in a `finally` reads as one word changed and is a deadlock. Read paired calls as pairs:
+acquire/release, alloc/free, open/close, enter/leave.
+
 ## Method
 
 1. `git show $REVIEW_SHA` — what moved.
@@ -89,7 +112,13 @@ it: read the callers, read the guards above and below, look for the check you mi
 Write what you checked into `refuted_by`. Survives refutation → `proven`. Still believed
 but not closed → `likely`. Refuted → drop it, silently.
 
-An empty result is a good result. Most commits hold nothing worth reporting.
+Refutation applies to candidates you already raised. It is not a reason to raise none:
+run it after the accounting pass above, never instead of it. Reporting nothing on a
+commit that removes a lock release is the expensive failure here — a false positive
+costs a human five minutes, a missed release corrupts a production server.
+
+An empty result is a legitimate result once the accounting pass is done and every
+deletion is accounted for. It is not the default.
 
 ## Output
 
