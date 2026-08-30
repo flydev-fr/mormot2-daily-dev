@@ -174,9 +174,6 @@ jobs:
         if: steps.plan.outputs.count != '0'
         with: { name: review-contexts, path: contexts/ }
 
-      - uses: actions/upload-artifact@v4
-        if: vars.REVIEW_TOKENSAVE == 'true' && steps.plan.outputs.count != '0'
-        with: { name: tokensave-graph, path: upstream/.tokensave/ }
 
   review:
     needs: plan
@@ -205,20 +202,23 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: review-contexts, path: contexts/ }
 
-      # The graph is built once at the day's head and reused by every job. Callers
-      # barely move within a day, and re-indexing 572k lines per commit would cost
-      # more than it saves.
-      - name: Restore the code graph
-        if: vars.REVIEW_TOKENSAVE == 'true'
-        uses: actions/download-artifact@v4
-        with: { name: tokensave-graph, path: upstream/.tokensave/ }
-
       - name: Restore the patched tokensave binary
         if: vars.REVIEW_TOKENSAVE == 'true'
         uses: actions/cache@v4
         with:
           path: tokensave-bin/tokensave
           key: tokensave-${{ vars.REVIEW_TOKENSAVE_REF || 'main' }}-${{ hashFiles('ci/tokensave-inc.py') }}
+
+      - name: Index this commit's tree
+        if: vars.REVIEW_TOKENSAVE == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x tokensave-bin/tokensave
+          export PATH="$PWD/tokensave-bin:$PATH"
+          cd upstream
+          # 10s for 1031 files, measured. Cheaper than moving a 153 MB graph twice,
+          # and it matches the tree this job actually checked out.
+          time tokensave init
 
       - name: Point Claude Code at the graph
         if: vars.REVIEW_TOKENSAVE == 'true'
