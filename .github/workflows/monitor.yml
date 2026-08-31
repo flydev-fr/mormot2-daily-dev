@@ -1,12 +1,12 @@
 name: mORMot2 Daily
 
-# The scheduled task: fetch new upstream commits, have Jules review them, validate
-# what it produced, merge it, publish the site. Runs early enough that the edition
-# is online before the first coffee in Europe.
+# The scheduled task fetches new upstream commits before the 06:00 Europe/Zagreb
+# ChatGPT review. Scheduled runs stop after committing raw data; manual dispatches
+# may still ask Jules to review when skip_jules is false.
 
 on:
   schedule:
-    - cron: '30 4 * * *'   # 04:30 UTC — ~06:30 Paris
+    - cron: '30 3 * * *'   # 05:30 CEST / 04:30 CET — before the 06:00 review
   workflow_dispatch:
     inputs:
       edition:
@@ -17,7 +17,7 @@ on:
         required: false
         default: '1'
       skip_jules:
-        description: 'Fetch and publish without the AI review'
+        description: 'On manual runs, fetch without asking Jules for analysis'
         type: boolean
         default: false
 
@@ -75,7 +75,7 @@ jobs:
 
       - name: Ask Jules to review the edition
         id: jules
-        if: steps.fetch.outputs.new_commits != '0' && env.JULES_API_KEY != '' && inputs.skip_jules != true
+        if: github.event_name == 'workflow_dispatch' && steps.fetch.outputs.new_commits != '0' && env.JULES_API_KEY != '' && inputs.skip_jules != true
         env:
           JULES_SOURCE: ${{ vars.JULES_SOURCE }}
           JULES_TIMEOUT: '3600'
@@ -108,7 +108,7 @@ jobs:
             python scripts/run_jules_analysis.py feedback \
               --session "$SESSION" --errors-file /tmp/errors.txt || true
             if ! check; then
-              echo "::warning::still invalid — leaving PR #$PR open and publishing the unreviewed edition"
+              echo "::warning::still invalid — leaving PR #$PR open and keeping the latest reviewed edition online"
               cat /tmp/errors.txt
               exit 0
             fi
@@ -131,7 +131,9 @@ jobs:
 
   publish:
     needs: digest
-    if: always()
+    # A scheduled fetch with new commits waits for the 06:00 ChatGPT analysis PR.
+    # Merging that PR changes data/** and triggers publish.yml on main.
+    if: always() && (needs.digest.outputs.new_commits == '0' || needs.digest.outputs.reviewed == 'true')
     uses: ./.github/workflows/publish.yml
     permissions:
       contents: read
