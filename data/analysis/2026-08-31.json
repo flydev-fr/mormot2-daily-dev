@@ -1,0 +1,832 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-08-31",
+  "edition_title": {
+    "en": "Lock and process fixes make build 16652 the safe landing point",
+    "fr": "Les correctifs de verrouillage et de processus font du build 16652 le point d'arrivée sûr",
+    "zh": "锁与进程修复使 build 16652 成为安全落点",
+    "ru": "Исправления блокировок и процессов делают build 16652 безопасной точкой обновления"
+  },
+  "intro": {
+    "en": "This batch fixes two production hazards: a missed wake-up race in TOSLightLock and several long-standing POSIX RunRedirect failures, including orphaned child processes and an EOF busy loop. It also adds a futex-backed read-write lock, corrects ODBC type inference, expands LDAP and stack-trace APIs, and closes Delphi and BSD compilation regressions before the final build.",
+    "fr": "Cette série corrige deux risques de production : une course pouvant manquer un réveil dans TOSLightLock et plusieurs défauts anciens de RunRedirect sous POSIX, notamment des processus enfants orphelins et une boucle active en fin de flux. Elle ajoute aussi un verrou lecture-écriture basé sur futex, corrige l'inférence des types ODBC, étend les API LDAP et de trace de pile, puis résout les régressions de compilation Delphi et BSD avant le build final.",
+    "zh": "这一批次修复了两个生产风险：TOSLightLock 中可能丢失唤醒的竞态，以及 POSIX RunRedirect 中长期存在的多个问题，包括孤儿子进程和 EOF 忙循环。同时还新增了基于 futex 的读写锁，修正了 ODBC 类型推断，扩展了 LDAP 与堆栈跟踪 API，并在最终 build 前解决了 Delphi 和 BSD 编译回归。",
+    "ru": "Этот набор устраняет две производственные угрозы: гонку с потерей пробуждения в TOSLightLock и несколько давних ошибок POSIX RunRedirect, включая осиротевшие дочерние процессы и активный цикл после EOF. Также добавлена read-write блокировка на futex, исправлено определение типов ODBC, расширены API LDAP и трассировки стека, а перед финальным build устранены регрессии компиляции Delphi и BSD."
+  },
+  "tldr": [
+    "TOSLightLock.UnLock now uses a mandatory CAS, preventing a waiter from being forgotten during unlock.",
+    "POSIX RunRedirect no longer leaks child process groups or spins at 100% CPU after EOF, and now honors environment and working-directory arguments.",
+    "ODBC column binding now uses the real precision and maps SQL_FLOAT separately from DECIMAL and NUMERIC.",
+    "New public APIs include TOSRWLightLock, TDebugFile.StackTrace, LDAP formatting and DN filtering helpers, and TAsnObjects.",
+    "Land on build 2.4.16652; earlier snapshots in this batch contain Delphi, BSD, or WaitForSafe source-compatibility regressions."
+  ],
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Pull the final 2.4.16652 revision for POSIX services using RunRedirect, workloads using TOSLightLock, ODBC consumers, or any Delphi/BSD build. Do not stop on an intermediate revision: later commits in the batch repair compilation and source compatibility introduced earlier in the same sequence.",
+    "fr": "Intégrez la révision finale 2.4.16652 pour les services POSIX utilisant RunRedirect, les charges utilisant TOSLightLock, les consommateurs ODBC ou toute compilation Delphi/BSD. Ne vous arrêtez pas sur une révision intermédiaire : des commits ultérieurs réparent des problèmes de compilation et de compatibilité source introduits plus tôt dans la même série.",
+    "zh": "对于使用 RunRedirect 的 POSIX 服务、使用 TOSLightLock 的负载、ODBC 使用者或任何 Delphi/BSD 构建，应拉取最终的 2.4.16652 修订。不要停在中间修订，因为本批后续提交修复了同一序列早期引入的编译与源码兼容性问题。",
+    "ru": "Для POSIX-сервисов с RunRedirect, нагрузок с TOSLightLock, пользователей ODBC и любых сборок Delphi/BSD следует взять финальную ревизию 2.4.16652. Не останавливайтесь на промежуточной ревизии: последующие коммиты исправляют компиляцию и совместимость исходников, нарушенные ранее в той же серии."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16630",
+        "to_build": "2.4.16638",
+        "why": "The first LDAP DN-filter type declaration did not compile with Delphi; build 16639 introduces TNormalizeDNs and corrects the signatures."
+      },
+      {
+        "from_build": "2.4.16645",
+        "to_build": "2.4.16651",
+        "why": "The WaitForSafe default argument was temporarily removed, and BSD builds lacked the SPIN_FUTEX declaration required by TOSRWLightLock; build 16652 repairs both."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "ad8f8d3836654bfbd4d2f1b513010ac76a4c80f1",
+          "667509df5243a636b9efdf9bb93dbd06412f00ef"
+        ],
+        "why": "Concurrency and process-lifecycle fixes have the highest production impact."
+      },
+      {
+        "shas": [
+          "5c4a0328922172a8a75dad08f9aa92fd50949ca2",
+          "63b43ba0ae29dcc9c00b6f6b170f659b42e291bd",
+          "951b4afd5f5864400b807117b472546e7c305c46"
+        ],
+        "why": "Then take the data-mapping and compiler-compatibility fixes, ending on the edition head."
+      }
+    ]
+  },
+  "entries": [
+    {
+      "sha": "951b4afd5f5864400b807117b472546e7c305c46",
+      "headline": {
+        "en": "Final revision restores BSD builds and the WaitForSafe default",
+        "fr": "La révision finale rétablit les builds BSD et la valeur par défaut de WaitForSafe",
+        "zh": "最终修订恢复 BSD 构建和 WaitForSafe 默认参数",
+        "ru": "Финальная ревизия восстанавливает сборки BSD и параметр по умолчанию WaitForSafe"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "In mormot.core.os, SPIN_FUTEX was moved outside the OSFUTEX-only block so the fallback TOSRWLightLock code can reference it on BSD. TSynEvent.WaitForSafe also regains DisableSafe=false as its public default argument.",
+        "fr": "Dans mormot.core.os, SPIN_FUTEX a été déplacé hors du bloc réservé à OSFUTEX afin que le code de repli de TOSRWLightLock puisse l'utiliser sous BSD. TSynEvent.WaitForSafe retrouve aussi DisableSafe=false comme argument public par défaut.",
+        "zh": "在 mormot.core.os 中，SPIN_FUTEX 被移出仅限 OSFUTEX 的代码块，使 BSD 上的 TOSRWLightLock 回退代码可以引用它。TSynEvent.WaitForSafe 也恢复了公共默认参数 DisableSafe=false。",
+        "ru": "В mormot.core.os константа SPIN_FUTEX вынесена из блока только для OSFUTEX, чтобы резервный код TOSRWLightLock мог использовать ее на BSD. У TSynEvent.WaitForSafe также восстановлен публичный параметр по умолчанию DisableSafe=false."
+      },
+      "impact": {
+        "en": "BSD targets can compile the new read-write lock, and existing source that calls WaitForSafe with only a timeout compiles again. This is the revision to use instead of intermediate builds 16645-16651.",
+        "fr": "Les cibles BSD peuvent compiler le nouveau verrou lecture-écriture, et le code existant appelant WaitForSafe avec seulement un délai compile à nouveau. Cette révision doit remplacer les builds intermédiaires 16645 à 16651.",
+        "zh": "BSD 目标现在可以编译新的读写锁，仅以超时参数调用 WaitForSafe 的现有源码也能再次编译。应使用此修订，而不是中间的 16645-16651 构建。",
+        "ru": "Цели BSD снова компилируют новую read-write блокировку, а существующий код, вызывающий WaitForSafe только с тайм-аутом, вновь собирается. Эту ревизию следует использовать вместо промежуточных build 16645-16651."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Land on this revision before compiling BSD targets or adopting any other change from this edition.",
+        "fr": "Placez-vous sur cette révision avant de compiler des cibles BSD ou d'adopter tout autre changement de cette édition.",
+        "zh": "在编译 BSD 目标或采用本期其他更改前，应落在此修订。",
+        "ru": "Перед сборкой целей BSD или использованием других изменений этого выпуска перейдите на эту ревизию."
+      },
+      "units": ["mormot.core.os"],
+      "api_changes": [
+        {
+          "symbol": "TSynEvent.WaitForSafe",
+          "change": "signature-changed",
+          "note": {
+            "en": "DisableSafe once again defaults to false after being made mandatory in build 16645.",
+            "fr": "DisableSafe vaut de nouveau false par défaut après être devenu obligatoire dans le build 16645.",
+            "zh": "DisableSafe 在 build 16645 中一度成为必填参数，现在再次默认为 false。",
+            "ru": "DisableSafe снова имеет значение false по умолчанию после того, как в build 16645 стал обязательным."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b1f1302d8857cd6f6326ad8649c953f22f5cfee1",
+      "headline": {
+        "en": "Tunnel relay test drops an unused random-generator variable",
+        "fr": "Le test du relais de tunnel supprime une variable de générateur aléatoire inutilisée",
+        "zh": "隧道中继测试移除未使用的随机生成器变量",
+        "ru": "Тест туннельного ретранслятора удаляет неиспользуемую переменную генератора"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TNetworkProtocols.TunnelRelay no longer declares and initializes an unused PLecuyer variable. No test assertion, control flow, or framework unit changed.",
+        "fr": "TNetworkProtocols.TunnelRelay ne déclare et n'initialise plus une variable PLecuyer inutilisée. Aucune assertion, aucun flux de contrôle ni aucune unité du framework n'est modifié.",
+        "zh": "TNetworkProtocols.TunnelRelay 不再声明和初始化未使用的 PLecuyer 变量。测试断言、控制流和框架单元均未改变。",
+        "ru": "TNetworkProtocols.TunnelRelay больше не объявляет и не инициализирует неиспользуемую переменную PLecuyer. Проверки, поток управления и модули фреймворка не изменены."
+      },
+      "impact": {
+        "en": "There is no impact on application code or runtime behavior; the change only removes a compiler warning in the test suite.",
+        "fr": "Il n'y a aucun impact sur le code applicatif ni sur le comportement d'exécution ; le changement supprime seulement un avertissement du compilateur dans les tests.",
+        "zh": "对应用代码或运行时行为没有影响；此更改仅消除测试套件中的编译器警告。",
+        "ru": "На код приложений и поведение во время выполнения влияния нет; изменение лишь убирает предупреждение компилятора в тестах."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "60cb8bc77b64ec7b0762f4ce626731fd755a4103",
+      "headline": {
+        "en": "Pending socket events switch to the cheaper low-contention lock",
+        "fr": "Les événements socket en attente utilisent un verrou moins coûteux en faible contention",
+        "zh": "待处理套接字事件改用低争用下成本更低的锁",
+        "ru": "Ожидающие события сокетов переходят на более дешевую блокировку при низкой конкуренции"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPollSockets.fPendingSafe changes from TOSLightLock to TLightLock. The commit records that pending-event contention is small and that the mandatory CAS added to TOSLightLock.UnLock makes the simpler lock faster here.",
+        "fr": "TPollSockets.fPendingSafe passe de TOSLightLock à TLightLock. Le commit indique que la contention des événements en attente est faible et que le CAS obligatoire ajouté à TOSLightLock.UnLock rend ici le verrou simple plus rapide.",
+        "zh": "TPollSockets.fPendingSafe 从 TOSLightLock 改为 TLightLock。提交说明待处理事件的争用很小，而 TOSLightLock.UnLock 新增的强制 CAS 使简单锁在此处更快。",
+        "ru": "TPollSockets.fPendingSafe заменен с TOSLightLock на TLightLock. В коммите указано, что конкуренция за ожидающие события мала, а обязательный CAS в TOSLightLock.UnLock делает здесь простую блокировку быстрее."
+      },
+      "impact": {
+        "en": "Socket polling keeps the race fix while avoiding its extra uncontended unlock cost for this internal queue. No application code change is required.",
+        "fr": "Le polling des sockets conserve la correction de course tout en évitant son coût supplémentaire de déverrouillage sans contention pour cette file interne. Aucun changement applicatif n'est requis.",
+        "zh": "套接字轮询保留竞态修复，同时避免此内部队列在无争用解锁时的额外成本。应用代码无需修改。",
+        "ru": "Опрос сокетов сохраняет исправление гонки, избегая дополнительной стоимости разблокировки без конкуренции для этой внутренней очереди. Изменения приложений не требуются."
+      },
+      "action": "none",
+      "units": ["mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "46404091f2fcd1add807da12a5fa7e88c5b0a5bd",
+      "headline": {
+        "en": "WaitForSafe gives synchronized main-thread work priority",
+        "fr": "WaitForSafe donne la priorité au travail synchronisé du thread principal",
+        "zh": "WaitForSafe 优先处理主线程同步工作",
+        "ru": "WaitForSafe отдает приоритет синхронизированной работе главного потока"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "On the main thread, TSynEvent.WaitForSafe now calls CheckSynchronize(10) and then polls the event with WaitFor(0), instead of checking synchronization for 1 ms and blocking on the event for 10 ms. A zero timeout bypasses the safe loop.",
+        "fr": "Sur le thread principal, TSynEvent.WaitForSafe appelle désormais CheckSynchronize(10) puis sonde l'événement avec WaitFor(0), au lieu de vérifier la synchronisation pendant 1 ms puis de bloquer 10 ms sur l'événement. Un délai nul contourne la boucle sûre.",
+        "zh": "在主线程中，TSynEvent.WaitForSafe 现在调用 CheckSynchronize(10)，随后用 WaitFor(0) 轮询事件；此前是同步检查 1 毫秒并在事件上阻塞 10 毫秒。零超时会绕过安全循环。",
+        "ru": "В главном потоке TSynEvent.WaitForSafe теперь вызывает CheckSynchronize(10), затем опрашивает событие через WaitFor(0), вместо 1 мс синхронизации и 10 мс блокировки на событии. Нулевой тайм-аут обходит безопасный цикл."
+      },
+      "impact": {
+        "en": "Main-thread waits process queued Synchronize calls more promptly and check the event without an additional blocking interval. Code sensitive to synchronization ordering or timeout boundaries should be retested.",
+        "fr": "Les attentes du thread principal traitent plus rapidement les appels Synchronize en attente et vérifient l'événement sans intervalle bloquant supplémentaire. Le code sensible à l'ordre de synchronisation ou aux limites de délai doit être retesté.",
+        "zh": "主线程等待会更及时地处理排队的 Synchronize 调用，并在不增加阻塞间隔的情况下检查事件。对同步顺序或超时边界敏感的代码应重新测试。",
+        "ru": "Ожидания главного потока быстрее обрабатывают очередь Synchronize и проверяют событие без дополнительной блокировки. Код, чувствительный к порядку синхронизации или границам тайм-аута, следует повторно протестировать."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Retest main-thread RunWait or direct WaitForSafe usage that depends on precise timeout or Synchronize ordering.",
+        "fr": "Retestez les usages de RunWait sur le thread principal ou de WaitForSafe qui dépendent d'un délai précis ou de l'ordre de Synchronize.",
+        "zh": "重新测试依赖精确超时或 Synchronize 顺序的主线程 RunWait 或直接 WaitForSafe 用法。",
+        "ru": "Повторно протестируйте RunWait в главном потоке и прямые вызовы WaitForSafe, зависящие от точного тайм-аута или порядка Synchronize."
+      },
+      "units": ["mormot.core.os"],
+      "api_changes": [
+        {
+          "symbol": "TSynEvent.WaitForSafe",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Safe main-thread waits now prioritize CheckSynchronize and use a nonblocking event check.",
+            "fr": "Les attentes sûres du thread principal privilégient désormais CheckSynchronize et utilisent une vérification non bloquante de l'événement.",
+            "zh": "安全的主线程等待现在优先执行 CheckSynchronize，并使用非阻塞事件检查。",
+            "ru": "Безопасные ожидания главного потока теперь отдают приоритет CheckSynchronize и используют неблокирующую проверку события."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a22faf703a6016c1f4262df57e99337e93b17d96",
+      "headline": {
+        "en": "TLoggedWorker waits on an event instead of polling",
+        "fr": "TLoggedWorker attend un événement au lieu de sonder",
+        "zh": "TLoggedWorker 改为等待事件而非轮询",
+        "ru": "TLoggedWorker ожидает событие вместо опроса"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TLoggedWorker now owns a TSynEvent named fIdle. RunOne resets it when work starts, RunDone signals it when fRunning reaches zero, and RunWait delegates its timeout and optional main-thread synchronization to WaitForSafe.",
+        "fr": "TLoggedWorker possède maintenant un TSynEvent nommé fIdle. RunOne le réinitialise au démarrage du travail, RunDone le signale lorsque fRunning atteint zéro, et RunWait délègue son délai et la synchronisation optionnelle du thread principal à WaitForSafe.",
+        "zh": "TLoggedWorker 现在拥有名为 fIdle 的 TSynEvent。RunOne 在工作开始时重置它，RunDone 在 fRunning 归零时发出信号，RunWait 将超时和可选主线程同步委托给 WaitForSafe。",
+        "ru": "TLoggedWorker теперь владеет TSynEvent fIdle. RunOne сбрасывает его при запуске работы, RunDone сигнализирует при достижении fRunning нуля, а RunWait передает тайм-аут и необязательную синхронизацию главного потока в WaitForSafe."
+      },
+      "impact": {
+        "en": "Waiting no longer wakes every 10 ms, reducing idle CPU use and reacting immediately when the worker becomes idle. The contract now explicitly permits only one concurrent RunWait caller.",
+        "fr": "L'attente ne se réveille plus toutes les 10 ms, ce qui réduit l'utilisation CPU au repos et réagit immédiatement lorsque le worker devient inactif. Le contrat n'autorise désormais explicitement qu'un seul appelant RunWait simultané.",
+        "zh": "等待不再每 10 毫秒唤醒，降低了空闲 CPU 使用，并在 worker 变为空闲时立即响应。契约现在明确只允许一个并发 RunWait 调用者。",
+        "ru": "Ожидание больше не просыпается каждые 10 мс, снижая нагрузку CPU в простое и немедленно реагируя на переход worker в idle. Контракт теперь явно допускает только одного одновременного вызывающего RunWait."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Check that application code does not call RunWait concurrently on the same TLoggedWorker instance.",
+        "fr": "Vérifiez que le code applicatif n'appelle pas RunWait simultanément sur la même instance de TLoggedWorker.",
+        "zh": "检查应用代码是否会在同一 TLoggedWorker 实例上并发调用 RunWait。",
+        "ru": "Проверьте, что код приложения не вызывает RunWait одновременно для одного экземпляра TLoggedWorker."
+      },
+      "units": ["mormot.core.threads"],
+      "api_changes": [
+        {
+          "symbol": "TLoggedWorker.RunWait",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The implementation is event-driven and supports one waiting thread at a time.",
+            "fr": "L'implémentation est pilotée par événement et accepte un seul thread en attente à la fois.",
+            "zh": "实现改为事件驱动，并且一次仅支持一个等待线程。",
+            "ru": "Реализация стала событийной и поддерживает один ожидающий поток одновременно."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ad8f8d3836654bfbd4d2f1b513010ac76a4c80f1",
+      "headline": {
+        "en": "TOSLightLock could miss a waiter during unlock",
+        "fr": "TOSLightLock pouvait oublier un thread en attente au déverrouillage",
+        "zh": "TOSLightLock 解锁时可能遗漏等待线程",
+        "ru": "TOSLightLock мог потерять ожидающий поток при разблокировке"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TOSLightLock.UnLock now always performs LockedExc32 from EV_LOCKED to EV_NONE before choosing the wake-up path. The former Intel fast path read fMutex and then stored EV_NONE non-atomically, allowing a waiter to publish EV_WAITER between those operations and be overwritten.",
+        "fr": "TOSLightLock.UnLock effectue désormais toujours LockedExc32 de EV_LOCKED vers EV_NONE avant de choisir le chemin de réveil. L'ancien chemin rapide Intel lisait fMutex puis écrivait EV_NONE sans atomicité, permettant à un thread en attente de publier EV_WAITER entre les deux opérations puis d'être écrasé.",
+        "zh": "TOSLightLock.UnLock 现在始终先通过 LockedExc32 将 EV_LOCKED 改为 EV_NONE，再选择唤醒路径。旧的 Intel 快速路径先读取 fMutex，再非原子地写入 EV_NONE，等待线程可能在两者之间发布 EV_WAITER 并被覆盖。",
+        "ru": "TOSLightLock.UnLock теперь всегда выполняет LockedExc32 из EV_LOCKED в EV_NONE перед выбором пути пробуждения. Старый быстрый путь Intel читал fMutex, затем неатомарно записывал EV_NONE, поэтому ожидающий поток мог между операциями установить EV_WAITER, который затем затирался."
+      },
+      "impact": {
+        "en": "Under contention, the old unlock sequence could forget to wake a waiter and leave a thread blocked indefinitely. Services using TOSLightLock directly or through framework internals should take this fix despite the small uncontended CAS cost.",
+        "fr": "Sous contention, l'ancienne séquence de déverrouillage pouvait oublier de réveiller un thread et le laisser bloqué indéfiniment. Les services utilisant TOSLightLock directement ou via les composants internes du framework doivent intégrer ce correctif malgré le faible coût du CAS sans contention.",
+        "zh": "在争用下，旧解锁序列可能忘记唤醒等待线程，使其无限期阻塞。直接或通过框架内部使用 TOSLightLock 的服务应采用此修复，尽管无争用时会增加少量 CAS 成本。",
+        "ru": "При конкуренции старая последовательность могла не разбудить ожидающий поток и оставить его заблокированным навсегда. Сервисы, использующие TOSLightLock напрямую или через внутренности фреймворка, должны принять исправление несмотря на небольшую стоимость CAS без конкуренции."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Rebuild concurrency-heavy services on build 2.4.16652 or later and rerun lock-contention tests.",
+        "fr": "Recompilez les services fortement concurrents avec le build 2.4.16652 ou ultérieur et relancez les tests de contention des verrous.",
+        "zh": "使用 build 2.4.16652 或更高版本重新构建高并发服务，并重新运行锁争用测试。",
+        "ru": "Пересоберите сервисы с высокой конкуренцией на build 2.4.16652 или новее и повторите тесты блокировок под нагрузкой."
+      },
+      "units": ["mormot.core.os"],
+      "api_changes": [
+        {
+          "symbol": "TOSLightLock.UnLock",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Unlock now uses an atomic transition before deciding whether a waiter must be woken.",
+            "fr": "Le déverrouillage utilise maintenant une transition atomique avant de décider si un thread doit être réveillé.",
+            "zh": "解锁现在先执行原子状态转换，再决定是否需要唤醒等待线程。",
+            "ru": "Разблокировка теперь атомарно меняет состояние перед решением о пробуждении ожидающего потока."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9fbd6c32f619b1db1999d3afe313ab70cbfe752a",
+      "headline": {
+        "en": "Database and REST class registries use pointer arrays",
+        "fr": "Les registres de classes base de données et REST utilisent des tableaux de pointeurs",
+        "zh": "数据库和 REST 类注册表改用指针数组",
+        "ru": "Реестры классов базы данных и REST используют массивы указателей"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "Internal class-definition registries in TSqlDBConnectionProperties and TRest now call PtrArrayAddOnce instead of storing TClass values through TObject casts. The ODBC helper name and formatting were normalized without changing its scope.",
+        "fr": "Les registres internes de définitions de classes dans TSqlDBConnectionProperties et TRest appellent maintenant PtrArrayAddOnce au lieu de stocker des TClass via des conversions TObject. Le nom et le formatage de l'aide ODBC ont été normalisés sans changer sa portée.",
+        "zh": "TSqlDBConnectionProperties 和 TRest 的内部类定义注册表现在调用 PtrArrayAddOnce，不再通过 TObject 转换存储 TClass。ODBC 辅助函数的名称和格式也被规范化，但作用域未变。",
+        "ru": "Внутренние реестры классов TSqlDBConnectionProperties и TRest теперь вызывают PtrArrayAddOnce вместо хранения TClass через приведение к TObject. Имя и форматирование вспомогательной ODBC-функции нормализованы без изменения области видимости."
+      },
+      "impact": {
+        "en": "There is no functional change and no application migration. The registry representation now matches the pointer values it actually stores.",
+        "fr": "Il n'y a aucun changement fonctionnel ni migration applicative. La représentation du registre correspond désormais aux valeurs de pointeur réellement stockées.",
+        "zh": "没有功能变化，也无需迁移应用。注册表表示现在与实际存储的指针值一致。",
+        "ru": "Функциональных изменений и миграции приложений нет. Представление реестра теперь соответствует фактически хранимым указателям."
+      },
+      "action": "none",
+      "units": ["mormot.db.sql", "mormot.db.sql.odbc", "mormot.rest.core"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5c4a0328922172a8a75dad08f9aa92fd50949ca2",
+      "headline": {
+        "en": "ODBC binding now respects declared numeric precision",
+        "fr": "La liaison ODBC respecte désormais la précision numérique déclarée",
+        "zh": "ODBC 绑定现在遵守声明的数值精度",
+        "ru": "Привязка ODBC теперь учитывает заявленную точность чисел"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBOdbcStatement.BindColumns passes the actual ColumnSize and DecimalDigits from SQLDescribeColW to ODBCColumnToFieldType instead of a hard-coded precision of 10. SQL_FLOAT is also moved out of the DECIMAL/NUMERIC integer and currency heuristic and maps directly to ftDouble.",
+        "fr": "TSqlDBOdbcStatement.BindColumns transmet à ODBCColumnToFieldType les véritables ColumnSize et DecimalDigits fournis par SQLDescribeColW au lieu d'une précision codée en dur à 10. SQL_FLOAT sort aussi de l'heuristique entier/devise de DECIMAL et NUMERIC et correspond directement à ftDouble.",
+        "zh": "TSqlDBOdbcStatement.BindColumns 现在把 SQLDescribeColW 返回的真实 ColumnSize 和 DecimalDigits 传给 ODBCColumnToFieldType，而不是使用硬编码精度 10。SQL_FLOAT 也不再进入 DECIMAL/NUMERIC 的整数与货币启发式，而是直接映射为 ftDouble。",
+        "ru": "TSqlDBOdbcStatement.BindColumns теперь передает в ODBCColumnToFieldType реальные ColumnSize и DecimalDigits из SQLDescribeColW вместо жестко заданной точности 10. SQL_FLOAT также исключен из эвристики DECIMAL/NUMERIC для целых и валюты и напрямую отображается в ftDouble."
+      },
+      "impact": {
+        "en": "ODBC result columns may now expose the correct ftInt64, ftCurrency or ftDouble type instead of a type inferred from precision 10. Applications relying on previously incorrect metadata or conversion behavior should be regression-tested.",
+        "fr": "Les colonnes de résultat ODBC peuvent désormais exposer le bon type ftInt64, ftCurrency ou ftDouble au lieu d'un type déduit d'une précision 10. Les applications dépendant des anciennes métadonnées ou conversions incorrectes doivent être testées.",
+        "zh": "ODBC 结果列现在可能返回正确的 ftInt64、ftCurrency 或 ftDouble，而不是根据精度 10 推断的类型。依赖旧错误元数据或转换行为的应用应进行回归测试。",
+        "ru": "Столбцы результата ODBC теперь могут выдавать корректный ftInt64, ftCurrency или ftDouble вместо типа, выведенного из точности 10. Приложения, зависевшие от прежних ошибочных метаданных или преобразований, следует протестировать."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Retest DECIMAL, NUMERIC and FLOAT result columns through every ODBC driver used in production.",
+        "fr": "Retestez les colonnes de résultat DECIMAL, NUMERIC et FLOAT avec chaque pilote ODBC utilisé en production.",
+        "zh": "通过生产中使用的每个 ODBC 驱动重新测试 DECIMAL、NUMERIC 和 FLOAT 结果列。",
+        "ru": "Повторно протестируйте столбцы DECIMAL, NUMERIC и FLOAT со всеми ODBC-драйверами, используемыми в production."
+      },
+      "units": ["mormot.db.sql.odbc"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "79dd6c23793599c12a83fec5bbf7d5f95f8b9f44",
+      "headline": {
+        "en": "Windows socket polling takes the pending-event fast path",
+        "fr": "Le polling socket Windows utilise le chemin rapide des événements en attente",
+        "zh": "Windows 套接字轮询启用待处理事件快速路径",
+        "ru": "Опрос сокетов Windows использует быстрый путь ожидающих событий"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPollSockets.PollForPendingEvents no longer limits its fPendingSafe.TryLock fast path to POSIX. Windows now attempts the same nonblocking lock and moves pending events without entering the slower fallback when contention is absent.",
+        "fr": "TPollSockets.PollForPendingEvents ne limite plus son chemin rapide fPendingSafe.TryLock à POSIX. Windows tente désormais le même verrou non bloquant et déplace les événements en attente sans entrer dans le chemin lent en l'absence de contention.",
+        "zh": "TPollSockets.PollForPendingEvents 不再将 fPendingSafe.TryLock 快速路径限制于 POSIX。Windows 现在也尝试相同的非阻塞锁，并在无争用时直接移动待处理事件。",
+        "ru": "TPollSockets.PollForPendingEvents больше не ограничивает быстрый путь fPendingSafe.TryLock платформой POSIX. Windows теперь также пробует неблокирующую блокировку и переносит события без медленного пути при отсутствии конкуренции."
+      },
+      "impact": {
+        "en": "Windows servers with frequent socket subscription changes may spend less time merging pending events. The change is internal and requires no application code modification.",
+        "fr": "Les serveurs Windows avec de fréquents changements d'abonnement socket peuvent passer moins de temps à fusionner les événements en attente. Le changement est interne et ne requiert aucune modification applicative.",
+        "zh": "频繁变更套接字订阅的 Windows 服务器可能减少合并待处理事件的时间。此更改为内部实现，应用代码无需修改。",
+        "ru": "Серверы Windows с частыми изменениями подписок сокетов могут тратить меньше времени на объединение ожидающих событий. Изменение внутреннее и не требует правок приложений."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "63b43ba0ae29dcc9c00b6f6b170f659b42e291bd",
+      "headline": {
+        "en": "Delphi compilation is restored for new lock and LDAP APIs",
+        "fr": "La compilation Delphi est rétablie pour les nouvelles API de verrou et LDAP",
+        "zh": "新锁与 LDAP API 的 Delphi 编译已恢复",
+        "ru": "Компиляция Delphi восстановлена для новых API блокировок и LDAP"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "TOSRWLightLock removes Delphi inline directives from methods that could not be inlined there. In mormot.net.ldap, the anonymous set declaration becomes a TNormalizeDN enum plus a TNormalizeDNs set, and DNToCN, DNsToCN and NormalizeDN take TNormalizeDNs.",
+        "fr": "TOSRWLightLock retire sous Delphi les directives inline de méthodes qui ne pouvaient pas y être inlinées. Dans mormot.net.ldap, la déclaration d'ensemble anonyme devient une énumération TNormalizeDN plus un ensemble TNormalizeDNs, et DNToCN, DNsToCN et NormalizeDN acceptent TNormalizeDNs.",
+        "zh": "TOSRWLightLock 移除了 Delphi 无法内联的方法上的 inline 指令。在 mormot.net.ldap 中，匿名集合声明改为 TNormalizeDN 枚举和 TNormalizeDNs 集合，DNToCN、DNsToCN 与 NormalizeDN 改为接收 TNormalizeDNs。",
+        "ru": "В TOSRWLightLock удалены Delphi-директивы inline у методов, которые там не могли встраиваться. В mormot.net.ldap анонимный set заменен перечислением TNormalizeDN и множеством TNormalizeDNs, а DNToCN, DNsToCN и NormalizeDN принимают TNormalizeDNs."
+      },
+      "impact": {
+        "en": "Delphi can compile the APIs introduced earlier in the batch. Code written against transient build 16630 must replace set-typed TNormalizeDN variables with TNormalizeDNs; code using the final API has no migration.",
+        "fr": "Delphi peut compiler les API introduites plus tôt dans la série. Le code écrit contre le build transitoire 16630 doit remplacer les variables d'ensemble TNormalizeDN par TNormalizeDNs ; le code utilisant l'API finale n'a aucune migration.",
+        "zh": "Delphi 现在可以编译本批早先引入的 API。针对临时 build 16630 编写的代码必须把集合类型 TNormalizeDN 变量替换为 TNormalizeDNs；使用最终 API 的代码无需迁移。",
+        "ru": "Delphi теперь компилирует API, добавленные ранее в серии. Код для временного build 16630 должен заменить set-переменные TNormalizeDN на TNormalizeDNs; для финального API миграция не нужна."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Skip intermediate builds and compile Delphi applications against build 2.4.16652; grep for TNormalizeDN if build 16630 was already adopted.",
+        "fr": "Évitez les builds intermédiaires et compilez les applications Delphi avec le build 2.4.16652 ; recherchez TNormalizeDN si le build 16630 avait déjà été adopté.",
+        "zh": "跳过中间构建，使用 build 2.4.16652 编译 Delphi 应用；若已采用 build 16630，请搜索 TNormalizeDN。",
+        "ru": "Пропустите промежуточные build и компилируйте Delphi-приложения с 2.4.16652; если уже использовали build 16630, найдите TNormalizeDN."
+      },
+      "units": ["mormot.core.os", "mormot.net.ldap"],
+      "api_changes": [
+        {
+          "symbol": "TNormalizeDNs",
+          "change": "added",
+          "note": {
+            "en": "The set type used by DN filtering is now explicitly named TNormalizeDNs.",
+            "fr": "Le type d'ensemble utilisé pour filtrer les DN est maintenant explicitement nommé TNormalizeDNs.",
+            "zh": "用于 DN 过滤的集合类型现在明确命名为 TNormalizeDNs。",
+            "ru": "Тип множества для фильтрации DN теперь явно называется TNormalizeDNs."
+          }
+        },
+        {
+          "symbol": "DNToCN / DNsToCN / NormalizeDN",
+          "change": "signature-changed",
+          "note": {
+            "en": "Their extend parameter uses TNormalizeDNs instead of the transient set-typed TNormalizeDN.",
+            "fr": "Leur paramètre extend utilise TNormalizeDNs au lieu du type d'ensemble transitoire TNormalizeDN.",
+            "zh": "其 extend 参数使用 TNormalizeDNs，而不是临时的集合类型 TNormalizeDN。",
+            "ru": "Параметр extend использует TNormalizeDNs вместо временного set-типа TNormalizeDN."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "181c2d7b92bac61f0ae9218d34a1f452da8dc322",
+      "headline": {
+        "en": "Lock preference and pending-socket behavior are documented",
+        "fr": "La préférence des verrous et le comportement des sockets en attente sont documentés",
+        "zh": "锁偏好和待处理套接字行为得到说明",
+        "ru": "Документированы приоритет блокировок и поведение ожидающих сокетов"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "Comments now distinguish TOSRWLightLock reader preference from the Windows SRW locking pattern and describe TPollSockets pending-event overrides more precisely. EnsurePending also names its starting index explicitly without changing the search.",
+        "fr": "Les commentaires distinguent maintenant la préférence lecteur de TOSRWLightLock du modèle SRW de Windows et décrivent plus précisément les substitutions d'événements en attente de TPollSockets. EnsurePending nomme aussi explicitement son index initial sans changer la recherche.",
+        "zh": "注释现在区分 TOSRWLightLock 的读者优先策略与 Windows SRW 锁定模式，并更准确地说明 TPollSockets 的待处理事件重写。EnsurePending 也显式命名起始索引，但搜索逻辑未变。",
+        "ru": "Комментарии теперь отличают приоритет читателей TOSRWLightLock от модели Windows SRW и точнее описывают переопределения ожидающих событий TPollSockets. EnsurePending явно именует начальный индекс без изменения поиска."
+      },
+      "impact": {
+        "en": "There is no runtime or source impact. The documentation makes lock-selection tradeoffs and socket subclass responsibilities clearer.",
+        "fr": "Il n'y a aucun impact à l'exécution ni sur le code source. La documentation clarifie les compromis de choix des verrous et les responsabilités des sous-classes socket.",
+        "zh": "对运行时和源码没有影响。文档更清楚地说明了锁选择权衡和套接字子类职责。",
+        "ru": "Влияния на выполнение и исходный код нет. Документация яснее описывает выбор блокировок и обязанности подклассов сокетов."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "583fe89c573c17158a2881f2600e8efe7e16ff23",
+      "headline": {
+        "en": "New OS-assisted read-write lock favors readers",
+        "fr": "Un nouveau verrou lecture-écriture assisté par l'OS favorise les lecteurs",
+        "zh": "新增由操作系统辅助且读者优先的读写锁",
+        "ru": "Новая read-write блокировка с поддержкой ОС отдает приоритет читателям"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.os adds TOSRWLightLock, a 32-bit reader counter and writer flag using WaitOnAddress/WakeByAddress on Windows 8+, futex on Linux, and spinning fallbacks elsewhere. It exposes Init, Done, read/write lock, try-lock, unlock and IsLocked methods.",
+        "fr": "mormot.core.os ajoute TOSRWLightLock, un compteur de lecteurs 32 bits avec indicateur d'écriture utilisant WaitOnAddress/WakeByAddress sous Windows 8+, futex sous Linux et une attente active ailleurs. Il expose Init, Done, les verrous lecture/écriture, try-lock, unlock et IsLocked.",
+        "zh": "mormot.core.os 新增 TOSRWLightLock：一个 32 位读者计数器与写入标志，在 Windows 8+ 使用 WaitOnAddress/WakeByAddress，在 Linux 使用 futex，其他平台使用自旋回退。它公开 Init、Done、读写锁、尝试锁、解锁和 IsLocked 方法。",
+        "ru": "mormot.core.os добавляет TOSRWLightLock: 32-битный счетчик читателей и флаг писателя с WaitOnAddress/WakeByAddress на Windows 8+, futex на Linux и spin-резервом на других системах. Доступны Init, Done, read/write lock, try-lock, unlock и IsLocked."
+      },
+      "impact": {
+        "en": "Applications gain a low-overhead reader-preference alternative to writer-preference TRWLightLock. Continuous readers may delay a writer, and attempting a write lock inside a read or write lock still deadlocks by contract.",
+        "fr": "Les applications disposent d'une alternative légère à TRWLightLock, avec préférence lecteur plutôt que rédacteur. Des lecteurs continus peuvent retarder un rédacteur, et demander un verrou d'écriture depuis un verrou de lecture ou d'écriture provoque toujours un deadlock par contrat.",
+        "zh": "应用获得了相对于写者优先 TRWLightLock 的低开销读者优先替代方案。持续读者可能延迟写者，并且在读锁或写锁内部再次申请写锁按契约仍会死锁。",
+        "ru": "Приложения получают малозатратную альтернативу TRWLightLock с приоритетом читателей. Непрерывные читатели могут задержать писателя, а запрос write-lock внутри read- или write-lock по контракту приводит к deadlock."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Use TOSRWLightLock only where reader preference is acceptable; keep TRWLightLock when queued writers must block new readers.",
+        "fr": "Utilisez TOSRWLightLock uniquement si la préférence lecteur est acceptable ; conservez TRWLightLock lorsque les rédacteurs en attente doivent bloquer les nouveaux lecteurs.",
+        "zh": "仅在可接受读者优先时使用 TOSRWLightLock；若排队写者必须阻止新读者，请保留 TRWLightLock。",
+        "ru": "Используйте TOSRWLightLock только когда допустим приоритет читателей; оставьте TRWLightLock, если ожидающий писатель должен блокировать новых читателей."
+      },
+      "units": ["mormot.core.os"],
+      "api_changes": [
+        {
+          "symbol": "TOSRWLightLock",
+          "change": "added",
+          "note": {
+            "en": "New reader-preference, OS-assisted read-write lock record/object.",
+            "fr": "Nouveau record/objet de verrou lecture-écriture assisté par l'OS et à préférence lecteur.",
+            "zh": "新增读者优先、由操作系统辅助的读写锁 record/object。",
+            "ru": "Новый record/object read-write блокировки с приоритетом читателей и поддержкой ОС."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c849d8602cbbca5b6777878a4bfcb1cfaf1dd920",
+      "headline": {
+        "en": "Cross-platform futex layer can wake every waiter",
+        "fr": "La couche futex multiplateforme peut réveiller tous les threads en attente",
+        "zh": "跨平台 futex 层现在可唤醒所有等待线程",
+        "ru": "Кроссплатформенный слой futex умеет будить всех ожидающих"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "A new OsWakeAllOnValue callback is resolved to WakeByAddressAll on Windows 8+ and to FUTEX_WAKE_PRIVATE with MaxInt on Linux. It complements OsWaitOnValue and the single-waiter OsWakeOnValue callback.",
+        "fr": "Un nouveau callback OsWakeAllOnValue est résolu vers WakeByAddressAll sous Windows 8+ et vers FUTEX_WAKE_PRIVATE avec MaxInt sous Linux. Il complète OsWaitOnValue et le callback OsWakeOnValue qui ne réveille qu'un thread.",
+        "zh": "新增 OsWakeAllOnValue 回调：在 Windows 8+ 映射到 WakeByAddressAll，在 Linux 映射到带 MaxInt 的 FUTEX_WAKE_PRIVATE。它补充了 OsWaitOnValue 和单等待者 OsWakeOnValue。",
+        "ru": "Новый callback OsWakeAllOnValue разрешается в WakeByAddressAll на Windows 8+ и FUTEX_WAKE_PRIVATE с MaxInt на Linux. Он дополняет OsWaitOnValue и OsWakeOnValue для одного ожидающего."
+      },
+      "impact": {
+        "en": "Framework primitives such as TOSRWLightLock can wake all readers after a writer releases the lock. Existing application behavior is unchanged unless code chooses the new callback directly.",
+        "fr": "Les primitives du framework comme TOSRWLightLock peuvent réveiller tous les lecteurs après la libération du verrou par un rédacteur. Le comportement applicatif existant ne change que si le code utilise directement le nouveau callback.",
+        "zh": "TOSRWLightLock 等框架原语可在写者释放锁后唤醒所有读者。除非代码直接选择新回调，否则现有应用行为不变。",
+        "ru": "Примитивы фреймворка, например TOSRWLightLock, могут разбудить всех читателей после освобождения блокировки писателем. Поведение приложений не меняется, если новый callback не используется напрямую."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.core.os.posix", "mormot.core.os.windows"],
+      "api_changes": [
+        {
+          "symbol": "OsWakeAllOnValue",
+          "change": "added",
+          "note": {
+            "en": "New optional callback for waking every waiter on a 32-bit value.",
+            "fr": "Nouveau callback optionnel pour réveiller tous les threads en attente sur une valeur 32 bits.",
+            "zh": "新增可选回调，用于唤醒等待某个 32 位值的所有线程。",
+            "ru": "Новый необязательный callback для пробуждения всех ожидающих 32-битного значения."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ff62d96629c45f14364d74b1ef78bd561725b829",
+      "headline": {
+        "en": "TUri documentation confirms bare server names are accepted",
+        "fr": "La documentation de TUri confirme l'acceptation des noms de serveur seuls",
+        "zh": "TUri 文档确认可接受纯服务器名称",
+        "ru": "Документация TUri подтверждает поддержку имени сервера без пути"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "The TUri.From comment now explicitly lists a bare server name, without scheme or path, as an input interpreted as HTTP. No parser code changed.",
+        "fr": "Le commentaire de TUri.From mentionne explicitement un nom de serveur seul, sans schéma ni chemin, comme entrée interprétée en HTTP. Aucun code du parseur n'est modifié.",
+        "zh": "TUri.From 注释现在明确列出不含方案或路径的纯服务器名称，并说明其按 HTTP 解释。解析器代码未改变。",
+        "ru": "Комментарий TUri.From теперь явно указывает имя сервера без схемы и пути как ввод, интерпретируемый по HTTP. Код парсера не изменен."
+      },
+      "impact": {
+        "en": "There is no runtime change. Developers can rely on already-existing bare-host parsing with clearer documentation.",
+        "fr": "Il n'y a aucun changement d'exécution. Les développeurs peuvent s'appuyer sur l'analyse existante des hôtes seuls avec une documentation plus claire.",
+        "zh": "运行时没有变化。开发者可以在更清晰的文档基础上继续依赖已有的纯主机解析。",
+        "ru": "Изменений выполнения нет. Разработчики могут использовать уже существующий разбор имени хоста с более ясной документацией."
+      },
+      "action": "none",
+      "units": ["mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c7ba1bb3c0e323c32745f9670227bf136989f7a3",
+      "headline": {
+        "en": "LDAP attribute lists gain formatted value insertion",
+        "fr": "Les listes d'attributs LDAP gagnent l'insertion de valeurs formatées",
+        "zh": "LDAP 属性列表新增格式化值插入",
+        "ru": "Списки атрибутов LDAP получают вставку форматированных значений"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "TLdapAttributeList.AddFmt formats a RawUtf8 value with FormatUtf8 and forwards it to the existing Add overload with the requested TLdapAddOption. The method returns the affected TLdapAttribute.",
+        "fr": "TLdapAttributeList.AddFmt formate une valeur RawUtf8 avec FormatUtf8 puis la transmet à la surcharge Add existante avec le TLdapAddOption demandé. La méthode renvoie le TLdapAttribute concerné.",
+        "zh": "TLdapAttributeList.AddFmt 使用 FormatUtf8 格式化 RawUtf8 值，然后以指定 TLdapAddOption 转发给现有 Add 重载，并返回受影响的 TLdapAttribute。",
+        "ru": "TLdapAttributeList.AddFmt форматирует значение RawUtf8 через FormatUtf8 и передает его существующей перегрузке Add с нужным TLdapAddOption. Метод возвращает затронутый TLdapAttribute."
+      },
+      "impact": {
+        "en": "LDAP client code can build formatted attribute values without a temporary string. Existing Add calls and behavior are unchanged.",
+        "fr": "Le code client LDAP peut construire des valeurs d'attribut formatées sans chaîne temporaire. Les appels Add existants et leur comportement ne changent pas.",
+        "zh": "LDAP 客户端代码可在无需临时字符串的情况下构建格式化属性值。现有 Add 调用和行为不变。",
+        "ru": "Код LDAP-клиента может создавать форматированные значения атрибутов без временной строки. Существующие вызовы Add и их поведение не изменены."
+      },
+      "action": "none",
+      "units": ["mormot.net.ldap"],
+      "api_changes": [
+        {
+          "symbol": "TLdapAttributeList.AddFmt",
+          "change": "added",
+          "note": {
+            "en": "New formatted-value overload-like helper using FormatUtf8 arguments.",
+            "fr": "Nouvelle aide de type surcharge pour valeur formatée avec les arguments de FormatUtf8.",
+            "zh": "新增类似重载的格式化值辅助方法，使用 FormatUtf8 参数。",
+            "ru": "Новый вспомогательный метод для форматированного значения с аргументами FormatUtf8."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "446a5be14379de3d7469826632b204cc74dbc0a0",
+      "headline": {
+        "en": "ASN.1 objects gain a typed dynamic-array helper",
+        "fr": "Les objets ASN.1 gagnent une aide de tableau dynamique typé",
+        "zh": "ASN.1 对象新增类型化动态数组辅助项",
+        "ru": "Объекты ASN.1 получают типизированный динамический массив"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os.security adds TAsnObjects as an array of TAsnObject and AsnAddItem to append one encoded object while returning its zero-based index. LDAP modifier construction is the stated use case.",
+        "fr": "mormot.core.os.security ajoute TAsnObjects comme tableau de TAsnObject et AsnAddItem pour ajouter un objet encodé en renvoyant son index de base zéro. La construction de modificateurs LDAP est le cas d'usage indiqué.",
+        "zh": "mormot.core.os.security 新增 TAsnObjects（TAsnObject 数组）和 AsnAddItem，用于追加一个编码对象并返回其零基索引。声明的用例是构建 LDAP 修改项。",
+        "ru": "mormot.core.os.security добавляет TAsnObjects как массив TAsnObject и AsnAddItem для добавления закодированного объекта с возвратом его индекса от нуля. Указанный сценарий — построение модификаторов LDAP."
+      },
+      "impact": {
+        "en": "Code assembling multiple ASN.1 values can use a named array type and avoid repeated SetLength boilerplate. Existing ASN.1 encoding APIs are unchanged.",
+        "fr": "Le code assemblant plusieurs valeurs ASN.1 peut utiliser un type de tableau nommé et éviter les répétitions de SetLength. Les API d'encodage ASN.1 existantes ne changent pas.",
+        "zh": "组装多个 ASN.1 值的代码可使用命名数组类型并避免重复 SetLength 样板。现有 ASN.1 编码 API 不变。",
+        "ru": "Код, собирающий несколько ASN.1-значений, может использовать именованный тип массива без повторяющегося SetLength. Существующие API кодирования ASN.1 не изменены."
+      },
+      "action": "none",
+      "units": ["mormot.core.os.security"],
+      "api_changes": [
+        {
+          "symbol": "TAsnObjects",
+          "change": "added",
+          "note": {
+            "en": "Dynamic array type for multiple TAsnObject values.",
+            "fr": "Type de tableau dynamique pour plusieurs valeurs TAsnObject.",
+            "zh": "用于多个 TAsnObject 值的动态数组类型。",
+            "ru": "Тип динамического массива для нескольких значений TAsnObject."
+          }
+        },
+        {
+          "symbol": "AsnAddItem",
+          "change": "added",
+          "note": {
+            "en": "Appends an ASN.1 object and returns its index.",
+            "fr": "Ajoute un objet ASN.1 et renvoie son index.",
+            "zh": "追加 ASN.1 对象并返回其索引。",
+            "ru": "Добавляет объект ASN.1 и возвращает его индекс."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d5844b6ade1b6c91b81fb95083d6da69cf2516d9",
+      "headline": {
+        "en": "TRWLightLock gains a no-op finalizer for lock interchangeability",
+        "fr": "TRWLightLock gagne un finaliseur vide pour l'interchangeabilité des verrous",
+        "zh": "TRWLightLock 新增空终结方法以便锁互换",
+        "ru": "TRWLightLock получает пустой финализатор для взаимозаменяемости блокировок"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "TRWLightLock now exposes Done as an empty method, matching the lifecycle shape of TOSLock and related primitives. Its documentation also states writer preference explicitly.",
+        "fr": "TRWLightLock expose maintenant Done comme méthode vide, conformément au cycle de vie de TOSLock et des primitives associées. Sa documentation indique aussi explicitement la préférence rédacteur.",
+        "zh": "TRWLightLock 现在公开空方法 Done，与 TOSLock 及相关原语的生命周期形式一致。文档也明确说明写者优先。",
+        "ru": "TRWLightLock теперь предоставляет пустой метод Done, совпадающий с жизненным циклом TOSLock и родственных примитивов. В документации также явно указан приоритет писателя."
+      },
+      "impact": {
+        "en": "Generic code can call Init and Done for either lock type without conditional cleanup. Done performs no work, so existing runtime behavior is unchanged.",
+        "fr": "Le code générique peut appeler Init et Done pour chaque type de verrou sans nettoyage conditionnel. Done ne fait rien, donc le comportement d'exécution existant ne change pas.",
+        "zh": "通用代码可对任一锁类型调用 Init 和 Done，无需条件清理。Done 不执行任何操作，因此现有运行时行为不变。",
+        "ru": "Обобщенный код может вызывать Init и Done для обоих типов блокировок без условной очистки. Done ничего не делает, поэтому поведение не изменено."
+      },
+      "action": "none",
+      "units": ["mormot.core.os"],
+      "api_changes": [
+        {
+          "symbol": "TRWLightLock.Done",
+          "change": "added",
+          "note": {
+            "en": "No-op lifecycle method compatible with other lock records.",
+            "fr": "Méthode de cycle de vie vide compatible avec les autres records de verrou.",
+            "zh": "与其他锁 record 兼容的空生命周期方法。",
+            "ru": "Пустой метод жизненного цикла, совместимый с другими record-блокировками."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e171e5aa419b42a276c665ffb5876ba209be35da",
+      "headline": {
+        "en": "Text unit asserts its formatter still fits the stack buffer",
+        "fr": "L'unité texte vérifie que son formateur tient toujours dans le tampon de pile",
+        "zh": "文本单元断言格式化器仍可容纳于栈缓冲区",
+        "ru": "Текстовый модуль проверяет, что форматтер помещается в стековый буфер"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The mormot.core.text initialization adds an Assert that SizeOf(TFormatUtf8) does not exceed SizeOf(TTextWriterStackBuffer). The current expected sizes are 4 KB and 8 KB respectively.",
+        "fr": "L'initialisation de mormot.core.text ajoute un Assert vérifiant que SizeOf(TFormatUtf8) ne dépasse pas SizeOf(TTextWriterStackBuffer). Les tailles attendues sont actuellement de 4 Ko et 8 Ko.",
+        "zh": "mormot.core.text 初始化新增 Assert，确认 SizeOf(TFormatUtf8) 不超过 SizeOf(TTextWriterStackBuffer)。当前预期大小分别为 4 KB 和 8 KB。",
+        "ru": "Инициализация mormot.core.text добавляет Assert, что SizeOf(TFormatUtf8) не превышает SizeOf(TTextWriterStackBuffer). Текущие ожидаемые размеры — 4 КБ и 8 КБ."
+      },
+      "impact": {
+        "en": "Normal builds see no behavior change. Assertion-enabled builds will fail early if a future formatter growth would invalidate the stack-buffer assumption.",
+        "fr": "Les builds normaux ne changent pas. Les builds avec assertions échoueront tôt si une future croissance du formateur invalide l'hypothèse sur le tampon de pile.",
+        "zh": "正常构建没有行为变化。启用断言的构建会在未来格式化器增长破坏栈缓冲假设时尽早失败。",
+        "ru": "В обычных сборках поведение не меняется. Сборки с assertions завершатся раньше, если будущий рост форматтера нарушит предположение о стековом буфере."
+      },
+      "action": "none",
+      "units": ["mormot.core.text"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9411aea0a29a236c1e652141edb6a664e08a1502",
+      "headline": {
+        "en": "LDAP DN conversion can select CN, OU and DC components",
+        "fr": "La conversion des DN LDAP peut sélectionner les composants CN, OU et DC",
+        "zh": "LDAP DN 转换可选择 CN、OU 和 DC 组件",
+        "ru": "Преобразование LDAP DN может выбирать компоненты CN, OU и DC"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "DNToCN, DNsToCN and NormalizeDN gain an optional extend set controlling whether CN, OU and DC parts appear in the result. Defaults preserve the former all-components output; build 16639 later gives the set its final TNormalizeDNs name.",
+        "fr": "DNToCN, DNsToCN et NormalizeDN gagnent un ensemble optionnel extend contrôlant la présence des parties CN, OU et DC dans le résultat. Les valeurs par défaut conservent l'ancien résultat complet ; le build 16639 donne ensuite à l'ensemble son nom final TNormalizeDNs.",
+        "zh": "DNToCN、DNsToCN 和 NormalizeDN 新增可选 extend 集合，用于控制结果中是否包含 CN、OU 与 DC。默认值保留原有全部组件输出；build 16639 随后将该集合最终命名为 TNormalizeDNs。",
+        "ru": "DNToCN, DNsToCN и NormalizeDN получают необязательное множество extend, управляющее включением CN, OU и DC. Значение по умолчанию сохраняет прежний полный результат; build 16639 позже дает множеству финальное имя TNormalizeDNs."
+      },
+      "impact": {
+        "en": "LDAP applications can derive canonical or normalized names containing only selected DN levels without parsing the string again. Existing calls keep their output because DN_ALL remains the default.",
+        "fr": "Les applications LDAP peuvent produire des noms canoniques ou normalisés ne contenant que certains niveaux DN sans réanalyser la chaîne. Les appels existants conservent leur résultat car DN_ALL reste la valeur par défaut.",
+        "zh": "LDAP 应用可生成仅包含所选 DN 层级的规范名或标准化名称，无需再次解析字符串。由于 DN_ALL 仍为默认值，现有调用输出不变。",
+        "ru": "LDAP-приложения могут получать канонические или нормализованные имена только с выбранными уровнями DN без повторного разбора строки. Существующие вызовы сохраняют результат, так как DN_ALL остается значением по умолчанию."
+      },
+      "action": "none",
+      "units": ["mormot.net.ldap"],
+      "api_changes": [
+        {
+          "symbol": "DNToCN / DNsToCN / NormalizeDN",
+          "change": "signature-changed",
+          "note": {
+            "en": "An optional component-selection parameter was appended with DN_ALL as default.",
+            "fr": "Un paramètre optionnel de sélection des composants a été ajouté avec DN_ALL par défaut.",
+            "zh": "新增可选组件选择参数，默认值为 DN_ALL。",
+            "ru": "Добавлен необязательный параметр выбора компонентов со значением DN_ALL по умолчанию."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "667509df5243a636b9efdf9bb93dbd06412f00ef",
+      "headline": {
+        "en": "POSIX RunRedirect stops leaking children and spinning after EOF",
+        "fr": "Sous POSIX, RunRedirect ne fuit plus les processus enfants et ne boucle plus après EOF",
+        "zh": "POSIX RunRedirect 不再泄漏子进程或在 EOF 后忙循环",
+        "ru": "POSIX RunRedirect больше не оставляет дочерние процессы и не зацикливается после EOF"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The FPC POSIX implementation replaces popen with a prepared fork/execve path. The child creates its own session, stdout is piped explicitly, timeouts signal the whole process group, EOF uses n<=0, environment and working-directory parameters are honored, simple commands use PATH from the supplied environment, and exitcode receives WaitProcess output unless aborted.",
+        "fr": "L'implémentation POSIX FPC remplace popen par un chemin fork/execve préparé. L'enfant crée sa propre session, stdout est redirigé explicitement, les délais signalent tout le groupe de processus, EOF utilise n<=0, l'environnement et le répertoire sont respectés, les commandes simples utilisent le PATH fourni et exitcode reçoit le résultat de WaitProcess sauf en cas d'abandon.",
+        "zh": "FPC POSIX 实现用预先准备的 fork/execve 路径替代 popen。子进程创建独立会话，stdout 显式进入管道，超时会向整个进程组发信号，EOF 判断改为 n<=0，环境和工作目录参数得到遵守，简单命令使用所提供环境中的 PATH，未中止时 exitcode 接收 WaitProcess 结果。",
+        "ru": "Реализация FPC POSIX заменяет popen подготовленным путем fork/execve. Дочерний процесс создает отдельную сессию, stdout явно направляется в pipe, тайм-аут сигнализирует всей группе, EOF проверяется как n<=0, учитываются окружение и рабочий каталог, простые команды используют PATH переданного окружения, а exitcode получает результат WaitProcess, если запуск не прерван."
+      },
+      "impact": {
+        "en": "INFINITE waits no longer enter a 100% CPU loop when the child closes stdout, aborts no longer leave shell-spawned workers orphaned under PID 1, wrkdir no longer changes the parent process, and POSIX env/options are no longer silently ignored. Command execution semantics are materially corrected without changing the public signature.",
+        "fr": "Les attentes INFINITE ne bouclent plus à 100 % CPU lorsque l'enfant ferme stdout, les abandons ne laissent plus les workers lancés par shell orphelins sous PID 1, wrkdir ne change plus le processus parent et env/options ne sont plus ignorés sous POSIX. La sémantique d'exécution est corrigée sans changer la signature publique.",
+        "zh": "当子进程关闭 stdout 时，INFINITE 等待不再进入 100% CPU 循环；中止不再把 shell 启动的 worker 作为 PID 1 下的孤儿；wrkdir 不再改变父进程；POSIX 的 env/options 不再被静默忽略。公共签名不变，但执行语义得到实质修正。",
+        "ru": "Ожидание INFINITE больше не создает цикл с 100 % CPU после закрытия stdout, прерывание не оставляет запущенные shell процессы под PID 1, wrkdir не меняет каталог родителя, а env/options на POSIX больше не игнорируются. Семантика существенно исправлена без изменения публичной сигнатуры."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade POSIX services using RunRedirect, then test successful exit, EOF, timeout, callback abort, custom env/PATH, working directory, and descendant termination.",
+        "fr": "Mettez à jour les services POSIX utilisant RunRedirect, puis testez la sortie normale, EOF, le délai, l'abandon par callback, env/PATH personnalisé, le répertoire de travail et l'arrêt des descendants.",
+        "zh": "升级使用 RunRedirect 的 POSIX 服务，并测试正常退出、EOF、超时、回调中止、自定义 env/PATH、工作目录和后代进程终止。",
+        "ru": "Обновите POSIX-сервисы с RunRedirect и проверьте успешный выход, EOF, тайм-аут, отмену callback, собственные env/PATH, рабочий каталог и завершение потомков."
+      },
+      "units": ["mormot.core.os.posix"],
+      "api_changes": [
+        {
+          "symbol": "RunRedirect",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "POSIX execution now uses fork/execve, honors existing parameters, returns the actual exit code, and terminates process groups.",
+            "fr": "L'exécution POSIX utilise maintenant fork/execve, respecte les paramètres existants, renvoie le véritable code de sortie et termine les groupes de processus.",
+            "zh": "POSIX 执行现在使用 fork/execve，遵守现有参数，返回实际退出码并终止进程组。",
+            "ru": "POSIX-исполнение теперь использует fork/execve, учитывает существующие параметры, возвращает фактический код и завершает группы процессов."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "702c8d0cb0ac59b7107853e3ee854d74a4cfbd72",
+      "headline": {
+        "en": "Stack traces can be captured without raising an exception",
+        "fr": "Les traces de pile peuvent être capturées sans lever d'exception",
+        "zh": "无需抛出异常即可捕获堆栈跟踪",
+        "ru": "Трассировку стека можно получить без исключения"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TDebugFile gains StackTrace overloads returning RawUtf8 or appending to TTextWriter, with skip, depth and TSynLogStackTraceUse controls. FPC uses CaptureBacktrace, Delphi Windows uses RtlCaptureStackBackTrace with a Win32 manual fallback, and TSynLog shares the implementation.",
+        "fr": "TDebugFile gagne des surcharges StackTrace renvoyant RawUtf8 ou ajoutant dans TTextWriter, avec les contrôles skip, depth et TSynLogStackTraceUse. FPC utilise CaptureBacktrace, Delphi Windows utilise RtlCaptureStackBackTrace avec repli manuel Win32, et TSynLog partage l'implémentation.",
+        "zh": "TDebugFile 新增 StackTrace 重载，可返回 RawUtf8 或追加到 TTextWriter，并支持 skip、depth 与 TSynLogStackTraceUse 控制。FPC 使用 CaptureBacktrace，Delphi Windows 使用 RtlCaptureStackBackTrace，并在 Win32 上手动回退；TSynLog 共享该实现。",
+        "ru": "TDebugFile получает перегрузки StackTrace с возвратом RawUtf8 или записью в TTextWriter и параметрами skip, depth, TSynLogStackTraceUse. FPC использует CaptureBacktrace, Delphi Windows — RtlCaptureStackBackTrace с ручным Win32-резервом, а TSynLog разделяет реализацию."
+      },
+      "impact": {
+        "en": "Diagnostic endpoints and error reports can capture the current thread stack without manufacturing an exception. On FPC x86_64, useful frames still depend on stack-frame generation; Delphi POSIX currently appends nothing.",
+        "fr": "Les endpoints de diagnostic et rapports d'erreur peuvent capturer la pile du thread courant sans fabriquer d'exception. Sous FPC x86_64, les frames utiles dépendent toujours de la génération des stack frames ; Delphi POSIX n'ajoute encore rien.",
+        "zh": "诊断端点和错误报告可在不构造异常的情况下捕获当前线程堆栈。在 FPC x86_64 上，有效帧仍依赖栈帧生成；Delphi POSIX 当前不会追加内容。",
+        "ru": "Диагностические endpoints и отчеты об ошибках могут получать стек текущего потока без искусственного исключения. На FPC x86_64 полезные кадры зависят от генерации stack frames; Delphi POSIX пока ничего не добавляет."
+      },
+      "action": "none",
+      "units": ["mormot.core.log"],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.StackTrace",
+          "change": "added",
+          "note": {
+            "en": "Two overloads capture the current thread stack as text without an exception.",
+            "fr": "Deux surcharges capturent sous forme de texte la pile du thread courant sans exception.",
+            "zh": "两个重载可在无异常情况下以文本形式捕获当前线程堆栈。",
+            "ru": "Две перегрузки получают стек текущего потока как текст без исключения."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
