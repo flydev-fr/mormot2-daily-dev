@@ -1,0 +1,1292 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-08-31",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-08-31T21:01:41Z",
+  "range": {
+    "since": "2026-08-29T15:12:17Z",
+    "until": "2026-08-31T21:01:41Z",
+    "head_sha": "951b4afd5f5864400b807117b472546e7c305c46"
+  },
+  "version": {
+    "after": "2.4.16652",
+    "before": "2.4.16629"
+  },
+  "totals": {
+    "commits": 23,
+    "additions": 1303,
+    "deletions": 403
+  },
+  "commits": [
+    {
+      "sha": "951b4afd5f5864400b807117b472546e7c305c46",
+      "short_sha": "951b4afd",
+      "subject": "core: fixed BSD compilation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T19:38:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/951b4afd5f5864400b807117b472546e7c305c46",
+      "parents": [
+        "134b99dea7b47a54edbf3545e7a2a88f938aa56e"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -5216,7 +5216,7 @@   TSynEvent = class(TSynPersistent)\n       {$ifdef HASINLINE} inline; {$endif}\r\n     /// wait until SetEvent is called, calling CheckSynchronize() on main thread\r\n     // - returns true if was signaled by SetEvent, or false on timeout\r\n-    function WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean): boolean;\r\n+    function WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean = false): boolean;\r\n     /// calls SleepHiRes() in steps while checking terminated flag and this event\r\n     function SleepStep(var start: Int64; terminated: PBoolean): Int64;\r\n     /// low-level read-only access to the internal SetEvent flag\r\n@@ -11760,6 +11760,9 @@ procedure TOSLock.UnLock;\n   mormot.core.os.LeaveCriticalSection(CS);\r\n end;\r\n \r\n+const\r\n+  SPIN_FUTEX = {$ifdef CPUINTEL} 24 {$else} 127 {$endif};\r\n+\r\n {$ifndef HAS_TOSLIGHTLOCK}\r\n {$ifdef OSFUTEX}\r\n \r\n@@ -11772,8 +11775,6 @@ procedure TOSLock.UnLock;\n   EV_LOCKED = 1;\r\n   EV_WAITER = 2;\r\n \r\n-  SPIN_FUTEX = {$ifdef CPUINTEL} 24 {$else} 127 {$endif};\r\n-\r\n procedure TOSLightLock.Init;\r\n begin\r\n   fMutex := EV_NONE; // single 32-bit field\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16647\n+16652",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16647'\r\n+'2.4.16652'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "134b99dea7b47a54edbf3545e7a2a88f938aa56e",
+      "short_sha": "134b99de",
+      "subject": "Merge pull request #560 from zen010101/runredirect-463",
+      "body": "core: rewrite POSIX RunRedirect() from popen() to fork/execve - fix #463",
+      "author": "ab",
+      "date": "2026-08-31T19:34:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/134b99dea7b47a54edbf3545e7a2a88f938aa56e",
+      "parents": [
+        "aac3e95e5c060d7543f4e7078768f39dd25dc384",
+        "667509df5243a636b9efdf9bb93dbd06412f00ef"
+      ],
+      "stats": {
+        "additions": 231,
+        "deletions": 77,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 231,
+          "deletions": 77,
+          "patch": "@@ -5252,20 +5252,83 @@ begin\n   end;\r\n end;\r\n \r\n-function RunInternal(args: PPAnsiChar; waitfor: boolean; const env: TRunArg;\r\n-  options: TRunOptions): integer;\r\n-var\r\n-  pid: TPID;\r\n-  e: array[0..511] of PUtf8Char; // max 512 environment variables\r\n-  envpp: PPUtf8Char;\r\n+type\r\n+  // stack-allocated storage for RunBuildEnv() child environment pointers\r\n+  TRunEnv = array[0..511] of PUtf8Char; // max 512 environment variables\r\n+\r\n+// compute the child environment pointers from Windows-layout env pairs\r\n+// - to be called before fork(), since it may not be fork-safe\r\n+// - returns false on too many environment variables\r\n+// - returns true and envpp=nil to reuse the current process environment,\r\n+// or envpp<>nil pointing to e[] entries (values from env and current envp)\r\n+function RunBuildEnv(const env: TRunArg; options: TRunOptions;\r\n+  var e: TRunEnv; out envpp: PPUtf8Char): boolean;\r\n+var\r\n+  cur: PPUtf8Char;\r\n   P: PUtf8Char;\r\n   n: PtrInt;\r\n begin\r\n+  envpp := pointer(envp); // Delphi POSIX uses wrongly a PWideChar here\r\n+  if env <> '' then\r\n+  begin\r\n+    result := false; // -ESysE2BIG on too many variables\r\n+    n := 0;\r\n+    if (roEnvAddExisting in options) and\r\n+       (envpp <> nil) then\r\n+    begin\r\n+      cur := envpp;\r\n+      while cur^ <> nil do\r\n+      begin\r\n+        if PosChar(cur^, #10) = nil then\r\n+        begin\r\n+          // filter to add only single-line variables\r\n+          if n = high(e) - 1 then\r\n+            exit;\r\n+          e[n] := cur^;\r\n+          inc(n);\r\n+        end;\r\n+        inc(cur);\r\n+      end;\r\n+    end;\r\n+    P := pointer(env); // env follows Windows layout 'n1=v1'#0'n2=v2'#0#0\r\n+    while P^ <> #0 do\r\n+    begin\r\n+      if n = high(e) - 1 then\r\n+        exit;\r\n+      e[n] := P; // makes POSIX compatible\r\n+      inc(n);\r\n+      inc(P, StrLen(P) + 1);\r\n+    end;\r\n+    e[n] := nil; // end with null\r\n+    envpp := @e;\r\n+  end;\r\n+  result := true;\r\n+end;\r\n+\r\n+function RunFork: TPID; {$ifdef HASINLINE} inline; {$endif}\r\n+begin\r\n+  // vfork is required with libc on BSD/SunOS - as FPC RTL POpen_internal()\r\n   {$if (defined(BSD) or defined(SUNOS)) and defined(FPC_USE_LIBC)}\r\n-  pid := FpvFork;\r\n+  result := FpvFork;\r\n   {$else}\r\n-  pid := FpFork;\r\n+  result := FpFork;\r\n   {$ifend}\r\n+end;\r\n+\r\n+function RunInternal(args: PPAnsiChar; waitfor: boolean; const env: TRunArg;\r\n+  options: TRunOptions): integer;\r\n+var\r\n+  pid: TPID;\r\n+  e: TRunEnv;\r\n+  envpp: PPUtf8Char;\r\n+begin\r\n+  // prepare the child environment before fork() for fork-safety\r\n+  if not RunBuildEnv(env, options, e, envpp) then\r\n+  begin\r\n+    result := -ESysE2BIG;\r\n+    exit;\r\n+  end;\r\n+  pid := RunFork;\r\n   if pid < 0 then\r\n   begin\r\n     // fork failed\r\n@@ -5278,39 +5341,6 @@ begin\n     if not waitfor then\r\n       // don't share the same console\r\n       CleanAfterFork;\r\n-    envpp := pointer(envp); // Delphi POSIX uses wrongly a PWideChar here\r\n-    if env <> '' then\r\n-    begin\r\n-      n := 0;\r\n-      result := -ESysE2BIG;\r\n-      if (roEnvAddExisting in options) and\r\n-         (envpp <> nil) then\r\n-      begin\r\n-        while envpp^ <> nil do\r\n-        begin\r\n-          if PosChar(envpp^, #10) = nil then\r\n-          begin\r\n-            // filter to add only single-line variables\r\n-            if n = high(e) - 1 then\r\n-              exit;\r\n-            e[n] := envpp^;\r\n-            inc(n);\r\n-          end;\r\n-          inc(envpp);\r\n-        end;\r\n-      end;\r\n-      P := pointer(env); // env follows Windows layout 'n1=v1'#0'n2=v2'#0#0\r\n-      while P^ <> #0 do\r\n-      begin\r\n-        if n = high(e) - 1 then\r\n-          exit;\r\n-        e[n] := P; // makes POSIX compatible\r\n-        inc(n);\r\n-        inc(P, StrLen(P) + 1);\r\n-      end;\r\n-      e[n] := nil; // end with null\r\n-      envpp := @e;\r\n-    end;\r\n     FpExecve(args^, args, envpp);\r\n     FpExit(127);\r\n   end;\r\n@@ -5369,18 +5399,78 @@ begin\n end;\r\n \r\n {$ifdef FPC}\r\n+\r\n+// retrieve the PATH= value from the environment to be passed to execve()\r\n+// - i.e. from the RunBuildEnv\n... [truncated, 7905 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": 560,
+      "is_merge": true
+    },
+    {
+      "sha": "aac3e95e5c060d7543f4e7078768f39dd25dc384",
+      "short_sha": "aac3e95e",
+      "subject": "Merge pull request #559 from zen010101/stacktrace-401",
+      "body": "core: add TDebugFile.StackTrace() methods - request #401",
+      "author": "ab",
+      "date": "2026-08-31T19:32:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aac3e95e5c060d7543f4e7078768f39dd25dc384",
+      "parents": [
+        "b1f1302d8857cd6f6326ad8649c953f22f5cfee1",
+        "702c8d0cb0ac59b7107853e3ee854d74a4cfbd72"
+      ],
+      "stats": {
+        "additions": 208,
+        "deletions": 47,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 208,
+          "deletions": 47,
+          "patch": "@@ -117,6 +117,15 @@ interface\n     diInternalMab,\r\n     {$ifdef FPC} diInternalDwarf, diExternalDwarf {$else} diExternalMap {$endif});\r\n \r\n+  /// how stack trace shall be computed during logging\r\n+  // - stOnlyAPI is the first (and default) value, since manual stack makes\r\n+  // unexpected detections, and was reported as very slow on Windows 11\r\n+  // - on FPC, these values are ignored, because RTL CaptureBacktrace() is used\r\n+  TSynLogStackTraceUse = (\r\n+    stOnlyAPI,\r\n+    stManualAndAPI,\r\n+    stOnlyManual);\r\n+\r\n   /// allow to customize TDebugFile.Create and TDebugFile.SaveToFile process\r\n   TDebugFileScope = set of (\r\n     dfsIncludePathInFileName,\r\n@@ -239,6 +248,27 @@   TDebugFile = class(TSynPersistent)\n     /// add some debugging information about the supplied absolute memory address\r\n     class function AddLog(W: TTextWriter; aPointer: PtrUInt;\r\n       NoHex: boolean = false): boolean; {$ifdef HASINLINE} static; {$endif}\r\n+    /// return the current thread stack trace as convenient plain text\r\n+    // - filename, symbol name and line number (if any) of each frame, e.g.\r\n+    // $ 57f480 mormot.core.log.pas TSynLog.LogEscape (5782) 4a0a40 ...\r\n+    // - skip is the number of caller frames to ignore (0 = start at caller)\r\n+    // - depth is the maximum number of located frames (0 = 30 as TSynLog)\r\n+    // - could be used e.g. for diagnostic endpoints or error reporting, with\r\n+    // no exception involved - returns '' if no stack trace is available\r\n+    class function StackTrace(skip: integer = 0; depth: integer = 0;\r\n+      use: TSynLogStackTraceUse = stManualAndAPI): RawUtf8; overload; static;\r\n+    /// append the current thread stack trace to an existing TTextWriter\r\n+    // - the current thread stack is captured via the RTL CaptureBacktrace()\r\n+    // on FPC, or the RtlCaptureStackBackTrace() API on Delphi + Windows,\r\n+    // with a manual stack walk fallback on Delphi Win32 (where this API is\r\n+    // limited) - not implemented on Delphi POSIX yet (nothing is appended)\r\n+    // - use follows TSynLogFamily.StackTraceUse semantics: ignored on FPC,\r\n+    // and stOnlyManual is implemented on Delphi Win32 only, as TSynLog\r\n+    // - skip does not apply to the heuristic manual stack walk\r\n+    // - a trailing space is left after each located frame, as TDebugFile.AddLog\r\n+    class procedure StackTrace(W: TTextWriter; skip: integer = 0;\r\n+      depth: integer = 0;\r\n+      use: TSynLogStackTraceUse = stManualAndAPI); overload; static;\r\n     /// low-level resolution of a TDebugFile instance from a code address\r\n     // - this is the main internal thread-safe factory method for this process\r\n     // - returns nil if this code address has no known debug information\r\n@@ -726,15 +756,6 @@   TSynLogFamily = class;\n     ptIdentifiedInOneFile,\r\n     ptNoThreadProcess);\r\n \r\n-  /// how stack trace shall be computed during logging\r\n-  // - stOnlyAPI is the first (and default) value, since manual stack makes\r\n-  // unexpected detections, and was reported as very slow on Windows 11\r\n-  // - on FPC, these values are ignored, because RTL CaptureBacktrace() is used \r\n-  TSynLogStackTraceUse = (\r\n-    stOnlyAPI,\r\n-    stManualAndAPI,\r\n-    stOnlyManual);\r\n-\r\n   /// how file existing shall be handled during logging\r\n   TSynLogExistsAction = (\r\n     acOverwrite,\r\n@@ -4510,6 +4531,172 @@ procedure TAutoFlushThread.Execute;\n threadvar // do not publish for compilation within Delphi packages\r\n   PerThreadInfo: TSynLogThreadInfo;\r\n \r\n+type\r\n+  // on Win64, RtlCaptureStackBackTrace() API is limited to < 62 frames\r\n+  TRawStackFrames = array[0..61] of PtrUInt;\r\n+\r\n+{$STACKFRAMES ON} // we need a stack frame for the backtrace API calls below\r\n+\r\n+{$ifndef FPC}\r\n+{$ifdef OSWINDOWS}\r\n+{$ifndef CPU64}\r\n+\r\n+function CheckAsmX86(xret: PtrUInt): boolean; // naive x86 caller detection\r\n+var\r\n+  i: PtrUInt;\r\n+begin\r\n+  result := true;\r\n+  try\r\n+    if PByte(xret - 5)^ = $E8 then\r\n+      exit;\r\n+    for i := 2 to 7 do\r\n+      if PWord(xret - i)^ and $3\n... [truncated, 6674 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": 559,
+      "is_merge": true
+    },
+    {
+      "sha": "b1f1302d8857cd6f6326ad8649c953f22f5cfee1",
+      "short_sha": "b1f1302d",
+      "subject": "tests: minor unused variable cleanup",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T19:31:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b1f1302d8857cd6f6326ad8649c953f22f5cfee1",
+      "parents": [
+        "60cb8bc77b64ec7b0762f4ce626731fd755a4103"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16646\n+16647",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16646'\r\n+'2.4.16647'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 2,
+          "patch": "@@ -3145,9 +3145,7 @@ procedure TNetworkProtocols.TunnelRelay(relay: TTunnelRelay;\n   sess: TTunnelSession;\r\n   i, j, c: PtrInt;\r\n   local: TNetPort;\r\n-  rnd: PLecuyer;\r\n begin\r\n-  rnd := ThreadRandom; // use the TLecuyer of this thread\r\n   TSynLogTestLog.EnterLocal(log, self, 'TTunnelRelay');\r\n   if CheckFailed(length(console) <> 0) then\r\n     exit; // avoid division per zero in \"i mod length(console)\" below\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "60cb8bc77b64ec7b0762f4ce626731fd755a4103",
+      "short_sha": "60cb8bc7",
+      "subject": "net: let TPollSockets use TLightLock for the Pending envents",
+      "body": "- in practice, contention is so small the fastest CAS path is preferred\n- TOSLightLock is now slower due to UnLock mandatory CAS",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T19:24:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/60cb8bc77b64ec7b0762f4ce626731fd755a4103",
+      "parents": [
+        "46404091f2fcd1add807da12a5fa7e88c5b0a5bd"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16645\n+16646",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16645'\r\n+'2.4.16646'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1428,7 +1428,7 @@   TPollSockets = class(TPollAbstract)\n   protected\r\n     fMergeSubscribeEventsLock: TLightLock; // topmost to ensure aarch64 alignment\r\n     fSubscriptionSafe: TLightLock; // dedicated not to block Accept()\r\n-    fPendingSafe: TOSLightLock; // CAS + light futex is better than any RW lock\r\n+    fPendingSafe: TLightLock;      // RW or OS lock is slower (low contention)\r\n     fGettingOne: integer;\r\n     fPoll: array of TPollSocketAbstract; // each track up to fPoll[].MaxSockets\r\n     fPending: TPollSocketResults;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "46404091f2fcd1add807da12a5fa7e88c5b0a5bd",
+      "short_sha": "46404091",
+      "subject": "core: fixe TSynEvent.WaitForSafe Synchronize() call",
+      "body": "- WaitFor() should become secondary in priority if safe mode",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T19:23:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/46404091f2fcd1add807da12a5fa7e88c5b0a5bd",
+      "parents": [
+        "a22faf703a6016c1f4262df57e99337e93b17d96"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -5216,7 +5216,7 @@   TSynEvent = class(TSynPersistent)\n       {$ifdef HASINLINE} inline; {$endif}\r\n     /// wait until SetEvent is called, calling CheckSynchronize() on main thread\r\n     // - returns true if was signaled by SetEvent, or false on timeout\r\n-    function WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean = false): boolean;\r\n+    function WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean): boolean;\r\n     /// calls SleepHiRes() in steps while checking terminated flag and this event\r\n     function SleepStep(var start: Int64; terminated: PBoolean): Int64;\r\n     /// low-level read-only access to the internal SetEvent flag\r\n@@ -12735,6 +12735,7 @@ function TSynEvent.WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean): boole\n   endtix: Int64;\r\n begin\r\n   if DisableSafe or  // DisableSafe=true to skip main Thread recognition\r\n+     (TimeoutMS = 0) or\r\n      (GetCurrentThreadID <> MainThreadID) then\r\n   begin\r\n     result := WaitFor(TimeoutMS);\r\n@@ -12747,8 +12748,8 @@ function TSynEvent.WaitForSafe(TimeoutMS: cardinal; DisableSafe: boolean): boole\n   if TimeoutMS <> INFINITE then\r\n     endtix := GetTickCount64 + TimeoutMS;\r\n   repeat\r\n-    CheckSynchronize(1); // make UI responsive enough\r\n-    result := WaitFor(10);\r\n+    CheckSynchronize(10); // make UI responsive and Main Thread execution fast\r\n+    result := WaitFor(0);\r\n   until result or\r\n         ((endtix <> 0) and\r\n          (GetTickCount64 > endtix));\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16644\n+16645",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16644'\r\n+'2.4.16645'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a22faf703a6016c1f4262df57e99337e93b17d96",
+      "short_sha": "a22faf70",
+      "subject": "core: let TLoggedWorker use TSynEvent for WaitFor()",
+      "body": "- instead of sleeping",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T18:32:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a22faf703a6016c1f4262df57e99337e93b17d96",
+      "parents": [
+        "ad8f8d3836654bfbd4d2f1b513010ac76a4c80f1"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 20,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 18,
+          "patch": "@@ -1565,6 +1565,7 @@   TLoggedWorker = class(TObjectLightLock)\n     fRunning: integer;\r\n     fMaxRunning: integer;\r\n     fPending: array of TLoggedWork; // pending Run() if ForcedThreaded\r\n+    fIdle: TSynEvent; // notify WaitFor() when fRunning reaches 0\r\n     fSynLog: TSynLogClass;\r\n     fTerminated: boolean;\r\n     fOnBeforeEachTask, fOnAfterEachTask: TNotifyEvent;\r\n@@ -1592,6 +1593,7 @@   TLoggedWorker = class(TObjectLightLock)\n       ForcedThread: boolean = false); overload;\r\n     /// wait for background thread started by Run() to finish\r\n     // - returns true on success, false on timeout\r\n+    // - only one thread should call RunWait() at a time\r\n     // - can optionally call CheckSynchronize() if needed\r\n     function RunWait(TimeoutSec: integer = 60; CallSynchronize: boolean = false): boolean;\r\n     /// check if Running > 0\r\n@@ -4453,11 +4455,13 @@ constructor TLoggedWorker.Create(aSynLog: TSynLogClass; aMaxThread: integer);\n   if aMaxThread = 0 then\r\n     aMaxThread := CpuThreads; // = SystemInfo.dwNumberOfProcessors logical count\r\n   fMaxRunning := aMaxThread;\r\n+  fIdle := TSynEvent.Create;\r\n end;\r\n \r\n destructor TLoggedWorker.Destroy;\r\n begin\r\n   Terminate({andwait=}true);\r\n+  fIdle.Free;\r\n   inherited Destroy;\r\n end;\r\n \r\n@@ -4483,8 +4487,18 @@ procedure TLoggedWorker.RunOne(const Work: TLoggedWork; ForcedThread: boolean);\n     if fRunning < fMaxRunning then\r\n     begin\r\n       // enough CPU cores to run a new thread now\r\n+      if fRunning = 0 then\r\n+        fIdle.ResetEvent;\r\n       inc(fRunning);\r\n-      TLoggedWorkThread.CreateOwned(self, Work, RunDone);\r\n+      try\r\n+        TLoggedWorkThread.CreateOwned(self, Work, RunDone);\r\n+      except\r\n+        // keep fRunning/fIdle consistent if thread creation failed\r\n+        dec(fRunning);\r\n+        if fRunning = 0 then\r\n+          fIdle.SetEvent;\r\n+        raise;\r\n+      end;\r\n       exit;\r\n     end\r\n     else if ForcedThread then\r\n@@ -4539,7 +4553,9 @@ procedure TLoggedWorker.RunDone(Sender: TObject);\n       if (fPending = nil) or\r\n          fTerminated then\r\n       begin\r\n-        dec(fRunning); // no pending task: atomic decrease global counter\r\n+        dec(fRunning); // no pending task: decrease global counter under fSafe\r\n+        if fRunning = 0 then\r\n+          fIdle.SetEvent;\r\n         exit;\r\n       end;\r\n       // pop last pending task\r\n@@ -4566,26 +4582,21 @@ procedure TLoggedWorker.RunDone(Sender: TObject);\n \r\n function TLoggedWorker.RunWait(TimeoutSec: integer; CallSynchronize: boolean): boolean;\r\n var\r\n-  endtix: cardinal;\r\n+  ms: cardinal;\r\n begin\r\n-  result := (self = nil) or\r\n-            (fRunning = 0);\r\n-  if result then\r\n+  result := true;\r\n+  if (self = nil) or\r\n+     (fRunning = 0) then\r\n     exit;\r\n-  endtix := TimeoutSec;\r\n-  if endtix <> 0 then\r\n-    inc(endtix, GetTickSec); // never wait forever\r\n+  if TimeoutSec = 0 then // TimeoutSec=0 has always meant to wait forever\r\n+    ms := INFINITE\r\n+  else if cardinal(TimeoutSec) >= INFINITE div MilliSecsPerSec then\r\n+    ms := INFINITE - 1\r\n+  else\r\n+    ms := cardinal(TimeoutSec) * MilliSecsPerSec;\r\n   CallSynchronize := CallSynchronize and\r\n                      (GetCurrentThreadID = MainThreadID);\r\n-  while fRunning <> 0 do\r\n-    if (endtix <> 0) and\r\n-       (GetTickSec > endtix) then\r\n-      exit // result = false on timeout\r\n-    else if CallSynchronize then\r\n-      CheckSynchronize(1)\r\n-    else\r\n-      SleepHiRes(10);\r\n-  result := true; // success\r\n+  result := fIdle.WaitForSafe(ms, {DisableSafe=}not CallSynchronize);\r\n end;\r\n \r\n function TLoggedWorker.Waiting: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16643\n+16644",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16643'\r\n+'2.4.16644'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ad8f8d3836654bfbd4d2f1b513010ac76a4c80f1",
+      "short_sha": "ad8f8d38",
+      "subject": "core: fixed race in TOSLightLock.UnLock",
+      "body": "- discovered with new regression tests (upcoming unit)\n- only TOSLightLock seems affected with the problem",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T17:24:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ad8f8d3836654bfbd4d2f1b513010ac76a4c80f1",
+      "parents": [
+        "9fbd6c32f619b1db1999d3afe313ab70cbfe752a"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 14,
+          "patch": "@@ -5521,8 +5521,8 @@ function SleepDelay(elapsed: PtrInt): PtrInt;\n function SleepStepTime(var start, tix: Int64; endtix: PInt64 = nil): PtrInt;\r\n \r\n /// similar to Windows SwitchToThread API call, to be truly cross-platform\r\n-// - call the homonymous API on Windows\r\n-// - call direclty the sched_yield Linux syscall or the FPC RTL on BSD\r\n+// - call direclty the sched_yield or fpnanosleep Linux syscall\r\n+// - call the homonymous API on Windows, or the FPC RTL on BSD\r\n // - you should not call this function in your own code, especially since\r\n // sched_yield is reported to be unfair and misleading by Linux kernel devs\r\n procedure SwitchToThread;\r\n@@ -11791,16 +11791,8 @@ procedure TOSLightLock.Lock;\n \r\n procedure TOSLightLock.UnLock;\r\n begin\r\n-  {$ifdef CPUINTEL}\r\n-  if fMutex = EV_LOCKED then\r\n-  begin\r\n-    fMutex := EV_NONE; // fast path is allowed on Intel (and noticeably faster)\r\n-    exit;\r\n-  end;\r\n-  {$else}\r\n   if LockedExc32(fMutex, {to=}EV_NONE, {from=}EV_LOCKED) then\r\n-    exit; // uncontended CAS path is needed on non-ordered ARM\r\n-  {$endif CPUINTEL}\r\n+    exit; // CAS is mandatory to avoid any race and forget to wake the waiter\r\n   fMutex := EV_NONE;\r\n   if Assigned(OsWakeOnValue) then\r\n     OsWakeOnValue(@fMutex);\r\n@@ -11894,10 +11886,8 @@ function TOSRWLightLock.TryReadLock: boolean;\n   f: cardinal;\r\n begin\r\n   f := Flags;\r\n-  { A reader can't enter while a writer owns the lock.\r\n-    Also prevent the reader count from overflowing into RW_WRITE. }\r\n   if ((f and RW_WRITE) <> 0) or // reader can't enter while a writer owns it\r\n-     (f = RW_READ_MAX) then     // avoid overflow\r\n+     (f = RW_READ_MAX) then     // avoid 31-bit counter overflow\r\n     result := false\r\n   else\r\n     result := LockedExc32(Flags, f + 1, f); // fast CAS acquisition\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16642\n+16643",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16642'\r\n+'2.4.16643'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9fbd6c32f619b1db1999d3afe313ab70cbfe752a",
+      "short_sha": "9fbd6c32",
+      "subject": "all: minor code refactoring",
+      "body": "- with no functional change",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T16:22:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9fbd6c32f619b1db1999d3afe313ab70cbfe752a",
+      "parents": [
+        "5c4a0328922172a8a75dad08f9aa92fd50949ca2"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 13,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 9,
+          "patch": "@@ -562,7 +562,7 @@ procedure TSqlDBOdbcStatement.DeallocStatement;\n   end;\r\n end;\r\n \r\n-function ODBCColumnToFieldType(\r\n+function OdbcColumnToFieldType(\r\n   DataType, ColumnPrecision, ColumnScale: integer): TSqlDBFieldType;\r\n begin\r\n   // ftUnknown, ftNull, ftInt64, ftDouble, ftCurrency, ftDate, ftUtf8, ftBlob\r\n@@ -642,10 +642,10 @@ procedure TSqlDBOdbcStatement.BindColumns;\n         DescribeColW(fStatement, c, Name{%H-}, 256, NameLength, DataType,\r\n           ColumnSize, DecimalDigits, Nullable),\r\n         SQL_HANDLE_STMT, fStatement);\r\n-      p := AddColumn(RawUnicodeToUtf8(Name, NameLength));\r\n+      p := AddColumn(RawUnicodeToUtf8(@Name, NameLength));\r\n       p^.ColumnValueInlined := true;\r\n       p^.ColumnValueDBType := DataType;\r\n-      p^.ColumnType := ODBCColumnToFieldType(DataType, ColumnSize, DecimalDigits);\r\n+      p^.ColumnType := OdbcColumnToFieldType(DataType, ColumnSize, DecimalDigits);\r\n       if ColumnSize > 65535 then\r\n         ColumnSize := 0; // avoid out of memory error for BLOBs\r\n       p^.ColumnValueDBSize := ColumnSize;\r\n@@ -1424,7 +1424,7 @@ procedure TSqlDBOdbcConnectionProperties.GetFields(const aTableName: RawUtf8;\n           F.ColumnLength := stmt.ColumnInt(6);\r\n           F.ColumnScale := stmt.ColumnInt(8);\r\n           F.ColumnPrecision := stmt.ColumnInt(9);\r\n-          F.ColumnType := ODBCColumnToFieldType(\r\n+          F.ColumnType := OdbcColumnToFieldType(\r\n             datatype, F.ColumnPrecision, F.ColumnScale);\r\n           F.ColumnIndexed := (fDbms in [dFirebird, dDB2]) and\r\n                              IsRowID(pointer(F.ColumnName));\r\n@@ -1658,11 +1658,11 @@ procedure TSqlDBOdbcConnectionProperties.GetProcedureParameters(\n           end;\r\n           DataType := stmt.ColumnInt(5);\r\n           P.ColumnTypeNative := TrimU(stmt.ColumnUtf8(6));\r\n-          P.ColumnLength := stmt.ColumnInt(7);\r\n-          P.ColumnScale := stmt.ColumnInt(8);\r\n-          P.ColumnPrecision := stmt.ColumnInt(9);\r\n-          P.ColumnType := ODBCColumnToFieldType(\r\n-            DataType, P.ColumnPrecision, P.ColumnScale);\r\n+          P.ColumnLength     := stmt.ColumnInt(7);\r\n+          P.ColumnScale      := stmt.ColumnInt(8);\r\n+          P.ColumnPrecision  := stmt.ColumnInt(9);\r\n+          P.ColumnType       := OdbcColumnToFieldType(\r\n+                                  DataType, P.ColumnPrecision, P.ColumnScale);\r\n           PA.Add(P);\r\n         until not stmt.Step;\r\n       SetLength(Parameters, n);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -5608,7 +5608,7 @@ function TSqlDBConnectionProperties.SqlLimitClause(AStmt: TSelectStatement):\n \r\n class procedure TSqlDBConnectionProperties.RegisterClassNameForDefinition;\r\n begin\r\n-  ObjArrayAddOnce(GlobalDefinitions, TObject(self)); // TClass stored as TObject\r\n+  PtrArrayAddOnce(GlobalDefinitions, pointer(self)); // store TClass\r\n end;\r\n \r\n procedure TSqlDBConnectionProperties.DefinitionTo(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16641\n+16642",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16641'\r\n+'2.4.16642'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2308,7 +2308,7 @@ destructor TRest.Destroy;\n \r\n class procedure TRest.RegisterClassNameForDefinition;\r\n begin\r\n-  ObjArrayAddOnce(GlobalDefinitions, TObject(self)); // TClass stored as TObject\r\n+  PtrArrayAddOnce(GlobalDefinitions, pointer(self)); // store this TClass\r\n end;\r\n \r\n procedure TRest.OnBeginCurrentThread(Sender: TThread);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Cross-cutting",
+        "Database",
+        "REST"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.odbc",
+        "mormot.rest.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5c4a0328922172a8a75dad08f9aa92fd50949ca2",
+      "short_sha": "5c4a0328",
+      "subject": "db: fixed TSqlDBOdbcStatement.BindColumns",
+      "body": "- as reported by #561",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T16:08:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5c4a0328922172a8a75dad08f9aa92fd50949ca2",
+      "parents": [
+        "79dd6c23793599c12a83fec5bbf7d5f95f8b9f44"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -562,14 +562,13 @@ procedure TSqlDBOdbcStatement.DeallocStatement;\n   end;\r\n end;\r\n \r\n-function ODBCColumnToFieldType(DataType, ColumnPrecision, ColumnScale: integer):\r\n-  TSqlDBFieldType;\r\n+function ODBCColumnToFieldType(\r\n+  DataType, ColumnPrecision, ColumnScale: integer): TSqlDBFieldType;\r\n begin\r\n   // ftUnknown, ftNull, ftInt64, ftDouble, ftCurrency, ftDate, ftUtf8, ftBlob\r\n   case DataType of\r\n     SQL_DECIMAL,\r\n-    SQL_NUMERIC,\r\n-    SQL_FLOAT:\r\n+    SQL_NUMERIC:\r\n       begin\r\n         result := ftDouble;\r\n         if ColumnPrecision = 10 then\r\n@@ -580,6 +579,7 @@ function ODBCColumnToFieldType(DataType, ColumnPrecision, ColumnScale: integer):\n               result := ftCurrency;\r\n           end;\r\n       end;\r\n+    SQL_FLOAT,\r\n     SQL_REAL,\r\n     SQL_DOUBLE:\r\n       result := ftDouble;\r\n@@ -645,11 +645,11 @@ procedure TSqlDBOdbcStatement.BindColumns;\n       p := AddColumn(RawUnicodeToUtf8(Name, NameLength));\r\n       p^.ColumnValueInlined := true;\r\n       p^.ColumnValueDBType := DataType;\r\n+      p^.ColumnType := ODBCColumnToFieldType(DataType, ColumnSize, DecimalDigits);\r\n       if ColumnSize > 65535 then\r\n         ColumnSize := 0; // avoid out of memory error for BLOBs\r\n       p^.ColumnValueDBSize := ColumnSize;\r\n       p^.ColumnNonNullable := (Nullable = SQL_NO_NULLS);\r\n-      p^.ColumnType := ODBCColumnToFieldType(DataType, 10, DecimalDigits);\r\n       if p^.ColumnType = ftUtf8 then\r\n         if ColumnSize = 0 then\r\n           siz := 256\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16640\n+16641",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16640'\r\n+'2.4.16641'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.odbc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "79dd6c23793599c12a83fec5bbf7d5f95f8b9f44",
+      "short_sha": "79dd6c23",
+      "subject": "core: some TPollSockets optimization on Windows",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T15:32:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/79dd6c23793599c12a83fec5bbf7d5f95f8b9f44",
+      "parents": [
+        "63b43ba0ae29dcc9c00b6f6b170f659b42e291bd"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -4814,7 +4814,6 @@   TOSLightLock = record\n     procedure Lock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n     /// access to raw pthread_mutex_trylock() method\r\n-    // - TryAcquireSRWLockExclusive() seems not stable on all Windows revisions\r\n     function TryLock: boolean;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n     /// leave an OS lock\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16639\n+16640",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16639'\r\n+'2.4.16640'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 2,
+          "patch": "@@ -5343,7 +5343,6 @@ function TPollSockets.PollForPendingEvents(timeoutMS: integer): integer;\n   try\r\n     // thread-safe get the pending (un)subscriptions\r\n     new.Count := 0;\r\n-    {$ifdef OSPOSIX} // TOSLight.TryLock is not available on Windows\r\n     if (fPending.Count = 0) and\r\n        fPendingSafe.TryLock then\r\n     begin\r\n@@ -5355,7 +5354,6 @@ function TPollSockets.PollForPendingEvents(timeoutMS: integer): integer;\n       end;\r\n       fPendingSafe.UnLock;\r\n     end;\r\n-    {$endif OSPOSIX}\r\n     {$ifdef POLLSOCKETEPOLL}\r\n     // TPollSocketEpoll is thread-safe and let epoll_wait() work in the background\r\n     {if Assigned(OnLog) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Network"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "63b43ba0ae29dcc9c00b6f6b170f659b42e291bd",
+      "short_sha": "63b43ba0",
+      "subject": "net: fixed Delphi compilation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T14:55:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/63b43ba0ae29dcc9c00b6f6b170f659b42e291bd",
+      "parents": [
+        "181c2d7b92bac61f0ae9218d34a1f452da8dc322"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 12,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 3,
+          "patch": "@@ -4854,7 +4854,7 @@   TOSRWLightLock = record\n     /// try to enter a multiple-reads reentrant lock\r\n     // - if returned true, caller should eventually call ReadUnLock\r\n     function TryReadLock: boolean;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n+      {$ifdef FPC} inline; {$endif}\r\n     /// leave a multiple-reads lock\r\n     procedure ReadUnLock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n@@ -4866,10 +4866,9 @@   TOSRWLightLock = record\n     /// try to enter an exclusive non-reentrant write lock\r\n     // - if returned true, caller should eventually call WriteUnLock\r\n     function TryWriteLock: boolean;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n+      {$ifdef FPC} inline; {$endif}\r\n     /// leave an exclusive write lock\r\n     procedure WriteUnLock;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n     /// check if the lock has been acquired as read or write\r\n     // - informational only: result may change immediately on another thread\r\n     function IsLocked: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16638\n+16639",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16638'\r\n+'2.4.16639'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 7,
+          "patch": "@@ -242,7 +242,8 @@ function DnsLdapControllersSorted(UdpFirstDelayMS, MinimalUdpCount: integer;\n \r\n type\r\n   /// define only one part of a Distinguished Name content e.g. for DNToCN()\r\n-  TNormalizeDN = set of (dnCN, dnOU, dnDC);\r\n+  TNormalizeDN = (dnCN, dnOU, dnDC);\r\n+  TNormalizeDNs = set of TNormalizeDN;\r\n const\r\n   /// define all parts of a Distinguished Name content\r\n   DN_ALL = [low(TNormalizeDN) .. high(TNormalizeDN)];\r\n@@ -252,15 +253,15 @@ function DnsLdapControllersSorted(UdpFirstDelayMS, MinimalUdpCount: integer;\n // - e.g. DNToCN('CN=User1,OU=Users,OU=London,DC=xyz,DC=local') =\r\n // 'xyz.local/London/Users/User1'\r\n function DNToCN(const DN: RawUtf8; NoRaise: boolean = false;\r\n-  extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n+  extend: TNormalizeDNs = DN_ALL): RawUtf8;\r\n \r\n /// internal function used by DNToDN()\r\n function DNsToCN(const dc, ou, cn: TRawUtf8DynArray;\r\n-  extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n+  extend: TNormalizeDNs = DN_ALL): RawUtf8;\r\n \r\n /// normalize a Distinguished Name into its standard layout\r\n // - trim spaces, and use CN= OU= DC= specifiers\r\n-function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n+function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDNs = DN_ALL): RawUtf8;\r\n \r\n /// low-level parse a Distinguished Name text into its DC= OU= CN= parts\r\n // - on parsing error, raise ELdap or return false if NoRaise was set to true\r\n@@ -3259,7 +3260,7 @@ function ParseDN(const DN: RawUtf8; out dc, ou, cn: TRawUtf8DynArray;\n   result := true;\r\n end;\r\n \r\n-function DNsToCN(const dc, ou, cn: TRawUtf8DynArray; extend: TNormalizeDN): RawUtf8;\r\n+function DNsToCN(const dc, ou, cn: TRawUtf8DynArray; extend: TNormalizeDNs): RawUtf8;\r\n var\r\n   w: TTextWriter;\r\n   tmp: TTextWriterStackBuffer; // 8KB work buffer on stack\r\n@@ -3297,7 +3298,7 @@ function DNsToCN(const dc, ou, cn: TRawUtf8DynArray; extend: TNormalizeDN): RawU\n   end;\r\n end;\r\n \r\n-function DNToCN(const DN: RawUtf8; NoRaise: boolean; extend: TNormalizeDN): RawUtf8;\r\n+function DNToCN(const DN: RawUtf8; NoRaise: boolean; extend: TNormalizeDNs): RawUtf8;\r\n var\r\n   dc, ou, cn: TRawUtf8DynArray;\r\n begin\r\n@@ -3307,7 +3308,7 @@ function DNToCN(const DN: RawUtf8; NoRaise: boolean; extend: TNormalizeDN): RawU\n     result := DNsToCN(dc, ou, cn, extend);\r\n end;\r\n \r\n-function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDN): RawUtf8;\r\n+function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDNs): RawUtf8;\r\n var\r\n   dc, ou, cn: TRawUtf8DynArray;\r\n   i: PtrInt;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "181c2d7b92bac61f0ae9218d34a1f452da8dc322",
+      "short_sha": "181c2d7b",
+      "subject": "core: mostly comments/documentation precisions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T14:33:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/181c2d7b92bac61f0ae9218d34a1f452da8dc322",
+      "parents": [
+        "583fe89c573c17158a2881f2600e8efe7e16ff23"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -4826,7 +4826,8 @@   TOSLightLock = record\n   /// the fastest non-reentrant Read/Write lock with waiters waken by the OS\r\n   // - reader-preference: readers are allowed to enter while a writer waits;\r\n   // note that TRWLightLock has writer-preference so could be an alternative\r\n-  // - on Windows, calls WaitOnAddress/WakeByAddressSingle Win8+ API\r\n+  // - on Windows, calls WaitOnAddress/WakeByAddressSingle Win8+ API - the\r\n+  // official SRW API has another locking pattern, and readers are not reentrant\r\n   // - on Linux, uses 32-bit futex syscall\r\n   // - other systems (BSD or old Windows/Linux) fallback to regular SpinAndWait()\r\n   // - warning: ReadLock calls are reentrant by design but WriteLock is not\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16637\n+16638",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16637'\r\n+'2.4.16638'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 6,
+          "patch": "@@ -1428,7 +1428,7 @@   TPollSockets = class(TPollAbstract)\n   protected\r\n     fMergeSubscribeEventsLock: TLightLock; // topmost to ensure aarch64 alignment\r\n     fSubscriptionSafe: TLightLock; // dedicated not to block Accept()\r\n-    fPendingSafe: TOSLightLock; // more likely benefit from light futex\r\n+    fPendingSafe: TOSLightLock; // CAS + light futex is better than any RW lock\r\n     fGettingOne: integer;\r\n     fPoll: array of TPollSocketAbstract; // each track up to fPoll[].MaxSockets\r\n     fPending: TPollSocketResults;\r\n@@ -5138,20 +5138,23 @@ function FindPendingFromTag(res: PPollSocketResult; n: PtrInt;\n end;\r\n \r\n function TPollSockets.EnsurePending(tag: TPollSocketTag): boolean;\r\n+var\r\n+  i: PtrInt;\r\n begin\r\n-  // manual O(n) brute force search\r\n-  result := FindPendingFromTag(\r\n-    @fPending.Events[fPendingIndex], fPending.Count - fPendingIndex, tag) <> nil;\r\n+  // manual O(i) brute force search into remaining events list\r\n+  // overriden in TPollReadSockets to use TPollAsyncConnection fReadPending flag\r\n+  i := fPendingIndex; // typically 0 in MergePendingEvents()\r\n+  result := FindPendingFromTag(@fPending.Events[i], fPending.Count - i, tag) <> nil;\r\n end;\r\n \r\n procedure TPollSockets.SetPending(tag: TPollSocketTag);\r\n begin\r\n-  // overriden method may set a per-connection flag for O(1) lookup\r\n+  // overriden in TPollReadSockets to set TPollAsyncConnection fReadPending flag\r\n end;\r\n \r\n function TPollSockets.UnsetPending(tag: TPollSocketTag): boolean;\r\n begin\r\n-  result := true; // overriden e.g. in TPollAsyncReadSockets\r\n+  result := true; // overriden e.g. in TPollAsyncReadSockets to use fReadPending\r\n end;\r\n \r\n function TPollSockets.GetSubscribeCount: integer;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "docs",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Network"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "583fe89c573c17158a2881f2600e8efe7e16ff23",
+      "short_sha": "583fe89c",
+      "subject": "core: new TOSRWLightLock efficient object",
+      "body": "- with reader-preference and waiters waking using an OS futex",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T14:12:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/583fe89c573c17158a2881f2600e8efe7e16ff23",
+      "parents": [
+        "c849d8602cbbca5b6777878a4bfcb1cfaf1dd920"
+      ],
+      "stats": {
+        "additions": 196,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 194,
+          "deletions": 5,
+          "patch": "@@ -4584,7 +4584,8 @@   TMultiLightLock = record\n \r\n   /// a lightweight multiple Reads / exclusive Write non-upgradable lock\r\n   // - calls SwitchToThread after some spinning, but don't use any R/W OS API\r\n-  // - writer-preference: new ReadLock will wait until WriteUnLock is done\r\n+  // - writer-preference: new ReadLock will wait until WriteUnLock is done;\r\n+  // note that TOSRWLightLock has reader-preference so could be an alternative\r\n   // - warning: ReadLocks are reentrant and allow concurrent acccess, but calling\r\n   // WriteLock within a ReadLock, or within another WriteLock, would deadlock\r\n   // - consider TRWLock if you need an upgradable lock - but for mostly reads,\r\n@@ -4782,7 +4783,7 @@   TOSLock = record\n   POSLock = ^TOSLock;\r\n \r\n   /// the fastest non-reentrant lock supplied by the Operating System\r\n-  // - on Windows, calls WaitOnAddress/WakeByAddresssingle Win8+ API\r\n+  // - on Windows, calls WaitOnAddress/WakeByAddressSingle Win8+ API\r\n   // - on Linux, uses 32-bit futex syscall; on BSD, calls pthread_mutex_*()\r\n   // - other systems fallback to TRTLCriticalSection\r\n   // - don't forget to call Init and Done to properly initialize the structure\r\n@@ -4802,11 +4803,12 @@   TOSLightLock = record\n     {$endif OSFUTEX}\r\n   public\r\n     /// to be called to setup the instance\r\n-    // - mandatory in all cases, even if TOSLightLock is part of a class\r\n+    // - mandatory for the TRTLCriticalSection fallback compatibility\r\n     procedure Init;\r\n     /// to be called to finalize the instance\r\n+    // - mandatory for the TRTLCriticalSection fallback compatibility\r\n     procedure Done;\r\n-    /// enter an OS lock\r\n+      /// enter an OS lock\r\n     // - warning: this method is NOT reentrant/recursive, so any nested call\r\n     // would deadlock\r\n     procedure Lock;\r\n@@ -4821,6 +4823,59 @@   TOSLightLock = record\n   end;\r\n   POSLightLock = ^TOSLightLock;\r\n \r\n+  /// the fastest non-reentrant Read/Write lock with waiters waken by the OS\r\n+  // - reader-preference: readers are allowed to enter while a writer waits;\r\n+  // note that TRWLightLock has writer-preference so could be an alternative\r\n+  // - on Windows, calls WaitOnAddress/WakeByAddressSingle Win8+ API\r\n+  // - on Linux, uses 32-bit futex syscall\r\n+  // - other systems (BSD or old Windows/Linux) fallback to regular SpinAndWait()\r\n+  // - warning: ReadLock calls are reentrant by design but WriteLock is not\r\n+  {$ifdef USERECORDWITHMETHODS}\r\n+  TOSRWLightLock = record\r\n+  {$else}\r\n+  TOSRWLightLock = object\r\n+  {$endif USERECORDWITHMETHODS}\r\n+  private\r\n+    Flags: cardinal; // 32-bit futex on Linux and Win8+; simple CAS fallback\r\n+    procedure ReadLockSpin;\r\n+    procedure WriteLockSpin;\r\n+  public\r\n+    /// to be called if the instance has not been filled with 0\r\n+    // - e.g. not needed if TOSRWLightLock is defined as a class field\r\n+    procedure Init;\r\n+    /// not mandatory do-nothing method to finalize the instance\r\n+    procedure Done;\r\n+    /// enter a multiple-reads reentrant lock\r\n+    // - readers may enter while a writer is waiting\r\n+    // - warning: WriteLock within a ReadLock deadlocks\r\n+    procedure ReadLock;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n+    /// try to enter a multiple-reads reentrant lock\r\n+    // - if returned true, caller should eventually call ReadUnLock\r\n+    function TryReadLock: boolean;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n+    /// leave a multiple-reads lock\r\n+    procedure ReadUnLock;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n+    /// enter an exclusive non-reentrant write lock\r\n+    // - readers have preference over a waiting writer\r\n+    // - warning: WriteLock within another WriteLock deadlocks\r\n+    procedure WriteLock;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n+    /// try to enter an exclusive non-reentrant write lock\r\n+    // - if returned true, caller should eventually call WriteUnLock\r\n+    function TryWriteLock: boolean;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n+    /// leave an exclusive writ\n... [truncated, 4206 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16636\n+16637",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16636'\r\n+'2.4.16637'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c849d8602cbbca5b6777878a4bfcb1cfaf1dd920",
+      "short_sha": "c849d860",
+      "subject": "core: implemented WakeByAddressAll() on Win8+ and Linux",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T14:12:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c849d8602cbbca5b6777878a4bfcb1cfaf1dd920",
+      "parents": [
+        "ff62d96629c45f14364d74b1ef78bd561725b829"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 12,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 3,
+          "patch": "@@ -5294,10 +5294,14 @@ function NewSynLocker: PSynLocker;\n // - see also OSFUTEX conditional defined only on Linux and Windows\r\n var OsWaitOnValue: procedure(Value: PCardinal; Expected, TimeoutMS: cardinal);\r\n \r\n-/// raw cross-platform futex-like unlock of the next waiting OsWakeOnValue()\r\n-// - use futex on Linux, WakeByAddresssingle() on Win8+, equal nil otherwise\r\n+/// raw cross-platform futex-like unlock of the next waiting OsWaitOnValue()\r\n+// - use futex on Linux, WakeByAddressSingle() on Win8+, equal nil otherwise\r\n var OsWakeOnValue: procedure(Value: PCardinal); {$ifdef OSWINDOWS} stdcall; {$endif}\r\n \r\n+/// raw cross-platform futex-like unlock all waiting OsWaitOnValue()\r\n+// - use futex on Linux, WakeByAddressAll() on Win8+, equal nil otherwise\r\n+var OsWakeAllOnValue: procedure(Value: PCardinal); {$ifdef OSWINDOWS} stdcall; {$endif}\r\n+\r\n type\r\n   TCachedValueCall = function(Param: pointer): RawByteString;\r\n   /// raw thread-safe cache of a RawByteString content\r\n@@ -11463,8 +11467,8 @@ procedure TRWLightLock.WriteUnLock;\n \r\n procedure TRWLightLock.WriteLockSpin;\r\n var\r\n-  f: cardinal;\r\n   spin: PtrUInt;\r\n+  f: cardinal;\r\n begin\r\n   spin := SPIN_COUNT;\r\n   repeat // first loop to acquire the WriteLock bit\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "patch": "@@ -2305,6 +2305,11 @@ begin\n   _futex(Value, FUTEX_WAKE_PRIVATE, 1, nil);\r\n end;\r\n \r\n+procedure _OsWakeAllOnValue(Value: PCardinal);\r\n+begin\r\n+  _futex(Value, FUTEX_WAKE_PRIVATE, MaxInt, nil);\r\n+end;\r\n+\r\n procedure _OsWaitOnValue(Value: PCardinal; Expected, TimeoutMS: cardinal);\r\n var\r\n   s: cardinal;\r\n@@ -6149,8 +6154,9 @@ begin\n   {$ifdef FPC} // futex() has no libc api -> no Delphi for POSIX compatibility\r\n   if KernelRevision >= $020616 then // FUTEX_PRIVATE_FLAG since Linux 2.6.22\r\n   begin\r\n-    OsWaitOnValue := @_OsWaitOnValue;\r\n-    OsWakeOnValue := @_OsWakeOnValue;\r\n+    OsWaitOnValue    := @_OsWaitOnValue;\r\n+    OsWakeOnValue    := @_OsWakeOnValue;\r\n+    OsWakeAllOnValue := @_OsWakeAllOnValue;\r\n   end;\r\n   {$endif FPC}\r\n   {$ifdef OSLINUXHUGEPAGES}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 5,
+          "patch": "@@ -1535,7 +1535,7 @@ var\n   // function returns when Address^ differs from the value at CompareAddress^\r\n   WaitOnAddress: function(Address, CompareAddress: pointer;\r\n     AddressSize, dwMilliseconds: PtrUInt): BOOL; stdcall;\r\n-  WakeByAddressSingle: procedure(Address: pointer); stdcall;\r\n+  WakeByAddressSingle, WakeByAddressAll: procedure(Address: pointer); stdcall;\r\n \r\n procedure _OsWaitOnValue(Value: PCardinal; Expected, TimeoutMS: cardinal);\r\n begin\r\n@@ -5288,13 +5288,16 @@ begin\n   if OSVersion >= wEight then\r\n   begin\r\n     h := Windows.LoadLibrary('API-MS-Win-Core-Synch-l1-2-0.dll'); // Win8+\r\n-    WaitOnAddress := LibraryResolve(h, 'WaitOnAddress');\r\n+    WaitOnAddress       := LibraryResolve(h, 'WaitOnAddress');\r\n     WakeByAddressSingle := LibraryResolve(h, 'WakeByAddressSingle');\r\n+    WakeByAddressAll    := LibraryResolve(h, 'WakeByAddressAll');\r\n     if Assigned(WaitOnAddress) and\r\n-       Assigned(WakeByAddressSingle) then\r\n+       Assigned(WakeByAddressSingle) and\r\n+       Assigned(WakeByAddressAll) then\r\n     begin\r\n-      OsWaitOnValue := @_OsWaitOnValue;\r\n-      OsWakeOnValue := @WakeByAddressSingle; // defined as stdcall\r\n+      OsWaitOnValue    := @_OsWaitOnValue;\r\n+      OsWakeOnValue    := @WakeByAddressSingle; // defined as stdcall\r\n+      OsWakeAllOnValue := @WakeByAddressAll;    // defined as stdcall\r\n     end;\r\n   end;\r\n   h := GetModuleHandle(ntdll); // late binding over unstable / altered API\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16635\n+16636",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16635'\r\n+'2.4.16636'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff62d96629c45f14364d74b1ef78bd561725b829",
+      "short_sha": "ff62d966",
+      "subject": "net: TUri.From() documentation precision",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T08:24:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff62d96629c45f14364d74b1ef78bd561725b829",
+      "parents": [
+        "c7ba1bb3c0e323c32745f9670227bf136989f7a3"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16634\n+16635",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16634'\r\n+'2.4.16635'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1770,8 +1770,8 @@   TUri = record\n     procedure Clear;\r\n     /// fill the members from a supplied URI\r\n     // - recognize e.g. 'http://server:port/address', 'https://server/address',\r\n-    // 'server/address' (as http), 'http://unix:/server:/address' (as nlUnix),\r\n-    // 'https://user:password@server:port/address' (authenticated),\r\n+    // 'server/address' or 'server' (as http), 'http://unix:/server:/address' (as\r\n+    // nlUnix), 'https://user:password@server:port/address' (authenticated),\r\n     // 'wss://Server/Address' (as https) or 'file://server/folder/data.xml'\r\n     // - supports RFC 3986 IPv6 litterals like 'https://[::1]:123/tata'\r\n     // - returns TRUE if the Server has been extracted and is not ''\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "docs",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c7ba1bb3c0e323c32745f9670227bf136989f7a3",
+      "short_sha": "c7ba1bb3",
+      "subject": "net: new TLdapAttributeList.AddFmt() method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T08:08:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c7ba1bb3c0e323c32745f9670227bf136989f7a3",
+      "parents": [
+        "446a5be14379de3d7469826632b204cc74dbc0a0"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16633\n+16634",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16633'\r\n+'2.4.16634'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 1,
+          "patch": "@@ -1292,6 +1292,10 @@   TLdapAttributeList = class(TClonable)\n     /// search or allocate a new TLdapAttribute object and its value to the list\r\n     function Add(const AttributeName: RawUtf8; const AttributeValue: RawByteString;\r\n       Option: TLdapAddOption = aoAlways): TLdapAttribute; overload;\r\n+    /// search or allocate a new TLdapAttribute object and its value to the list\r\n+    function AddFmt(const AttributeName, AttributeValueFmt: RawUtf8;\r\n+      const AttributeValueArgs: array of const;\r\n+      Option: TLdapAddOption = aoAlways): TLdapAttribute;\r\n     /// search or allocate TLdapAttribute object(s) from name/value pairs to the list\r\n     procedure AddPairs(const NameValuePairs: array of RawUtf8;\r\n       Option: TLdapAddOption = aoAlways); \r\n@@ -2376,7 +2380,8 @@   TLdapClient = class(TObjectOSLock)\n     /// create a new entry in the directory\r\n     function Add(const Obj: RawUtf8; Value: TLdapAttributeList): boolean;\r\n     /// make one or more changes to an entry\r\n-    // - the Modifications are one or several Modifier() operations\r\n+    // - the Modifications are one or several Modifier() operations, directly as\r\n+    // [Modifier(), Modifier()] inlined argument or via AsnAddItem(TAsnObjects)\r\n     // - is the main modification method, called by other Modify() overloads\r\n     function Modify(const Obj: RawUtf8;\r\n       const Modifications: array of TAsnObject): boolean; overload;\r\n@@ -4938,6 +4943,15 @@ function TLdapAttributeList.Add(const AttributeName: RawUtf8;\n   result.Add(AttributeValue, Option);\r\n end;\r\n \r\n+function TLdapAttributeList.AddFmt(const AttributeName, AttributeValueFmt: RawUtf8;\r\n+  const AttributeValueArgs: array of const; Option: TLdapAddOption): TLdapAttribute;\r\n+var\r\n+  v: RawUtf8;\r\n+begin\r\n+  FormatUtf8(AttributeValueFmt, AttributeValueArgs, v);\r\n+  result := Add(AttributeName, v, Option);\r\n+end;\r\n+\r\n procedure TLdapAttributeList.AddPairs(const NameValuePairs: array of RawUtf8;\r\n   Option: TLdapAddOption);\r\n var\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "446a5be14379de3d7469826632b204cc74dbc0a0",
+      "short_sha": "446a5be1",
+      "subject": "core: new TAsnObjects type and its AsnAddItem() wrapper",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T08:07:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/446a5be14379de3d7469826632b204cc74dbc0a0",
+      "parents": [
+        "d5844b6ade1b6c91b81fb95083d6da69cf2516d9"
+      ],
+      "stats": {
+        "additions": 15,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.security.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -2012,6 +2012,9 @@ function FileCcachePrincipal(const ccache: TFileName;\n   TAsnObject = RawByteString;\r\n   PAsnObject = ^TAsnObject;\r\n \r\n+  /// could be used to store several binary objects, e.g. LDAP modifiers\r\n+  TAsnObjects = array of TAsnObject;\r\n+\r\n const\r\n   /// constructed class type bitmask\r\n   ASN1_CL_CTR   = $20;\r\n@@ -2313,6 +2316,9 @@ procedure AsnNextInit(var Pos: TIntegerDynArray; Count: PtrInt);\n // - used e.g. by the ASNDEBUG conditional\r\n function AsnDump(const Value: TAsnObject): RawUtf8;\r\n \r\n+/// append one TAsnObject to a dynamic array e.g. for LDAP modifiers\r\n+function AsnAddItem(var Arr: TAsnObjects; const Value: TAsnObject): PtrInt;\r\n+\r\n \r\n { ****************** Operating System Certificates Operation }\r\n \r\n@@ -7408,6 +7414,13 @@ procedure AsnNextInit(var Pos: TIntegerDynArray; Count: PtrInt);\n     Pos[i] := 1;\r\n end;\r\n \r\n+function AsnAddItem(var Arr: TAsnObjects; const Value: TAsnObject): PtrInt;\r\n+begin\r\n+  result := length(Arr);\r\n+  SetLength(Arr, result + 1);\r\n+  Arr[result] := Value;\r\n+end;\r\n+\r\n function IsBinaryString(var Value: RawByteString): boolean;\r\n var\r\n   n: PtrInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16632\n+16633",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16632'\r\n+'2.4.16633'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.security"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d5844b6ade1b6c91b81fb95083d6da69cf2516d9",
+      "short_sha": "d5844b6a",
+      "subject": "core: new TRWLightLock.Done void method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T08:07:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d5844b6ade1b6c91b81fb95083d6da69cf2516d9",
+      "parents": [
+        "e171e5aa419b42a276c665ffb5876ba209be35da"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -4584,6 +4584,7 @@   TMultiLightLock = record\n \r\n   /// a lightweight multiple Reads / exclusive Write non-upgradable lock\r\n   // - calls SwitchToThread after some spinning, but don't use any R/W OS API\r\n+  // - writer-preference: new ReadLock will wait until WriteUnLock is done\r\n   // - warning: ReadLocks are reentrant and allow concurrent acccess, but calling\r\n   // WriteLock within a ReadLock, or within another WriteLock, would deadlock\r\n   // - consider TRWLock if you need an upgradable lock - but for mostly reads,\r\n@@ -4608,6 +4609,9 @@   TRWLightLock = record\n     // - e.g. not needed if TRWLightLock is defined as a class field\r\n     procedure Init;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n+    /// could be called to finalize the instance as a TRWLightLock\r\n+    // - does nothing - just for compatibility with TOSLock\r\n+    procedure Done;\r\n     /// enter a non-upgradable multiple reads lock\r\n     // - read locks maintain a thread-safe counter, so are reentrant and non blocking\r\n     // - warning: nested WriteLock call after a ReadLock would deadlock\r\n@@ -4623,6 +4627,8 @@   TRWLightLock = record\n     procedure ReadUnLock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n     /// enter a non-reentrant non-upgradable exclusive write lock\r\n+    // - WriteLock has precedence, and will wait until pending ReadLock are\r\n+    // consumed, but any new ReadLock would wait for the eventual WriteUnLock\r\n     // - warning: WriteLock deadlocks within another ReadLock or WriteLock\r\n     procedure WriteLock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n@@ -11397,6 +11403,10 @@ procedure TRWLightLock.Init;\n   Flags := 0; // bit 0=WriteLock, >0=ReadLock counter\r\n end;\r\n \r\n+procedure TRWLightLock.Done;\r\n+begin\r\n+end;\r\n+\r\n procedure TRWLightLock.ReadLock;\r\n var\r\n   f: cardinal;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16631\n+16632",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16631'\r\n+'2.4.16632'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e171e5aa419b42a276c665ffb5876ba209be35da",
+      "short_sha": "e171e5aa",
+      "subject": "core: added paranoid Assert() about TFormatUtf8",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T08:06:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e171e5aa419b42a276c665ffb5876ba209be35da",
+      "parents": [
+        "9411aea0a29a236c1e652141edb6a664e08a1502"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -11815,6 +11815,7 @@ procedure InitializeUnit;\n \r\n \r\n initialization\r\n+  Assert(SizeOf(TFormatUtf8) <= SizeOf(TTextWriterStackBuffer)); // 4KB<=8KB\r\n   InitializeUnit;\r\n \r\n end.\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16630\n+16631",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16630'\r\n+'2.4.16631'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9411aea0a29a236c1e652141edb6a664e08a1502",
+      "short_sha": "9411aea0",
+      "subject": "net: introducing TNormalizeDN extend e.g. for DNToCN()",
+      "body": "# Please enter the commit message for your changes. Lines starting",
+      "author": "Arnaud Bouchez",
+      "date": "2026-08-31T07:27:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9411aea0a29a236c1e652141edb6a664e08a1502",
+      "parents": [
+        "2c1daf90da9886548a6e3baf1884c116d5962ddf"
+      ],
+      "stats": {
+        "additions": 52,
+        "deletions": 24,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16629\n+16630",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16629'\r\n+'2.4.16630'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 50,
+          "deletions": 22,
+          "patch": "@@ -240,15 +240,27 @@ function DnsLdapControllersSorted(UdpFirstDelayMS, MinimalUdpCount: integer;\n \r\n { **************** LDAP Protocol Definitions }\r\n \r\n+type\r\n+  /// define only one part of a Distinguished Name content e.g. for DNToCN()\r\n+  TNormalizeDN = set of (dnCN, dnOU, dnDC);\r\n+const\r\n+  /// define all parts of a Distinguished Name content\r\n+  DN_ALL = [low(TNormalizeDN) .. high(TNormalizeDN)];\r\n+\r\n /// convert a Distinguished Name to a Canonical Name\r\n // - raise ELdap if the supplied DN is invalid - unless NoRaise was set to true\r\n // - e.g. DNToCN('CN=User1,OU=Users,OU=London,DC=xyz,DC=local') =\r\n // 'xyz.local/London/Users/User1'\r\n-function DNToCN(const DN: RawUtf8; NoRaise: boolean = false): RawUtf8;\r\n+function DNToCN(const DN: RawUtf8; NoRaise: boolean = false;\r\n+  extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n+\r\n+/// internal function used by DNToDN()\r\n+function DNsToCN(const dc, ou, cn: TRawUtf8DynArray;\r\n+  extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n \r\n /// normalize a Distinguished Name into its standard layout\r\n // - trim spaces, and use CN= OU= DC= specifiers\r\n-function NormalizeDN(const DN: RawUtf8): RawUtf8;\r\n+function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDN = DN_ALL): RawUtf8;\r\n \r\n /// low-level parse a Distinguished Name text into its DC= OU= CN= parts\r\n // - on parsing error, raise ELdap or return false if NoRaise was set to true\r\n@@ -3242,42 +3254,55 @@ function ParseDN(const DN: RawUtf8; out dc, ou, cn: TRawUtf8DynArray;\n   result := true;\r\n end;\r\n \r\n-function DNsToCN(const dc, ou, cn: TRawUtf8DynArray): RawUtf8;\r\n+function DNsToCN(const dc, ou, cn: TRawUtf8DynArray; extend: TNormalizeDN): RawUtf8;\r\n var\r\n   w: TTextWriter;\r\n   tmp: TTextWriterStackBuffer; // 8KB work buffer on stack\r\n begin\r\n+  if dc = nil then\r\n+    exclude(extend, dnDC);\r\n+  if ou = nil then\r\n+    exclude(extend, dnOU);\r\n+  if cn = nil then\r\n+    exclude(extend, dnCN);\r\n+  if extend = [] then\r\n+  begin\r\n+    FastAssignNew(result);\r\n+    exit;\r\n+  end;\r\n   w := TTextWriter.CreateOwnedStream(tmp);\r\n   try\r\n-    w.AddCsvStrings(dc, '.', -1, {reverse=}false);\r\n-    if (ou <> nil) or\r\n-       (cn <> nil) then\r\n-      w.AddDirect('/');\r\n-    if ou <> nil then\r\n-      w.AddCsvStrings(ou, '/', -1, {reverse=}true);\r\n-    if cn <> nil then\r\n+    if dnDC in extend then\r\n+      w.AddCsvStrings(dc, '.', -1, {reverse=}false);\r\n+    if extend <> [dnDC] then\r\n     begin\r\n-      if ou <> nil then\r\n-        w.AddDirect('/');\r\n-      w.AddCsvStrings(cn, '/', -1, {reverse=}true);\r\n+      w.AddDirect('/');\r\n+      if dnOU in extend then\r\n+        w.AddCsvStrings(ou, '/', -1, {reverse=}true);\r\n+      if dnCN in extend then\r\n+      begin\r\n+        if dnOU in extend then\r\n+          w.AddDirect('/');\r\n+        w.AddCsvStrings(cn, '/', -1, {reverse=}true);\r\n+      end;\r\n     end;\r\n     w.SetText(result);\r\n   finally\r\n     w.Free;\r\n   end;\r\n end;\r\n \r\n-function DNToCN(const DN: RawUtf8; NoRaise: boolean): RawUtf8;\r\n+function DNToCN(const DN: RawUtf8; NoRaise: boolean; extend: TNormalizeDN): RawUtf8;\r\n var\r\n   dc, ou, cn: TRawUtf8DynArray;\r\n begin\r\n   FastAssignNew(result);\r\n   if (DN <> '') and\r\n      ParseDN(DN, dc, ou, cn, {valueEscapeCN=}true, NoRaise) then\r\n-    result := DNsToCN(dc, ou, cn);\r\n+    result := DNsToCN(dc, ou, cn, extend);\r\n end;\r\n \r\n-function NormalizeDN(const DN: RawUtf8): RawUtf8;\r\n+function NormalizeDN(const DN: RawUtf8; extend: TNormalizeDN): RawUtf8;\r\n var\r\n   dc, ou, cn: TRawUtf8DynArray;\r\n   i: PtrInt;\r\n@@ -3286,12 +3311,15 @@ function NormalizeDN(const DN: RawUtf8): RawUtf8;\n   if (DN = '') or\r\n      not ParseDN(DN, dc, ou, cn, {valueEscapeCN=}true, {noraise=}true) then\r\n     exit;\r\n-  for i := 0 to length(cn) - 1 do\r\n-    Append(result, ',CN=', cn[i]);\r\n-  for i := 0 to length(ou) - 1 do\r\n-    Append(result, ',OU=', ou[i]);\r\n-  for i := 0 to length(dc) - 1 do\r\n-    Append(result, ',DC=', dc[i]);\r\n+  if dnCN in extend then\r\n+    for i := 0 to length(cn) - 1 do\r\n+      Append(result, ',CN=', cn[i]);\r\n+  if dnOU in extend the\n... [truncated, 239 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "667509df5243a636b9efdf9bb93dbd06412f00ef",
+      "short_sha": "667509df",
+      "subject": "core: rewrite POSIX RunRedirect() from popen() to fork/execve - fix #463",
+      "body": "- popen() runs /bin/sh -c and records the shell pid: killing it on\nabort leaves the actual worker as an orphan re-parented to PID 1\n(as reported for TSynAngelize) - the child now runs in its own\nsetsid() group, so the whole process group is signaled on abort\n- fix EOF busy-spin regression introduced by 7ec04e578 (n<0 vs n<=0):\nsince 2023/01 any RunRedirect() call with INFINITE waitfordelayms\nwould never return once the process ended, burning 100% CPU on a\npoll(POLLHUP)/read()=0 tight loop - proven by strace\n- simple commands are resolved and executed with no shell at all,\nwith a shell fallback e.g. for built-ins - the executable lookup\nuses the PATH= actually supplied to execve() via RunEnvPath(), not\nthe parent PATH\n- new RunFork() shared helper keeps the vfork() behavior with libc\non BSD/SunOS, as RunInternal() and the FPC RTL POpen_internal();\nthe child side is strictly limited to low-level syscalls, checking\nthe failures which would break redirection\n- env/options parameters are now honored (were silently ignored)\n- wrkdir now applies to the child process only - it used to ChDir()\nthe whole calling process, and never restore it\n- exitcode^ is now the actual WaitProcess() result, or -1 if aborted\n- the child environment is prepared before fork() for fork-safety,\nalso fixing RunInternal() E2BIG path which could return in the child",
+      "author": "zen010101",
+      "date": "2026-08-31T06:39:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/667509df5243a636b9efdf9bb93dbd06412f00ef",
+      "parents": [
+        "ff62d96629c45f14364d74b1ef78bd561725b829"
+      ],
+      "stats": {
+        "additions": 231,
+        "deletions": 77,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 231,
+          "deletions": 77,
+          "patch": "@@ -5247,20 +5247,83 @@ begin\n   end;\r\n end;\r\n \r\n-function RunInternal(args: PPAnsiChar; waitfor: boolean; const env: TRunArg;\r\n-  options: TRunOptions): integer;\r\n-var\r\n-  pid: TPID;\r\n-  e: array[0..511] of PUtf8Char; // max 512 environment variables\r\n-  envpp: PPUtf8Char;\r\n+type\r\n+  // stack-allocated storage for RunBuildEnv() child environment pointers\r\n+  TRunEnv = array[0..511] of PUtf8Char; // max 512 environment variables\r\n+\r\n+// compute the child environment pointers from Windows-layout env pairs\r\n+// - to be called before fork(), since it may not be fork-safe\r\n+// - returns false on too many environment variables\r\n+// - returns true and envpp=nil to reuse the current process environment,\r\n+// or envpp<>nil pointing to e[] entries (values from env and current envp)\r\n+function RunBuildEnv(const env: TRunArg; options: TRunOptions;\r\n+  var e: TRunEnv; out envpp: PPUtf8Char): boolean;\r\n+var\r\n+  cur: PPUtf8Char;\r\n   P: PUtf8Char;\r\n   n: PtrInt;\r\n begin\r\n+  envpp := pointer(envp); // Delphi POSIX uses wrongly a PWideChar here\r\n+  if env <> '' then\r\n+  begin\r\n+    result := false; // -ESysE2BIG on too many variables\r\n+    n := 0;\r\n+    if (roEnvAddExisting in options) and\r\n+       (envpp <> nil) then\r\n+    begin\r\n+      cur := envpp;\r\n+      while cur^ <> nil do\r\n+      begin\r\n+        if PosChar(cur^, #10) = nil then\r\n+        begin\r\n+          // filter to add only single-line variables\r\n+          if n = high(e) - 1 then\r\n+            exit;\r\n+          e[n] := cur^;\r\n+          inc(n);\r\n+        end;\r\n+        inc(cur);\r\n+      end;\r\n+    end;\r\n+    P := pointer(env); // env follows Windows layout 'n1=v1'#0'n2=v2'#0#0\r\n+    while P^ <> #0 do\r\n+    begin\r\n+      if n = high(e) - 1 then\r\n+        exit;\r\n+      e[n] := P; // makes POSIX compatible\r\n+      inc(n);\r\n+      inc(P, StrLen(P) + 1);\r\n+    end;\r\n+    e[n] := nil; // end with null\r\n+    envpp := @e;\r\n+  end;\r\n+  result := true;\r\n+end;\r\n+\r\n+function RunFork: TPID; {$ifdef HASINLINE} inline; {$endif}\r\n+begin\r\n+  // vfork is required with libc on BSD/SunOS - as FPC RTL POpen_internal()\r\n   {$if (defined(BSD) or defined(SUNOS)) and defined(FPC_USE_LIBC)}\r\n-  pid := FpvFork;\r\n+  result := FpvFork;\r\n   {$else}\r\n-  pid := FpFork;\r\n+  result := FpFork;\r\n   {$ifend}\r\n+end;\r\n+\r\n+function RunInternal(args: PPAnsiChar; waitfor: boolean; const env: TRunArg;\r\n+  options: TRunOptions): integer;\r\n+var\r\n+  pid: TPID;\r\n+  e: TRunEnv;\r\n+  envpp: PPUtf8Char;\r\n+begin\r\n+  // prepare the child environment before fork() for fork-safety\r\n+  if not RunBuildEnv(env, options, e, envpp) then\r\n+  begin\r\n+    result := -ESysE2BIG;\r\n+    exit;\r\n+  end;\r\n+  pid := RunFork;\r\n   if pid < 0 then\r\n   begin\r\n     // fork failed\r\n@@ -5273,39 +5336,6 @@ begin\n     if not waitfor then\r\n       // don't share the same console\r\n       CleanAfterFork;\r\n-    envpp := pointer(envp); // Delphi POSIX uses wrongly a PWideChar here\r\n-    if env <> '' then\r\n-    begin\r\n-      n := 0;\r\n-      result := -ESysE2BIG;\r\n-      if (roEnvAddExisting in options) and\r\n-         (envpp <> nil) then\r\n-      begin\r\n-        while envpp^ <> nil do\r\n-        begin\r\n-          if PosChar(envpp^, #10) = nil then\r\n-          begin\r\n-            // filter to add only single-line variables\r\n-            if n = high(e) - 1 then\r\n-              exit;\r\n-            e[n] := envpp^;\r\n-            inc(n);\r\n-          end;\r\n-          inc(envpp);\r\n-        end;\r\n-      end;\r\n-      P := pointer(env); // env follows Windows layout 'n1=v1'#0'n2=v2'#0#0\r\n-      while P^ <> #0 do\r\n-      begin\r\n-        if n = high(e) - 1 then\r\n-          exit;\r\n-        e[n] := P; // makes POSIX compatible\r\n-        inc(n);\r\n-        inc(P, StrLen(P) + 1);\r\n-      end;\r\n-      e[n] := nil; // end with null\r\n-      envpp := @e;\r\n-    end;\r\n     FpExecve(args^, args, envpp);\r\n     FpExit(127);\r\n   end;\r\n@@ -5364,18 +5394,78 @@ begin\n end;\r\n \r\n {$ifdef FPC}\r\n+\r\n+// retrieve the PATH= value from the environment to be passed to execve()\r\n+// - i.e. from the RunBuildEnv\n... [truncated, 7905 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": 463,
+      "is_merge": false
+    },
+    {
+      "sha": "702c8d0cb0ac59b7107853e3ee854d74a4cfbd72",
+      "short_sha": "702c8d0c",
+      "subject": "core: add TDebugFile.StackTrace() methods - request #401",
+      "body": "- return the current thread stack trace as convenient text, with no\nexception involved - e.g. for diagnostic endpoints or error reporting\n- TSynLog.AddStackTrace now shares the very same implementation on FPC,\nwith byte-identical log output (verified A/B on aarch64-linux)\n- the use: TSynLogStackTraceUse parameter follows the TSynLogFamily\nsemantics: ignored on FPC, and stOnlyManual is implemented on Delphi\nWin32 via the manual ebp-chain walk shared with TSynLog.AddStackManual\n- the manual scan never reads its own output frames[] buffer, and sets\ntiExceptionIgnore so its speculative reads don't reach the logs\n- validated on FPC 3.2.3 (x86_64-linux, aarch64-linux, win32, win64)\nand Delphi 13 (win32 including stOnlyManual at runtime, win64)\n- note: on FPC, frame availability follows the RTL CaptureBacktrace()\nconstraints - the calling code needs stack frames on x86_64\n($STACKFRAMES ON), whereas the aarch64 ABI keeps a frame pointer",
+      "author": "zen010101",
+      "date": "2026-08-31T06:38:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/702c8d0cb0ac59b7107853e3ee854d74a4cfbd72",
+      "parents": [
+        "ff62d96629c45f14364d74b1ef78bd561725b829"
+      ],
+      "stats": {
+        "additions": 208,
+        "deletions": 47,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 208,
+          "deletions": 47,
+          "patch": "@@ -117,6 +117,15 @@ interface\n     diInternalMab,\r\n     {$ifdef FPC} diInternalDwarf, diExternalDwarf {$else} diExternalMap {$endif});\r\n \r\n+  /// how stack trace shall be computed during logging\r\n+  // - stOnlyAPI is the first (and default) value, since manual stack makes\r\n+  // unexpected detections, and was reported as very slow on Windows 11\r\n+  // - on FPC, these values are ignored, because RTL CaptureBacktrace() is used\r\n+  TSynLogStackTraceUse = (\r\n+    stOnlyAPI,\r\n+    stManualAndAPI,\r\n+    stOnlyManual);\r\n+\r\n   /// allow to customize TDebugFile.Create and TDebugFile.SaveToFile process\r\n   TDebugFileScope = set of (\r\n     dfsIncludePathInFileName,\r\n@@ -239,6 +248,27 @@   TDebugFile = class(TSynPersistent)\n     /// add some debugging information about the supplied absolute memory address\r\n     class function AddLog(W: TTextWriter; aPointer: PtrUInt;\r\n       NoHex: boolean = false): boolean; {$ifdef HASINLINE} static; {$endif}\r\n+    /// return the current thread stack trace as convenient plain text\r\n+    // - filename, symbol name and line number (if any) of each frame, e.g.\r\n+    // $ 57f480 mormot.core.log.pas TSynLog.LogEscape (5782) 4a0a40 ...\r\n+    // - skip is the number of caller frames to ignore (0 = start at caller)\r\n+    // - depth is the maximum number of located frames (0 = 30 as TSynLog)\r\n+    // - could be used e.g. for diagnostic endpoints or error reporting, with\r\n+    // no exception involved - returns '' if no stack trace is available\r\n+    class function StackTrace(skip: integer = 0; depth: integer = 0;\r\n+      use: TSynLogStackTraceUse = stManualAndAPI): RawUtf8; overload; static;\r\n+    /// append the current thread stack trace to an existing TTextWriter\r\n+    // - the current thread stack is captured via the RTL CaptureBacktrace()\r\n+    // on FPC, or the RtlCaptureStackBackTrace() API on Delphi + Windows,\r\n+    // with a manual stack walk fallback on Delphi Win32 (where this API is\r\n+    // limited) - not implemented on Delphi POSIX yet (nothing is appended)\r\n+    // - use follows TSynLogFamily.StackTraceUse semantics: ignored on FPC,\r\n+    // and stOnlyManual is implemented on Delphi Win32 only, as TSynLog\r\n+    // - skip does not apply to the heuristic manual stack walk\r\n+    // - a trailing space is left after each located frame, as TDebugFile.AddLog\r\n+    class procedure StackTrace(W: TTextWriter; skip: integer = 0;\r\n+      depth: integer = 0;\r\n+      use: TSynLogStackTraceUse = stManualAndAPI); overload; static;\r\n     /// low-level resolution of a TDebugFile instance from a code address\r\n     // - this is the main internal thread-safe factory method for this process\r\n     // - returns nil if this code address has no known debug information\r\n@@ -726,15 +756,6 @@   TSynLogFamily = class;\n     ptIdentifiedInOneFile,\r\n     ptNoThreadProcess);\r\n \r\n-  /// how stack trace shall be computed during logging\r\n-  // - stOnlyAPI is the first (and default) value, since manual stack makes\r\n-  // unexpected detections, and was reported as very slow on Windows 11\r\n-  // - on FPC, these values are ignored, because RTL CaptureBacktrace() is used \r\n-  TSynLogStackTraceUse = (\r\n-    stOnlyAPI,\r\n-    stManualAndAPI,\r\n-    stOnlyManual);\r\n-\r\n   /// how file existing shall be handled during logging\r\n   TSynLogExistsAction = (\r\n     acOverwrite,\r\n@@ -4510,6 +4531,172 @@ procedure TAutoFlushThread.Execute;\n threadvar // do not publish for compilation within Delphi packages\r\n   PerThreadInfo: TSynLogThreadInfo;\r\n \r\n+type\r\n+  // on Win64, RtlCaptureStackBackTrace() API is limited to < 62 frames\r\n+  TRawStackFrames = array[0..61] of PtrUInt;\r\n+\r\n+{$STACKFRAMES ON} // we need a stack frame for the backtrace API calls below\r\n+\r\n+{$ifndef FPC}\r\n+{$ifdef OSWINDOWS}\r\n+{$ifndef CPU64}\r\n+\r\n+function CheckAsmX86(xret: PtrUInt): boolean; // naive x86 caller detection\r\n+var\r\n+  i: PtrUInt;\r\n+begin\r\n+  result := true;\r\n+  try\r\n+    if PByte(xret - 5)^ = $E8 then\r\n+      exit;\r\n+    for i := 2 to 7 do\r\n+      if PWord(xret - i)^ and $3\n... [truncated, 6674 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": 401,
+      "is_merge": false
+    }
+  ]
+}
