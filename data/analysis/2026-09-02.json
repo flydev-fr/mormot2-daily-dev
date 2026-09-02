@@ -1,0 +1,849 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-02",
+  "edition_title": {
+    "en": "Tunnel and certificate locks settle at build 16672",
+    "fr": "Les verrous de tunnel et certificats se stabilisent au build 16672",
+    "zh": "隧道与证书锁修复在 build 16672 稳定",
+    "ru": "Блокировки туннеля и сертификатов стабилизированы в build 16672"
+  },
+  "intro": {
+    "en": "This batch repairs deadlocks and races in tunnel relays, certificate chains, time-zone lookup and POSIX thread-pool shutdown. It also replaces the public TWebSocketProtocol.SetSubprotocol hook, so custom WebSocket protocol subclasses require a source change. Tunnel and Zstandard users should take the final build rather than an intermediate revision.",
+    "fr": "Cette série corrige des interblocages et des courses dans les relais de tunnel, les chaînes de certificats, la recherche de fuseau horaire et l'arrêt du pool de threads POSIX. Elle remplace aussi le point d'extension public TWebSocketProtocol.SetSubprotocol : les sous-classes WebSocket personnalisées nécessitent donc une modification du code source. Les utilisateurs des tunnels et de Zstandard doivent prendre le build final plutôt qu'une révision intermédiaire.",
+    "zh": "本批次修复了隧道中继、证书链、时区查找和 POSIX 线程池关闭中的死锁与竞争。公共扩展点 TWebSocketProtocol.SetSubprotocol 也被替换，因此自定义 WebSocket 协议子类需要修改源码。隧道和 Zstandard 用户应采用最终 build，而不是中间修订。",
+    "ru": "Эта серия исправляет взаимные блокировки и гонки в туннельных ретрансляторах, цепочках сертификатов, поиске часового пояса и завершении POSIX-пула потоков. Публичный метод расширения TWebSocketProtocol.SetSubprotocol также заменён, поэтому пользовательские подклассы WebSocket требуют изменения исходного кода. Пользователям туннелей и Zstandard следует брать финальный build, а не промежуточную ревизию."
+  },
+  "tldr": {
+    "en": [
+      "Land on 2.4.16672: tunnel synchronization continues through the final commit, after BSD and Delphi follow-up fixes.",
+      "Custom TWebSocketProtocol subclasses must replace SetSubprotocol overrides with IsSubprotocol and, when setup is required, SetName.",
+      "TEccCertificateChain.ValidateItems no longer locks itself; callers must serialize it, while SaveToBinary now takes a write lock.",
+      "POSIX TSynThreadPool now uses an O(1) circular queue and a shutdown path that rejects or aborts contexts safely.",
+      "Concurrent TAlgoZstd calls create transient contexts instead of blocking behind one shared context; the unit remains explicitly unfinished."
+    ],
+    "fr": [
+      "Adoptez 2.4.16672 : la synchronisation des tunnels évolue jusqu'au dernier commit, après des correctifs BSD et Delphi.",
+      "Les sous-classes personnalisées de TWebSocketProtocol doivent remplacer SetSubprotocol par IsSubprotocol et, si une configuration est nécessaire, SetName.",
+      "TEccCertificateChain.ValidateItems ne se verrouille plus lui-même ; les appelants doivent le sérialiser, tandis que SaveToBinary prend désormais un verrou en écriture.",
+      "Sous POSIX, TSynThreadPool utilise maintenant une file circulaire O(1) et un arrêt qui rejette ou annule proprement les contextes.",
+      "Les appels concurrents à TAlgoZstd créent des contextes temporaires au lieu d'attendre un unique contexte partagé ; l'unité reste explicitement inachevée."
+    ],
+    "zh": [
+      "应落在 2.4.16672：隧道同步一直调整到最终提交，中间还包含 BSD 与 Delphi 的后续修复。",
+      "自定义 TWebSocketProtocol 子类必须将 SetSubprotocol 重写改为 IsSubprotocol，并在需要初始化时重写 SetName。",
+      "TEccCertificateChain.ValidateItems 不再自行加锁；调用方必须串行化，而 SaveToBinary 现在使用写锁。",
+      "POSIX TSynThreadPool 现在使用 O(1) 环形队列，并在关闭时安全拒绝或中止上下文。",
+      "并发 TAlgoZstd 调用会创建临时上下文，不再阻塞于单个共享上下文；该单元仍明确标记为未完成。"
+    ],
+    "ru": [
+      "Переходите на 2.4.16672: синхронизация туннелей менялась до последнего коммита после дополнительных исправлений BSD и Delphi.",
+      "В пользовательских подклассах TWebSocketProtocol нужно заменить переопределения SetSubprotocol на IsSubprotocol и, при необходимости настройки, SetName.",
+      "TEccCertificateChain.ValidateItems больше не блокирует себя; вызовы нужно сериализовать, а SaveToBinary теперь берёт write lock.",
+      "POSIX TSynThreadPool теперь использует кольцевую очередь O(1) и безопасно отклоняет или отменяет контексты при завершении.",
+      "Параллельные вызовы TAlgoZstd создают временные контексты вместо ожидания одного общего; модуль по-прежнему явно отмечен как незавершённый."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Use build 2.4.16672 for tunnel, POSIX thread-pool, ECC certificate-chain or Zstandard workloads. Do not stop on the intermediate tunnel sequence. Before rebuilding, grep custom WebSocket protocol classes for SetSubprotocol and certificate workflows for concurrent ValidateItems calls.",
+    "fr": "Utilisez le build 2.4.16672 pour les tunnels, le pool de threads POSIX, les chaînes de certificats ECC ou Zstandard. Ne vous arrêtez pas au milieu de la série concernant les tunnels. Avant de reconstruire, recherchez SetSubprotocol dans les protocoles WebSocket personnalisés et les appels concurrents à ValidateItems dans les traitements de certificats.",
+    "zh": "隧道、POSIX 线程池、ECC 证书链或 Zstandard 工作负载应使用 build 2.4.16672，不要停在隧道修复序列的中间版本。重新构建前，请在自定义 WebSocket 协议类中搜索 SetSubprotocol，并检查证书流程中的并发 ValidateItems 调用。",
+    "ru": "Для туннелей, POSIX-пула потоков, цепочек ECC-сертификатов и Zstandard используйте build 2.4.16672. Не останавливайтесь на промежуточной ревизии туннельной серии. Перед сборкой найдите SetSubprotocol в пользовательских WebSocket-протоколах и параллельные вызовы ValidateItems в обработке сертификатов."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16660",
+        "to_build": "2.4.16667",
+        "why": "The first non-blocking TAlgoZstd context rewrite was completed by lazy shared-context initialization in build 16668."
+      },
+      {
+        "from_build": "2.4.16662",
+        "to_build": "2.4.16671",
+        "why": "Tunnel locking, callback release, BSD initialization, Delphi compilation and relay deletion logic continued changing through build 16672."
+      },
+      {
+        "from_build": "2.4.16664",
+        "to_build": "2.4.16670",
+        "why": "The POSIX thread-pool lock and queue changes were followed by the safer termination and TaskAbort path in build 16671."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "17f74f8129f07e27df4e9b952acc0ec8e2915503",
+          "fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea"
+        ],
+        "why": "Address the two source and concurrency contract changes first: WebSocket overrides and ValidateItems serialization."
+      },
+      {
+        "shas": [
+          "4be92b7a4ef633830bbd3337d8ab1179d56a4483",
+          "0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786",
+          "aef05e96dcd947c2dd0a82818c47a449f2ba99bd"
+        ],
+        "why": "Take the complete tunnel repair sequence and end on the edition head."
+      },
+      {
+        "shas": [
+          "6f064610e7c4922a6034bb4ab929ba535f944038",
+          "76f15a8639aef77cfba3bc28da4b7f2d53659b6c"
+        ],
+        "why": "Then take the POSIX queue optimization together with its shutdown follow-up."
+      }
+    ]
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Tunnel synchronization repair",
+        "fr": "Réparation de la synchronisation des tunnels",
+        "zh": "隧道同步修复",
+        "ru": "Исправление синхронизации туннелей"
+      },
+      "summary": {
+        "en": "The tunnel series moves callbacks outside list and relay locks, adds safe interface extraction, switches accept waits to an OS-assisted lock, repairs BSD initialization and Delphi compilation, and finishes with separate session locking in build 16672.",
+        "fr": "La série sur les tunnels déplace les callbacks hors des verrous de liste et de relais, ajoute une extraction sûre des interfaces, utilise un verrou assisté par l'OS pour l'attente d'acceptation, corrige l'initialisation BSD et la compilation Delphi, puis sépare le verrou de session dans le build 16672.",
+        "zh": "隧道系列将回调移出列表和中继锁，增加安全的接口提取，使用操作系统辅助锁等待 accept，修复 BSD 初始化与 Delphi 编译，并在 build 16672 中分离会话锁。",
+        "ru": "Туннельная серия выносит callbacks за пределы блокировок списка и ретранслятора, добавляет безопасное извлечение интерфейса, применяет системную блокировку при ожидании accept, исправляет BSD-инициализацию и Delphi-сборку и завершает разделением блокировки сессий в build 16672."
+      },
+      "shas": [
+        "4be92b7a4ef633830bbd3337d8ab1179d56a4483",
+        "75bf766051bb3701c90b3b2baad2a815c3d2e928",
+        "428ee2219b51700f11f86d88909fa580c28c78fe",
+        "0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786",
+        "804bc9700313eaf13b4ad09b594e699ab7a790b1",
+        "aef05e96dcd947c2dd0a82818c47a449f2ba99bd"
+      ]
+    },
+    {
+      "title": {
+        "en": "POSIX thread-pool queue and shutdown",
+        "fr": "File et arrêt du pool de threads POSIX",
+        "zh": "POSIX 线程池队列与关闭",
+        "ru": "Очередь и завершение POSIX-пула потоков"
+      },
+      "summary": {
+        "en": "TSynThreadPool replaces its moving pending array with a circular FIFO and coordinates termination under the pending lock so new work cannot race shutdown.",
+        "fr": "TSynThreadPool remplace son tableau mobile de tâches en attente par une FIFO circulaire et coordonne l'arrêt sous le verrou de la file afin qu'aucun nouveau travail ne puisse entrer en course avec la fermeture.",
+        "zh": "TSynThreadPool 用环形 FIFO 替换移动式待处理数组，并在待处理锁下协调终止，防止新任务与关闭过程发生竞争。",
+        "ru": "TSynThreadPool заменяет перемещаемый массив ожидания кольцевой FIFO-очередью и координирует завершение под блокировкой очереди, исключая гонку новой работы с остановкой."
+      },
+      "shas": [
+        "844e8029aa4750850d65e632909632c4d3f0031c",
+        "6f064610e7c4922a6034bb4ab929ba535f944038",
+        "76f15a8639aef77cfba3bc28da4b7f2d53659b6c"
+      ]
+    },
+    {
+      "title": {
+        "en": "Certificate and lookup thread safety",
+        "fr": "Sûreté des certificats et recherches concurrentes",
+        "zh": "证书与查找线程安全",
+        "ru": "Потокобезопасность сертификатов и поиска"
+      },
+      "summary": {
+        "en": "ECC serialization now protects its temporary certificate mutation, ValidateItems avoids a nested-lock deadlock but becomes caller-serialized, and TSynTimeZone protects its last-zone cache separately.",
+        "fr": "La sérialisation ECC protège désormais sa mutation temporaire de certificat, ValidateItems évite un interblocage de verrous imbriqués mais doit être sérialisé par l'appelant, et TSynTimeZone protège séparément son cache du dernier fuseau.",
+        "zh": "ECC 序列化现在保护临时证书修改；ValidateItems 避免嵌套锁死锁，但需由调用方串行化；TSynTimeZone 则单独保护最近时区缓存。",
+        "ru": "ECC-сериализация теперь защищает временное изменение сертификата, ValidateItems устраняет взаимную блокировку вложенных locks, но требует сериализации вызывающим кодом, а TSynTimeZone отдельно защищает кэш последней зоны."
+      },
+      "shas": [
+        "6c82cf9377f726ee7feb186fb53c3968a4c7bc93",
+        "55fa224e49a2b4285b809bb5d44dea062c2b23ed",
+        "fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "aef05e96dcd947c2dd0a82818c47a449f2ba99bd",
+      "headline": {
+        "en": "Tunnel callbacks are released outside relay and session locks",
+        "fr": "Les callbacks de tunnel sont libérés hors des verrous de relais et de session",
+        "zh": "隧道回调在中继锁和会话锁之外释放",
+        "ru": "Туннельные callbacks освобождаются вне блокировок ретранслятора и сессии"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "In mormot.net.tunnel, TTunnelList now derives from TSynPersistent and owns a dedicated TRWLightLock named fSessionSafe. New Extract removes an ITunnelTransmit while retaining a local reference; Delete and TTunnelRelay.ConsoleDelete release that reference after leaving the lock. ConsoleTunnelSend likewise invokes the remote callback outside fConsoleSafe.",
+        "fr": "Dans mormot.net.tunnel, TTunnelList dérive désormais de TSynPersistent et possède un TRWLightLock dédié nommé fSessionSafe. La nouvelle méthode Extract retire un ITunnelTransmit tout en conservant une référence locale ; Delete et TTunnelRelay.ConsoleDelete libèrent cette référence après avoir quitté le verrou. ConsoleTunnelSend invoque également le callback distant hors de fConsoleSafe.",
+        "zh": "在 mormot.net.tunnel 中，TTunnelList 现在继承 TSynPersistent，并拥有专用的 TRWLightLock fSessionSafe。新增的 Extract 在保留本地引用的同时移除 ITunnelTransmit；Delete 与 TTunnelRelay.ConsoleDelete 离开锁后再释放该引用。ConsoleTunnelSend 也在 fConsoleSafe 之外调用远程回调。",
+        "ru": "В mormot.net.tunnel класс TTunnelList теперь наследуется от TSynPersistent и использует отдельный TRWLightLock fSessionSafe. Новый Extract удаляет ITunnelTransmit, сохраняя локальную ссылку; Delete и TTunnelRelay.ConsoleDelete освобождают её после выхода из блокировки. ConsoleTunnelSend также вызывает удалённый callback вне fConsoleSafe."
+      },
+      "impact": {
+        "en": "Tunnel closure and frame delivery no longer run interface finalizers or remote code while shared relay locks are held, reducing deadlock and re-entrancy risk. Code that subclasses TTunnelList or accesses its inherited Safe property will no longer compile because the base class changed.",
+        "fr": "La fermeture des tunnels et la livraison des trames n'exécutent plus de finaliseur d'interface ni de code distant sous les verrous partagés du relais, ce qui réduit les risques d'interblocage et de réentrance. Le code qui dérive de TTunnelList ou utilise sa propriété Safe héritée ne compile plus, car la classe de base a changé.",
+        "zh": "隧道关闭与帧传递不再在持有共享中继锁时执行接口终结器或远程代码，从而降低死锁和重入风险。继承 TTunnelList 或访问其继承属性 Safe 的代码会因基类变化而无法编译。",
+        "ru": "Закрытие туннеля и доставка кадров больше не запускают финализаторы интерфейсов или удалённый код под общей блокировкой ретранслятора, снижая риск взаимной блокировки и повторного входа. Код, наследующий TTunnelList или использующий унаследованное свойство Safe, перестанет компилироваться из-за смены базового класса."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Land on build 2.4.16672, then grep for TTunnelList subclasses and .Safe access before rebuilding tunnel services.",
+        "fr": "Adoptez le build 2.4.16672, puis recherchez les sous-classes de TTunnelList et les accès à .Safe avant de reconstruire les services de tunnel.",
+        "zh": "采用 build 2.4.16672，并在重新构建隧道服务前搜索 TTunnelList 子类和 .Safe 访问。",
+        "ru": "Перейдите на build 2.4.16672, затем перед сборкой туннельных сервисов найдите подклассы TTunnelList и обращения к .Safe."
+      },
+      "units": ["mormot.net.tunnel"],
+      "api_changes": [
+        {
+          "symbol": "TTunnelList",
+          "change": "signature-changed",
+          "note": {
+            "en": "Its base class changes from TObjectRWLightLock to TSynPersistent; the inherited Safe surface disappears.",
+            "fr": "Sa classe de base passe de TObjectRWLightLock à TSynPersistent ; l'interface Safe héritée disparaît.",
+            "zh": "其基类从 TObjectRWLightLock 改为 TSynPersistent；继承的 Safe 接口随之消失。",
+            "ru": "Базовый класс меняется с TObjectRWLightLock на TSynPersistent; унаследованный интерфейс Safe исчезает."
+          }
+        },
+        {
+          "symbol": "TTunnelList.Extract",
+          "change": "added",
+          "note": {
+            "en": "Removes a session and returns its ITunnelTransmit so release can happen outside the lock.",
+            "fr": "Retire une session et renvoie son ITunnelTransmit afin de le libérer hors du verrou.",
+            "zh": "移除会话并返回其 ITunnelTransmit，以便在锁外释放。",
+            "ru": "Удаляет сессию и возвращает её ITunnelTransmit для освобождения вне блокировки."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "76f15a8639aef77cfba3bc28da4b7f2d53659b6c",
+      "headline": {
+        "en": "POSIX thread-pool shutdown closes its enqueue race",
+        "fr": "L'arrêt du pool POSIX ferme la course avec l'ajout de tâches",
+        "zh": "POSIX 线程池关闭消除入队竞争",
+        "ru": "Завершение POSIX-пула устраняет гонку с постановкой задач"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynThreadPool renames its POSIX queue lock to fPendingSafe and sets fTerminated while holding it. Enqueue checks termination under the same lock, workers abort a captured context when stopping, and DoTaskAbort makes TaskAbort exception-safe. TSynParallelProcess also documents and performs the BSD-required TOSLightLock initialization.",
+        "fr": "TSynThreadPool renomme son verrou de file POSIX en fPendingSafe et définit fTerminated tout en le maintenant. Enqueue vérifie l'arrêt sous le même verrou, les workers annulent le contexte capturé lors de l'arrêt et DoTaskAbort protège TaskAbort contre les exceptions. TSynParallelProcess initialise aussi explicitement TOSLightLock comme l'exige BSD.",
+        "zh": "TSynThreadPool 将 POSIX 队列锁改名为 fPendingSafe，并在持锁时设置 fTerminated。Enqueue 在同一锁下检查终止状态，worker 在停止时中止已取得的上下文，DoTaskAbort 则保证 TaskAbort 的异常安全。TSynParallelProcess 也明确执行 BSD 所需的 TOSLightLock 初始化。",
+        "ru": "TSynThreadPool переименовывает POSIX-блокировку очереди в fPendingSafe и устанавливает fTerminated под этой же блокировкой. Enqueue проверяет завершение внутри неё, workers отменяют захваченный контекст при остановке, а DoTaskAbort делает TaskAbort безопасным при исключениях. TSynParallelProcess также явно инициализирует TOSLightLock, как требуется на BSD."
+      },
+      "impact": {
+        "en": "A producer can no longer enqueue work into a pool that is already entering destruction, and queued contexts are less likely to leak or deadlock shutdown. This matters to POSIX servers built on TSynThreadPool; Windows IOCP keeps its separate path.",
+        "fr": "Un producteur ne peut plus ajouter une tâche à un pool déjà en destruction, et les contextes en attente risquent moins de fuir ou de bloquer l'arrêt. Cela concerne les serveurs POSIX basés sur TSynThreadPool ; Windows IOCP conserve son chemin distinct.",
+        "zh": "生产者无法再向已进入销毁流程的线程池入队，待处理上下文也更不易泄漏或阻塞关闭。此变化影响基于 TSynThreadPool 的 POSIX 服务器；Windows IOCP 仍走独立路径。",
+        "ru": "Производитель больше не может поставить работу в пул, уже начавший уничтожение, а ожидающие контексты реже утекут или заблокируют остановку. Это важно для POSIX-серверов на TSynThreadPool; Windows IOCP использует отдельный путь."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade POSIX services that destroy active thread pools and exercise shutdown under load.",
+        "fr": "Mettez à jour les services POSIX qui détruisent des pools actifs et testez l'arrêt sous charge.",
+        "zh": "升级会销毁活动线程池的 POSIX 服务，并在负载下测试关闭。",
+        "ru": "Обновите POSIX-сервисы, уничтожающие активные пулы, и проверьте завершение под нагрузкой."
+      },
+      "units": ["mormot.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6f064610e7c4922a6034bb4ab929ba535f944038",
+      "headline": {
+        "en": "POSIX pending work now leaves the queue in constant time",
+        "fr": "La sortie de file des tâches POSIX devient constante",
+        "zh": "POSIX 待处理任务实现常数时间出队",
+        "ru": "Извлечение POSIX-задач из очереди теперь выполняется за O(1)"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The POSIX TSynThreadPool pending array becomes a fixed circular FIFO tracked by fPendingFirst and fPendingLast. PopPendingContext advances an index instead of moving every remaining pointer, and the queue is allocated once from QueueLength.",
+        "fr": "Le tableau d'attente POSIX de TSynThreadPool devient une FIFO circulaire fixe suivie par fPendingFirst et fPendingLast. PopPendingContext avance un index au lieu de déplacer tous les pointeurs restants, et la file est allouée une seule fois depuis QueueLength.",
+        "zh": "POSIX TSynThreadPool 待处理数组改为由 fPendingFirst 与 fPendingLast 跟踪的固定环形 FIFO。PopPendingContext 只推进索引，不再移动所有剩余指针；队列按 QueueLength 一次性分配。",
+        "ru": "Массив ожидания POSIX TSynThreadPool превращён в фиксированную кольцевую FIFO с индексами fPendingFirst и fPendingLast. PopPendingContext сдвигает индекс вместо перемещения всех оставшихся указателей, а очередь один раз выделяется по QueueLength."
+      },
+      "impact": {
+        "en": "Dequeuing no longer scales with backlog size, shortening the internal lock hold time during bursts. The change is POSIX-only and does not alter the TSynThreadPool public API.",
+        "fr": "Le retrait d'une tâche ne dépend plus de la taille de la file, ce qui réduit la durée du verrou interne lors des pics. Le changement concerne seulement POSIX et ne modifie pas l'API publique de TSynThreadPool.",
+        "zh": "出队成本不再随积压量增长，可缩短突发流量下内部锁的持有时间。该变化仅限 POSIX，不改变 TSynThreadPool 公共 API。",
+        "ru": "Стоимость извлечения больше не зависит от размера накопленной очереди, сокращая удержание внутренней блокировки при всплесках. Изменение относится только к POSIX и не меняет публичный API TSynThreadPool."
+      },
+      "action": "none",
+      "units": ["mormot.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "804bc9700313eaf13b4ad09b594e699ab7a790b1",
+      "headline": {
+        "en": "Delphi builds catch up with the evolving tunnel types",
+        "fr": "Les builds Delphi suivent l'évolution des types de tunnel",
+        "zh": "Delphi 构建适配演进中的隧道类型",
+        "ru": "Delphi-сборки адаптированы к изменившимся туннельным типам"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.net.tunnel introduces the public ITunnelTransmits dynamic-array alias, uses it for TTunnelList storage and local copies, changes Get's interface parameter to out, and replaces a non-inlineable TRAIL_SIZE reference inside FrameSession with SizeOf(TTunnelSession).",
+        "fr": "mormot.net.tunnel introduit l'alias public de tableau dynamique ITunnelTransmits, l'utilise pour le stockage de TTunnelList et les copies locales, passe le paramètre d'interface de Get à out et remplace dans FrameSession une référence TRAIL_SIZE non inlineable par SizeOf(TTunnelSession).",
+        "zh": "mormot.net.tunnel 新增公共动态数组别名 ITunnelTransmits，用于 TTunnelList 存储和本地副本；Get 的接口参数改为 out；FrameSession 中不可内联的 TRAIL_SIZE 引用改为 SizeOf(TTunnelSession)。",
+        "ru": "mormot.net.tunnel добавляет публичный псевдоним динамического массива ITunnelTransmits, использует его для хранения TTunnelList и локальных копий, меняет параметр интерфейса Get на out и заменяет не встраиваемую ссылку TRAIL_SIZE в FrameSession на SizeOf(TTunnelSession)."
+      },
+      "impact": {
+        "en": "The preceding tunnel revision did not compile with Delphi. This commit restores Delphi compatibility, but tunnel logic changes again in build 16672, so consumers should use the edition head.",
+        "fr": "La révision précédente des tunnels ne compilait pas avec Delphi. Ce commit rétablit la compatibilité Delphi, mais la logique du tunnel change encore dans le build 16672 ; les utilisateurs doivent donc prendre la tête de l'édition.",
+        "zh": "前一个隧道修订无法使用 Delphi 编译。此提交恢复 Delphi 兼容性，但隧道逻辑在 build 16672 中再次变化，因此应采用本期头部版本。",
+        "ru": "Предыдущая туннельная ревизия не компилировалась Delphi. Этот commit восстанавливает совместимость, но логика туннеля снова меняется в build 16672, поэтому следует использовать вершину выпуска."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Do not stop on build 16668; compile Delphi tunnel projects against build 16672.",
+        "fr": "Ne vous arrêtez pas au build 16668 ; compilez les projets de tunnel Delphi avec le build 16672.",
+        "zh": "不要停在 build 16668；请使用 build 16672 编译 Delphi 隧道项目。",
+        "ru": "Не останавливайтесь на build 16668; собирайте Delphi-проекты туннелей с build 16672."
+      },
+      "units": ["mormot.net.tunnel"],
+      "api_changes": [
+        {
+          "symbol": "ITunnelTransmits",
+          "change": "added",
+          "note": {
+            "en": "Public alias for array of ITunnelTransmit.",
+            "fr": "Alias public pour array of ITunnelTransmit.",
+            "zh": "array of ITunnelTransmit 的公共别名。",
+            "ru": "Публичный псевдоним для array of ITunnelTransmit."
+          }
+        },
+        {
+          "symbol": "TTunnelList.Get",
+          "change": "signature-changed",
+          "note": {
+            "en": "The ITunnelTransmit output parameter changes from var to out.",
+            "fr": "Le paramètre de sortie ITunnelTransmit passe de var à out.",
+            "zh": "ITunnelTransmit 输出参数从 var 改为 out。",
+            "ru": "Выходной параметр ITunnelTransmit меняется с var на out."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786",
+      "headline": {
+        "en": "Follow-up closes three lock initialization and nesting defects",
+        "fr": "Un suivi ferme trois défauts d'initialisation et d'imbrication des verrous",
+        "zh": "后续提交修复三处锁初始化与嵌套缺陷",
+        "ru": "Дополнительный commit устраняет три дефекта инициализации и вложенности locks"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TAlgoZstd now creates its shared compression and decompression contexts lazily while holding their locks. THttpPeerCrypt explicitly initializes and finalizes its new TOSLightLock for BSD. TTunnelList.DeleteFrom copies session IDs under the source read lock and performs deletions after unlocking, avoiding nested list locks.",
+        "fr": "TAlgoZstd crée désormais paresseusement ses contextes partagés de compression et décompression sous leurs verrous. THttpPeerCrypt initialise et finalise explicitement son nouveau TOSLightLock pour BSD. TTunnelList.DeleteFrom copie les identifiants de session sous le verrou de lecture source puis effectue les suppressions après déverrouillage, évitant les verrous de listes imbriqués.",
+        "zh": "TAlgoZstd 现在在持有对应锁时延迟创建共享压缩与解压上下文。THttpPeerCrypt 为 BSD 明确初始化和结束新的 TOSLightLock。TTunnelList.DeleteFrom 在源读锁下复制会话 ID，解锁后再删除，避免嵌套列表锁。",
+        "ru": "TAlgoZstd теперь лениво создаёт общие контексты сжатия и распаковки под соответствующими locks. THttpPeerCrypt явно инициализирует и завершает новый TOSLightLock для BSD. TTunnelList.DeleteFrom копирует идентификаторы сессий под read lock исходного списка и удаляет их после разблокировки, избегая вложенных блокировок списков."
+      },
+      "impact": {
+        "en": "This repairs regressions introduced earlier in the same batch: premature Zstandard context creation, an uninitialized BSD peer-client lock, and a possible tunnel list lock cycle. Builds 16660-16667 are not suitable landing points for those components.",
+        "fr": "Ce commit corrige des régressions introduites plus tôt dans la même série : création prématurée des contextes Zstandard, verrou du client pair non initialisé sous BSD et cycle possible entre verrous de listes de tunnels. Les builds 16660 à 16667 ne sont pas de bons points d'arrêt pour ces composants.",
+        "zh": "此提交修复同批次较早引入的回归：Zstandard 上下文过早创建、BSD 对等客户端锁未初始化，以及隧道列表锁可能形成循环。对于这些组件，build 16660-16667 不适合作为落点。",
+        "ru": "Исправлены регрессии из ранних commit этой серии: преждевременное создание контекстов Zstandard, неинициализированная блокировка peer-клиента на BSD и возможный цикл блокировок туннельных списков. Builds 16660-16667 не подходят как конечная точка для этих компонентов."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Skip the affected intermediate builds and use 2.4.16672 for Zstandard, peer-cache or tunnel deployments.",
+        "fr": "Ignorez les builds intermédiaires concernés et utilisez 2.4.16672 pour les déploiements Zstandard, peer-cache ou tunnel.",
+        "zh": "跳过受影响的中间 build，Zstandard、peer-cache 或隧道部署应使用 2.4.16672。",
+        "ru": "Пропустите затронутые промежуточные builds и используйте 2.4.16672 для Zstandard, peer-cache и туннелей."
+      },
+      "units": ["mormot.lib.zstd", "mormot.net.server", "mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "428ee2219b51700f11f86d88909fa580c28c78fe",
+      "headline": {
+        "en": "BSD tunnel threads now initialize their OS lock",
+        "fr": "Les threads de tunnel BSD initialisent désormais leur verrou OS",
+        "zh": "BSD 隧道线程现会初始化操作系统锁",
+        "ru": "Туннельные потоки BSD теперь инициализируют системную блокировку"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "TTunnelLocalThread.Create calls fSafe.Init and its destructor calls fSafe.Done. On BSD, TOSLightLock maps to TRtlCriticalSection and cannot rely on zero-filled class storage alone. The ORM diff only clarifies the same existing requirement around TOrmPropertiesAbstract.fSafe.",
+        "fr": "TTunnelLocalThread.Create appelle fSafe.Init et son destructeur appelle fSafe.Done. Sous BSD, TOSLightLock correspond à TRtlCriticalSection et ne peut pas s'appuyer uniquement sur la mémoire de classe initialisée à zéro. Le diff ORM précise seulement la même exigence déjà respectée pour TOrmPropertiesAbstract.fSafe.",
+        "zh": "TTunnelLocalThread.Create 调用 fSafe.Init，析构函数调用 fSafe.Done。在 BSD 上，TOSLightLock 映射为 TRtlCriticalSection，不能只依赖类存储的零初始化。ORM 差异仅说明 TOrmPropertiesAbstract.fSafe 已遵守的同一要求。",
+        "ru": "TTunnelLocalThread.Create вызывает fSafe.Init, а destructor — fSafe.Done. На BSD TOSLightLock отображается в TRtlCriticalSection и не может полагаться только на нулевую память экземпляра. Изменение ORM лишь поясняет уже соблюдаемое требование для TOrmPropertiesAbstract.fSafe."
+      },
+      "impact": {
+        "en": "BSD tunnel creation could otherwise operate on an uninitialized critical section. Later commits continue changing tunnel code, so this fix should be consumed through build 16672.",
+        "fr": "Sous BSD, la création d'un tunnel pouvait sinon utiliser une section critique non initialisée. Les commits suivants modifient encore le code de tunnel ; ce correctif doit donc être pris via le build 16672.",
+        "zh": "否则 BSD 隧道创建可能操作未初始化的临界区。后续提交仍继续修改隧道代码，因此应通过 build 16672 获取此修复。",
+        "ru": "Без этого создание туннеля на BSD могло работать с неинициализированной critical section. Последующие commits продолжают менять туннельный код, поэтому исправление следует брать в build 16672."
+      },
+      "action": "none",
+      "units": ["mormot.net.tunnel", "mormot.orm.base"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a5e68484e7f8341aee3f7d4f9e42a8ca3155ab9e",
+      "headline": {
+        "en": "Peer-cache client contention moves to an OS-assisted lock",
+        "fr": "La contention du client peer-cache passe à un verrou assisté par l'OS",
+        "zh": "Peer-cache 客户端竞争改用操作系统辅助锁",
+        "ru": "Конкуренция peer-cache клиента переводится на системную блокировку"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpPeerCrypt.fClientSafe changes from TLightLock to TOSLightLock, allowing contended waits to use the platform futex-style implementation instead of pure spinning.",
+        "fr": "THttpPeerCrypt.fClientSafe passe de TLightLock à TOSLightLock, permettant aux attentes sous contention d'utiliser l'implémentation de type futex de la plateforme au lieu d'une attente active pure.",
+        "zh": "THttpPeerCrypt.fClientSafe 从 TLightLock 改为 TOSLightLock，使竞争等待使用平台的 futex 类实现，而不是纯自旋。",
+        "ru": "THttpPeerCrypt.fClientSafe меняется с TLightLock на TOSLightLock, поэтому ожидание при конкуренции использует платформенный futex-подобный механизм вместо чистого spin."
+      },
+      "impact": {
+        "en": "Background direct downloads should consume less CPU when several threads contend for the shared HTTP client. This revision lacked the explicit BSD Init and Done calls added in build 16668.",
+        "fr": "Les téléchargements directs en arrière-plan devraient consommer moins de CPU lorsque plusieurs threads se disputent le client HTTP partagé. Cette révision ne contient pas les appels Init et Done explicites pour BSD ajoutés dans le build 16668.",
+        "zh": "多个线程争用共享 HTTP 客户端时，后台直连下载应减少 CPU 消耗。此修订缺少 build 16668 增加的 BSD 显式 Init 与 Done 调用。",
+        "ru": "Фоновые прямые загрузки должны потреблять меньше CPU при конкуренции потоков за общий HTTP-клиент. В этой ревизии ещё нет явных Init и Done для BSD, добавленных в build 16668."
+      },
+      "action": "none",
+      "units": ["mormot.net.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "907c92f53802625839946fae515a7a90661c2b11",
+      "headline": {
+        "en": "SQL proxy transaction locking adopts the lighter OS primitive",
+        "fr": "Le verrouillage des transactions du proxy SQL adopte le primitive OS léger",
+        "zh": "SQL 代理事务锁改用更轻量的操作系统原语",
+        "ru": "Блокировка транзакций SQL-прокси переходит на облегчённый системный примитив"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSqlDBProxyConnectionProtocol.fSafe changes from TOSLock to TOSLightLock, which maps to the lighter futex-backed mutex on Linux and Windows 8 or later. No transaction algorithm or public method changes.",
+        "fr": "TSqlDBProxyConnectionProtocol.fSafe passe de TOSLock à TOSLightLock, qui correspond au mutex plus léger basé sur futex sous Linux et Windows 8 ou ultérieur. Aucun algorithme de transaction ni aucune méthode publique ne change.",
+        "zh": "TSqlDBProxyConnectionProtocol.fSafe 从 TOSLock 改为 TOSLightLock，在 Linux 和 Windows 8 及更高版本上对应更轻量的 futex 支持互斥量。事务算法与公共方法均未改变。",
+        "ru": "TSqlDBProxyConnectionProtocol.fSafe меняется с TOSLock на TOSLightLock, соответствующий более лёгкому futex-backed mutex на Linux и Windows 8+. Алгоритм транзакций и публичные методы не меняются."
+      },
+      "impact": {
+        "en": "Remote SQL proxy transactions may pay less lock overhead under light contention. There is no source migration or behavior change for application code.",
+        "fr": "Les transactions du proxy SQL distant peuvent réduire le coût du verrou sous faible contention. Il n'y a aucune migration de source ni modification de comportement pour le code applicatif.",
+        "zh": "远程 SQL 代理事务在轻度竞争下可能降低锁开销。应用代码无需迁移，行为也不变。",
+        "ru": "Удалённые транзакции SQL-прокси могут иметь меньшие накладные расходы при слабой конкуренции. Миграция исходного кода и изменение поведения приложений не требуются."
+      },
+      "action": "none",
+      "units": ["mormot.db.proxy"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "844e8029aa4750850d65e632909632c4d3f0031c",
+      "headline": {
+        "en": "POSIX thread-pool coordination returns to a short spin lock",
+        "fr": "La coordination du pool POSIX revient à un verrou spin court",
+        "zh": "POSIX 线程池协调恢复短时自旋锁",
+        "ru": "Координация POSIX-пула возвращается к короткой spin-блокировке"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The internal POSIX TSynThreadPool.fSafe field changes from TOSLightLock to the four-byte TLightLock, removing the associated Init and Done calls. The protected critical sections only assign pointers and queue metadata.",
+        "fr": "Le champ POSIX interne TSynThreadPool.fSafe passe de TOSLightLock au TLightLock de quatre octets, supprimant les appels Init et Done associés. Les sections critiques protégées ne font qu'assigner des pointeurs et des métadonnées de file.",
+        "zh": "内部 POSIX TSynThreadPool.fSafe 从 TOSLightLock 改为四字节 TLightLock，并移除相关 Init 与 Done 调用。受保护的临界区只分配指针和队列元数据。",
+        "ru": "Внутреннее поле POSIX TSynThreadPool.fSafe меняется с TOSLightLock на четырёхбайтовый TLightLock, а связанные Init и Done удаляются. Защищённые участки только назначают указатели и метаданные очереди."
+      },
+      "impact": {
+        "en": "Very short POSIX pool operations avoid OS-assisted lock overhead. The queue and shutdown logic is reworked again in builds 16670 and 16671, so this is not a standalone landing point.",
+        "fr": "Les opérations très courtes du pool POSIX évitent le coût d'un verrou assisté par l'OS. La file et l'arrêt sont de nouveau remaniés dans les builds 16670 et 16671 ; ce build n'est donc pas un point d'arrêt autonome.",
+        "zh": "极短的 POSIX 线程池操作可避免操作系统辅助锁开销。队列与关闭逻辑在 build 16670 和 16671 中再次调整，因此此版本不应单独作为落点。",
+        "ru": "Очень короткие операции POSIX-пула избегают накладных расходов системной блокировки. Очередь и завершение снова переработаны в builds 16670 и 16671, поэтому это не самостоятельная конечная точка."
+      },
+      "action": "none",
+      "units": ["mormot.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "75bf766051bb3701c90b3b2baad2a815c3d2e928",
+      "headline": {
+        "en": "Tunnel accept waits stop burning CPU under contention",
+        "fr": "L'attente d'acceptation des tunnels réduit l'usage CPU sous contention",
+        "zh": "隧道 accept 等待在竞争时不再持续消耗 CPU",
+        "ru": "Ожидание tunnel accept больше не расходует CPU при конкуренции"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TTunnelLocalThread.fSafe changes from TLightLock to TOSLightLock. OnReceived can therefore wait through the Linux or modern Windows futex path while the background thread is blocked in accept.",
+        "fr": "TTunnelLocalThread.fSafe passe de TLightLock à TOSLightLock. OnReceived peut ainsi attendre via le chemin futex de Linux ou de Windows récent pendant que le thread d'arrière-plan est bloqué dans accept.",
+        "zh": "TTunnelLocalThread.fSafe 从 TLightLock 改为 TOSLightLock。当后台线程阻塞在 accept 时，OnReceived 可通过 Linux 或现代 Windows 的 futex 路径等待。",
+        "ru": "TTunnelLocalThread.fSafe меняется с TLightLock на TOSLightLock. Пока фоновый поток заблокирован в accept, OnReceived может ожидать через futex-путь Linux или современной Windows."
+      },
+      "impact": {
+        "en": "Early incoming tunnel frames no longer spin on a CPU while waiting for the local socket to be accepted. This change required the BSD initialization fix in the next build.",
+        "fr": "Les premières trames du tunnel ne tournent plus activement sur le CPU en attendant l'acceptation du socket local. Ce changement nécessitait le correctif d'initialisation BSD du build suivant.",
+        "zh": "早到的隧道帧等待本地套接字被接受时不再占用 CPU 自旋。此变化需要下一个 build 中的 BSD 初始化修复。",
+        "ru": "Ранние туннельные кадры больше не крутятся на CPU в ожидании принятия локального сокета. Изменение потребовало исправления BSD-инициализации в следующем build."
+      },
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4be92b7a4ef633830bbd3337d8ab1179d56a4483",
+      "headline": {
+        "en": "Tunnel lists no longer invoke remote code while read-locked",
+        "fr": "Les listes de tunnels n'invoquent plus de code distant sous verrou de lecture",
+        "zh": "隧道列表不再在读锁内调用远程代码",
+        "ru": "Туннельные списки больше не вызывают удалённый код под read lock"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TTunnelList adds Get to copy an ITunnelTransmit under its read lock. TunnelSend, GetInfo and GetAllInfo then call interface methods after unlocking; GetAllInfo snapshots both interfaces and session IDs. DeleteFrom rejects self-deletion, and later follow-ups further refine this sequence.",
+        "fr": "TTunnelList ajoute Get afin de copier un ITunnelTransmit sous son verrou de lecture. TunnelSend, GetInfo et GetAllInfo appellent ensuite les méthodes d'interface après déverrouillage ; GetAllInfo prend un instantané des interfaces et des identifiants de session. DeleteFrom refuse l'auto-suppression, et les suivis ultérieurs affinent encore cette série.",
+        "zh": "TTunnelList 新增 Get，在读锁下复制 ITunnelTransmit。TunnelSend、GetInfo 与 GetAllInfo 随后在解锁后调用接口方法；GetAllInfo 同时快照接口和会话 ID。DeleteFrom 拒绝对自身删除，后续提交还继续完善该流程。",
+        "ru": "TTunnelList добавляет Get для копирования ITunnelTransmit под read lock. TunnelSend, GetInfo и GetAllInfo затем вызывают методы интерфейса после разблокировки; GetAllInfo делает снимок интерфейсов и идентификаторов сессий. DeleteFrom запрещает удаление из самого себя, а последующие commits дополнительно уточняют эту последовательность."
+      },
+      "impact": {
+        "en": "A callback that re-enters the list or releases another interface can no longer deadlock the list's reader-writer lock. Because this area keeps changing through build 16672, test relay creation, frame delivery and teardown only on the final revision.",
+        "fr": "Un callback qui rentre de nouveau dans la liste ou libère une autre interface ne peut plus bloquer le verrou lecture-écriture de la liste. Cette zone évoluant jusqu'au build 16672, testez la création du relais, la livraison des trames et l'arrêt uniquement sur la révision finale.",
+        "zh": "回调重入列表或释放其他接口时，不再会死锁列表的读写锁。由于该区域一直变化到 build 16672，应仅在最终修订上测试中继创建、帧传递和关闭。",
+        "ru": "Callback, повторно входящий в список или освобождающий другой интерфейс, больше не может заблокировать read-write lock списка. Поскольку область менялась до build 16672, проверяйте создание ретранслятора, передачу кадров и завершение только на финальной ревизии."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Use this fix only as part of the complete sequence ending at build 16672 and run concurrent tunnel lifecycle tests.",
+        "fr": "Utilisez ce correctif uniquement dans la série complète se terminant au build 16672 et exécutez des tests concurrents du cycle de vie des tunnels.",
+        "zh": "仅将此修复作为以 build 16672 结束的完整序列的一部分，并运行并发隧道生命周期测试。",
+        "ru": "Используйте исправление только в полной серии до build 16672 и выполните конкурентные тесты жизненного цикла туннеля."
+      },
+      "units": ["mormot.net.tunnel"],
+      "api_changes": [
+        {
+          "symbol": "TTunnelList.Get",
+          "change": "added",
+          "note": {
+            "en": "Returns a thread-safe local ITunnelTransmit reference for a session.",
+            "fr": "Renvoie une référence locale ITunnelTransmit sûre pour une session.",
+            "zh": "返回会话对应的线程安全本地 ITunnelTransmit 引用。",
+            "ru": "Возвращает потокобезопасную локальную ссылку ITunnelTransmit для сессии."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ccde07c6ce4d26df2bfef5569c01a34dd9482620",
+      "headline": {
+        "en": "Lock cleanup keeps runtime behavior unchanged",
+        "fr": "Le nettoyage des verrous conserve le comportement d'exécution",
+        "zh": "锁清理保持运行时行为不变",
+        "ru": "Очистка блокировок сохраняет поведение времени выполнения"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "Comments and lock scopes are clarified across mormot.core.os, mormot.net.async, mormot.rest.http.server and mormot.soa.server. The async TLS path repeats its Enabled check while holding fGC1.Safe, and the SOA session lookup releases its read lock before returning.",
+        "fr": "Les commentaires et les portées de verrous sont clarifiés dans mormot.core.os, mormot.net.async, mormot.rest.http.server et mormot.soa.server. Le chemin TLS asynchrone répète la vérification Enabled sous fGC1.Safe et la recherche de session SOA libère son verrou de lecture avant de retourner.",
+        "zh": "mormot.core.os、mormot.net.async、mormot.rest.http.server 与 mormot.soa.server 中的注释和锁作用域得到澄清。异步 TLS 路径在持有 fGC1.Safe 时再次检查 Enabled，SOA 会话查找在返回前释放读锁。",
+        "ru": "Комментарии и области блокировок уточнены в mormot.core.os, mormot.net.async, mormot.rest.http.server и mormot.soa.server. Асинхронный TLS-путь повторно проверяет Enabled под fGC1.Safe, а поиск SOA-сессии освобождает read lock перед возвратом."
+      },
+      "impact": {
+        "en": "There is no public API or intended application behavior change. The double-check prevents duplicate TLS setup if several connections enter initialization together.",
+        "fr": "Il n'y a aucune modification d'API publique ni de comportement applicatif prévu. La double vérification empêche une configuration TLS en double si plusieurs connexions entrent ensemble dans l'initialisation.",
+        "zh": "公共 API 与预期应用行为均不变。双重检查可防止多个连接同时进入初始化时重复配置 TLS。",
+        "ru": "Публичный API и предполагаемое поведение приложений не меняются. Повторная проверка предотвращает двойную настройку TLS при одновременной инициализации нескольких соединений."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.net.async", "mormot.rest.http.server", "mormot.soa.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "83c4df20f15661a856c66bcdba97f3ec2b4fd41a",
+      "headline": {
+        "en": "Zstandard calls stop serializing behind one shared context",
+        "fr": "Les appels Zstandard ne se sérialisent plus derrière un contexte unique",
+        "zh": "Zstandard 调用不再排队等待单一共享上下文",
+        "ru": "Вызовы Zstandard больше не сериализуются за одним общим контекстом"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TAlgoZstd preallocates shared compression and decompression contexts and attempts TryLock for each operation. A contending thread creates and frees a transient ZSTD_CCtx or ZSTD_DCtx instead of blocking until the shared context is available.",
+        "fr": "TAlgoZstd préalloue des contextes partagés de compression et décompression et tente TryLock pour chaque opération. Un thread en contention crée puis libère un ZSTD_CCtx ou ZSTD_DCtx temporaire au lieu d'attendre la disponibilité du contexte partagé.",
+        "zh": "TAlgoZstd 预分配共享压缩与解压上下文，并为每次操作尝试 TryLock。竞争线程会创建并释放临时 ZSTD_CCtx 或 ZSTD_DCtx，而不是等待共享上下文。",
+        "ru": "TAlgoZstd заранее выделяет общие контексты сжатия и распаковки и использует TryLock для каждой операции. Конкурирующий поток создаёт и освобождает временный ZSTD_CCtx или ZSTD_DCtx вместо ожидания общего контекста."
+      },
+      "impact": {
+        "en": "Parallel Zstandard operations can run concurrently instead of forming a single lock queue. The unit is still marked unfinished and FPC-only, and build 16668 changes shared-context creation to lazy initialization, so this commit is not a safe standalone target.",
+        "fr": "Les opérations Zstandard parallèles peuvent s'exécuter simultanément au lieu de former une file derrière un verrou unique. L'unité reste marquée inachevée et réservée à FPC, et le build 16668 rend la création du contexte partagé paresseuse ; ce commit n'est donc pas une cible autonome sûre.",
+        "zh": "并行 Zstandard 操作可并发执行，不再形成单一锁队列。该单元仍标记为未完成且仅限 FPC，build 16668 又将共享上下文改为延迟创建，因此此提交不适合作为独立落点。",
+        "ru": "Параллельные операции Zstandard могут выполняться одновременно вместо одной очереди блокировки. Модуль всё ещё отмечен как незавершённый и только для FPC, а build 16668 переводит создание общего контекста на ленивую схему, поэтому этот commit не является безопасной отдельной целью."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "If mormot.lib.zstd is enabled, benchmark and stress it only on build 16668 or later; prefer the edition head.",
+        "fr": "Si mormot.lib.zstd est activé, mesurez-le et testez-le sous charge uniquement à partir du build 16668 ; préférez la tête de l'édition.",
+        "zh": "若启用 mormot.lib.zstd，仅在 build 16668 或更高版本上进行基准与压力测试；优先使用本期头部。",
+        "ru": "Если включён mormot.lib.zstd, выполняйте нагрузочные тесты только на build 16668 или новее; предпочтителен итог выпуска."
+      },
+      "units": ["mormot.lib.zstd"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea",
+      "headline": {
+        "en": "Certificate-chain validation avoids deadlock but becomes caller-serialized",
+        "fr": "La validation de chaîne évite l'interblocage mais doit être sérialisée par l'appelant",
+        "zh": "证书链验证避免死锁，但需由调用方串行化",
+        "ru": "Проверка цепочки устраняет deadlock, но требует сериализации вызывающим кодом"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "TEccCertificateChain.ValidateItems removes its surrounding fSafe.ReadLock because each nested IsValid call obtains the chain lock itself and could deadlock. Its public documentation now explicitly states that ValidateItems is not thread-safe and should run after loading.",
+        "fr": "TEccCertificateChain.ValidateItems supprime son fSafe.ReadLock englobant, car chaque appel imbriqué à IsValid prend lui-même le verrou de la chaîne et pouvait provoquer un interblocage. Sa documentation publique indique désormais explicitement que ValidateItems n'est pas thread-safe et doit être exécuté après le chargement.",
+        "zh": "TEccCertificateChain.ValidateItems 移除外围 fSafe.ReadLock，因为内部每次 IsValid 调用都会自行获取证书链锁，可能导致死锁。公共文档现明确说明 ValidateItems 非线程安全，应在加载后执行。",
+        "ru": "TEccCertificateChain.ValidateItems удаляет внешний fSafe.ReadLock, поскольку каждый вложенный IsValid сам получает блокировку цепочки и мог вызвать взаимную блокировку. Публичная документация теперь явно указывает, что ValidateItems не потокобезопасен и должен выполняться после загрузки."
+      },
+      "impact": {
+        "en": "Validation no longer self-deadlocks, but concurrent mutation or another ValidateItems call can race the unprotected fItems traversal. Backends that expose chain reload and validation concurrently must serialize this method externally.",
+        "fr": "La validation ne s'interbloque plus elle-même, mais une mutation concurrente ou un autre appel à ValidateItems peut entrer en course avec le parcours non protégé de fItems. Les backends qui rechargent et valident une chaîne en parallèle doivent sérialiser cette méthode extérieurement.",
+        "zh": "验证不再自锁，但并发修改或另一个 ValidateItems 调用可能与未保护的 fItems 遍历发生竞争。同时执行证书链重载与验证的后端必须在外部串行化此方法。",
+        "ru": "Проверка больше не блокирует сама себя, но параллельное изменение или другой ValidateItems может вступить в гонку с незащищённым обходом fItems. Backend, одновременно перезагружающий и проверяющий цепочку, должен сериализовать метод снаружи."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Grep for ValidateItems and ensure it cannot overlap chain loading, revocation updates or another validation call.",
+        "fr": "Recherchez ValidateItems et assurez-vous qu'il ne chevauche pas le chargement de la chaîne, les mises à jour de révocation ou un autre appel de validation.",
+        "zh": "搜索 ValidateItems，确保其不会与证书链加载、吊销更新或另一次验证调用重叠。",
+        "ru": "Найдите ValidateItems и исключите его одновременное выполнение с загрузкой цепочки, обновлением отзыва или другим вызовом проверки."
+      },
+      "units": ["mormot.crypt.ecc"],
+      "api_changes": [
+        {
+          "symbol": "TEccCertificateChain.ValidateItems",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The method is now explicitly not thread-safe and requires caller-side serialization.",
+            "fr": "La méthode n'est désormais explicitement plus thread-safe et exige une sérialisation côté appelant.",
+            "zh": "该方法现在明确非线程安全，需要调用方串行化。",
+            "ru": "Метод теперь явно не потокобезопасен и требует сериализации вызывающей стороной."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "17f74f8129f07e27df4e9b952acc0ec8e2915503",
+      "headline": {
+        "en": "WebSocket subprotocol matching splits recognition from instance setup",
+        "fr": "La sélection WebSocket sépare la reconnaissance de l'initialisation de l'instance",
+        "zh": "WebSocket 子协议匹配拆分识别与实例初始化",
+        "ru": "Выбор WebSocket subprotocol разделяет распознавание и настройку экземпляра"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWebSocketProtocol.SetSubprotocol is removed. Public virtual IsSubprotocol now performs read-only recognition, while protected virtual SetName configures a cloned or selected instance through the Name property. Binary, relay, client and Engine.IO protocol classes adopt the split so the shared prototype is not mutated during matching.",
+        "fr": "TWebSocketProtocol.SetSubprotocol est supprimé. La méthode virtuelle publique IsSubprotocol effectue désormais une reconnaissance sans mutation, tandis que la méthode virtuelle protégée SetName configure l'instance clonée ou sélectionnée via la propriété Name. Les protocoles binaire, relay, client et Engine.IO adoptent cette séparation afin de ne pas modifier le prototype partagé pendant la recherche.",
+        "zh": "TWebSocketProtocol.SetSubprotocol 被移除。新的公共虚方法 IsSubprotocol 只执行只读识别，受保护虚方法 SetName 则通过 Name 属性配置克隆或选中的实例。二进制、relay、client 与 Engine.IO 协议均采用该拆分，匹配时不再修改共享原型。",
+        "ru": "TWebSocketProtocol.SetSubprotocol удалён. Новый публичный virtual IsSubprotocol выполняет только распознавание, а protected virtual SetName настраивает клонированный или выбранный экземпляр через свойство Name. Binary, relay, client и Engine.IO протоколы используют это разделение, чтобы не изменять общий прототип при поиске."
+      },
+      "impact": {
+        "en": "Subprotocol negotiation becomes thread-safe because matching no longer mutates a shared protocol object. Any custom subclass that overrides or calls SetSubprotocol will fail to compile and must separate recognition from per-instance setup.",
+        "fr": "La négociation du sous-protocole devient thread-safe, car la recherche ne modifie plus un objet de protocole partagé. Toute sous-classe personnalisée qui redéfinit ou appelle SetSubprotocol ne compile plus et doit séparer la reconnaissance de la configuration propre à l'instance.",
+        "zh": "子协议协商变得线程安全，因为匹配不再修改共享协议对象。任何重写或调用 SetSubprotocol 的自定义子类都会编译失败，必须将识别与实例配置分开。",
+        "ru": "Согласование subprotocol становится потокобезопасным, поскольку поиск больше не изменяет общий объект протокола. Любой пользовательский подкласс, переопределяющий или вызывающий SetSubprotocol, перестанет компилироваться и должен разделить распознавание и настройку экземпляра."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Replace SetSubprotocol overrides with IsSubprotocol; move state changes into SetName when the selected protocol name configures the clone.",
+        "fr": "Remplacez les redéfinitions de SetSubprotocol par IsSubprotocol ; déplacez les changements d'état dans SetName lorsque le nom sélectionné configure le clone.",
+        "zh": "将 SetSubprotocol 重写替换为 IsSubprotocol；若所选协议名需要配置克隆实例，请把状态修改移入 SetName。",
+        "ru": "Замените переопределения SetSubprotocol на IsSubprotocol; переносите изменения состояния в SetName, если выбранное имя настраивает clone."
+      },
+      "units": ["mormot.net.relay", "mormot.net.ws.client", "mormot.net.ws.core"],
+      "api_changes": [
+        {
+          "symbol": "TWebSocketProtocol.SetSubprotocol",
+          "change": "removed",
+          "note": {
+            "en": "Replaced by IsSubprotocol for matching and SetName for instance setup.",
+            "fr": "Remplacé par IsSubprotocol pour la reconnaissance et SetName pour la configuration de l'instance.",
+            "zh": "由 IsSubprotocol 负责匹配，SetName 负责实例配置。",
+            "ru": "Заменён на IsSubprotocol для распознавания и SetName для настройки экземпляра."
+          }
+        },
+        {
+          "symbol": "TWebSocketProtocol.IsSubprotocol",
+          "change": "added",
+          "note": {
+            "en": "Public virtual read-only subprotocol recognition method.",
+            "fr": "Méthode virtuelle publique de reconnaissance sans mutation.",
+            "zh": "公共虚拟只读子协议识别方法。",
+            "ru": "Публичный virtual-метод распознавания subprotocol без изменения состояния."
+          }
+        },
+        {
+          "symbol": "TWebSocketProtocol.Name",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Writing Name now calls virtual SetName, allowing per-instance setup.",
+            "fr": "L'écriture de Name appelle désormais la méthode virtuelle SetName pour configurer l'instance.",
+            "zh": "写入 Name 现在调用虚方法 SetName，可执行实例级配置。",
+            "ru": "Запись Name теперь вызывает virtual SetName для настройки экземпляра."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "55fa224e49a2b4285b809bb5d44dea062c2b23ed",
+      "headline": {
+        "en": "Time-zone lookup protects its shared last-result cache",
+        "fr": "La recherche de fuseau protège son cache partagé du dernier résultat",
+        "zh": "时区查找保护共享的最近结果缓存",
+        "ru": "Поиск часового пояса защищает общий кэш последнего результата"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynTimeZone adds fLastZoneSafe, a TLightLock dedicated to fLastZone and fLastIndex. LockedSearch checks and updates that cache under the new lock while leaving the hashed zone lookup under the existing outer read lock.",
+        "fr": "TSynTimeZone ajoute fLastZoneSafe, un TLightLock dédié à fLastZone et fLastIndex. LockedSearch consulte et met à jour ce cache sous le nouveau verrou, tandis que la recherche hachée des fuseaux reste sous le verrou de lecture externe existant.",
+        "zh": "TSynTimeZone 新增专门保护 fLastZone 与 fLastIndex 的 TLightLock fLastZoneSafe。LockedSearch 在新锁下读取和更新缓存，哈希时区查找仍由现有外围读锁保护。",
+        "ru": "TSynTimeZone добавляет fLastZoneSafe — отдельный TLightLock для fLastZone и fLastIndex. LockedSearch читает и обновляет кэш под новой блокировкой, оставляя хешированный поиск зоны под существующим внешним read lock."
+      },
+      "impact": {
+        "en": "Concurrent conversions using different zone IDs can no longer race the shared last-zone text and index, which could return a mismatched cached index. Multi-threaded REST backends using TSynTimeZone.Default should take this fix.",
+        "fr": "Des conversions concurrentes utilisant des identifiants de fuseau différents ne peuvent plus mettre en course le texte et l'index du dernier fuseau, ce qui pouvait renvoyer un index de cache incohérent. Les backends REST multithreads utilisant TSynTimeZone.Default doivent prendre ce correctif.",
+        "zh": "使用不同时区 ID 的并发转换不再竞争共享的最近时区文本和索引，避免返回不匹配的缓存索引。使用 TSynTimeZone.Default 的多线程 REST 后端应采用此修复。",
+        "ru": "Параллельные преобразования с разными идентификаторами зон больше не создают гонку между текстом и индексом последней зоны, которая могла вернуть несоответствующий кэшированный индекс. Многопоточным REST-backend на TSynTimeZone.Default следует взять исправление."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade services that perform concurrent TSynTimeZone conversions and rerun cross-zone date tests.",
+        "fr": "Mettez à jour les services qui effectuent des conversions TSynTimeZone concurrentes et rejouez les tests de dates entre fuseaux.",
+        "zh": "升级执行并发 TSynTimeZone 转换的服务，并重新运行跨时区日期测试。",
+        "ru": "Обновите сервисы с параллельными преобразованиями TSynTimeZone и повторите межзонные тесты дат."
+      },
+      "units": ["mormot.core.search"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6c82cf9377f726ee7feb186fb53c3968a4c7bc93",
+      "headline": {
+        "en": "Binary certificate export now excludes concurrent writers",
+        "fr": "L'export binaire des certificats exclut désormais les écritures concurrentes",
+        "zh": "证书二进制导出现排除并发写入",
+        "ru": "Бинарный экспорт сертификатов теперь исключает параллельную запись"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TEccCertificateChain.SaveToBinary changes fSafe.ReadLock to fSafe.WriteLock because serialization temporarily toggles each TEccCertificate.fStoreOnlyPublicKey flag before and after SaveToStream.",
+        "fr": "TEccCertificateChain.SaveToBinary remplace fSafe.ReadLock par fSafe.WriteLock, car la sérialisation modifie temporairement le drapeau TEccCertificate.fStoreOnlyPublicKey de chaque certificat avant et après SaveToStream.",
+        "zh": "TEccCertificateChain.SaveToBinary 将 fSafe.ReadLock 改为 fSafe.WriteLock，因为序列化会在 SaveToStream 前后临时切换每个 TEccCertificate.fStoreOnlyPublicKey 标志。",
+        "ru": "TEccCertificateChain.SaveToBinary заменяет fSafe.ReadLock на fSafe.WriteLock, поскольку сериализация временно переключает флаг TEccCertificate.fStoreOnlyPublicKey каждого сертификата до и после SaveToStream."
+      },
+      "impact": {
+        "en": "Parallel SaveToBinary calls can no longer race on the temporary certificate flag and produce inconsistent private/public serialization. The stronger lock may serialize rare concurrent exports but does not change the binary format.",
+        "fr": "Des appels parallèles à SaveToBinary ne peuvent plus entrer en course sur le drapeau temporaire et produire une sérialisation privée/publique incohérente. Le verrou plus fort peut sérialiser de rares exports concurrents sans modifier le format binaire.",
+        "zh": "并行 SaveToBinary 调用不再竞争临时证书标志，避免产生不一致的私钥/公钥序列化。更强的锁可能串行化少见的并发导出，但不会改变二进制格式。",
+        "ru": "Параллельные SaveToBinary больше не создают гонку на временном флаге сертификата и не формируют несогласованную private/public сериализацию. Более сильная блокировка может сериализовать редкие одновременные экспорты, но бинарный формат не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade backends that export one shared TEccCertificateChain from multiple threads.",
+        "fr": "Mettez à jour les backends qui exportent une même TEccCertificateChain depuis plusieurs threads.",
+        "zh": "升级从多个线程导出同一 TEccCertificateChain 的后端。",
+        "ru": "Обновите backend, экспортирующий одну TEccCertificateChain из нескольких потоков."
+      },
+      "units": ["mormot.crypt.ecc"],
+      "api_changes": [
+        {
+          "symbol": "TEccCertificateChain.SaveToBinary",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Now takes the chain write lock during serialization.",
+            "fr": "Prend désormais le verrou en écriture de la chaîne pendant la sérialisation.",
+            "zh": "序列化期间现在获取证书链写锁。",
+            "ru": "Теперь берёт write lock цепочки на время сериализации."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "62bd0e82ae429d33a7c779063d8b77fc01b7b97f",
+      "headline": {
+        "en": "The main test runner now executes the new lock suite",
+        "fr": "Le lanceur principal exécute désormais la nouvelle suite de verrous",
+        "zh": "主测试程序现会运行新的锁测试套件",
+        "ru": "Основной test runner теперь запускает новый набор тестов блокировок"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test/mormot2tests.dpr adds test.core.threads to its uses list, making the newly introduced lock tests part of the regular mormot2tests executable.",
+        "fr": "test/mormot2tests.dpr ajoute test.core.threads à sa liste uses, intégrant les nouveaux tests de verrous à l'exécutable mormot2tests habituel.",
+        "zh": "test/mormot2tests.dpr 将 test.core.threads 加入 uses 列表，使新锁测试成为常规 mormot2tests 可执行程序的一部分。",
+        "ru": "test/mormot2tests.dpr добавляет test.core.threads в uses, включая новые тесты блокировок в обычный исполняемый файл mormot2tests."
+      },
+      "impact": {
+        "en": "There is no runtime or application-code impact. Continuous test runs now exercise the lock harness that was added in the preceding commit.",
+        "fr": "Il n'y a aucun impact sur l'exécution ni sur le code applicatif. Les tests continus exécutent désormais le banc de test des verrous ajouté dans le commit précédent.",
+        "zh": "对运行时和应用代码没有影响。持续测试现在会执行前一提交新增的锁测试框架。",
+        "ru": "На runtime и код приложений влияния нет. Постоянные тестовые прогоны теперь выполняют стенд блокировок из предыдущего commit."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "719cd877956cc308dd387ce3abafb55e4790bb1e",
+      "headline": {
+        "en": "A multithreaded harness exercises every lightweight lock family",
+        "fr": "Un banc multithread teste chaque famille de verrous légers",
+        "zh": "多线程测试框架覆盖所有轻量锁系列",
+        "ru": "Многопоточный стенд проверяет все семейства облегчённых блокировок"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The new test.core.threads unit adds 1,166 lines of stress coverage for TLightLock, TOSLightLock, TOSRWLightLock, TRWLightLock and related lock behavior across multiple worker threads.",
+        "fr": "La nouvelle unité test.core.threads ajoute 1 166 lignes de tests sous charge pour TLightLock, TOSLightLock, TOSRWLightLock, TRWLightLock et les comportements associés sur plusieurs threads workers.",
+        "zh": "新增的 test.core.threads 单元增加 1,166 行压力测试，覆盖多个 worker 线程下的 TLightLock、TOSLightLock、TOSRWLightLock、TRWLightLock 及相关锁行为。",
+        "ru": "Новый модуль test.core.threads добавляет 1166 строк стресс-тестов TLightLock, TOSLightLock, TOSRWLightLock, TRWLightLock и связанного поведения на нескольких worker-потоках."
+      },
+      "impact": {
+        "en": "Application code is unchanged. The suite raises confidence in the recent lock rewrites but does not by itself prove every higher-level tunnel or shutdown sequence is race-free.",
+        "fr": "Le code applicatif ne change pas. La suite renforce la confiance dans les réécritures récentes des verrous, sans prouver à elle seule que chaque séquence de tunnel ou d'arrêt de plus haut niveau est exempte de course.",
+        "zh": "应用代码不变。该套件提高了对近期锁重写的信心，但本身不能证明所有更高层隧道或关闭流程都无竞争。",
+        "ru": "Код приложений не меняется. Набор повышает уверенность в последних переработках locks, но сам по себе не доказывает отсутствие гонок во всех высокоуровневых туннельных и shutdown-последовательностях."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4e7838758f122a59192d6eff0d4a1e8274255a9c",
+      "headline": {
+        "en": "LDAP tests cover custom group-member attributes",
+        "fr": "Les tests LDAP couvrent les attributs de membres personnalisés",
+        "zh": "LDAP 测试覆盖自定义组成员属性",
+        "ru": "LDAP-тесты покрывают пользовательские атрибуты членов группы"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TNetworkProtocols adds assertions for custom LDAP group-member parsing, including normalized distinguished names and the configured member attribute path. Only test/test.net.proto.pas changes.",
+        "fr": "TNetworkProtocols ajoute des assertions pour l'analyse personnalisée des membres de groupes LDAP, notamment les noms distinctifs normalisés et le chemin d'attribut member configuré. Seul test/test.net.proto.pas est modifié.",
+        "zh": "TNetworkProtocols 为自定义 LDAP 组成员解析增加断言，包括规范化的 distinguished name 与配置的 member 属性路径。仅修改 test/test.net.proto.pas。",
+        "ru": "TNetworkProtocols добавляет проверки пользовательского разбора членов LDAP-групп, включая нормализованные distinguished names и настроенный путь атрибута member. Изменён только test/test.net.proto.pas."
+      },
+      "impact": {
+        "en": "There is no application or framework runtime change. The tests protect the LDAP custom-member behavior introduced in the previous edition.",
+        "fr": "Il n'y a aucune modification du code applicatif ni de l'exécution du framework. Les tests protègent le comportement des membres LDAP personnalisés introduit dans l'édition précédente.",
+        "zh": "应用与框架运行时均无变化。这些测试保护上一期引入的 LDAP 自定义成员行为。",
+        "ru": "Код приложений и runtime фреймворка не меняются. Тесты защищают поведение пользовательских LDAP-членов, добавленное в предыдущем выпуске."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    }
+  ]
+}
