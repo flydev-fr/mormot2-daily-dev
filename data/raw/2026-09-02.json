@@ -1,0 +1,1195 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-02",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-02T03:37:28Z",
+  "range": {
+    "since": "2026-08-31T19:38:04Z",
+    "until": "2026-09-02T03:37:28Z",
+    "head_sha": "aef05e96dcd947c2dd0a82818c47a449f2ba99bd"
+  },
+  "version": {
+    "after": "2.4.16672",
+    "before": "2.4.16652"
+  },
+  "totals": {
+    "commits": 20,
+    "additions": 1559,
+    "deletions": 296
+  },
+  "commits": [
+    {
+      "sha": "aef05e96dcd947c2dd0a82818c47a449f2ba99bd",
+      "short_sha": "aef05e96",
+      "subject": "net: some Tunnel logic fixes",
+      "body": "- especially for less used methods",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T16:57:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aef05e96dcd947c2dd0a82818c47a449f2ba99bd",
+      "parents": [
+        "76f15a8639aef77cfba3bc28da4b7f2d53659b6c"
+      ],
+      "stats": {
+        "additions": 70,
+        "deletions": 41,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16671\n+16672",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16671'\r\n+'2.4.16672'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 68,
+          "deletions": 39,
+          "patch": "@@ -344,8 +344,9 @@   TTunnelLocalClient = class(TTunnelLocal)\n   end;\r\n \r\n   /// maintain a list of ITunnelTransmit instances\r\n-  TTunnelList = class(TObjectRWLightLock)\r\n+  TTunnelList = class(TSynPersistent)\r\n   protected\r\n+    fSessionSafe: TRWLightLock;\r\n     fInfoCacheSafe: TLightLock;\r\n     fCount: integer;\r\n     fItem: ITunnelTransmits;\r\n@@ -358,6 +359,9 @@   TTunnelList = class(TObjectRWLightLock)\n     function Add(aSession: TTunnelSession;\r\n       const aInstance: ITunnelTransmit): boolean;\r\n     /// remove one ITunnelTransmit from its session ID\r\n+    function Extract(aSession: TTunnelSession; out aTunnel: ITunnelTransmit): boolean;\r\n+    /// remove and deleted one ITunnelTransmit from its session ID\r\n+    // - i.e. runs Extract() then set aTunnel := nil\r\n     function Delete(aSession: TTunnelSession): boolean;\r\n     /// remove all ITunnelTransmit from another list\r\n     // - returns the number of deleted items\r\n@@ -525,9 +529,9 @@   TTunnelRelay = class(TInterfaceResolver)\n     // note: fAgent and fConsole[] are class instances, to avoid refcount race\r\n     fAgent: TTunnelAgent;\r\n     fConsoleSafe: TRWLightLock;\r\n+    fConsoleCount: integer;\r\n     fConsole: TTunnelConsoles; // per-console list of instances with callbacks\r\n     fLogClass: TSynLogClass;\r\n-    fConsoleCount: integer;\r\n     fTransientTimeOutSecs: cardinal;\r\n     fAgentInstance: ITunnelAgent;\r\n     function HasConsolePrepared(aSession: TTunnelSession): boolean;\r\n@@ -536,6 +540,7 @@   TTunnelRelay = class(TInterfaceResolver)\n       const callback: ITunnelTransmit): TTunnelSession;\r\n     // search for matching fConsole[].TunnelSend\r\n     procedure ConsoleTunnelSend(const Frame: RawByteString);\r\n+    procedure ConsoleDelete(aSession: TTunnelSession);\r\n     // TInterfaceResolver method to resolve ITunnelConsole instances\r\n     function TryResolve(aInterface: PRttiInfo; out Obj): boolean; override;\r\n   public\r\n@@ -1261,11 +1266,11 @@ function TTunnelList.LockedExists(aSession: TTunnelSession): boolean;\n \r\n function TTunnelList.Exists(aSession: TTunnelSession): boolean;\r\n begin\r\n-  fSafe.ReadLock;\r\n+  fSessionSafe.ReadLock;\r\n   try\r\n     result := IntegerScanExists(pointer(fSession), fCount, aSession);\r\n   finally\r\n-    fSafe.ReadUnLock;\r\n+    fSessionSafe.ReadUnLock;\r\n   end;\r\n end;\r\n \r\n@@ -1276,43 +1281,46 @@ function TTunnelList.Add(aSession: TTunnelSession;\n   if (aInstance = nil) or\r\n      (aSession = 0) then\r\n     exit;\r\n-  fSafe.WriteLock;\r\n+  fSessionSafe.WriteLock;\r\n   try\r\n     if IntegerScanExists(pointer(fSession), fCount, aSession) then\r\n       exit;\r\n     AddInteger(fSession, fCount, aSession);\r\n     InterfaceArrayAdd(fItem, aInstance);\r\n   finally\r\n-    fSafe.WriteUnLock;\r\n+    fSessionSafe.WriteUnLock;\r\n   end;\r\n   result := true;\r\n end;\r\n \r\n-function TTunnelList.Delete(aSession: TTunnelSession): boolean;\r\n+function TTunnelList.Extract(aSession: TTunnelSession; out aTunnel: ITunnelTransmit): boolean;\r\n var\r\n   ndx: PtrInt;\r\n-  instance: ITunnelTransmit;\r\n begin\r\n   result := false;\r\n   if (aSession = 0) or\r\n      (fCount = 0) then\r\n     exit;\r\n-  fSafe.WriteLock;\r\n+  fSessionSafe.WriteLock;\r\n   try\r\n     ndx := IntegerScanIndex(pointer(fSession), fCount, aSession);\r\n     if (ndx < 0) or\r\n-       not InterfaceArrayExtract(fItem, ndx, instance) then // weak copy\r\n+       not InterfaceArrayExtract(fItem, ndx, aTunnel) then // weak copy\r\n       exit;\r\n     DeleteInteger(fSession, fCount, ndx);\r\n   finally\r\n-    fSafe.WriteUnLock;\r\n-  end;\r\n-  try\r\n-    instance := nil; // release outside of the global Write lock\r\n-    result := true;\r\n-  except\r\n-    result := false; // show must go on\r\n+    fSessionSafe.WriteUnLock;\r\n   end;\r\n+  result := true;\r\n+end;\r\n+\r\n+function TTunnelList.Delete(aSession: TTunnelSession): boolean;\r\n+var\r\n+  tunnel: ITunnelTransmit;\r\n+begin\r\n+  result := Extract(aSession, tunnel);\r\n+  if result then\r\n+    InterfaceNilSafe(tunnel);\r\n end;\r\n \r\n function TTunnelList.DeleteFrom(aList: TTunnelList): integer;\r\n@@ -1326,11 +1334,11 \n... [truncated, 4304 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "76f15a8639aef77cfba3bc28da4b7f2d53659b6c",
+      "short_sha": "76f15a86",
+      "subject": "core: another pass on TSynThreadPool shuhtdown logic",
+      "body": "- should be safer and avoid most deadlock at shutdown",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T16:56:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/76f15a8639aef77cfba3bc28da4b7f2d53659b6c",
+      "parents": [
+        "6f064610e7c4922a6034bb4ab929ba535f944038"
+      ],
+      "stats": {
+        "additions": 60,
+        "deletions": 44,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 42,
+          "patch": "@@ -1654,7 +1654,7 @@   TSynThreadPool = class\n     {$ifdef USE_THREADWINIOCP}\r\n     fRequestQueue: THandle; // IOCP has its own internal queue\r\n     {$else}\r\n-    fSafe: TLightLock; // single 32-bit field is enough\r\n+    fPendingSafe: TLightLock; // single 32-bit field is enough\r\n     fPendingFirst, fPendingLast: integer; // O(1) FIFO in fPendingContext[]\r\n     fPendingContext: TPointerDynArray;\r\n     {$endif USE_THREADWINIOCP}\r\n@@ -1674,7 +1674,7 @@   TSynThreadPool = class\n     fQueuePendingContext: boolean;\r\n     function GetPendingContextCount: integer;\r\n     function PopPendingContext: pointer;\r\n-    function QueueLength: integer; virtual; // called once when needed\r\n+    function QueueLength: integer; virtual; // assumed stable while running\r\n     {$endif USE_THREADWINIOCP}\r\n     /// end thread on IO error\r\n     function NeedStopOnIOError: boolean; virtual;\r\n@@ -1683,6 +1683,7 @@   TSynThreadPool = class\n       aContext: pointer); virtual; abstract;\r\n     /// finalize a queue item on Terminate - e.g. call Free/Dispose on aContext\r\n     procedure TaskAbort(aContext: pointer); virtual;\r\n+    procedure DoTaskAbort(aContext: pointer);\r\n   public\r\n     /// initialize a thread pool with the supplied number of threads\r\n     // - abstract Task() virtual method will be called by one of the threads\r\n@@ -4019,7 +4020,7 @@ constructor TSynParallelProcess.Create(ThreadPoolCount: integer;\n var\r\n   i: PtrInt;\r\n begin\r\n-  fSafe.Init;\r\n+  fSafe.Init; // mandatory for TOSLightLock on BSD\r\n   if ThreadPoolCount < 0 then\r\n     ESynThread.RaiseUtf8('%.Create(%,%)',\r\n       [Self, ThreadPoolCount, ThreadName]);\r\n@@ -4650,22 +4651,25 @@ destructor TSynThreadPool.Destroy;\n   i: PtrInt;\r\n   endtix: cardinal;\r\n begin\r\n-  fTerminated := true; // fWorkThread[].Execute will check this flag\r\n   try\r\n     {$ifdef USE_THREADWINIOCP}\r\n+    fTerminated := true; // fWorkThread[].Execute will check this flag\r\n     // notify the threads we are shutting down\r\n     for i := 0 to fWorkThreadCount * 2 do // *2 = better safe than sorry\r\n       IocpPostQueuedStatus(fRequestQueue, 0, nil, {ctxt=}nil);\r\n       // TaskAbort() is done in Execute when fTerminated = true\r\n     {$else}\r\n+    fPendingSafe.Lock;   // ensure Terminated is notified cleanly\r\n+    fTerminated := true; // fWorkThread[].Execute will check this flag\r\n+    fPendingSafe.UnLock;\r\n     // notify the threads we are shutting down using the event\r\n     for i := 0 to fWorkThreadCount - 1 do\r\n       fWorkThread[i].fEvent.SetEvent;\r\n     // cleanup now any pending task (e.g. THttpServerSocket instance)\r\n     i := fPendingFirst;\r\n     while fPendingContextCount > 0 do\r\n     begin\r\n-      TaskAbort(fPendingContext[i]);\r\n+      DoTaskAbort(fPendingContext[i]); // with try..except\r\n       inc(i);\r\n       if i = length(fPendingContext) then\r\n         i := 0;\r\n@@ -4714,16 +4718,21 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n     thread: ^TSynThreadPoolWorkThread;\r\n   begin\r\n     result := false; // queue is full\r\n-    fSafe.Lock;\r\n+    fPendingSafe.Lock;\r\n+    if fTerminated then\r\n+    begin\r\n+      fPendingSafe.UnLock; // avoid any race at shutdown\r\n+      exit;\r\n+    end;\r\n     thread := pointer(fWorkThread);\r\n     for n := 1 to fWorkThreadCount do\r\n       if thread^.fProcessingContext = nil then\r\n       begin\r\n         found := thread^;\r\n         found.fProcessingContext := aContext;\r\n-        fSafe.UnLock;\r\n+        fPendingSafe.UnLock;\r\n         found.fEvent.SetEvent; // notify outside of the fSafe lock\r\n-        result := true; // found one available thread\r\n+        result := true;        // found one available thread\r\n         exit;\r\n       end\r\n       else\r\n@@ -4734,18 +4743,14 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n       // not too many connection limit reached (see QueueIsFull)\r\n       if fPendingContext = nil then\r\n         SetLength(fPendingContext, QueueLength); // allocate once when needed\r\n-      n := length(f\n... [truncated, 4073 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16670\n+16671",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16670'\r\n+'2.4.16671'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6f064610e7c4922a6034bb4ab929ba535f944038",
+      "short_sha": "6f064610",
+      "subject": "core: ensure TSynThreadPool POSIX queue is O(1)",
+      "body": "- use a round-robin algorithm like TSynQueue instead of a moving array\n- so the internal TLightLock is assured to be with almost no contention",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T13:54:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6f064610e7c4922a6034bb4ab929ba535f944038",
+      "parents": [
+        "804bc9700313eaf13b4ad09b594e699ab7a790b1"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 30,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 28,
+          "patch": "@@ -1650,30 +1650,31 @@   TSynThreadPoolWorkThread = class(TSynThread)\n   // Event-driven approach under Linux/POSIX\r\n   TSynThreadPool = class\r\n   protected\r\n-    {$ifndef USE_THREADWINIOCP}\r\n+    fPendingContextCount: integer;\r\n+    {$ifdef USE_THREADWINIOCP}\r\n+    fRequestQueue: THandle; // IOCP has its own internal queue\r\n+    {$else}\r\n     fSafe: TLightLock; // single 32-bit field is enough\r\n+    fPendingFirst, fPendingLast: integer; // O(1) FIFO in fPendingContext[]\r\n+    fPendingContext: TPointerDynArray;\r\n     {$endif USE_THREADWINIOCP}\r\n     fWorkThreadCount: integer;\r\n     fRunningThreads: integer;\r\n     fExceptionsCount: integer;\r\n+    fContentionAbortDelay: integer;\r\n     fWorkThread: TSynThreadPoolWorkThreads;\r\n     fOnThreadTerminate: TOnNotifyThread;\r\n     fOnThreadStart: TOnNotifyThread;\r\n     fContentionTime: Int64;\r\n     fContentionAbortCount: cardinal;\r\n     fContentionCount: cardinal;\r\n     fName, fPoolName: RawUtf8;\r\n-    fContentionAbortDelay: integer;\r\n-    fPendingContextCount: integer;\r\n     fTerminated: boolean;\r\n-    {$ifdef USE_THREADWINIOCP}\r\n-    fRequestQueue: THandle; // IOCP has its own internal queue\r\n-    {$else}\r\n+    {$ifndef USE_THREADWINIOCP}\r\n     fQueuePendingContext: boolean;\r\n-    fPendingContext: TPointerDynArray;\r\n     function GetPendingContextCount: integer;\r\n     function PopPendingContext: pointer;\r\n-    function QueueLength: integer; virtual;\r\n+    function QueueLength: integer; virtual; // called once when needed\r\n     {$endif USE_THREADWINIOCP}\r\n     /// end thread on IO error\r\n     function NeedStopOnIOError: boolean; virtual;\r\n@@ -1756,11 +1757,8 @@   TSynThreadPool = class\n       read fContentionCount;\r\n     /// how many input tasks are currently waiting to be affected to threads\r\n     property PendingContextCount: integer\r\n-      {$ifdef USE_THREADWINIOCP}\r\n-      read fPendingContextCount;\r\n-      {$else}\r\n-      read GetPendingContextCount;\r\n-      {$endif USE_THREADWINIOCP}\r\n+      {$ifdef USE_THREADWINIOCP} read fPendingContextCount;\r\n+      {$else} read GetPendingContextCount; {$endif}\r\n   end;\r\n \r\n   {$M-}\r\n@@ -4664,8 +4662,15 @@ destructor TSynThreadPool.Destroy;\n     for i := 0 to fWorkThreadCount - 1 do\r\n       fWorkThread[i].fEvent.SetEvent;\r\n     // cleanup now any pending task (e.g. THttpServerSocket instance)\r\n-    for i := 0 to fPendingContextCount - 1 do\r\n+    i := fPendingFirst;\r\n+    while fPendingContextCount > 0 do\r\n+    begin\r\n       TaskAbort(fPendingContext[i]);\r\n+      inc(i);\r\n+      if i = length(fPendingContext) then\r\n+        i := 0;\r\n+      dec(fPendingContextCount);\r\n+    end;\r\n     {$endif USE_THREADWINIOCP}\r\n     // wait for threads to finish, with 30 seconds TimeOut\r\n     endtix := GetTickSec + 30;\r\n@@ -4704,14 +4709,14 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n \r\n   function Enqueue: boolean;\r\n   var\r\n-    i, n: integer;\r\n+    n: integer;\r\n     found: TSynThreadPoolWorkThread;\r\n     thread: ^TSynThreadPoolWorkThread;\r\n   begin\r\n     result := false; // queue is full\r\n     fSafe.Lock;\r\n     thread := pointer(fWorkThread);\r\n-    for i := 1 to fWorkThreadCount do\r\n+    for n := 1 to fWorkThreadCount do\r\n       if thread^.fProcessingContext = nil then\r\n       begin\r\n         found := thread^;\r\n@@ -4723,15 +4728,19 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n       end\r\n       else\r\n         inc(thread);\r\n-    if fQueuePendingContext then\r\n+    if fQueuePendingContext and\r\n+       (fPendingContextCount + fWorkThreadCount <= QueueLength) then\r\n     begin\r\n-      n := fPendingContextCount;\r\n-      if n + fWorkThreadCount <= QueueLength then\r\n+      // not too many connection limit reached (see QueueIsFull)\r\n+      if fPendingContext = nil then\r\n+        SetLength(fPendingContext, QueueLength); // allocate once when needed\r\n+      n := length(fPendingContext);\r\n+      if fPendingLast < n then // paranoid: QueueLength is stable once started\r\n       begin\r\n-        // \n... [truncated, 1283 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16669\n+16670",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16669'\r\n+'2.4.16670'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "804bc9700313eaf13b4ad09b594e699ab7a790b1",
+      "short_sha": "804bc970",
+      "subject": "net: fixed Delphi compilation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T13:41:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/804bc9700313eaf13b4ad09b594e699ab7a790b1",
+      "parents": [
+        "0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16668\n+16669",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16668'\r\n+'2.4.16669'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -87,6 +87,7 @@   ETunnel = class(ESynException);\n     function TunnelInfo: variant;\r\n   end;\r\n   PITunnelTransmit = ^ITunnelTransmit;\r\n+  ITunnelTransmits = array of ITunnelTransmit;\r\n \r\n   /// abstract tunneling service implementation\r\n   ITunnelLocal = interface(ITunnelTransmit)\r\n@@ -347,7 +348,7 @@   TTunnelList = class(TObjectRWLightLock)\n   protected\r\n     fInfoCacheSafe: TLightLock;\r\n     fCount: integer;\r\n-    fItem: array of ITunnelTransmit;\r\n+    fItem: ITunnelTransmits;\r\n     fSession: TIntegerDynArray; // store TTunnelSession (=cardinal) values\r\n     fInfoCache: TVariantDynArray;\r\n     fInfoCacheTix32: cardinal;\r\n@@ -588,7 +589,7 @@ function FrameSession(const Frame: RawByteString): TTunnelSession;\n var\r\n   l: PtrInt;\r\n begin\r\n-  l := length(Frame) - TRAIL_SIZE; // - SizeOf(TTunnelSession)\r\n+  l := length(Frame) - SizeOf(TTunnelSession); // TRAIL_SIZE can't be inlined\r\n   if l >= 0 then\r\n     result := PTunnelSession(@PByteArray(Frame)[l])^\r\n   else\r\n@@ -1387,7 +1388,7 @@ function TTunnelList.GetAllInfo: TVariantDynArray;\n var\r\n   n, i: PtrInt;\r\n   tix32: cardinal;\r\n-  tunnels: array of ITunnelTransmit; // local copy called outside of ReadLock\r\n+  tunnels: ITunnelTransmits; // local copy called outside of ReadLock\r\n   sessions: TIntegerDynArray;\r\n begin\r\n   result := nil;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786",
+      "short_sha": "0a0f36a4",
+      "subject": "all: fixes several locking issues",
+      "body": "- mostly introduced during previous commits, or even long-standing but never triggered",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T12:46:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0a0f36a4ea6d7e73ac1a5d9b51e02231fb954786",
+      "parents": [
+        "428ee2219b51700f11f86d88909fa580c28c78fe"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 13,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.zstd.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 5,
+          "patch": "@@ -168,7 +168,7 @@   TSynZstdDynamic = class(TSynZstd)\n   Zstd: TSynZstd;\r\n \r\n \r\n-  { ****************** TAlgoZstd High-Level Algorithms }\r\n+{ ****************** TAlgoZstd High-Level Algorithms }\r\n \r\n var\r\n   /// implement Zstandard compression in level 3 (ZSTD_CLEVEL_DEFAULT)\r\n@@ -340,8 +340,6 @@ constructor TAlgoZstd.Create;\n   fAlgoFileExt := '.zst';\r\n   inherited Create;\r\n   fCompressionLevel := ZSTD_CLEVEL_DEFAULT;\r\n-  fCompressionContext := Zstd.createCCtx; // pre-alloced two shared contexts\r\n-  fDecompressionContext := Zstd.createDCtx;\r\n end;\r\n \r\n destructor TAlgoZstd.Destroy;\r\n@@ -361,7 +359,11 @@ function TAlgoZstd.AlgoCompress(Plain: pointer; PlainLen: integer; Comp: pointer\n   if Zstd = nil then\r\n     exit;\r\n   if fCompressionContextSafe.TryLock then // acquired shared context\r\n-    ctx := fCompressionContext\r\n+  begin\r\n+    if fCompressionContext = nil then\r\n+      fCompressionContext := Zstd.createCCtx;\r\n+    ctx := fCompressionContext;\r\n+  end\r\n   else\r\n     ctx := Zstd.createCCtx; // transient context for this thread on contention\r\n   try\r\n@@ -384,7 +386,11 @@ function TAlgoZstd.AlgoDecompress(Comp: pointer; CompLen: integer; Plain: pointe\n   if Zstd = nil then\r\n     exit;\r\n   if fDecompressionContextSafe.TryLock then // acquired shared context\r\n-    ctx := fDecompressionContext\r\n+  begin\r\n+    if fDecompressionContext = nil then\r\n+      fDecompressionContext := Zstd.createDCtx;\r\n+    ctx := fDecompressionContext;\r\n+  end\r\n   else\r\n     ctx := Zstd.createDCtx; // transient context for this thread on contention\r\n   try\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16667\n+16668",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16667'\r\n+'2.4.16668'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -6148,6 +6148,7 @@ constructor THttpPeerCrypt.Create(const aSharedSecret: RawByteString;\n   key: THash256Rec;\r\n begin\r\n   // setup internal processing status\r\n+  fClientSafe.Init; // mandatory for TOSLightLock\r\n   fFrameSeqLow := Random31Not0; // 31-bit random start value set at startup\r\n   fFrameSeq := fFrameSeqLow;\r\n   // setup internal cryptography\r\n@@ -6180,6 +6181,7 @@ destructor THttpPeerCrypt.Destroy;\n   fSharedMagic := 0;\r\n   inherited Destroy;\r\n   FillZero(fDirectSecret);\r\n+  fClientSafe.Done; // mandatory for TOSLightLock\r\n end;\r\n \r\n function THttpPeerCrypt.NetworkInterfaceChanged: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 6,
+          "patch": "@@ -365,7 +365,7 @@   TTunnelList = class(TObjectRWLightLock)\n     function Exists(aSession: TTunnelSession): boolean;\r\n     /// retrieve one ITunnelTransmit instance from its session ID\r\n     // - make a local thread-safe copy\r\n-    function Get(aSession: TTunnelSession; var aTunnel: ITunnelTransmit): boolean;\r\n+    function Get(aSession: TTunnelSession; out aTunnel: ITunnelTransmit): boolean;\r\n     /// ask the TunnelInfo of a given session ID as TDocVariant object\r\n     procedure GetInfo(aSession: TTunnelSession; out aInfo: variant);\r\n     /// ask all TunnelInfo of all opended sessions as TDocVariant array\r\n@@ -1317,6 +1317,7 @@ function TTunnelList.Delete(aSession: TTunnelSession): boolean;\n function TTunnelList.DeleteFrom(aList: TTunnelList): integer;\r\n var\r\n   i: PtrInt;\r\n+  sessions: TIntegerDynArray; // local copy to delete outside of ReadLock\r\n begin\r\n   result := 0;\r\n   if (fCount = 0) or\r\n@@ -1326,16 +1327,17 @@ function TTunnelList.DeleteFrom(aList: TTunnelList): integer;\n     exit;\r\n   aList.fSafe.ReadLock;\r\n   try\r\n-    for i := 0 to aList.fCount - 1 do\r\n-      if Delete(aList.fSession[i]) then // fast enough\r\n-        inc(result);\r\n+    sessions := copy(aList.fSession, 0, aList.fCount);\r\n   finally\r\n     aList.fSafe.ReadUnLock;\r\n   end;\r\n+  for i := 0 to high(sessions) do\r\n+    if Delete(sessions[i]) then // fast enough\r\n+      inc(result);\r\n end;\r\n \r\n function TTunnelList.Get(aSession: TTunnelSession;\r\n-  var aTunnel: ITunnelTransmit): boolean;\r\n+  out aTunnel: ITunnelTransmit): boolean;\r\n var\r\n   ndx: PtrInt;\r\n begin\r\n@@ -1358,7 +1360,7 @@ function TTunnelList.Get(aSession: TTunnelSession;\n function TTunnelList.TunnelSend(const Frame: RawByteString;\r\n   aSession: TTunnelSession): boolean;\r\n var\r\n-  tunnel: ITunnelTransmit; // local copy to be called outside of the lock\r\n+  tunnel: ITunnelTransmit; // local copy to be called outside of ReadLock\r\n begin\r\n   result := false;\r\n   if fCount = 0 then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Cross-cutting",
+        "External libs",
+        "Network"
+      ],
+      "units": [
+        "mormot.lib.zstd",
+        "mormot.net.server",
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "428ee2219b51700f11f86d88909fa580c28c78fe",
+      "short_sha": "428ee221",
+      "subject": "net: fixed TTunnelLocalThread.Create on BSD",
+      "body": "- where TOSLightLock is a TRtlCriticalSection which requires initialization",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T12:22:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/428ee2219b51700f11f86d88909fa580c28c78fe",
+      "parents": [
+        "a5e68484e7f8341aee3f7d4f9e42a8ca3155ab9e"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16666\n+16667",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16666'\r\n+'2.4.16667'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -602,6 +602,7 @@ constructor TTunnelLocalThread.Create(owner: TTunnelLocal;\n   const transmit: ITunnelTransmit; const key, iv: THash128; sock: TNetSocket;\r\n   acceptSecs: cardinal);\r\n begin\r\n+  fSafe.Init; // mandatory for TOSLightLock\r\n   fOwner := owner;\r\n   fPort := owner.Port;\r\n   fSession := owner.Session;\r\n@@ -637,6 +638,7 @@ destructor TTunnelLocalThread.Destroy;\n   inherited Destroy;\r\n   FreeAndNil(fAes[true]);\r\n   FreeAndNil(fAes[false]);\r\n+  fSafe.Done; // mandatory for TOSLightLock\r\n end;\r\n \r\n function TTunnelLocalThread.Processing: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -11062,7 +11062,7 @@ function TOrmCacheTable.CachedEntries: cardinal;\n \r\n constructor TOrmPropertiesAbstract.Create;\r\n begin\r\n-  fSafe.Init;\r\n+  fSafe.Init; // mandatory for TOSLightLock\r\n   fSqlTableRetrieveAllFields := 'RowID'; // to work with virtual tables\r\n   SetLength(fManyFields, MAX_SQLFIELDS);\r\n   SetLength(fSimpleFields, MAX_SQLFIELDS);\r\n@@ -11078,7 +11078,7 @@ constructor TOrmPropertiesAbstract.Create;\n destructor TOrmPropertiesAbstract.Destroy;\r\n begin\r\n   inherited Destroy;\r\n-  fSafe.Done;\r\n+  fSafe.Done; // mandatory for TOSLightLock\r\n end;\r\n \r\n function TOrmPropertiesAbstract.BlobFieldPropFromRawUtf8(const PropName: RawUtf8): PRttiProp;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "ORM"
+      ],
+      "units": [
+        "mormot.net.tunnel",
+        "mormot.orm.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a5e68484e7f8341aee3f7d4f9e42a8ca3155ab9e",
+      "short_sha": "a5e68484",
+      "subject": "net: refined THttpPeerCrypt HTTP client lock",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T12:22:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a5e68484e7f8341aee3f7d4f9e42a8ca3155ab9e",
+      "parents": [
+        "907c92f53802625839946fae515a7a90661c2b11"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16665\n+16666",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16665'\r\n+'2.4.16666'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1774,7 +1774,7 @@   THttpPeerCacheSettings = class(TSynPersistent)\n   THttpPeerCrypt = class(TInterfacedPersistent)\r\n   protected\r\n     fAesSafe: TLightLock; // topmost to ensure proper aarch64 alignment\r\n-    fClientSafe: TLightLock; // if try to download with background direct mode\r\n+    fClientSafe: TOSLightLock; // if try to download with background direct mode\r\n     fSettings: THttpPeerCacheSettings;\r\n     fSharedMagic, fFrameSeqLow: cardinal;\r\n     fFrameSeq: integer;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "907c92f53802625839946fae515a7a90661c2b11",
+      "short_sha": "907c92f5",
+      "subject": "db: refined TSqlDBProxyConnectionProtocol lock",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T12:20:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/907c92f53802625839946fae515a7a90661c2b11",
+      "parents": [
+        "844e8029aa4750850d65e632909632c4d3f0031c"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -160,7 +160,7 @@   TSqlDBProxyConnectionProtocol = class\n     fTransactionRetryTimeout: Int64;\r\n     fTransactionActiveTimeout: Int64;\r\n     fTransactionActiveAutoReleaseTicks: Int64;\r\n-    fSafe: TOSLock;\r\n+    fSafe: TOSLightLock; // = TOSLightMutex = futex on Linux and Win8+\r\n     function GetAuthenticate: TSynAuthenticationAbstract;\r\n     /// default Handle*() will just return the incoming value\r\n     function HandleInput(const input: RawByteString): RawByteString; virtual;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16664\n+16665",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16664'\r\n+'2.4.16665'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "844e8029aa4750850d65e632909632c4d3f0031c",
+      "short_sha": "844e8029",
+      "subject": "core: refined TSynThreadPool internal POSIX lock",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T12:20:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/844e8029aa4750850d65e632909632c4d3f0031c",
+      "parents": [
+        "75bf766051bb3701c90b3b2baad2a815c3d2e928"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 6,
+          "patch": "@@ -1651,19 +1651,19 @@   TSynThreadPoolWorkThread = class(TSynThread)\n   TSynThreadPool = class\r\n   protected\r\n     {$ifndef USE_THREADWINIOCP}\r\n-    fSafe: TOSLightLock; // TLightLock is likely to be less stable\r\n+    fSafe: TLightLock; // single 32-bit field is enough\r\n     {$endif USE_THREADWINIOCP}\r\n-    fWorkThread: TSynThreadPoolWorkThreads;\r\n     fWorkThreadCount: integer;\r\n     fRunningThreads: integer;\r\n     fExceptionsCount: integer;\r\n-    fContentionAbortDelay: integer;\r\n+    fWorkThread: TSynThreadPoolWorkThreads;\r\n     fOnThreadTerminate: TOnNotifyThread;\r\n     fOnThreadStart: TOnNotifyThread;\r\n     fContentionTime: Int64;\r\n     fContentionAbortCount: cardinal;\r\n     fContentionCount: cardinal;\r\n     fName, fPoolName: RawUtf8;\r\n+    fContentionAbortDelay: integer;\r\n     fPendingContextCount: integer;\r\n     fTerminated: boolean;\r\n     {$ifdef USE_THREADWINIOCP}\r\n@@ -4638,7 +4638,6 @@ constructor TSynThreadPool.Create(NumberOfThreads: integer;\n   if fRequestQueue = 0 then\r\n     exit;\r\n   {$else}\r\n-  fSafe.Init; // mandatory for TOSLightLock\r\n   fQueuePendingContext := aQueuePendingContext;\r\n   {$endif USE_THREADWINIOCP}\r\n   // now create the worker threads\r\n@@ -4684,8 +4683,6 @@ destructor TSynThreadPool.Destroy;\n   finally\r\n     {$ifdef USE_THREADWINIOCP}\r\n     CloseHandle(fRequestQueue);\r\n-    {$else}\r\n-    fSafe.Done; // mandatory for TOSLightLock\r\n     {$endif USE_THREADWINIOCP}\r\n   end;\r\n   inherited Destroy;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16663\n+16664",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16663'\r\n+'2.4.16664'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "75bf766051bb3701c90b3b2baad2a815c3d2e928",
+      "short_sha": "75bf7660",
+      "subject": "net: optimized TTunnelLocalThread accept() step",
+      "body": "- benefit from an OS futex while waiting",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T11:43:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/75bf766051bb3701c90b3b2baad2a815c3d2e928",
+      "parents": [
+        "4be92b7a4ef633830bbd3337d8ab1179d56a4483"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16662\n+16663",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16662'\r\n+'2.4.16663'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -107,7 +107,7 @@   TTunnelLocal = class;\n   /// background thread bound or connected to a local port process\r\n   TTunnelLocalThread = class(TLoggedThread)\r\n   protected\r\n-    fSafe: TLightLock; // protect especially fClientSock at startup/closure\r\n+    fSafe: TOSLightLock; // protect especially fClientSock at startup/closure\r\n     fState: (stCreated, stAccepting, stProcessing, stTerminated);\r\n     fStarted: boolean;\r\n     fOwner: TTunnelLocal;\r\n@@ -664,7 +664,7 @@ procedure TTunnelLocalThread.OnReceived(Frame: pointer; FrameLen: PtrInt);\n   if not fSafe.TryLock then\r\n   begin\r\n     fLogClass.Add.Log(sllDebug, 'OnReceived: wait for accept', self);\r\n-    fSafe.Lock;\r\n+    fSafe.Lock; // use futex on Linux and Win8+\r\n     fLogClass.Add.Log(sllDebug, 'OnReceived: accepted', self);\r\n   end;\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4be92b7a4ef633830bbd3337d8ab1179d56a4483",
+      "short_sha": "4be92b7a",
+      "subject": "net: fixed race/deadlock in TTunnelList",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T11:33:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4be92b7a4ef633830bbd3337d8ab1179d56a4483",
+      "parents": [
+        "ccde07c6ce4d26df2bfef5569c01a34dd9482620"
+      ],
+      "stats": {
+        "additions": 44,
+        "deletions": 39,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16661\n+16662",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16661'\r\n+'2.4.16662'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 37,
+          "patch": "@@ -349,8 +349,8 @@   TTunnelList = class(TObjectRWLightLock)\n     fCount: integer;\r\n     fItem: array of ITunnelTransmit;\r\n     fSession: TIntegerDynArray; // store TTunnelSession (=cardinal) values\r\n-    fInfoCacheTix32: cardinal;\r\n     fInfoCache: TVariantDynArray;\r\n+    fInfoCacheTix32: cardinal;\r\n     function LockedExists(aSession: TTunnelSession): boolean;\r\n   public\r\n     /// append one ITunnelTransmit callback to the list\r\n@@ -363,6 +363,9 @@   TTunnelList = class(TObjectRWLightLock)\n     function DeleteFrom(aList: TTunnelList): integer;\r\n     /// search if one ITunnelTransmit matches a session ID\r\n     function Exists(aSession: TTunnelSession): boolean;\r\n+    /// retrieve one ITunnelTransmit instance from its session ID\r\n+    // - make a local thread-safe copy\r\n+    function Get(aSession: TTunnelSession; var aTunnel: ITunnelTransmit): boolean;\r\n     /// ask the TunnelInfo of a given session ID as TDocVariant object\r\n     procedure GetInfo(aSession: TTunnelSession; out aInfo: variant);\r\n     /// ask all TunnelInfo of all opended sessions as TDocVariant array\r\n@@ -585,7 +588,7 @@ function FrameSession(const Frame: RawByteString): TTunnelSession;\n var\r\n   l: PtrInt;\r\n begin\r\n-  l := length(Frame) - SizeOf(TTunnelSession); // - TRAIL_SIZE\r\n+  l := length(Frame) - TRAIL_SIZE; // - SizeOf(TTunnelSession)\r\n   if l >= 0 then\r\n     result := PTunnelSession(@PByteArray(Frame)[l])^\r\n   else\r\n@@ -1316,6 +1319,7 @@ function TTunnelList.DeleteFrom(aList: TTunnelList): integer;\n   result := 0;\r\n   if (fCount = 0) or\r\n      (aList = nil) or\r\n+     (aList = self) or\r\n      (aList.fCount = 0) then\r\n     exit;\r\n   aList.fSafe.ReadLock;\r\n@@ -1328,57 +1332,59 @@ function TTunnelList.DeleteFrom(aList: TTunnelList): integer;\n   end;\r\n end;\r\n \r\n-function TTunnelList.TunnelSend(const Frame: RawByteString;\r\n-  aSession: TTunnelSession): boolean;\r\n+function TTunnelList.Get(aSession: TTunnelSession;\r\n+  var aTunnel: ITunnelTransmit): boolean;\r\n var\r\n   ndx: PtrInt;\r\n begin\r\n   result := false;\r\n-  if fCount = 0 then\r\n+  if (aSession = 0) or\r\n+     (fCount = 0) then\r\n     exit;\r\n-  if aSession = 0 then\r\n-  begin\r\n-    aSession := FrameSession(Frame); // if was not pre-computed\r\n-    if aSession = 0 then\r\n-      exit;\r\n-  end;\r\n   fSafe.ReadLock; // non-blocking Read lock\r\n   try\r\n     ndx := IntegerScanIndex(pointer(fSession), fCount, aSession); // SSE2 asm\r\n     if ndx < 0 then\r\n       exit; // just skip the frame if the session does not exist (anti-fuzzing)\r\n-    fItem[ndx].TunnelSend(frame); // call ITunnelTransmit method within ReadLock\r\n     result := true;\r\n+    aTunnel := fItem[ndx]; // found this session instance\r\n   finally\r\n     fSafe.ReadUnLock;\r\n   end;\r\n+end;\r\n+\r\n+function TTunnelList.TunnelSend(const Frame: RawByteString;\r\n+  aSession: TTunnelSession): boolean;\r\n+var\r\n+  tunnel: ITunnelTransmit; // local copy to be called outside of the lock\r\n+begin\r\n+  result := false;\r\n+  if fCount = 0 then\r\n+    exit;\r\n+  if aSession = 0 then\r\n+    aSession := FrameSession(Frame); // if was not pre-computed\r\n+  if not Get(aSession, tunnel) then\r\n+    exit;\r\n+  tunnel.TunnelSend(frame); // call ITunnelTransmit method outside ReadLock\r\n   // handle end of process notification from the other side\r\n   if length(Frame) = TRAIL_SIZE then\r\n     Delete(aSession); // remove this instance\r\n end;\r\n \r\n procedure TTunnelList.GetInfo(aSession: TTunnelSession; out aInfo: variant);\r\n var\r\n-  ndx: PtrInt;\r\n+  tunnel: ITunnelTransmit; // local copy to be called outside of ReadLock\r\n begin\r\n-  if (aSession = 0) or\r\n-     (fCount = 0) then\r\n-    exit;\r\n-  fSafe.ReadLock;\r\n-  try\r\n-    ndx := IntegerScanIndex(pointer(fSession), fCount, aSession);\r\n-    if ndx >= 0 then\r\n-      aInfo := fItem[ndx].TunnelInfo; // ask the remote endpoint\r\n-  finally\r\n-    fSafe.ReadUnLock;\r\n-  end;\r\n+  if Get(aSession, tunnel) then\r\n+    aInfo := tunnel.TunnelInfo; // ask the remote endpoint\r\n end;\r\n \r\n function TTunnelList.GetAllInfo: TVariantDynArray;\r\n var\r\n   n, i: PtrInt;\r\n   tix3\n... [truncated, 1278 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ccde07c6ce4d26df2bfef5569c01a34dd9482620",
+      "short_sha": "ccde07c6",
+      "subject": "core: some code refactoring with no functional change",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T11:33:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ccde07c6ce4d26df2bfef5569c01a34dd9482620",
+      "parents": [
+        "83c4df20f15661a856c66bcdba97f3ec2b4fd41a"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 7,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4601,7 +4601,7 @@   TRWLightLock = record\n   TRWLightLock = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Flags: cardinal; // bit 0 = WriteLock, bits 1..31/63 = ReadLock\r\n+    Flags: cardinal; // bit 0 = WriteLock, bits 1..31 = ReadLock\r\n     // low-level functions called by the Lock methods when inlined\r\n     procedure ReadLockSpin;\r\n     procedure WriteLockSpin;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16660\n+16661",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16660'\r\n+'2.4.16661'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -4015,7 +4015,8 @@ procedure TAsyncServer.OnFirstReadDoTls(Sender: TPollAsyncConnection);\n   begin\r\n     fGC1.Safe.Lock; // load certificates once from first connected thread\r\n     try\r\n-      fServer.DoTlsAfter(cstaBind);  // validate certificates now\r\n+      if not fServer.TLS.Enabled then\r\n+        fServer.DoTlsAfter(cstaBind);  // validate certificates now\r\n     finally\r\n       fGC1.Safe.UnLock;\r\n     end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.http.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1237,7 +1237,7 @@ function TRestHttpServer.Request(Ctxt: THttpServerRequestAbstract): cardinal;\n     match := rmNoMatch;\r\n     matchcase := rsoRedirectServerRootUriForExactCase in fOptions;\r\n     // thread-safe TLS + URI match from fRestServers[].Server.Model array\r\n-    fSafe.ReadLock;\r\n+    fSafe.ReadLock; // protect fRestServers[]\r\n     {$ifdef HASFASTTRYFINALLY}\r\n     try\r\n     {$else}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1153,11 +1153,11 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\n       P := @fInstance[ndx];\r\n       P^.LastAccessTix10 := Inst.LastAccessTix10;\r\n       Inst.Instance := P^.Instance;\r\n-      fInstances.Safe.ReadUnLock;\r\n       result := aMethodIndex; // notify caller\r\n-      exit;\r\n     end;\r\n     fInstances.Safe.ReadUnLock;\r\n+    if result >= 0 then\r\n+      exit;\r\n   end;\r\n   // new TInterfacedObject corresponding to this session/user/group/thread\r\n   if (InstanceCreation <> sicClientDriven) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Network",
+        "REST",
+        "SOA"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.net.async",
+        "mormot.rest.http.server",
+        "mormot.soa.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "83c4df20f15661a856c66bcdba97f3ec2b4fd41a",
+      "short_sha": "83c4df20",
+      "subject": "lib: fixed TAlgoZstd context usage",
+      "body": "- it was blocking on multi-thread\n- this unit is clearly not finalized",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T10:00:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/83c4df20f15661a856c66bcdba97f3ec2b4fd41a",
+      "parents": [
+        "fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea"
+      ],
+      "stats": {
+        "additions": 44,
+        "deletions": 36,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.zstd.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 34,
+          "patch": "@@ -3,7 +3,6 @@\n // licensed under a MPL/GPL/LGPL three license - see LICENSE.md\r\n unit mormot.lib.zstd;\r\n \r\n-\r\n {\r\n   *****************************************************************************\r\n \r\n@@ -313,11 +312,11 @@ function TSynZstdDynamic.LibraryName: TFileName;\n   // TAlgoCompress file layout and only support raw buffer and file methods\r\n   TAlgoZstd = class(TAlgoCompress)\r\n   protected\r\n-    fCompressionContextSafe: TLightLock;\r\n+    fCompressionContextSafe: TLightLock; // TryLock to acquire shared CCtx\r\n     fDecompressionContextSafe: TLightLock;\r\n-    fCompressionLevel: integer;\r\n     fCompressionContext: TZSTD_CCtx;\r\n     fDecompressionContext: TZSTD_DCtx;\r\n+    fCompressionLevel: integer;\r\n   public\r\n     /// set AlgoID = 11 as genuine byte identifier for zstd (even if not used)\r\n     constructor Create; override;\r\n@@ -341,6 +340,8 @@ constructor TAlgoZstd.Create;\n   fAlgoFileExt := '.zst';\r\n   inherited Create;\r\n   fCompressionLevel := ZSTD_CLEVEL_DEFAULT;\r\n+  fCompressionContext := Zstd.createCCtx; // pre-alloced two shared contexts\r\n+  fDecompressionContext := Zstd.createDCtx;\r\n end;\r\n \r\n destructor TAlgoZstd.Destroy;\r\n@@ -352,58 +353,65 @@ destructor TAlgoZstd.Destroy;\n   inherited Destroy;\r\n end;\r\n \r\n-function TAlgoZstd.AlgoCompressDestLen(PlainLen: integer): integer;\r\n+function TAlgoZstd.AlgoCompress(Plain: pointer; PlainLen: integer; Comp: pointer): integer;\r\n+var\r\n+  ctx: TZSTD_CCtx;\r\n begin\r\n+  result := 0;\r\n   if Zstd = nil then\r\n-    result := 0\r\n+    exit;\r\n+  if fCompressionContextSafe.TryLock then // acquired shared context\r\n+    ctx := fCompressionContext\r\n   else\r\n-    result := Zstd.compressBound(PlainLen);\r\n+    ctx := Zstd.createCCtx; // transient context for this thread on contention\r\n+  try\r\n+    Zstd.CCtx_setParameter(ctx, ZSTD_c_compressionLevel, fCompressionLevel);\r\n+    result := zstd.compress2(ctx,\r\n+      Comp, Zstd.compressBound(PlainLen) {Todo}, Plain, PlainLen);\r\n+  finally\r\n+    if ctx = fCompressionContext then\r\n+      fCompressionContextSafe.UnLock\r\n+    else\r\n+      Zstd.freeCCtx(ctx);\r\n+  end;\r\n end;\r\n \r\n-function TAlgoZstd.AlgoCompress(Plain: pointer; PlainLen: integer; Comp: pointer): integer;\r\n+function TAlgoZstd.AlgoDecompress(Comp: pointer; CompLen: integer; Plain: pointer): integer;\r\n+var\r\n+  ctx: TZSTD_DCtx;\r\n begin\r\n+  result := 0;\r\n   if Zstd = nil then\r\n-    result := 0\r\n+    exit;\r\n+  if fDecompressionContextSafe.TryLock then // acquired shared context\r\n+    ctx := fDecompressionContext\r\n   else\r\n-  begin\r\n-    fCompressionContextSafe.Lock;\r\n-    try\r\n-      if fCompressionContext = nil then\r\n-        fCompressionContext := Zstd.createCCtx;\r\n-      Zstd.CCtx_setParameter(fCompressionContext,\r\n-        ZSTD_c_compressionLevel, fCompressionLevel);\r\n-      result := zstd.compress2(fCompressionContext,\r\n-        Comp, Zstd.compressBound(PlainLen) {Todo}, Plain, PlainLen);\r\n-    finally\r\n-      fCompressionContextSafe.UnLock;\r\n-    end;\r\n+    ctx := Zstd.createDCtx; // transient context for this thread on contention\r\n+  try\r\n+    result := zstd.decompressDCtx(ctx, Plain,\r\n+      Zstd.getFrameContentSize(Comp, CompLen) {Todo}, Comp, CompLen);\r\n+  finally\r\n+    if ctx = fDecompressionContext then\r\n+      fDecompressionContextSafe.UnLock\r\n+    else\r\n+      Zstd.freeDCtx(ctx);\r\n   end;\r\n end;\r\n \r\n-function TAlgoZstd.AlgoDecompressDestLen(Comp: pointer): integer;\r\n+function TAlgoZstd.AlgoCompressDestLen(PlainLen: integer): integer;\r\n begin\r\n   if Zstd = nil then\r\n     result := 0\r\n   else\r\n-    result := Zstd.getFrameContentSize(Comp, MemSize(Comp) {Todo});\r\n+    result := Zstd.compressBound(PlainLen);\r\n end;\r\n \r\n-function TAlgoZstd.AlgoDecompress(Comp: pointer; CompLen: integer; Plain: pointer): integer;\r\n+function TAlgoZstd.AlgoDecompressDestLen(Comp: pointer): integer;\r\n begin\r\n   if Zstd = nil then\r\n     result := 0\r\n   else\r\n-  begin\r\n-    fDecompressionContextSafe.Lock;\r\n-    try\r\n-      if fDecompressionContext = nil then\r\n-        fDecompressionContext := Zstd.createDC\n... [truncated, 378 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16659\n+16660",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16659'\r\n+'2.4.16660'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.zstd"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea",
+      "short_sha": "fbb6f6dc",
+      "subject": "crypt: fixed potential deadlock in TEccCertificateChain.ValidateItems",
+      "body": "- this method is now deliberly not thread safe and won't try to use ReadLock here",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T09:26:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fbb6f6dc219fa69dcdc9a2d03cf9f2c9e2b791ea",
+      "parents": [
+        "17f74f8129f07e27df4e9b952acc0ec8e2915503"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 8,
+          "patch": "@@ -950,6 +950,7 @@   TEccCertificateChain = class(TObjectRWLightLock)\n     // - returns nil if all items were valid\r\n     // - returns the list of any invalid instances\r\n     // - do not free the returned items, since they are reference to Items[]\r\n+    // - this method is not thread-safe so should be run e.g. just after loading\r\n     function ValidateItems: TEccCertificateObjArray;\r\n     /// check if the digital signature is recognized by the stored certificates\r\n     // - ensure that sign.AuthoritySerial is part of Items[] list but not the CRL\r\n@@ -4519,14 +4520,10 @@ function TEccCertificateChain.ValidateItems: TEccCertificateObjArray;\n   result := nil;\r\n   if self = nil then\r\n     exit;\r\n-  fSafe.ReadLock;\r\n-  try\r\n-    for i := 0 to high(fItems) do\r\n-      if not (IsValid(fItems[i]) in ECC_VALIDSIGN) then\r\n-        PtrArrayAdd(result, fItems[i]);\r\n-  finally\r\n-    fSafe.ReadUnLock;\r\n-  end;\r\n+  // note: fSafe.ReadLock here would deadlock within nested IsValid()\r\n+  for i := 0 to high(fItems) do\r\n+    if not (IsValid(fItems[i]) in ECC_VALIDSIGN) then\r\n+      PtrArrayAdd(result, fItems[i]);\r\n end;\r\n \r\n constructor TEccCertificateChain.CreateFromFile(const jsonfile: TFileName);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16658\n+16659",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16658'\r\n+'2.4.16659'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.ecc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "17f74f8129f07e27df4e9b952acc0ec8e2915503",
+      "short_sha": "17f74f81",
+      "subject": "net: new TWebSocketProtocol.IsSubprotocol/SetName methods",
+      "body": "- to replace TWebSocketProtocol.SetSubprotocol which was not thread-safe\n- with clear distinction between name checking and cloned instance setup\n- both virtual to be properly overriden e.g. for synopse binary protocols",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T09:19:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/17f74f8129f07e27df4e9b952acc0ec8e2915503",
+      "parents": [
+        "55fa224e49a2b4285b809bb5d44dea062c2b23ed"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 25,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16657\n+16658",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16657'\r\n+'2.4.16658'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.relay.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -173,7 +173,7 @@   TSynopseServerProtocol = class(TWebSocketProtocol)\n     // implements mormot.net.ws.core's TWebSocketProtocolRest variants\r\n     // to behave like a regular mORMot server from the client point of view\r\n     function GetSubprotocols: RawUtf8; override;\r\n-    function SetSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n+    function IsSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n   public\r\n     /// initialize the protocol to be processed on a given TPublicRelay\r\n     constructor Create(aOwner: TPublicRelay); reintroduce;\r\n@@ -550,7 +550,7 @@ function TSynopseServerProtocol.GetSubprotocols: RawUtf8;\n   result := 'synopsejson, synopsebin, synopsebinary';\r\n end;\r\n \r\n-function TSynopseServerProtocol.SetSubprotocol(\r\n+function TSynopseServerProtocol.IsSubprotocol(\r\n   const aProtocolName: RawUtf8): boolean;\r\n begin\r\n   result := FindPropName(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -758,8 +758,8 @@ function THttpClientWebSockets.WebSocketsUpgrade(\n       result := 'Invalid HTTP Upgrade Sub-Protocol';\r\n       supportedprot := HeaderGetValue('SEC-WEBSOCKET-PROTOCOL');\r\n       if supportedprot <> '' then // this header may be omitted\r\n-        if aProtocol.SetSubprotocol(supportedprot) then\r\n-          aProtocol.Name := supportedprot\r\n+        if aProtocol.IsSubprotocol(supportedprot) then\r\n+          aProtocol.Name := supportedprot // call SetName() virtual method\r\n         else\r\n           exit // unsupported sub-protocol\r\n       else if PosExChar(',', expectedprot) <> 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.core.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 19,
+          "patch": "@@ -304,6 +304,7 @@   TWebSocketProtocol = class(TSynPersistent)\n     fEncryption: IProtocol;\r\n     fCustomData: TObject;\r\n     procedure AfterUpgrade(aProcess: TWebSocketProcess); virtual;\r\n+    procedure SetName(const aProtocolName: RawUtf8); virtual;\r\n     // focText/focBinary or focContinuation/focConnectionClose from ProcessStart/Stop\r\n     procedure ProcessIncomingFrame(Sender: TWebSocketProcess;\r\n       var Request: TWebSocketFrame; const Info: RawUtf8); virtual; abstract;\r\n@@ -340,7 +341,8 @@   TWebSocketProtocol = class(TSynPersistent)\n     /// recognize a supported sub-protocol (on both client and server sides)\r\n     // - should return true on success, i.e. if aProtocolName has been recognized\r\n     // - check against Name by default, but could be e.g. 'synopsebin, synopsebinary'\r\n-    function SetSubprotocol(const aProtocolName: RawUtf8): boolean; virtual;\r\n+    // - protocols with multiple name should set their Name onced cloned/created\r\n+    function IsSubprotocol(const aProtocolName: RawUtf8): boolean; virtual;\r\n     /// create the internal Encryption: IProtocol according to the supplied key\r\n     // - any asymmetric algorithm needs to know its side, i.e. client or server\r\n     // - use aKey='password#xxxxxx.private' for efAesCtr128 calling\r\n@@ -397,7 +399,7 @@   TWebSocketProtocol = class(TSynPersistent)\n     /// the Sec-WebSocket-Protocol application name currently involved\r\n     // - e.g. 'synopsejson', 'synopsebin' or 'synopsebinary'\r\n     property Name: RawUtf8\r\n-      read fName write fName;\r\n+      read fName write SetName;\r\n     /// the optional URI on which this protocol would be enabled\r\n     // - leave to '' if any URI should match\r\n     property URI: RawUtf8\r\n@@ -511,6 +513,7 @@   TWebSocketProtocolBinary = class(TWebSocketProtocolRest)\n     fFramesInBytesSocket: QWord;\r\n     fFramesOutBytesSocket: QWord;\r\n     fOptions: TWebSocketProtocolBinaryOptions;\r\n+    procedure SetName(const aProtocolName: RawUtf8); override;\r\n     procedure FrameCompress(const Head: RawUtf8;\r\n       const Values: array of const; const Content, ContentType: RawByteString;\r\n       var frame: TWebSocketFrame); override;\r\n@@ -564,7 +567,7 @@   TWebSocketProtocolBinary = class(TWebSocketProtocolRest)\n     /// overriden to return 'synopsebin, synopsebinary' sub-protocols\r\n     function GetSubprotocols: RawUtf8; override;\r\n     /// recognize our 'synopsebin, synopsebinary' sub-protocols\r\n-    function SetSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n+    function IsSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n   published\r\n     /// how compression / encryption is implemented during the transmission\r\n     // - is set to [pboSynLzCompress] by default\r\n@@ -1406,7 +1409,7 @@   TWebSocketEngineIOProtocol = class(TWebSocketProtocol)\n   public\r\n     // overriden to return '' i.e. recognize by URI, not \"Sec-WebSocket-Protocol:\"\r\n     function GetSubprotocols: RawUtf8; override;\r\n-    function SetSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n+    function IsSubprotocol(const aProtocolName: RawUtf8): boolean; override;\r\n     /// true when Engine.IO messages can be processed\r\n     // - i.e. after OPEN (eioOpen) and before CLOSE (eioClose)\r\n     property Opened: boolean\r\n@@ -1803,7 +1806,12 @@ function TWebSocketProtocol.GetSubprotocols: RawUtf8;\n   result := fName;\r\n end;\r\n \r\n-function TWebSocketProtocol.SetSubprotocol(const aProtocolName: RawUtf8): boolean;\r\n+procedure TWebSocketProtocol.SetName(const aProtocolName: RawUtf8);\r\n+begin\r\n+  fName := aProtocolName; // could be overriden to setup the instance by-name\r\n+end;\r\n+\r\n+function TWebSocketProtocol.IsSubprotocol(const aProtocolName: RawUtf8): boolean;\r\n begin\r\n   result := PropNameEquals(aProtocolName, fName);\r\n end;\r\n@@ -2590,18 +2598,16 @@ function TWebSocketProtocolBinary.GetSubprotocols: RawUtf8;\n   result := 'synopsebin, synopsebinary';\r\n end;\r\n \r\n-function TWebSocketProtocolBinary.SetSubprotocol(const aProtocolName: RawUtf8): boolea\n... [truncated, 1563 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.relay",
+        "mormot.net.ws.client",
+        "mormot.net.ws.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "55fa224e49a2b4285b809bb5d44dea062c2b23ed",
+      "short_sha": "55fa224e",
+      "subject": "core: fixed TSynTimeZone.LockedSearch thread safety",
+      "body": "- the internal \"last zone\" cache was not thread safe on concurrent ReadLock",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T08:57:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/55fa224e49a2b4285b809bb5d44dea062c2b23ed",
+      "parents": [
+        "6c82cf9377f726ee7feb186fb53c3968a4c7bc93"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.search.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 10,
+          "patch": "@@ -1912,11 +1912,12 @@   TTimeZoneData = record\n   TSynTimeZone = class(TObjectRWLightLock)\r\n   protected\r\n     fZone: TTimeZoneDataDynArray;\r\n-    fZoneCount: integer;\r\n     fZones: TDynArrayHashed;\r\n     fLastZone: TTimeZoneID;\r\n     fLastIndex: integer;\r\n+    fLastZoneSafe: TLightLock; // protect fLastZone/fLastIndex\r\n     fCurrentIndex, fUtcIndex: integer;\r\n+    fZoneCount: integer;\r\n     fIds: TStringList;\r\n     fDisplays: TStringList;\r\n     procedure SetIDs;\r\n@@ -7738,16 +7739,20 @@ procedure TSynTimeZone.SaveToFile(const FileName: TFileName);\n \r\n function TSynTimeZone.LockedSearch(const TzId: TTimeZoneID): PtrInt;\r\n begin\r\n+  result := -1;\r\n   if TzId = '' then\r\n-    result := -1\r\n-  else if TzId = fLastZone then\r\n-    result := fLastIndex\r\n-  else\r\n-  begin\r\n-    result := fZones.FindHashed(TzId);\r\n-    fLastZone := TzId;\r\n-    flastIndex := result;\r\n-  end;\r\n+    exit;\r\n+  fLastZoneSafe.Lock; // protect fLastZone/fLastIndex within concurrent ReadLock\r\n+  if TzId = fLastZone then\r\n+    result := fLastIndex;\r\n+  fLastZoneSafe.UnLock;\r\n+  if result >= 0 then\r\n+    exit;\r\n+  result := fZones.FindHashed(TzId);\r\n+  fLastZoneSafe.Lock;\r\n+  fLastZone := TzId;\r\n+  flastIndex := result;\r\n+  fLastZoneSafe.UnLock;\r\n end;\r\n \r\n procedure TSynTimeZone.LockedAfterLoad;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16656\n+16657",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16656'\r\n+'2.4.16657'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.search"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6c82cf9377f726ee7feb186fb53c3968a4c7bc93",
+      "short_sha": "6c82cf93",
+      "subject": "crypt: fixed TEccCertificateChain.SaveToBinary thread safety",
+      "body": "- may fail on parallel executions, which is very unlikely in practice",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T08:50:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6c82cf9377f726ee7feb186fb53c3968a4c7bc93",
+      "parents": [
+        "62bd0e82ae429d33a7c779063d8b77fc01b7b97f"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -4392,7 +4392,7 @@ function TEccCertificateChain.SaveToBinary: RawByteString;\n begin\r\n   st := TRawByteStringStream.Create;\r\n   try\r\n-    fSafe.ReadLock;\r\n+    fSafe.WriteLock; // ReadLock not enough because of fStoreOnlyPublicKey flag\r\n     try\r\n       // genuine magic header\r\n       n := CHAIN_MAGIC;\r\n@@ -4419,7 +4419,7 @@ function TEccCertificateChain.SaveToBinary: RawByteString;\n       for i := 0 to n - 1 do\r\n         fCrl[i].SaveToStream(st);\r\n     finally\r\n-      fSafe.ReadUnLock;\r\n+      fSafe.WriteUnLock;\r\n     end;\r\n     result := st.DataString;\r\n   finally\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16655\n+16656",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16655'\r\n+'2.4.16656'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.ecc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "62bd0e82ae429d33a7c779063d8b77fc01b7b97f",
+      "short_sha": "62bd0e82",
+      "subject": "tests: include test.core.threads in mormot2tests project",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T07:43:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/62bd0e82ae429d33a7c779063d8b77fc01b7b97f",
+      "parents": [
+        "719cd877956cc308dd387ce3abafb55e4790bb1e"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16654\n+16655",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16654'\r\n+'2.4.16655'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/mormot2tests.dpr",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -60,6 +60,7 @@ uses\n   mormot.crypt.openssl,\r\n   mormot.tools.ecc         in '..\\src\\tools\\ecc\\mormot.tools.ecc.pas',\r\n   test.core.base           in '.\\test.core.base.pas',\r\n+  test.core.threads        in '.\\test.core.threads.pas',\r\n   test.core.data           in '.\\test.core.data.pas',\r\n   test.core.crypt          in '.\\test.core.crypt.pas',\r\n   test.core.ecc            in '.\\test.core.ecc.pas',\r\n@@ -105,6 +106,7 @@ begin\n     Param('ldapusr', 'the LDAP #user for --dns, e.g. name@ad.company.com');\r\n     Param('ldappwd', 'the LDAP #password for --dns');\r\n     Option('ldaps',  'force LDAPS connection + plain auth instead of Kerberos');\r\n+    Option('fullthreads', 'force extensive test.core.threads coverage');\r\n     Param('ntp',     'a NTP/SNTP #server name/IP instead of time.google.com');\r\n     Option('nontp',  'disable the NTP/SNTP server tests');\r\n     {$ifdef USE_OPENSSL}\r\n@@ -147,6 +149,7 @@ procedure TIntegrationTests.CoreUnits;\n begin\r\n   AddCase([\r\n     TTestCoreBase,\r\n+    TTestCoreThreads,\r\n     TTestCoreProcess,\r\n     {$ifdef HASGENERICS} // do-nothing on oldest compilers (e.g. <= Delphi XE7)\r\n     TTestCoreCollections,\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "719cd877956cc308dd387ce3abafb55e4790bb1e",
+      "short_sha": "719cd877",
+      "subject": "tests: extended T*Lock coverage",
+      "body": "- introducing text.core.threads new unit\n- check expected behavior in a multi-threaded test harness\n- all our T*Lock algorithms seem stable now after last days review, debug and fix",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T07:41:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/719cd877956cc308dd387ce3abafb55e4790bb1e",
+      "parents": [
+        "4e7838758f122a59192d6eff0d4a1e8274255a9c"
+      ],
+      "stats": {
+        "additions": 1168,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16653\n+16654",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16653'\r\n+'2.4.16654'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "added",
+          "additions": 1166,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,1166 @@\n+/// regression tests for mormot.core.threads and low-level thread primitives\n+// - this unit is a part of the Open Source Synopse mORMot framework 2,\n+// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\n+unit test.core.threads;\n+\n+interface\n+\n+{$I ..\\src\\mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  classes,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.threads,\n+  mormot.core.test;\n+\n+\n+type\n+  /// execution profile for the comparatively expensive contention loops\n+  TThreadTestProfile = (\n+    ttpFast,\n+    ttpFull);\n+\n+  /// all exclusive low-level lock primitives with a Lock/TryLock/UnLock API\n+  // - includes every T*LightLock exclusive primitive from mormot.core.os\n+  // - TOSLock is kept as the reentrant OS-backed reference implementation\n+  TExclusiveLockKind = (\n+    elkLight,\n+    elkMultiLight,\n+    elkOSLight,\n+    elkOS);\n+\n+  /// R/W lock primitives from mormot.core.os\n+  TRWLockKind = (\n+    rwlkLight,\n+    rwlkRW,\n+    rwlkOSRWLight);\n+\n+  /// scheduling preference implemented by a R/W lock\n+  // - test logic below intentionally does not depend on this value\n+  // - it is metadata, so adding a differently biased lock does not silently\n+  //   inherit a writer- or reader-preference assertion\n+  TRWLockPreference = (\n+    rwlpUnspecified,\n+    rwlpReader,\n+    rwlpWriter);\n+\n+  TExclusiveStats = record\n+    Active: cardinal;\n+    MaxActive: cardinal;\n+    Acquired: cardinal;\n+    Failed: cardinal;\n+    Errors: cardinal;\n+    Value: cardinal;\n+    BlockingStarted: cardinal;\n+    BlockingFinished: cardinal;\n+    TryStarted: cardinal;\n+    TryFinished: cardinal;\n+  end;\n+\n+  TRWStats = record\n+    Readers: cardinal;\n+    Writers: cardinal;\n+    MaxReaders: cardinal;\n+    Errors: cardinal;\n+    Version: cardinal;\n+    Value1: cardinal;\n+    Value2: cardinal;\n+    ReadSuccess: cardinal;\n+    ReadFailure: cardinal;\n+    WriteSuccess: cardinal;\n+    WriteFailure: cardinal;\n+  end;\n+\n+\n+  /// regression tests for low-level synchronization primitives\n+  TTestCoreThreads = class(TSynTestCase)\n+  protected\n+    fProfile: TThreadTestProfile;\n+    // concrete lock storage - the active kind is selected by the enumerates\n+    fExclusiveKind: TExclusiveLockKind;\n+    fLight: TLightLock;\n+    fMultiLight: TMultiLightLock;\n+    fOSLight: TOSLightLock;\n+    fOS: TOSLock;\n+    fRWKind: TRWLockKind;\n+    fRWLight: TRWLightLock;\n+    fRW: TRWLock;\n+    fOSRWLight: TOSRWLightLock;\n+    // shared worker state - assertions are only made by the main test thread\n+    fIterations: integer;\n+    fExclusiveStats: TExclusiveStats;\n+    fRWStats: TRWStats;\n+    // TSynEvent accepts one waiter by design, so use one event per direction\n+    fEntered: TSynEvent;\n+    fAcquired: TSynEvent;\n+    fGate: TSynEvent;\n+    fDone: TSynEvent;\n+    fProbeResult: cardinal;\n+    fMainOwns: cardinal;\n+    procedure Setup; override;\n+    procedure CleanUp; override;\n+    function WorkerCount: integer;\n+    function StressIterations: integer;\n+    function TransitionIterations: integer;\n+    function WaitMS: cardinal;\n+    procedure ResetProbe;\n+    procedure RunWorker(const Worker: TNotifyEvent; const Name: RawUtf8);\n+    procedure RunWorkers(const Worker: TNotifyEvent; Count: integer;\n+      const Name: RawUtf8);\n+    // exclusive-lock dispatch\n+    procedure ExclusiveInit;\n+    procedure ExclusiveDone;\n+    procedure ExclusiveLock;\n+    function ExclusiveTryLock: boolean;\n+    procedure ExclusiveUnLock;\n+    function ExclusiveIsLocked: boolean;\n+    // exclusive-lock workers and tests\n+    procedure ExclusiveTryProbe(Sender: TObject);\n+    procedure ExclusiveBlockingProbe(Sender: TObject);\n+    procedure ExclusiveBlockingWorker(Sender: TObject);\n+    procedure ExclusiveTryWorker(Sender: TObject);\n+    procedure TestExclusiveKind(Kind: TExclusiveLockKind);\n+    procedure TestMultiLightSpecial;\n+    procedure TestOSLockSpecial;\n+    // R/W dispatch\n+    procedure RWInit;\n+    procedure RWDone;\n+    procedure RWReadLock;\n+ \n... [truncated, 28170 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4e7838758f122a59192d6eff0d4a1e8274255a9c",
+      "short_sha": "4e783875",
+      "subject": "tests: cover LDAP custom members parsing",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-01T07:40:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4e7838758f122a59192d6eff0d4a1e8274255a9c",
+      "parents": [
+        "951b4afd5f5864400b807117b472546e7c305c46"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16652\n+16653",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16652'\r\n+'2.4.16653'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 2,
+          "patch": "@@ -1303,8 +1303,12 @@ procedure TNetworkProtocols.DNSAndLDAP;\n       Run(RunLdapClient, self, 'ldap', true, false); // fails in the background\r\n   end;\r\n   // validate LDAP distinguished name conversion (no client)\r\n-  CheckEqual(DNToCN('CN=User1,OU=Users,OU=London,DC=xyz,DC=local'),\r\n-    'xyz.local/London/Users/User1');\r\n+  u := 'CN=User1,OU=Users,OU=London,DC=xyz,DC=local';\r\n+  CheckEqual(DNToCN(u), 'xyz.local/London/Users/User1');\r\n+  CheckEqual(DNToCN(u, false, [dnDC]), 'xyz.local');\r\n+  CheckEqual(DNToCN(u, false, [dnDC, dnOU]), 'xyz.local/London/Users');\r\n+  CheckEqual(DNToCN(u, false, [dnOU]), '/London/Users');\r\n+  CheckEqual(DNToCN(u, false, [dnCN]), '/User1');\r\n   CheckEqual(DNToCN(\r\n     'cn=JDoe,ou=Widgets,ou=Manufacturing,dc=USRegion,dc=OrgName,dc=com'),\r\n     'USRegion.OrgName.com/Manufacturing/Widgets/JDoe');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
