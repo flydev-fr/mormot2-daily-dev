@@ -1,0 +1,308 @@
+{
+  "schema": "mormot2-monitor/findings@1",
+  "edition": "2026-09-03",
+  "reviewed_shas": [
+    "09bdf54cabba2d5f861d58c72545f2630f55aca5",
+    "46cc440eaeda37ed5fcb8c89addbd43d6fab4d3b",
+    "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+    "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+    "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+    "6340aef4a9e8fd62cd367c4f56044d6cfea78816",
+    "103c03a8ca0852d935970cc3c4289fb944bb2468",
+    "aa59acd238349b9ae763d0cc88a1d44db59818d7",
+    "d492c4b0de2e2b97327bb00a76e072ff852715be",
+    "56e2752a756f63f70013a0cab66c34cfc465f926",
+    "c5d4f5c3a347e85dc3521f3326b80163489999bf",
+    "8b33b6b174eddf564857e039a38f51f442470ab4",
+    "14caddbaaf3cfe821451fbcb5dd463b380d6e127",
+    "2194da9b1da85dcb3f80d5e4ff0187c05ed2720d",
+    "16e06575443b78cf4c258ba2d6098c01520bc253",
+    "094f81d5b39e7c4e71d153c7e82cf27cf5502867",
+    "a333a689f02b8e2404a9f847318e4b457e438ac5",
+    "73e34c56503a5ca2f711fc8999a00fc43799203c",
+    "8343fa49f4f19357f7f78d3d720d1ab0480dc7d6",
+    "4b07c7309ed65d2ca2a7c9e674448988cd1d8e6d",
+    "6768230c62096b12b05b2503cea2f48192272af4",
+    "a7f1068b99218ba856f8aa65b003c79aa00f2196"
+  ],
+  "findings": [
+    {
+      "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+      "check": "memory-lifetime",
+      "severity": "high",
+      "title": "TTunnelRelay.Destroy no longer clears TTunnelConsole.fOwner, leaving a dangling relay pointer",
+      "explanation": "Before this commit the relay kept the console class instances in fConsole: TTunnelConsoles and its destructor ran 'for i := 0 to fConsoleCount - 1 do fConsole[i].fOwner := nil; // paranoid', so a console outliving the relay saw fOwner = nil and skipped RemoveConsole. The rewrite changes the registry to TTunnelRelayConsoles, which stores only the ITunnelOpenState of each console; TryResolve keeps no reference to the TTunnelConsole object itself ('SOA endpoint lifetime remains independent from relay state'), and TTunnelConsole is a plain refcounted TInterfacedPersistent owned by whoever holds ITunnelConsole (SOA sicPerSession). The new TTunnelRelay.Destroy therefore nils only fAgent.fOwner; it has no way to reach the live consoles. Every TTunnelConsole still referenced when the relay is freed keeps fOwner pointing at freed memory, and its destructor unconditionally calls owner.RemoveConsole(state) on it (TunnelSend/TunnelSetInfo/TunnelPrepare/TunnelAccept likewise dereference owner.fAgent and owner.fLogClass). The result is a use-after-free write into the freed relay's fConsole registry under fConsoleSafe.",
+      "evidence": [
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "  fConsoleSafe.WriteLock;\n  try\n    consoles := fConsole;\n    fConsole := nil;\n    fConsoleCount := 0;\n  finally\n    fConsoleSafe.WriteUnLock;\n  end;\n  if fAgent <> nil then\n    fAgent.fOwner := nil; // fAgentInstance keeps this raw pointer valid here\n  fAgent := nil;\n  fAgentInstance := nil;\n  consoles := nil; // state/interface releases outside fConsoleSafe\n  inherited Destroy;",
+          "why": "The new TTunnelRelay.Destroy detaches the registry and nils fAgent.fOwner only - no console fOwner is cleared, and grep confirms line 1721 is the sole 'fOwner := nil' assignment made by the relay."
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "    c := TTunnelConsole.Create(self, fTransientTimeOutSecs);\n    console := c; // SOA endpoint lifetime remains independent from relay state\n    fConsoleSafe.WriteLock;\n    try\n      n := fConsoleCount;\n      if n = length(fConsole) then\n        SetLength(fConsole, NextGrow(n));\n      fConsole[n].Info.Clear;\n      fConsole[n].State := c.fState;\n      inc(fConsoleCount);",
+          "why": "Only c.fState is registered; the relay keeps no handle on the TTunnelConsole instance, so Destroy cannot reach it - this is what removed the old nil-out loop's target."
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "  fOwner: TTunnelRelay;\n    fLogClass: TSynLogClass;\n    fTimeOutSecs: cardinal;\n    fState: ITunnelOpenState;",
+          "why": "fOwner is a raw class pointer with no refcount and no back-registration, so nothing keeps the relay alive for a surviving console."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "TTunnelRelay.Resolve(ITunnelConsole) / SOA sicPerSession ITunnelConsole endpoint, then TTunnelRelay.Free while that interface is still held",
+        "path_quote": "destructor TTunnelConsole.Destroy;\nvar\n  owner: TTunnelRelay;\n  state: ITunnelOpenState;\nbegin\n  state := fState;\n  owner := fOwner;\n  if (state <> nil) and\n     (owner <> nil) then\n    owner.RemoveConsole(state);\n  inherited Destroy;\nend;",
+        "path_sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+        "path_path": "src/net/mormot.net.tunnel.pas"
+      },
+      "refuted_by": "Looked for what makes it safe, found nothing: grep shows line 1721 (fAgent) is the only relay-side 'fOwner := nil'; TTunnelOpen.Destroy nils fOwner only inside the console's own teardown, after RemoveConsole ran; the relay holds no ITunnelConsole and TryResolve keeps endpoint lifetime independent, so freeing it neither frees nor notifies consoles; RemoveConsole guards only 'if (self = nil)', which cannot detect a freed instance; TInterfacedPersistent = class(TInterfacedObject) is plain refcounting with no relay ownership.",
+      "confidence": "likely",
+      "suggested_fix": "Give TTunnelRelay a way back to its live consoles - e.g. keep a weak TTunnelConsole pointer alongside State in TTunnelRelayConsole and nil each fOwner in Destroy as before, or make fOwner an interface/IWeakRef the console can test for validity."
+    },
+    {
+      "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+      "check": "other",
+      "severity": "low",
+      "title": "TTunnelList.AddTransient mutates fSession/fItem without flushing the GetAllInfo one-second cache",
+      "explanation": "TTunnelList caches the result of GetAllInfo for one wall-clock second, keyed by fInfoCacheTix32, and every mutator that changes the enumerated arrays fSession[]/fItem[] resets fInfoCacheTix32 to 0 right after unlocking (Add, Extract, Delete, DeleteFrom, Rollback, PurgeTransient). AddTransient performs exactly the same mutation - AddInteger(fSession, fCount, aSession) plus InterfaceArrayAdd(fItem, aInstance) - and then returns without touching fInfoCacheTix32. If any GetAllInfo call already populated the cache earlier in the same second, the next GetAllInfo takes the fast path and returns the pre-registration array, so a session just created by TunnelPrepare or accepted by TunnelAccept is missing from AgentsInfo/ConsolesInfo/TTunnelConsole.TunnelInfo until the tick second rolls over. In ConsolesInfo the effect is self-contradictory output: 'count' is read live from State.Count (fCount, already incremented) while 'list' comes from the stale cache, so count exceeds length(list). Routing is unaffected: TunnelSend/Get/Exists read fSession[] under fSafe and never consult fInfoCache.",
+      "evidence": [
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "    tix32 := GetTickSec;\n    AddInteger(fSession, fCount, aSession);\n    InterfaceArrayAdd(fItem, aInstance);\n    n := fPendingCount;\n    AddInteger(fPendingSession, fPendingCount, aSession);\n    if fPendingCount >= length(fPendingTix) then\n      SetLength(fPendingTix, length(fPendingSession));\n    fPendingTix[n] := tix32;\n    result := true;\n  finally\n    fSafe.WriteUnLock;\n  end;\nend;",
+          "why": "AddTransient: fSession[]/fItem[] are extended, then the routine ends - no 'fInfoCacheTix32 := 0'."
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "    AddInteger(fSession, fCount, aSession);\n    InterfaceArrayAdd(fItem, aInstance);\n    result := true;\n  finally\n    fSafe.WriteUnLock;\n  end;\n  fInfoCacheTix32 := 0; // flush cache info",
+          "why": "TTunnelList.Add does the identical mutation and does flush the cache - AddTransient is the outlier."
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "  if tix32 = fInfoCacheTix32 then // fast path to the cached last value\n  begin\n    fInfoCacheSafe.Lock;\n    try\n      if (fInfoCache <> nil) and\n         (tix32 = fInfoCacheTix32) then\n      begin\n        result := fInfoCache;\n        exit;\n      end;",
+          "why": "GetAllInfo returns the cached array whenever fInfoCacheTix32 still equals the current second, i.e. whenever nothing flushed it."
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+          "quote": "    count := consoles[i].State.Count;\n    dv^.AddValue('count', count);\n    VarClear(list);\n    if count <> 0 then\n      TDocVariantData(list).InitArrayFromVariants(\n        consoles[i].State.GetAllInfo, JSON_FAST);\n    dv^.AddValue('list', list);",
+          "why": "ConsolesInfo mixes a live Count with the cached GetAllInfo array, so the stale cache makes count and list disagree."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "ITunnelAgent.TunnelPrepare / ITunnelConsole.TunnelAccept (SOA endpoints) reach AddTransient; the stale data is read back through TTunnelRelay.AgentsInfo / ConsolesInfo and TTunnelConsole.TunnelInfo",
+        "path_quote": "    if (result <> 0) and\n       not aEndPoint.AddTransient(result, callback) then\n      result := 0;",
+        "path_sha": "b1b1f67d839b5b6b75edd4a05c02128552c9c1bc",
+        "path_path": "src/net/mormot.net.tunnel.pas"
+      },
+      "refuted_by": "Checked for an indirect flush and found none: both callers run aEndPoint.PurgeTransient right after AddTransient, but TTunnelList.PurgeTransient exits at 'if fDeprecatedTix4 = tix4 then exit' before reaching its own 'fInfoCacheTix32 := 0', so it only flushes once per 16 seconds. Commit() does not flush either, and correctly so - it only shrinks fPendingSession[], which GetAllInfo never reads. GetAllInfo's 'if fCount = 0 then exit' guard does not help: it returns before storing a cache entry, so an earlier non-empty second's cache survives. No writer resets fInfoCache itself.",
+      "confidence": "proven",
+      "suggested_fix": "Add 'fInfoCacheTix32 := 0; // flush cache info' after the fSafe.WriteUnLock in AddTransient, guarded by 'if result then' as Extract does."
+    },
+    {
+      "sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+      "check": "memory-lifetime",
+      "severity": "low",
+      "title": "FPCMM_MOONSHARD multiplies the retained empty small-pool bound from 38 pools to ~350",
+      "explanation": "_FreeMem keeps an emptied sequential-feed pool alive instead of returning it to the medium allocator, and gates that on BlockSize > MaximumTinyBlockSize. The gate is a proxy for 'this class has one block type process-wide' (its comment says so): before MOONSHARD, classes above MaximumTinyBlockSize existed exactly once, so at most 38 pools of 29..64KB could be retained, about 1.2-1.5MB. MOONSHARD sets NumTinyBlockTypesPO2=6 and NumTinyBlockArenasPO2=5, so MaximumTinyBlockSize becomes 64*16=1024 while SizeOf(TTinyBlockTypes) becomes 4096; since GetmemLookup only yields indices 0..43, ecx = index shl 6 never reaches 4096 and every class up to 2608B is served from the 32 per-thread-hashed arenas. The 11 classes from 1056 to 2608 bytes therefore still take the retain branch, but now exist 32 times each: up to ~352 block types can each pin one 29..64KB pool, i.e. roughly 20MB of empty pools never handed back. Retention is sticky, because EmptyPoolReuse is only reset at @TrySmallSequentialFeed, which a retained partially-free pool prevents from being reached. Symmetrically, the 144..1024B classes lose the retention they get in a plain FPCMM_SERVER build. The constant no longer tracks what the branch is trying to test.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+          "quote": "@EmptySequentialFeedPool:\n        // Larger small classes share one block type process-wide\n        cmp     word ptr [rsi].TSmallBlockType.BlockSize, MaximumTinyBlockSize\n        jbe     @IsSequentialFeedPool\n        // Retain one pool only after repeated single-block churn\n        cmp     byte ptr [rsi].TSmallBlockType.EmptyPoolReuse, SmallBlockRetention\n        jae     @StoreFreeBlock\n        inc     byte ptr [rsi].TSmallBlockType.EmptyPoolReuse",
+          "why": "The gate. @StoreFreeBlock re-inserts the empty pool in the partially-free list instead of calling FreeMediumBlock; the comment states the premise that the class has a single process-wide block type."
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+          "quote": "{$ifdef FPCMM_MOONSHARD}\n  NumTinyBlockTypesPO2  = 6; // 44 classes in a 64-slot arena row\n  NumTinyBlockArenasPO2 = 5; // 32 arenas",
+          "why": "MOONSHARD makes MaximumTinyBlockSize = NumTinyBlockTypes * SmallBlockGranularity = 64 * 16 = 1024, and gives every class NumTinyBlockArenas+1 = 32 instances."
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+          "quote": "// Can use one of the several arenas reserved for tiny blocks?\n        cmp     ecx, SizeOf(TTinyBlockTypes)\n        jae     @NotTinyBlockType",
+          "why": "ecx is the lookup index shifted by SmallBlockTypePO2; the largest index GetmemLookup can yield is 43, so ecx <= 2752 < SizeOf(TTinyBlockTypes)=4096 under MOONSHARD - the 1056..2608B classes are sharded like every other class, not process-wide."
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+          "quote": "OptimalSmallBlockPoolSizeLowerLimit =\n    29 * 1024 - MediumBlockGranularity + MediumBlockSizeOffset;\n  OptimalSmallBlockPoolSizeUpperLimit =\n    64 * 1024 - MediumBlockGranularity + MediumBlockSizeOffset;",
+          "why": "Each retained pool is one medium block of this clamped size, so 352 retained pools is on the order of 20MB."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "FreeMem/Dispose/TObject.Free of any 1056..2608 byte allocation, via the FPC memory manager this unit installs at initialization",
+        "path_quote": "GetMem:           @_Getmem;\n    FreeMem:          @_FreeMem;",
+        "path_sha": "58abf7f028fbfa43ea4852ada4b7a215b6097742",
+        "path_path": "src/core/mormot.core.fpcx64mm.pas"
+      },
+      "refuted_by": "Looked for what would make the threshold still correct. MaximumTinyBlockSize has exactly two occurrences in the unit - its definition at line 1029 and this comparison - so no MOONSHARD-specific adjustment compensates. The init loop runs a := 0 to NumTinyBlockArenas over all NumSmallBlockTypes slots with the i = NumTinyBlockTypes break never firing (i <= 63), so all 32 rows of >1024B block types really exist. EmptyPoolReuse is written in only two places: the inc here and the reset in _GetMem @TrySmallSequentialFeed, which a retained partially-free pool keeps _GetMem from reaching, so the retention does not decay. FPCMM_MOONSHARD does not undefine FPCMM_SERVER, so the branch is compiled in.",
+      "confidence": "likely",
+      "suggested_fix": "Make the branch test what it means: under FPCMM_MOONSHARD every class is sharded, so either skip retention entirely there (jbe/jmp @IsSequentialFeedPool) or scale SmallBlockRetention/the size threshold by the arena count, so the aggregate retained-pool bound stays in the ~1MB the comment assumes."
+    },
+    {
+      "sha": "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+      "check": "ifdef-asymmetry",
+      "severity": "low",
+      "title": "FPCMM_BOOSTER on BSD/Darwin loses both medium arena strategies at once",
+      "explanation": "The new guard defines FPCMM_MEDIUMTOLARGE only when FPCMM_MEDIUMPERTHREAD is not already set. FPCMM_BOOSTER sets FPCMM_MEDIUMPERTHREAD twelve lines earlier, so on a BOOSTER build the guard suppresses FPCMM_MEDIUMTOLARGE. That is the intent on Linux/Win64, where the 4 per-thread medium arenas take over. But FPCMM_MEDIUMPERTHREAD is undefined again ~460 lines later, in the POSIX non-LINUX branch, because the arena selection needs an inlined pthread_self/TEB read that only Linux and Windows provide. The preprocessor evaluates in file order, so on FreeBSD/OpenBSD/Darwin x86_64 the ifndef at line 222 still sees FPCMM_MEDIUMPERTHREAD defined and skips FPCMM_MEDIUMTOLARGE, then line 683 removes FPCMM_MEDIUMPERTHREAD too. A _GetMem for a medium block >48KB that loses the 'lock cmpxchg TMediumBlockInfo.Locked' then falls straight through to 'call LockMediumBlocks' with neither the extra arenas nor the spin-then-promote-to-large escape, i.e. it sleeps on the single medium lock. Before this commit FPCMM_SERVER defined FPCMM_MEDIUMTOLARGE unconditionally, so that same build had the fallback. Allocation stays correct; only multi-threaded medium-block throughput regresses.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+          "quote": "  {$ifdef FPCMM_SERVER}\n    {$define FPCMM_DEBUG}\n    {$define FPCMM_ASSUMEMULTITHREAD}\n    {$define FPCMM_ERMS}\n    {$define FPCMM_TINYPERTHREAD} // thread affinity matters with a few threads\n    {$ifndef FPCMM_MEDIUMPERTHREAD}\n      {$define FPCMM_MEDIUMTOLARGE} // mmap is better than sleeping\n    {$endif FPCMM_MEDIUMPERTHREAD}\n  {$endif FPCMM_SERVER}",
+          "why": "The new guard. FPCMM_MEDIUMPERTHREAD is already defined here on a BOOSTER build (line 210), so FPCMM_MEDIUMTOLARGE is skipped."
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+          "quote": "{$ifdef LINUX}\n  {$define NOSFRAME}\n{$else}\n  {$define OLDLINUXKERNEL}      // no Linuxism on BSD\n  {$undef FPCMM_TINYPERTHREAD}  // no inlined pthread_self on BSD\n  {$undef FPCMM_MEDIUMPERTHREAD}\n{$endif LINUX}\n",
+          "why": "~460 lines later, the non-LINUX POSIX branch undefines FPCMM_MEDIUMPERTHREAD. Too late to re-enable FPCMM_MEDIUMTOLARGE."
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+          "quote": "        {$ifdef FPCMM_MEDIUMTOLARGE}\n        // On contention, allocate medium blocks > 48KB as large blocks\n        cmp     ebx, MediumBlockToLargeMinSize\n        jb      @WaitForMedium // < 48KB won't be allocated as a large block\n        // Spin a little then fallback to large block allocation path\n        call    SpinLockMediumBlocks\n        jz      @MediumLocked2\n        // AllocateLargeBlock() would round it up by 64KB anyway\n        mov     size, rbx // reset first parameter\n        jmp     @IsALargeBlockRequest\n@WaitForMedium:\n        {$endif FPCMM_MEDIUMTOLARGE}\n        call    LockMediumBlocks\n@MediumLocked2:",
+          "why": "The medium-block contention path: with FPCMM_MEDIUMTOLARGE out, the >48KB spin-and-promote escape vanishes and the code goes directly to 'call LockMediumBlocks'."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "_GetMem / GetMem / any RTL allocation, on FreeBSD/OpenBSD/Darwin x86_64 built with -dFPCMM_BOOSTER (or -dFPCMM_SERVER -dFPCMM_MEDIUMPERTHREAD)",
+        "path_quote": "        // Is it a tiny/small block?\n        cmp     size, (MaximumSmallBlockSize - BlockHeaderSize)\n        ja      @NotTinySmallBlock",
+        "path_sha": "4ca2fd27ec3990e58d285048e960eb8b1dd393ac",
+        "path_path": "src/core/mormot.core.fpcx64mm.pas"
+      },
+      "refuted_by": "Checked for anything that would restore the define and found none: grep of FPCMM_MEDIUMTOLARGE in the unit shows only lines 63, 76, 147, 223, 423, 1015, 2279, 2290 - no re-define after the line 683 undef. The MSWINDOWS branch keeps FPCMM_MEDIUMPERTHREAD (asm at 2226-2242 has a WINDOWS TEB path), so Win64 is unaffected; LINUX is unaffected. Confirmed against the parent commit that FPCMM_SERVER previously did '{$define FPCMM_MEDIUMTOLARGE}' unconditionally, so this is a change, not pre-existing. Also confirmed the consequence is bounded: the fallback is a pure contention optimisation and its absence leaves the correct 'call LockMediumBlocks' path.",
+      "confidence": "likely",
+      "suggested_fix": "Move the medium-arena decision after the platform undefs, or add '{$define FPCMM_MEDIUMTOLARGE}' next to '{$undef FPCMM_MEDIUMPERTHREAD}' in the non-LINUX POSIX branch (guarded by FPCMM_SERVER), so a BSD/Darwin BOOSTER build keeps the medium-to-large fallback it had before."
+    },
+    {
+      "sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+      "check": "memory-lifetime",
+      "severity": "low",
+      "title": "fpcx64mm: EmptyPoolReuse reset skipped for pools drained after they stop being the feed pool",
+      "explanation": "EmptyPoolReuse gates the FPCMM_SERVER small-pool retention latch: @EmptySequentialFeedPool increments it each time a pool that served a single block empties, and at SmallBlockRetention (8) the pool is kept via @StoreFreeBlock instead of going to FreeMediumBlock. The reset used to sit in _GetMem/@TrySmallSequentialFeed, firing as soon as the feed pool served a second block - what the still-present comment 'Counter is reset once the sequential pool serves more than one block' describes, and what commit 8343fa49f added it for ('MM allow eventual OS reclaim'). It now sits in _FreeMem after 'cmp CurrentSequentialFeedPool, rdx / jne @NotSequentialFeedPool', so it runs only when the pool being fully drained is still that block type's current feed pool. A pool whose sequential feed is exhausted stops being current at @GotMediumBlock, so a class whose live usage outgrows one pool drains its older pools through the 'jne' branch and never resets. EmptyPoolReuse then counts non-consecutive churn events and, once latched at 8, stays latched: that class keeps one empty 29-64KB pool resident instead of returning it to the OS.",
+      "evidence": [
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+          "quote": "        // Is this the sequential feed pool? If so, stop sequential feeding\n        xor     eax, eax\n        cmp     [rsi].TSmallBlockType.CurrentSequentialFeedPool, rdx\n        jne     @NotSequentialFeedPool\n        {$ifdef FPCMM_SERVER}\n        // A drained multi-block sequential pool ends single-block churn.\n        // Reset on this cold release path, not on every sequential GetMem.\n        mov     byte ptr [rsi].TSmallBlockType.EmptyPoolReuse, 0\n        {$endif FPCMM_SERVER}",
+          "why": "the reset is now under the CurrentSequentialFeedPool equality guard: a drained pool that is no longer the feed pool takes the 'jne' and skips it"
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+          "quote": "        {$ifdef FPCMM_SERVER}\n@EmptySequentialFeedPool:\n        // Larger small classes share one block type process-wide\n        cmp     word ptr [rsi].TSmallBlockType.BlockSize, MaximumTinyBlockSize\n        jbe     @IsSequentialFeedPool\n        // Retain one pool only after repeated single-block churn\n        cmp     byte ptr [rsi].TSmallBlockType.EmptyPoolReuse, SmallBlockRetention\n        jae     @StoreFreeBlock\n        inc     byte ptr [rsi].TSmallBlockType.EmptyPoolReuse\n        // Counter is reset once the sequential pool serves more than one block\n        jmp     @IsSequentialFeedPool",
+          "why": "the latch it feeds - at >= SmallBlockRetention the empty pool is retained instead of released - and the comment still states the old, broader reset rule"
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+          "quote": "        // Can another block fit?\n        cmp     rax, [rsi].TSmallBlockType.MaxSequentialFeedBlockAddress\n        ja      @AllocateSmallBlockPool",
+          "why": "once the sequential feed area is exhausted _GetMem branches to @AllocateSmallBlockPool"
+        },
+        {
+          "path": "src/core/mormot.core.fpcx64mm.pas",
+          "sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+          "quote": "        mov     [rbx].TSmallBlockType.CurrentSequentialFeedPool, rsi",
+          "why": "the freshly allocated pool becomes CurrentSequentialFeedPool, so the previous pool can no longer satisfy the reset condition when it is later drained"
+        }
+      ],
+      "reachability": {
+        "reachable_from": "any heap allocation/free in the process: _GetMem/_FreeMem are installed as the FPC memory manager in FPC_X64MM builds, and FPCMM_SERVER is the default mode of the unit",
+        "path_quote": "    GetMem:           @_Getmem;\n    FreeMem:          @_FreeMem;",
+        "path_sha": "103c03a8ca0852d935970cc3c4289fb944bb2468",
+        "path_path": "src/core/mormot.core.fpcx64mm.pas"
+      },
+      "refuted_by": "Read both full asm bodies. The unit has only three EmptyPoolReuse sites (this reset, the cmp, the inc): no other reset, no decrement, no re-init, so nothing else clears the latch. The new site is not dead code - it fires when the current feed pool drains with a non-empty free list - but that is strictly narrower than 'served more than one block'. FPCMM_SERVER is on by default, so the ifdef does not save it. Retention stays bounded to ~one pool per class > MaximumTinyBlockSize (the retained pool is reused), hence low, not a leak.",
+      "confidence": "proven",
+      "suggested_fix": "Move the reset above 'cmp [rsi].TSmallBlockType.CurrentSequentialFeedPool, rdx' so every fully drained multi-block pool clears the counter, or restore it in _GetMem/@TrySmallSequentialFeed; otherwise the 'Counter is reset once the sequential pool serves more than one block' comment no longer matches the code."
+    },
+    {
+      "sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+      "check": "other",
+      "severity": "low",
+      "title": "README documents MORMOT2_REFRESH, ref switching and a cache path bootstrap-fpc.sh never implements",
+      "explanation": "The commit rewrites the environment-variable table and the cache-location section of boot/README.md, but leaves boot/bootstrap-fpc.sh untouched. Three of the new statements are false against the script at this sha. (1) MORMOT2_REFRESH appears nowhere outside README.md: the script only reads FPC_REFRESH, so exporting MORMOT2_REFRESH=1 is a silent no-op. (2) The mORMot clone goes through checkout_ref, which returns immediately when \"$dir/.git\" already exists and FPC_REFRESH is not 1; it never compares the checked-out ref against MORMOT2_REF, so changing MORMOT2_REF does not switch an existing cached clone, contrary to the new wording. (3) The default cache root is still chatgpt-fpc-mormot2, not the mormot2-fpc the README now prints. A reader following the README gets a stale cached mORMot tree while believing it was refreshed or re-pointed, and looks for the cached sources, downloads and static archives under a directory that is never created.",
+      "evidence": [
+        {
+          "path": "boot/README.md",
+          "sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+          "quote": "| `MORMOT2_REF` | mORMot branch/tag for the cached checkout. Changing it switches the cached clone to that ref. |\n| `MORMOT2_REFRESH=1` | Refresh the cached mORMot checkout even when `MORMOT2_REF` is unchanged. |",
+          "why": "The two behaviours added by this commit. MORMOT2_REFRESH occurs in no other file at this sha."
+        },
+        {
+          "path": "boot/bootstrap-fpc.sh",
+          "sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+          "quote": "  if [[ ! -d \"$dir/.git\" ]]; then\n    rm -rf \"$dir\"\n    log \"Cloning $url ($ref)\"\n    git clone --depth=1 --branch \"$ref\" \"$url\" \"$dir\"\n    return\n  fi\n\n  if [[ \"$FPC_REFRESH\" == \"1\" ]]; then",
+          "why": "checkout_ref: with an existing .git and FPC_REFRESH != 1 it falls off the end doing nothing. $ref is used only on the initial clone, so a changed MORMOT2_REF is ignored on a cached checkout, and only FPC_REFRESH - not MORMOT2_REFRESH - can force the fetch/reset."
+        },
+        {
+          "path": "boot/bootstrap-fpc.sh",
+          "sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+          "quote": "CACHE_BASE=\"${FPC_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/chatgpt-fpc-mormot2}\"",
+          "why": "The only definition of the cache root at this sha; the string mormot2-fpc appears nowhere in the script."
+        },
+        {
+          "path": "boot/README.md",
+          "sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+          "quote": "~/.cache/mormot2-fpc/",
+          "why": "The cache path the commit now advertises, which no code produces."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "boot/bootstrap-fpc.sh, the entry point boot/README.md documents (e.g. MORMOT2_REFRESH=1 MORMOT2_REF=... boot/bootstrap-fpc.sh)",
+        "path_quote": "  checkout_ref \"$MORMOT2_GIT_URL\" \"$MORMOT2_REF\" \"$MORMOT2_CACHE_DIR\"",
+        "path_sha": "8b33b6b174eddf564857e039a38f51f442470ab4",
+        "path_path": "boot/bootstrap-fpc.sh"
+      },
+      "refuted_by": "git show --stat lists only boot/README.md and the two commit .inc files, so the script was not updated alongside. boot/ holds just README.md and bootstrap-fpc.sh, so no second script defines the flag. At this sha, grepping the whole tree: MORMOT2_REFRESH matches the README line alone, mormot2-fpc matches only the README, chatgpt-fpc-mormot2 matches only CACHE_BASE. Read checkout_ref, the mORMot dir resolution and build_fpc in full: no comparison of the existing checkout against $ref, and no per-repository refresh flag.",
+      "confidence": "proven",
+      "suggested_fix": "Either implement the documented behaviour in bootstrap-fpc.sh (add MORMOT2_REFRESH, make checkout_ref fetch when the checked-out ref differs from $ref, rename CACHE_BASE to mormot2-fpc) or revert these README lines to describe MORMOT2_REF as used only when cloning, drop MORMOT2_REFRESH, and restore ~/.cache/chatgpt-fpc-mormot2/. The script's own header comment block still states the old, correct behaviour and would need the same treatment."
+    },
+    {
+      "sha": "16e06575443b78cf4c258ba2d6098c01520bc253",
+      "check": "other",
+      "severity": "low",
+      "title": "bootstrap-fpc.sh: checkout_ref reuses a cached clone without checking its ref or url",
+      "explanation": "checkout_ref() honours $url and $ref only on the first clone. When $dir/.git already exists it verifies nothing: without FPC_REFRESH=1 it returns immediately, and with FPC_REFRESH=1 it fetches from `origin`, i.e. the url the cache was originally cloned from, never $url. build_fpc() calls it with $FPC_REF, and installed_fpc_ok() already treats a changed $FPC_REF as a reason to rebuild - so a ref change is exactly the case that reaches the stale checkout. FPC is then built from the old sources, and build_fpc() writes the new $FPC_REF into $FPC_PREFIX/.source-ref. The only downstream check compares compiler version strings against $FPC_EXPECTED_VERSION, so it passes whenever both refs report the same version (FPC_REF changed while FPC_EXPECTED_VERSION keeps its 3.2.3 default, or FPC_GIT_URL pointed at a fork of the same branch). From then on installed_fpc_ok() sees .source-ref == $FPC_REF and short-circuits, so the mislabelled toolchain is cached for good. find_or_clone_mormot2() has the same hole with $MORMOT2_REF, and there no version check exists at all.",
+      "evidence": [
+        {
+          "path": "boot/bootstrap-fpc.sh",
+          "sha": "16e06575443b78cf4c258ba2d6098c01520bc253",
+          "quote": "  if [[ ! -d \"$dir/.git\" ]]; then\n    rm -rf \"$dir\"\n    log \"Cloning $url ($ref)\"\n    git clone --depth=1 --branch \"$ref\" \"$url\" \"$dir\"\n    return\n  fi\n\n  if [[ \"$FPC_REFRESH\" == \"1\" ]]; then\n    log \"Refreshing $dir to $ref\"\n    git -C \"$dir\" fetch --depth=1 origin \"$ref\"\n    git -C \"$dir\" reset --hard FETCH_HEAD\n  fi",
+          "why": "$url and $ref are used only in the clone branch. With an existing .git and FPC_REFRESH unset the function is a no-op; the refresh branch fetches from `origin`, not from $url."
+        },
+        {
+          "path": "boot/bootstrap-fpc.sh",
+          "sha": "16e06575443b78cf4c258ba2d6098c01520bc253",
+          "quote": "  local revision\n  revision=\"$(git -C \"$FPC_SRC_DIR\" rev-parse HEAD 2>/dev/null || true)\"\n  printf '%s\\n' \"$revision\" > \"$FPC_PREFIX/.source-revision\"\n  printf '%s\\n' \"$FPC_REF\" > \"$FPC_PREFIX/.source-ref\"",
+          "why": "The requested $FPC_REF is recorded as the built ref regardless of what was actually in $FPC_SRC_DIR."
+        },
+        {
+          "path": "boot/bootstrap-fpc.sh",
+          "sha": "16e06575443b78cf4c258ba2d6098c01520bc253",
+          "quote": "installed_fpc_ok() {\n  local fpc_bin=\"$FPC_PREFIX/bin/fpc\"\n  [[ -x \"$fpc_bin\" ]] || return 1\n  [[ \"$(\"$fpc_bin\" -iV 2>/dev/null || true)\" == \"$FPC_EXPECTED_VERSION\" ]] || return 1\n  [[ -f \"$FPC_PREFIX/.source-ref\" ]] || return 1\n  [[ \"$(cat \"$FPC_PREFIX/.source-ref\")\" == \"$FPC_REF\" ]]",
+          "why": "A changed $FPC_REF makes this return false, so build_fpc proceeds - straight into the stale checkout. After the run it matches again against the false label, so the wrong build is reused for good."
+        }
+      ],
+      "reachability": {
+        "reachable_from": "Running boot/bootstrap-fpc.sh (main -> build_fpc -> checkout_ref) on a runtime whose cache is warm, with the FPC_REF / FPC_GIT_URL overrides documented in boot/README.md",
+        "path_quote": "  install_prerequisites\n  checkout_ref \"$FPC_GIT_URL\" \"$FPC_REF\" \"$FPC_SRC_DIR\"",
+        "path_sha": "16e06575443b78cf4c258ba2d6098c01520bc253",
+        "path_path": "boot/bootstrap-fpc.sh"
+      },
+      "refuted_by": "Checked, none saves it: installed_fpc_ok's .source-ref test invalidates the install on a ref change but never touches $FPC_SRC_DIR, so it is what routes the ref change into the stale clone; the FPC_EXPECTED_VERSION die only fires when old and new refs report different compiler versions, and is silent when that variable keeps its 3.2.3 default; `make distclean` removes build products, not the checkout; find_or_clone_mormot2's candidate scan short-circuits the mORMot clone when run from a mORMot2 tree, but the FPC call site has no such escape.",
+      "confidence": "proven",
+      "suggested_fix": "In checkout_ref, verify a cached clone before reusing it: compare `git -C \"$dir\" remote get-url origin` with $url and the checked-out revision with $ref, and rm -rf + re-clone on mismatch. Also make the refresh branch fetch \"$url\" \"$ref\" rather than `origin \"$ref\"`, so a changed FPC_GIT_URL/MORMOT2_GIT_URL is honoured."
+    }
+  ],
+  "unverified": [],
+  "notes": "46cc440e: Refuted. ConsolesInfo only leaves 'list' null when a console's State.Count is 0, and that is unreachable from CheckRelayInfo: both TunnelRelay() call sites use SetLength(console, CONSOLE_COUNT) with CONSOLE_COUNT = 4 against AGENT_COUNT = 7 sessions dealt round-robin by 'c := i mod length(console)', so the 4 consoles hold 2/2/2/1 sessions; the pre-existing CheckEqual(relay.ConsoleCount, length(console)) guard exits before CheckRelayInfo otherwise. Needing a future constant change to fire, with a test failure as worst case, is not a defect at this sha. | b1b1f67d: Verified suspicion v"
+}
