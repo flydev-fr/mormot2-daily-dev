@@ -1,0 +1,1314 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-04",
+  "edition_title": {
+    "en": "Thread shutdown cleanup becomes automatic—and changes callback types",
+    "fr": "Le nettoyage de fin de thread devient automatique et change les callbacks",
+    "zh": "线程结束清理自动化，同时回调类型发生变化",
+    "ru": "Очистка при завершении потока автоматизирована, типы callback изменены"
+  },
+  "intro": {
+    "en": "Thread termination is now centralized in TThreadAbstract, with source-breaking callback and REST/ORM method signatures for applications that override or assign them. A separate fix prevents TWebSocketProtocol.SetEncryptKey from silently disabling encryption when aSettings is nil. Windows HTTP API WebSocket startup, several shared caches and periodic cleanup triggers also receive concurrency fixes, while a merged feature lets HTTP handlers stream response bodies from TStream.",
+    "fr": "La fin des threads est désormais centralisée dans TThreadAbstract, avec des signatures de callbacks et de méthodes REST/ORM incompatibles au niveau source pour les applications qui les redéfinissent ou les affectent. Un correctif séparé empêche TWebSocketProtocol.SetEncryptKey de désactiver silencieusement le chiffrement lorsque aSettings vaut nil. Le démarrage des WebSockets HTTP API sous Windows, plusieurs caches partagés et des déclencheurs de nettoyage périodique reçoivent aussi des corrections de concurrence, tandis qu’une fonctionnalité fusionnée permet aux gestionnaires HTTP de diffuser un corps depuis TStream.",
+    "zh": "线程终止清理现集中到 TThreadAbstract；对重写或绑定相关回调及 REST/ORM 方法的应用，这会造成源码级签名不兼容。另一个修复避免 TWebSocketProtocol.SetEncryptKey 在 aSettings 为 nil 时静默关闭加密。Windows HTTP API WebSocket 启动、多个共享缓存和周期清理触发器也获得并发修复；同时合并的新功能允许 HTTP 处理器直接从 TStream 流式发送响应体。",
+    "ru": "Завершение потоков теперь централизовано в TThreadAbstract; для приложений, которые переопределяют или назначают соответствующие callbacks и методы REST/ORM, изменились несовместимые на уровне исходников сигнатуры. Отдельное исправление не позволяет TWebSocketProtocol.SetEncryptKey молча отключать шифрование при aSettings = nil. Также исправлена конкурентность запуска HTTP API WebSocket в Windows, нескольких общих кэшей и периодических очисток, а слитая функция позволяет HTTP-обработчикам передавать тело ответа из TStream."
+  },
+  "tldr": {
+    "en": [
+      "TOnNotifyThread now receives TThreadAbstract, TSynLogFamily.OnThreadEnded is removed, and related REST/ORM virtual methods use TThreadAbstract.",
+      "TWebSocketProtocol.SetEncryptKey now keeps encryption enabled when called with a non-empty key and aSettings = nil.",
+      "HTTP API WebSocket initialization is lazy and serialized; Wine is explicitly kept away from incomplete websocket.dll and http.sys paths.",
+      "HTTP handlers can now return a TStream through SetOutStream; socket servers stream it, while http.sys and REST-over-WebSockets buffer it within documented limits.",
+      "CAS and locking fixes prevent duplicate idle, session, cache-purge and connection-purge work under concurrent requests."
+    ],
+    "fr": [
+      "TOnNotifyThread reçoit maintenant TThreadAbstract, TSynLogFamily.OnThreadEnded est supprimé et les méthodes virtuelles REST/ORM associées utilisent TThreadAbstract.",
+      "TWebSocketProtocol.SetEncryptKey conserve maintenant le chiffrement avec une clé non vide et aSettings = nil.",
+      "L’initialisation HTTP API WebSocket est paresseuse et sérialisée ; Wine évite explicitement les chemins websocket.dll et http.sys incomplets.",
+      "Les gestionnaires HTTP peuvent renvoyer un TStream via SetOutStream ; les serveurs socket le diffusent, tandis que http.sys et REST-over-WebSockets le mettent en mémoire dans les limites documentées.",
+      "Des corrections CAS et de verrouillage évitent les travaux en double pour l’inactivité, les sessions et les purges de caches ou de connexions."
+    ],
+    "zh": [
+      "TOnNotifyThread 现接收 TThreadAbstract，TSynLogFamily.OnThreadEnded 被移除，相关 REST/ORM 虚方法也改用 TThreadAbstract。",
+      "使用非空密钥且 aSettings = nil 时，TWebSocketProtocol.SetEncryptKey 现在仍会启用加密。",
+      "HTTP API WebSocket 采用延迟且串行的初始化；Wine 明确避开不完整的 websocket.dll 与 http.sys 路径。",
+      "HTTP 处理器可通过 SetOutStream 返回 TStream；socket 服务器直接流式发送，http.sys 与 REST-over-WebSockets 则在文档限制内缓冲。",
+      "CAS 与锁修复避免并发请求重复执行空闲、会话、缓存及连接清理。"
+    ],
+    "ru": [
+      "TOnNotifyThread теперь принимает TThreadAbstract, TSynLogFamily.OnThreadEnded удалён, связанные виртуальные методы REST/ORM также используют TThreadAbstract.",
+      "TWebSocketProtocol.SetEncryptKey теперь сохраняет шифрование при непустом ключе и aSettings = nil.",
+      "HTTP API WebSocket инициализируется лениво и последовательно; Wine явно не использует неполные пути websocket.dll и http.sys.",
+      "HTTP-обработчики могут возвращать TStream через SetOutStream; socket-серверы передают поток, а http.sys и REST-over-WebSockets буферизуют его в документированных пределах.",
+      "Исправления CAS и блокировок исключают дублирование очисток idle, сессий, кэшей и соединений при конкурентных запросах."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Take build 2.4.16737 if you rely on WebSocket encryption with a nil settings pointer, Windows HTTP API WebSockets, or the affected shared caches. Recompile custom thread callbacks and REST/ORM descendants: TOnNotifyThread and several virtual methods now require TThreadAbstract. Direct callers of LockedGet32 must rename the call to LockedReset32. The raw payload reports no later successor for these changes within this edition.",
+    "fr": "Prenez la build 2.4.16737 si vous utilisez le chiffrement WebSocket avec un pointeur de paramètres nil, les WebSockets HTTP API sous Windows ou les caches partagés concernés. Recompilez les callbacks de thread et descendants REST/ORM personnalisés : TOnNotifyThread et plusieurs méthodes virtuelles exigent maintenant TThreadAbstract. Les appels directs à LockedGet32 doivent devenir LockedReset32. Le payload brut ne signale aucun successeur ultérieur dans cette édition.",
+    "zh": "若使用 aSettings=nil 的 WebSocket 加密、Windows HTTP API WebSocket 或受影响的共享缓存，请升级到 build 2.4.16737。重新编译自定义线程回调及 REST/ORM 派生类：TOnNotifyThread 与多个虚方法现要求 TThreadAbstract。直接调用 LockedGet32 的代码须改为 LockedReset32。原始数据未报告本期还有后续替代提交。",
+    "ru": "Используйте build 2.4.16737, если применяете WebSocket-шифрование с nil в параметрах, Windows HTTP API WebSocket или затронутые общие кэши. Пересоберите пользовательские callbacks потоков и потомков REST/ORM: TOnNotifyThread и несколько виртуальных методов теперь требуют TThreadAbstract. Прямые вызовы LockedGet32 замените на LockedReset32. В исходном payload нет более поздних замен этих изменений в этой редакции."
+  },
+  "upgrade": {
+    "order": [
+      {
+        "shas": [
+          "57660dac29601caf0c6e8f0082ec839a52137ff2"
+        ],
+        "why": "Restore encryption when SetEncryptKey receives a non-empty key with nil settings."
+      },
+      {
+        "shas": [
+          "f1f8d76658dbc5b5d5dae9689364024657eeaf5f",
+          "69869f49271bec0d6d943c2045ba9f197ea58b7a"
+        ],
+        "why": "Apply the TThreadAbstract callback and REST/ORM signature migration together."
+      },
+      {
+        "shas": [
+          "41dbfbbae68d870ef07cce426785254b9a149abd",
+          "2f0cdace275a3e05560fea3237458c0326265197",
+          "b4238a29efc6e4586dc21d92cba5b72e4b5f07dc"
+        ],
+        "why": "Take the complete Windows WebSocket initialization and Wine fallback sequence."
+      }
+    ]
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Thread lifecycle and logging",
+        "fr": "Cycle de vie des threads et journalisation",
+        "zh": "线程生命周期与日志",
+        "ru": "Жизненный цикл потоков и журналирование"
+      },
+      "summary": {
+        "en": "TThreadAbstract now owns end-of-thread log cleanup. Callback, REST and ORM signatures move from TThread to TThreadAbstract, and framework descendants are adapted so cleanup runs once even when a thread emitted no log entry.",
+        "fr": "TThreadAbstract prend en charge le nettoyage du journal en fin de thread. Les signatures de callbacks, REST et ORM passent de TThread à TThreadAbstract, et les descendants du framework sont adaptés afin que le nettoyage ait lieu une fois, même sans entrée de journal.",
+        "zh": "TThreadAbstract 现在负责线程结束时的日志清理。回调、REST 与 ORM 签名从 TThread 改为 TThreadAbstract，框架派生类也同步调整，确保即使线程未写日志也只清理一次。",
+        "ru": "TThreadAbstract теперь отвечает за очистку журнала при завершении потока. Сигнатуры callbacks, REST и ORM переходят с TThread на TThreadAbstract, а потомки фреймворка адаптированы так, чтобы очистка выполнялась один раз даже без записей журнала."
+      },
+      "shas": [
+        "2c03b28af5cc7536011eac3a2dcbc29f6812c12a",
+        "35d353c919d76f8d4f944001190d131cf6dafa55",
+        "5678b9d9aa17ff454f7949fe2f8d4d4bd1b20e7c",
+        "f1f8d76658dbc5b5d5dae9689364024657eeaf5f",
+        "8ef4ae1bfe81f643cdeb7f9d22040bbc2cbef988",
+        "69869f49271bec0d6d943c2045ba9f197ea58b7a"
+      ]
+    },
+    {
+      "title": {
+        "en": "Windows WebSocket startup",
+        "fr": "Démarrage WebSocket sous Windows",
+        "zh": "Windows WebSocket 启动",
+        "ru": "Запуск WebSocket в Windows"
+      },
+      "summary": {
+        "en": "websocket.dll is loaded on first HTTP API WebSocket server use under a global lock. Initialization is attempted once, partial exports cannot become visible to another thread, and Wine falls back from incomplete WebSocket and http.sys implementations.",
+        "fr": "websocket.dll est chargé lors de la première utilisation d’un serveur HTTP API WebSocket sous verrou global. L’initialisation n’est tentée qu’une fois, les exports partiels ne sont pas visibles par un autre thread et Wine évite les implémentations WebSocket et http.sys incomplètes.",
+        "zh": "websocket.dll 在首次使用 HTTP API WebSocket 服务器时于全局锁内加载。初始化只尝试一次，其他线程不会看到未完整绑定的导出，Wine 会避开不完整的 WebSocket 与 http.sys 实现。",
+        "ru": "websocket.dll загружается при первом использовании сервера HTTP API WebSocket под глобальной блокировкой. Инициализация выполняется однократно, частично связанные функции не видны другим потокам, а Wine обходит неполные реализации WebSocket и http.sys."
+      },
+      "shas": [
+        "41dbfbbae68d870ef07cce426785254b9a149abd",
+        "2f0cdace275a3e05560fea3237458c0326265197",
+        "b4238a29efc6e4586dc21d92cba5b72e4b5f07dc"
+      ]
+    },
+    {
+      "title": {
+        "en": "Atomic periodic work",
+        "fr": "Travaux périodiques atomiques",
+        "zh": "周期任务原子化",
+        "ru": "Атомарные периодические операции"
+      },
+      "summary": {
+        "en": "CAS gates now elect a single request to refresh timestamps, purge expired data or invoke idle work. The changes reduce duplicate work and protect shared cached values on both 32-bit and 64-bit Delphi/FPC backends.",
+        "fr": "Des barrières CAS désignent maintenant une seule requête pour rafraîchir les horodatages, purger les données expirées ou exécuter OnIdle. Ces changements réduisent les travaux en double et protègent les valeurs mises en cache sur les backends Delphi/FPC 32 et 64 bits.",
+        "zh": "CAS 门控现在只让一个请求刷新时间戳、清理过期数据或调用 OnIdle。这些改动减少重复工作，并保护 32 位及 64 位 Delphi/FPC 后端上的共享缓存值。",
+        "ru": "CAS-затворы теперь выбирают один запрос для обновления времени, очистки устаревших данных или вызова OnIdle. Это уменьшает дублирование и защищает общие кэшированные значения в 32- и 64-битных Delphi/FPC backend."
+      },
+      "shas": [
+        "f7cfb5db3b6a90aea32750c6bff4ce63d9a9d1be",
+        "84ab94497e190d52e942fa51e84f91269cf4f45f",
+        "7df2308e01cdc0b7a07fe3fee8fd50454bf96f30",
+        "d7b698d806484cdfda2bb568045228e3ee331320",
+        "c7887dc9f10df27e98cb474d8d614ea0829961cc",
+        "14d5a05d6cdec6bc70c204c0f199e490f883eb30",
+        "83f4846bc3d3d8c3d8821e0651b17b8d07d3151e",
+        "a6d76aa95a3b9114492a1e84fbf7c67bb41b4313",
+        "ad1dcbf50c0cdfa2585484e1cbfba1742cd2058b"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "14d901e85a21de249edb3299acfec5d2135ce608",
+      "headline": {
+        "en": "Final concurrency cleanup prevents an older cache result from winning",
+        "fr": "Le nettoyage final empêche un ancien résultat de cache de l’emporter",
+        "zh": "最终并发整理避免旧缓存结果覆盖新值",
+        "ru": "Финальная правка не даёт старому результату кэша перезаписать новый"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "In mormot.core.os, TCachedValue.Cache now stores a slow callback result only if TixShr still matches the tick claimed before the callback. The commit also switches TSynDictionary reads to VCardinal and simplifies equivalent code in mormot.rest.server, with comments in the other touched units.",
+        "fr": "Dans mormot.core.os, TCachedValue.Cache ne conserve le résultat d’un callback lent que si TixShr correspond encore au tick réservé avant l’appel. Le commit utilise aussi VCardinal pour TSynDictionary et simplifie du code équivalent dans mormot.rest.server, avec des commentaires dans les autres unités.",
+        "zh": "在 mormot.core.os 中，TCachedValue.Cache 仅在 TixShr 仍等于回调前占用的 tick 时写入慢回调结果。该提交还让 TSynDictionary 使用 VCardinal 读取，并简化 mormot.rest.server 中的等价代码，其他单元主要是注释。",
+        "ru": "В mormot.core.os TCachedValue.Cache сохраняет результат медленного callback только если TixShr всё ещё равен tick, захваченному до вызова. Также чтение TSynDictionary переведено на VCardinal, код в mormot.rest.server упрощён, в остальных модулях уточнены комментарии."
+      },
+      "impact": {
+        "en": "Concurrent callers can no longer let an older, slower computation overwrite a newer cached value. Existing Delphi and FPC application code has no API change from this commit.",
+        "fr": "Des appels concurrents ne peuvent plus laisser un calcul ancien et lent écraser une valeur de cache plus récente. Ce commit ne change aucune API pour le code Delphi/FPC existant.",
+        "zh": "并发调用者不再会让较旧且较慢的计算覆盖更新的缓存值。本提交不改变现有 Delphi/FPC 应用 API。",
+        "ru": "Конкурентный старый медленный расчёт больше не перезапишет новое значение кэша. API существующего кода Delphi/FPC этим commit не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this final build if your code uses TCachedValue from multiple threads.",
+        "fr": "Prenez cette build finale si votre code utilise TCachedValue depuis plusieurs threads.",
+        "zh": "若代码从多个线程使用 TCachedValue，请采用此最终 build。",
+        "ru": "Возьмите эту финальную build, если TCachedValue используется из нескольких потоков."
+      },
+      "units": ["mormot.core.json", "mormot.core.os", "mormot.db.sql", "mormot.rest.core", "mormot.rest.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bcf834a59d300be08e73d71812780021d1f758a2",
+      "headline": {
+        "en": "LockedGet32 is renamed and can now atomically install any integer",
+        "fr": "LockedGet32 est renommé et peut poser atomiquement tout entier",
+        "zh": "LockedGet32 更名并可原子写入任意整数",
+        "ru": "LockedGet32 переименован и атомарно устанавливает любое целое"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.core.base replaces the public LockedGet32(Target) function with LockedReset32(Target, New), where New defaults to zero. mormot.net.async updates both wake-up counter call sites to the new name.",
+        "fr": "mormot.core.base remplace la fonction publique LockedGet32(Target) par LockedReset32(Target, New), avec New valant zéro par défaut. mormot.net.async adapte les deux appels des compteurs de réveil.",
+        "zh": "mormot.core.base 将公开函数 LockedGet32(Target) 替换为 LockedReset32(Target, New)，New 默认为零。mormot.net.async 的两个唤醒计数器调用点同步更新。",
+        "ru": "mormot.core.base заменяет публичную функцию LockedGet32(Target) на LockedReset32(Target, New), где New по умолчанию равен нулю. Оба вызова счётчиков пробуждения в mormot.net.async обновлены."
+      },
+      "impact": {
+        "en": "Code that calls LockedGet32 directly will no longer compile. The default LockedReset32 call preserves the old exchange-with-zero behavior; the new parameter also supports another replacement value.",
+        "fr": "Le code appelant directement LockedGet32 ne compile plus. LockedReset32 sans second argument conserve l’échange avec zéro ; le nouveau paramètre accepte aussi une autre valeur de remplacement.",
+        "zh": "直接调用 LockedGet32 的代码将无法编译。省略第二个参数的 LockedReset32 保留原先与零交换的行为，新参数也允许写入其他替换值。",
+        "ru": "Код с прямым вызовом LockedGet32 больше не компилируется. LockedReset32 без второго аргумента сохраняет прежний обмен с нулём, новый параметр позволяет задать другое значение."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for LockedGet32 and rename each call to LockedReset32; pass New only when a value other than zero is required.",
+        "fr": "Recherchez LockedGet32 et renommez chaque appel en LockedReset32 ; passez New seulement si une valeur autre que zéro est nécessaire.",
+        "zh": "搜索 LockedGet32 并将每个调用改为 LockedReset32；仅在需要非零替换值时传入 New。",
+        "ru": "Найдите LockedGet32 и замените каждый вызов на LockedReset32; передавайте New только для значения, отличного от нуля."
+      },
+      "units": ["mormot.core.base", "mormot.net.async"],
+      "api_changes": [
+        {
+          "symbol": "LockedGet32",
+          "change": "removed",
+          "note": {
+            "en": "Replaced by LockedReset32.",
+            "fr": "Remplacée par LockedReset32.",
+            "zh": "由 LockedReset32 替代。",
+            "ru": "Заменена на LockedReset32."
+          }
+        },
+        {
+          "symbol": "LockedReset32",
+          "change": "added",
+          "note": {
+            "en": "Atomically returns Target^ and replaces it with New, which defaults to zero.",
+            "fr": "Retourne atomiquement Target^ et le remplace par New, zéro par défaut.",
+            "zh": "原子返回 Target^ 并写入 New，默认值为零。",
+            "ru": "Атомарно возвращает Target^ и заменяет его на New, по умолчанию ноль."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ad1dcbf50c0cdfa2585484e1cbfba1742cd2058b",
+      "headline": {
+        "en": "REST server timestamp cache gains atomic refresh and locked reads",
+        "fr": "Le cache d’horodatage REST gagne un rafraîchissement atomique",
+        "zh": "REST 服务器时间戳缓存采用原子刷新与加锁读取",
+        "ru": "Кэш времени REST получил атомарное обновление и чтение под блокировкой"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRest.GetServerTimestamp in mormot.rest.core uses LockedExc32 to elect one refresher for each 512 ms slot. A TLightLock now protects writes and reads of the cached TTimeLogBits value.",
+        "fr": "TRest.GetServerTimestamp dans mormot.rest.core utilise LockedExc32 pour choisir un seul rafraîchissement par tranche de 512 ms. Un TLightLock protège désormais les lectures et écritures du TTimeLogBits mis en cache.",
+        "zh": "mormot.rest.core 的 TRest.GetServerTimestamp 使用 LockedExc32，为每个 512 ms 时间段选出单一刷新者。TLightLock 现保护缓存 TTimeLogBits 的读写。",
+        "ru": "TRest.GetServerTimestamp в mormot.rest.core использует LockedExc32, выбирая одно обновление на интервал 512 мс. TLightLock защищает чтение и запись кэшированного TTimeLogBits."
+      },
+      "impact": {
+        "en": "Parallel REST requests see a consistently copied server timestamp, including on 32-bit Delphi/FPC where a 64-bit value is not naturally atomic. No application API changes.",
+        "fr": "Les requêtes REST parallèles lisent un horodatage cohérent, notamment en Delphi/FPC 32 bits où une valeur 64 bits n’est pas naturellement atomique. Aucune API applicative ne change.",
+        "zh": "并行 REST 请求会读取一致的服务器时间戳；这对 64 位值并非天然原子的 32 位 Delphi/FPC 尤其重要。应用 API 不变。",
+        "ru": "Параллельные REST-запросы получают согласованное время, в том числе в 32-битных Delphi/FPC, где 64-битное значение не атомарно. API приложения не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade if the same TRest instance serves concurrent requests on a 32-bit target.",
+        "fr": "Mettez à niveau si une même instance TRest sert des requêtes concurrentes sur une cible 32 bits.",
+        "zh": "若同一 TRest 实例在 32 位目标上处理并发请求，建议升级。",
+        "ru": "Обновитесь, если один экземпляр TRest обслуживает конкурентные запросы на 32-битной платформе."
+      },
+      "units": ["mormot.rest.core"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a6d76aa95a3b9114492a1e84fbf7c67bb41b4313",
+      "headline": {
+        "en": "Connection-pool expiry scans are elected once per interval",
+        "fr": "Un seul scan d’expiration du pool est élu par intervalle",
+        "zh": "每个周期只执行一次连接池过期扫描",
+        "ru": "Сканирование устаревших соединений выполняется один раз за интервал"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSqlDBConnectionPropertiesThreadSafe.ThreadSafeConnection in mormot.db.sql replaces an unsynchronized timestamp assignment with LockedExc32 before calling DeleteDeprecated. ClearConnectionPool atomically resets the trigger.",
+        "fr": "TSqlDBConnectionPropertiesThreadSafe.ThreadSafeConnection dans mormot.db.sql remplace l’affectation non synchronisée du timestamp par LockedExc32 avant DeleteDeprecated. ClearConnectionPool réinitialise atomiquement le déclencheur.",
+        "zh": "mormot.db.sql 的 TSqlDBConnectionPropertiesThreadSafe.ThreadSafeConnection 在调用 DeleteDeprecated 前以 LockedExc32 取代未同步的时间戳赋值。ClearConnectionPool 原子重置触发器。",
+        "ru": "TSqlDBConnectionPropertiesThreadSafe.ThreadSafeConnection в mormot.db.sql заменяет несинхронную запись времени на LockedExc32 перед DeleteDeprecated. ClearConnectionPool атомарно сбрасывает триггер."
+      },
+      "impact": {
+        "en": "Under concurrent database traffic, only one thread performs the optional expired-connection scan every 32 seconds. Backend behavior and public APIs remain unchanged.",
+        "fr": "Sous charge SQL concurrente, un seul thread effectue le scan optionnel des connexions expirées toutes les 32 secondes. Le comportement du backend et les API publiques restent inchangés.",
+        "zh": "在并发数据库流量下，每 32 秒只有一个线程执行可选的过期连接扫描。后端行为及公开 API 不变。",
+        "ru": "При конкурентной SQL-нагрузке только один поток выполняет необязательную очистку соединений раз в 32 секунды. Поведение backend и публичные API не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.db.sql"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "83f4846bc3d3d8c3d8821e0651b17b8d07d3151e",
+      "headline": {
+        "en": "MVC method-cache purging runs once per second across requests",
+        "fr": "La purge du cache MVC ne s’exécute qu’une fois par seconde",
+        "zh": "MVC 方法缓存每秒只清理一次",
+        "ru": "Очистка кэша методов MVC выполняется один раз в секунду"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TMvcRunWithViews processing in mormot.core.mvc now claims fOnIdlePurgeCacheTix32 with LockedExc32 before calling PurgeMethodCache. PurgeMethodCache no longer assigns that tick itself.",
+        "fr": "Le traitement TMvcRunWithViews dans mormot.core.mvc réserve maintenant fOnIdlePurgeCacheTix32 via LockedExc32 avant PurgeMethodCache. PurgeMethodCache n’affecte plus ce tick lui-même.",
+        "zh": "mormot.core.mvc 的 TMvcRunWithViews 处理流程现在先用 LockedExc32 占用 fOnIdlePurgeCacheTix32，再调用 PurgeMethodCache；PurgeMethodCache 不再自行赋值该 tick。",
+        "ru": "Обработка TMvcRunWithViews в mormot.core.mvc теперь захватывает fOnIdlePurgeCacheTix32 через LockedExc32 до PurgeMethodCache. Сам PurgeMethodCache больше не записывает tick."
+      },
+      "impact": {
+        "en": "Concurrent MVC requests avoid redundant full cache scans in the same second. Cached results and application-facing MVC APIs keep the same behavior.",
+        "fr": "Les requêtes MVC concurrentes évitent plusieurs scans complets du cache durant la même seconde. Les résultats et API MVC visibles par l’application gardent le même comportement.",
+        "zh": "并发 MVC 请求不会在同一秒内重复完整扫描缓存。缓存结果及应用可见的 MVC API 行为保持不变。",
+        "ru": "Конкурентные MVC-запросы не дублируют полный просмотр кэша в одну секунду. Результаты и прикладные API MVC ведут себя по-прежнему."
+      },
+      "action": "none",
+      "units": ["mormot.core.mvc"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "14d5a05d6cdec6bc70c204c0f199e490f883eb30",
+      "headline": {
+        "en": "Expired REST sessions are purged by one request per interval",
+        "fr": "Une requête par intervalle purge les sessions REST expirées",
+        "zh": "每个周期仅一个请求清理过期 REST 会话",
+        "ru": "Устаревшие REST-сессии очищает один запрос за интервал"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TRestServerUriContext.Authenticate in mormot.rest.server now advances fSessionsDeprecatedTix with LockedExc32 before SessionDeleteDeprecated. The purge routine no longer performs a separate non-atomic assignment.",
+        "fr": "TRestServerUriContext.Authenticate dans mormot.rest.server avance fSessionsDeprecatedTix avec LockedExc32 avant SessionDeleteDeprecated. La routine de purge ne fait plus d’affectation non atomique séparée.",
+        "zh": "mormot.rest.server 的 TRestServerUriContext.Authenticate 现在先用 LockedExc32 推进 fSessionsDeprecatedTix，再调用 SessionDeleteDeprecated；清理例程不再另做非原子赋值。",
+        "ru": "TRestServerUriContext.Authenticate в mormot.rest.server теперь продвигает fSessionsDeprecatedTix через LockedExc32 до SessionDeleteDeprecated. Отдельная неатомарная запись из очистки удалена."
+      },
+      "impact": {
+        "en": "Busy authenticated servers avoid multiple request threads entering the same once-per-second expiry scan. Session expiry semantics and public APIs do not change.",
+        "fr": "Les serveurs authentifiés chargés évitent que plusieurs threads entrent dans le même scan d’expiration par seconde. La sémantique d’expiration et les API publiques ne changent pas.",
+        "zh": "高负载认证服务器可避免多个请求线程同时进入每秒一次的过期扫描。会话过期语义及公开 API 不变。",
+        "ru": "На загруженных серверах несколько потоков больше не входят одновременно в ежесекундную проверку истечения сессий. Семантика и публичные API не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.rest.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c7887dc9f10df27e98cb474d8d614ea0829961cc",
+      "headline": {
+        "en": "Dictionary expiry scans gain an atomic one-second gate",
+        "fr": "Les scans d’expiration du dictionnaire gagnent une barrière atomique",
+        "zh": "字典过期扫描增加每秒原子门控",
+        "ru": "Очистка словаря получила атомарный секундный затвор"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSynDictionary.DeleteDeprecated in mormot.core.json reads the shared tick through the new TSynVarData.VCardinal view and uses LockedExc32 to claim a scan. mormot.core.base adds the VCardinal variant-record field used for that atomic access.",
+        "fr": "TSynDictionary.DeleteDeprecated dans mormot.core.json lit le tick partagé via la nouvelle vue TSynVarData.VCardinal et réserve le scan avec LockedExc32. mormot.core.base ajoute ce champ de record variant pour l’accès atomique.",
+        "zh": "mormot.core.json 的 TSynDictionary.DeleteDeprecated 通过新增的 TSynVarData.VCardinal 视图读取共享 tick，并用 LockedExc32 占用扫描。mormot.core.base 增加了该变体记录字段。",
+        "ru": "TSynDictionary.DeleteDeprecated в mormot.core.json читает общий tick через новое поле TSynVarData.VCardinal и захватывает проверку через LockedExc32. mormot.core.base добавляет это поле variant record."
+      },
+      "impact": {
+        "en": "Concurrent dictionary users avoid duplicate expiry scans for the same second. Existing TSynDictionary behavior is preserved; code inspecting TSynVarData may use the added unsigned view.",
+        "fr": "Les utilisateurs concurrents du dictionnaire évitent les scans d’expiration en double durant la même seconde. Le comportement de TSynDictionary est conservé ; le code inspectant TSynVarData peut utiliser la nouvelle vue non signée.",
+        "zh": "并发字典使用者不会在同一秒重复执行过期扫描。TSynDictionary 行为保持不变；检查 TSynVarData 的代码可使用新增的无符号视图。",
+        "ru": "Конкурентные пользователи словаря не дублируют очистку в одну секунду. Поведение TSynDictionary сохраняется; код с TSynVarData может использовать новое беззнаковое представление."
+      },
+      "action": "none",
+      "units": ["mormot.core.base", "mormot.core.json"],
+      "api_changes": [
+        {
+          "symbol": "TSynVarData.VCardinal",
+          "change": "added",
+          "note": {
+            "en": "Unsigned 32-bit overlay for the variant record.",
+            "fr": "Vue non signée 32 bits du record variant.",
+            "zh": "变体记录的 32 位无符号叠加字段。",
+            "ru": "32-битное беззнаковое представление variant record."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d7b698d806484cdfda2bb568045228e3ee331320",
+      "headline": {
+        "en": "HTTP log timestamp formatting is limited to one thread per second",
+        "fr": "Un seul thread formate l’heure du journal HTTP par seconde",
+        "zh": "HTTP 日志时间戳每秒仅由一个线程格式化",
+        "ru": "Время HTTP-журнала форматирует один поток в секунду"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "THttpLogger.Append in mormot.net.http uses LockedExc32 on fTimeTix32 before SetTimeText. Competing request threads reuse the cached ISO-8601 and NCSA strings instead of formatting them concurrently.",
+        "fr": "THttpLogger.Append dans mormot.net.http utilise LockedExc32 sur fTimeTix32 avant SetTimeText. Les threads concurrents réutilisent les chaînes ISO-8601 et NCSA en cache au lieu de les formater simultanément.",
+        "zh": "mormot.net.http 的 THttpLogger.Append 在调用 SetTimeText 前对 fTimeTix32 使用 LockedExc32。竞争请求线程会复用缓存的 ISO-8601 与 NCSA 字符串。",
+        "ru": "THttpLogger.Append в mormot.net.http применяет LockedExc32 к fTimeTix32 перед SetTimeText. Конкурентные запросы переиспользуют строки ISO-8601 и NCSA вместо параллельного форматирования."
+      },
+      "impact": {
+        "en": "High-throughput HTTP logging performs less duplicate date conversion while retaining the existing one-second timestamp cache. No logging format or public API changes.",
+        "fr": "La journalisation HTTP à haut débit effectue moins de conversions de date en double tout en gardant le cache d’une seconde. Ni le format du journal ni l’API publique ne changent.",
+        "zh": "高吞吐 HTTP 日志减少重复日期转换，同时保留原有的一秒缓存。日志格式及公开 API 不变。",
+        "ru": "При интенсивном HTTP-журналировании меньше дублируется преобразование дат, сохраняя секундный кэш. Формат журнала и публичные API не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.net.http"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7df2308e01cdc0b7a07fe3fee8fd50454bf96f30",
+      "headline": {
+        "en": "Concurrent REST requests no longer trigger OnIdle together",
+        "fr": "Les requêtes REST concurrentes ne déclenchent plus OnIdle ensemble",
+        "zh": "并发 REST 请求不再同时触发 OnIdle",
+        "ru": "Конкурентные REST-запросы больше не вызывают OnIdle одновременно"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRestServer.Uri in mormot.rest.server replaces the read-then-write fOnIdleLastTix test with a LockedExc32 compare-and-swap. Only the request that advances the tick calls OnIdle.",
+        "fr": "TRestServer.Uri dans mormot.rest.server remplace le test lecture-écriture de fOnIdleLastTix par un compare-and-swap LockedExc32. Seule la requête qui avance le tick appelle OnIdle.",
+        "zh": "mormot.rest.server 的 TRestServer.Uri 将 fOnIdleLastTix 的先读后写检查改为 LockedExc32 比较交换。只有推进 tick 的请求会调用 OnIdle。",
+        "ru": "TRestServer.Uri в mormot.rest.server заменяет проверку read-then-write fOnIdleLastTix на compare-and-swap LockedExc32. OnIdle вызывает только запрос, продвинувший tick."
+      },
+      "impact": {
+        "en": "OnIdle handlers are no longer entered concurrently merely because requests finish in the same tick. Backends with non-reentrant idle work avoid duplicate maintenance and races.",
+        "fr": "Les gestionnaires OnIdle ne sont plus appelés simultanément parce que plusieurs requêtes finissent au même tick. Les backends avec un travail d’inactivité non réentrant évitent doublons et courses.",
+        "zh": "多个请求在同一 tick 完成时，OnIdle 处理器不再因此并发进入。包含非可重入空闲任务的后端可避免重复维护与竞态。",
+        "ru": "OnIdle больше не выполняется параллельно только из-за завершения запросов в один tick. Backend с нереентерабельным idle-кодом избегают дублирования и гонок."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade if TRestServer.OnIdle performs stateful or non-reentrant maintenance.",
+        "fr": "Mettez à niveau si TRestServer.OnIdle effectue une maintenance avec état ou non réentrante.",
+        "zh": "若 TRestServer.OnIdle 执行有状态或不可重入的维护任务，请升级。",
+        "ru": "Обновитесь, если TRestServer.OnIdle выполняет stateful или нереентерабельное обслуживание."
+      },
+      "units": ["mormot.rest.server"],
+      "api_changes": [
+        {
+          "symbol": "TRestServer.OnIdle",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "At most one request invokes it for a given tick.",
+            "fr": "Une seule requête au plus l’appelle pour un tick donné.",
+            "zh": "每个 tick 最多由一个请求调用。",
+            "ru": "За один tick его вызывает не более одного запроса."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6f53f3d7b19d4d1dcb0188dd18e6edde6625efcb",
+      "headline": {
+        "en": "Kerberos keytab refresh is serialized without holding the lock during reload",
+        "fr": "Le rafraîchissement keytab Kerberos est sérialisé hors du verrou long",
+        "zh": "Kerberos keytab 刷新串行化且重载不占用锁",
+        "ru": "Обновление Kerberos keytab сериализовано без блокировки на время загрузки"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TServerSspiKeyTab.TryRefresh in mormot.lib.gssapi uses fSafe to claim each two-second refresh window, then calls SetKeyTab after releasing the lock. The tick is offset by one so the first valid interval is not mistaken for the initial zero.",
+        "fr": "TServerSspiKeyTab.TryRefresh dans mormot.lib.gssapi utilise fSafe pour réserver chaque fenêtre de deux secondes, puis appelle SetKeyTab hors verrou. Le tick est décalé de un afin que la première fenêtre ne soit pas confondue avec le zéro initial.",
+        "zh": "mormot.lib.gssapi 的 TServerSspiKeyTab.TryRefresh 使用 fSafe 占用每个两秒刷新窗口，释放锁后再调用 SetKeyTab。tick 加一，避免首个有效周期与初始零值混淆。",
+        "ru": "TServerSspiKeyTab.TryRefresh в mormot.lib.gssapi через fSafe захватывает двухсекундное окно, затем вызывает SetKeyTab вне блокировки. Tick увеличен на один, чтобы первый интервал не совпал с начальным нулём."
+      },
+      "impact": {
+        "en": "Concurrent SSPI/GSSAPI authentication attempts no longer reload the same keytab together, and unrelated callers do not wait under the lock for file parsing. Public APIs are unchanged.",
+        "fr": "Les authentifications SSPI/GSSAPI concurrentes ne rechargent plus le même keytab ensemble, et les autres appels n’attendent pas sous verrou pendant la lecture du fichier. Les API publiques ne changent pas.",
+        "zh": "并发 SSPI/GSSAPI 认证不会同时重载同一 keytab，其他调用也无需在锁内等待文件解析。公开 API 不变。",
+        "ru": "Конкурентные SSPI/GSSAPI-проверки больше не перезагружают один keytab одновременно, а другие вызовы не ждут под блокировкой разбора файла. Публичные API не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Kerberos-backed servers that refresh a keytab while serving concurrent requests.",
+        "fr": "Mettez à niveau les serveurs Kerberos qui rafraîchissent un keytab sous charge concurrente.",
+        "zh": "使用 Kerberos 且在并发请求期间刷新 keytab 的服务器应升级。",
+        "ru": "Обновите Kerberos-серверы, которые перечитывают keytab при конкурентных запросах."
+      },
+      "units": ["mormot.lib.gssapi"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "84ab94497e190d52e942fa51e84f91269cf4f45f",
+      "headline": {
+        "en": "TCachedValue reserves refresh work before releasing its lock",
+        "fr": "TCachedValue réserve le rafraîchissement avant de libérer son verrou",
+        "zh": "TCachedValue 在释放锁前预留刷新任务",
+        "ru": "TCachedValue резервирует обновление до снятия блокировки"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TCachedValue.Cache in mormot.core.os moves the Tix32 assignment inside Safe before invoking the slow Call callback outside the lock. That marks the refresh as claimed before another thread can enter.",
+        "fr": "TCachedValue.Cache dans mormot.core.os déplace l’affectation Tix32 sous Safe avant d’exécuter le callback lent Call hors verrou. Le rafraîchissement est ainsi réservé avant l’entrée d’un autre thread.",
+        "zh": "mormot.core.os 的 TCachedValue.Cache 在 Safe 锁内设置 Tix32，然后在锁外执行慢 Call 回调，从而在其他线程进入前标记刷新已被占用。",
+        "ru": "TCachedValue.Cache в mormot.core.os записывает Tix32 под Safe до медленного callback Call вне блокировки. Обновление помечается занятым до входа другого потока."
+      },
+      "impact": {
+        "en": "Multiple callers no longer start the same expensive cache computation for one interval. The later 14d901e commit additionally prevents a delayed older computation from overwriting a newer result.",
+        "fr": "Plusieurs appels ne lancent plus le même calcul coûteux durant un intervalle. Le commit ultérieur 14d901e empêche aussi un ancien calcul retardé d’écraser un résultat plus récent.",
+        "zh": "多个调用者不再于同一周期启动相同的昂贵缓存计算。后续 14d901e 还阻止延迟的旧计算覆盖新结果。",
+        "ru": "Несколько вызовов больше не запускают одинаковое дорогое вычисление в одном интервале. Последующий 14d901e также не даёт запоздалому старому расчёту перезаписать новый."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Use the edition head rather than stopping here, because 14d901e completes the concurrent cache update guard.",
+        "fr": "Utilisez la tête de l’édition plutôt que de vous arrêter ici, car 14d901e complète la protection du cache concurrent.",
+        "zh": "请采用本期最终版本，不要停在此提交，因为 14d901e 完成了并发缓存更新保护。",
+        "ru": "Берите итог редакции, а не этот commit: 14d901e завершает защиту конкурентного обновления кэша."
+      },
+      "units": ["mormot.core.os"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f7cfb5db3b6a90aea32750c6bff4ce63d9a9d1be",
+      "headline": {
+        "en": "Global time cache compare-and-swap no longer aliases its expected value",
+        "fr": "Le compare-and-swap du cache horaire n’alias plus sa valeur attendue",
+        "zh": "全局时间缓存的比较交换不再复用期望值变量",
+        "ru": "CAS кэша времени больше не использует одну переменную как ожидаемое значение"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "FromGlobalTime in mormot.core.datetime copies GlobalTime.clock into a local c variable and supplies that stable expected value to LockedExc32. The prior call used clock as both the target and expected argument.",
+        "fr": "FromGlobalTime dans mormot.core.datetime copie GlobalTime.clock dans la variable locale c et fournit cette valeur attendue stable à LockedExc32. L’ancien appel utilisait clock comme cible et comme valeur attendue.",
+        "zh": "mormot.core.datetime 的 FromGlobalTime 将 GlobalTime.clock 复制到局部变量 c，并把这个稳定期望值传给 LockedExc32。此前调用同时以 clock 作为目标和期望参数。",
+        "ru": "FromGlobalTime в mormot.core.datetime копирует GlobalTime.clock в локальную c и передаёт это стабильное ожидаемое значение в LockedExc32. Ранее clock служил и целью, и ожидаемым аргументом."
+      },
+      "impact": {
+        "en": "Concurrent timestamp formatting now has a well-defined CAS election before updating the shared 16 ms cache. Delphi and FPC callers keep the same FromGlobalTime signature and precision.",
+        "fr": "Le formatage concurrent de l’heure dispose maintenant d’une élection CAS définie avant la mise à jour du cache partagé de 16 ms. Les appels Delphi/FPC gardent la même signature et précision.",
+        "zh": "并发时间格式化在更新共享 16 ms 缓存前采用明确的 CAS 选举。Delphi/FPC 调用者的 FromGlobalTime 签名与精度不变。",
+        "ru": "Конкурентное форматирование времени теперь однозначно выбирает обновляющий поток через CAS перед записью в общий кэш 16 мс. Сигнатура и точность для Delphi/FPC прежние."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade multithreaded servers that frequently format global or local timestamps.",
+        "fr": "Mettez à niveau les serveurs multithreads qui formatent fréquemment des horodatages globaux ou locaux.",
+        "zh": "频繁格式化全局或本地时间戳的多线程服务器应升级。",
+        "ru": "Обновите многопоточные серверы, часто форматирующие глобальное или локальное время."
+      },
+      "units": ["mormot.core.datetime"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b4238a29efc6e4586dc21d92cba5b72e4b5f07dc",
+      "headline": {
+        "en": "Wine receives an explicit weak-http.sys capability flag",
+        "fr": "Wine reçoit un indicateur explicite de faiblesse de http.sys",
+        "zh": "Wine 新增明确的弱 http.sys 能力标志",
+        "ru": "Wine получил отдельный флаг ненадёжного http.sys"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.os adds wsWeakHttpSys to TWindowsSpecs and sets it during Wine detection. TRestHttpServer.Create in mormot.rest.http.server now uses that capability flag to fall back from HTTP_API_MODES to useHttpAsync.",
+        "fr": "mormot.core.os ajoute wsWeakHttpSys à TWindowsSpecs et l’active lors de la détection de Wine. TRestHttpServer.Create dans mormot.rest.http.server utilise ce drapeau pour remplacer HTTP_API_MODES par useHttpAsync.",
+        "zh": "mormot.core.os 向 TWindowsSpecs 增加 wsWeakHttpSys，并在检测到 Wine 时设置。mormot.rest.http.server 的 TRestHttpServer.Create 使用该能力标志，从 HTTP_API_MODES 回退到 useHttpAsync。",
+        "ru": "mormot.core.os добавляет wsWeakHttpSys в TWindowsSpecs и устанавливает его при обнаружении Wine. TRestHttpServer.Create в mormot.rest.http.server использует флаг для перехода с HTTP_API_MODES на useHttpAsync."
+      },
+      "impact": {
+        "en": "REST servers running under Wine avoid selecting an http.sys implementation known to be incomplete and use the asynchronous socket server instead. Native Windows behavior is unchanged.",
+        "fr": "Les serveurs REST sous Wine n’utilisent plus une implémentation http.sys incomplète et passent au serveur socket asynchrone. Le comportement sous Windows natif ne change pas.",
+        "zh": "Wine 下的 REST 服务器会避开已知不完整的 http.sys 实现，改用异步 socket 服务器。原生 Windows 行为不变。",
+        "ru": "REST-серверы под Wine обходят заведомо неполный http.sys и используют асинхронный socket-сервер. Поведение нативной Windows не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Wine deployments that request an HTTP API server mode and verify the logged useHttpAsync fallback.",
+        "fr": "Mettez à niveau les déploiements Wine demandant un mode HTTP API et vérifiez le fallback useHttpAsync dans le journal.",
+        "zh": "请求 HTTP API 服务器模式的 Wine 部署应升级，并检查日志中的 useHttpAsync 回退。",
+        "ru": "Обновите Wine-развёртывания с режимом HTTP API и проверьте в журнале переход на useHttpAsync."
+      },
+      "units": ["mormot.core.os", "mormot.core.os.windows", "mormot.lib.winhttp", "mormot.rest.http.server"],
+      "api_changes": [
+        {
+          "symbol": "TWindowsSpecs.wsWeakHttpSys",
+          "change": "added",
+          "note": {
+            "en": "Marks environments where http.sys should not be selected.",
+            "fr": "Marque les environnements où http.sys ne doit pas être choisi.",
+            "zh": "标记不应选择 http.sys 的环境。",
+            "ru": "Отмечает окружения, где не следует выбирать http.sys."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2f0cdace275a3e05560fea3237458c0326265197",
+      "headline": {
+        "en": "WebSocket DLL probing is attempted once and disabled on Wine",
+        "fr": "La DLL WebSocket n’est testée qu’une fois et désactivée sous Wine",
+        "zh": "WebSocket DLL 仅探测一次，并在 Wine 下禁用",
+        "ru": "WebSocket DLL проверяется один раз и отключается под Wine"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TWebSocketApi gains a Tested flag in mormot.lib.winhttp. WebSocketApiInitialize records the first load attempt inside the global lock, avoids repeated failed loads and returns immediately on Wine, whose websocket.dll exposes only partial stubs.",
+        "fr": "TWebSocketApi gagne un drapeau Tested dans mormot.lib.winhttp. WebSocketApiInitialize mémorise la première tentative sous verrou global, évite les chargements échoués répétés et sort immédiatement sous Wine, dont websocket.dll n’expose que des stubs partiels.",
+        "zh": "mormot.lib.winhttp 的 TWebSocketApi 增加 Tested 标志。WebSocketApiInitialize 在全局锁内记录首次加载尝试，避免反复失败，并在仅提供部分 websocket.dll 桩的 Wine 上直接返回。",
+        "ru": "TWebSocketApi получает флаг Tested в mormot.lib.winhttp. WebSocketApiInitialize фиксирует первую попытку под глобальной блокировкой, не повторяет неудачные загрузки и сразу возвращается под Wine, где websocket.dll содержит лишь часть заглушек."
+      },
+      "impact": {
+        "en": "Unsupported Windows environments stop repeatedly probing the DLL, while Wine no longer appears WebSocket-capable merely because stub exports exist. Native supported systems initialize once.",
+        "fr": "Les environnements Windows non pris en charge cessent de tester la DLL à répétition, et Wine n’est plus considéré compatible à cause de simples exports factices. Les systèmes natifs compatibles s’initialisent une fois.",
+        "zh": "不支持的 Windows 环境不会重复探测 DLL；Wine 也不会仅因存在桩导出而被误判为支持 WebSocket。受支持的原生系统只初始化一次。",
+        "ru": "Неподдерживаемые Windows-среды не повторяют проверку DLL, а Wine не считается WebSocket-совместимым лишь из-за заглушек экспорта. Поддерживаемые системы инициализируются один раз."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this together with the lazy-initialization and wsWeakHttpSys commits for Windows or Wine deployments.",
+        "fr": "Prenez ce correctif avec l’initialisation paresseuse et wsWeakHttpSys pour les déploiements Windows ou Wine.",
+        "zh": "Windows 或 Wine 部署应与延迟初始化及 wsWeakHttpSys 提交一并采用。",
+        "ru": "Для Windows или Wine применяйте вместе с lazy initialization и wsWeakHttpSys."
+      },
+      "units": ["mormot.lib.winhttp"],
+      "api_changes": [
+        {
+          "symbol": "TWebSocketApi.Tested",
+          "change": "added",
+          "note": {
+            "en": "Records that websocket.dll availability was already tested.",
+            "fr": "Mémorise que la disponibilité de websocket.dll a déjà été testée.",
+            "zh": "记录 websocket.dll 可用性已完成探测。",
+            "ru": "Показывает, что доступность websocket.dll уже проверена."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6dda432f621e8cc4a4f4e16bbededf0d857a7ce7",
+      "headline": {
+        "en": "Global time caching now stores TSynSystemTime directly",
+        "fr": "Le cache horaire stocke directement TSynSystemTime",
+        "zh": "全局时间缓存直接存储 TSynSystemTime",
+        "ru": "Кэш времени теперь хранит TSynSystemTime напрямую"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.datetime changes the GlobalTime cache field from TSystemTime to TSynSystemTime and removes the local absolute alias in FromGlobalTime. Padding still keeps each cache record on one 64-byte line.",
+        "fr": "mormot.core.datetime remplace le champ GlobalTime de TSystemTime par TSynSystemTime et supprime l’alias absolute local dans FromGlobalTime. Le padding maintient chaque cache sur une ligne de 64 octets.",
+        "zh": "mormot.core.datetime 将 GlobalTime 缓存字段从 TSystemTime 改为 TSynSystemTime，并移除 FromGlobalTime 中的局部 absolute 别名。填充仍使每个缓存记录占 64 字节。",
+        "ru": "mormot.core.datetime меняет поле GlobalTime с TSystemTime на TSynSystemTime и удаляет локальный absolute alias в FromGlobalTime. Padding сохраняет размер записи в 64 байта."
+      },
+      "impact": {
+        "en": "This simplifies internal copying without changing the public FromGlobalTime contract or the 16 ms cache precision. Existing Delphi/FPC application code is unaffected.",
+        "fr": "Cela simplifie la copie interne sans modifier le contrat public de FromGlobalTime ni la précision de 16 ms. Le code applicatif Delphi/FPC n’est pas affecté.",
+        "zh": "这简化了内部复制，不改变公开 FromGlobalTime 契约或 16 ms 缓存精度。现有 Delphi/FPC 应用代码不受影响。",
+        "ru": "Это упрощает внутреннее копирование без изменения публичного контракта FromGlobalTime и точности 16 мс. Код Delphi/FPC не затронут."
+      },
+      "action": "none",
+      "units": ["mormot.core.datetime"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "56660c17306df80d5a420b1081bd12f32dcfe9e8",
+      "headline": {
+        "en": "Tests and a logging demo adopt TThreadAbstract",
+        "fr": "Les tests et une démo de journalisation adoptent TThreadAbstract",
+        "zh": "测试与日志示例改用 TThreadAbstract",
+        "ru": "Тесты и пример журналирования перешли на TThreadAbstract"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The dmvc-ai logging demo and TPipeConsumerThread in test.net.proto now inherit from TThreadAbstract instead of TThread. No framework implementation or public declaration changes in this commit.",
+        "fr": "La démo de journalisation dmvc-ai et TPipeConsumerThread dans test.net.proto héritent maintenant de TThreadAbstract au lieu de TThread. Ce commit ne change ni l’implémentation du framework ni une déclaration publique.",
+        "zh": "dmvc-ai 日志示例与 test.net.proto 中的 TPipeConsumerThread 现从 TThreadAbstract 而非 TThread 继承。本提交不改动框架实现或公开声明。",
+        "ru": "Демонстрация dmvc-ai и TPipeConsumerThread в test.net.proto теперь наследуются от TThreadAbstract вместо TThread. Реализация фреймворка и публичные объявления не меняются."
+      },
+      "impact": {
+        "en": "Application code is unaffected; the changed examples demonstrate the preferred base class so end-of-thread logging cleanup happens automatically.",
+        "fr": "Le code applicatif n’est pas affecté ; les exemples montrent la classe de base recommandée pour automatiser le nettoyage du journal en fin de thread.",
+        "zh": "应用代码不受影响；更新后的示例展示推荐基类，使线程结束日志清理自动执行。",
+        "ru": "Код приложений не затронут; примеры показывают предпочтительный базовый класс с автоматической очисткой журнала."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "afde3637c01d04b2cb7cc415a5d6198de03e4ac6",
+      "headline": {
+        "en": "Angelize watchdog drops manual logging cleanup callbacks",
+        "fr": "Le watchdog Angelize abandonne les callbacks de nettoyage manuel",
+        "zh": "Angelize 看门狗移除手动日志清理回调",
+        "ru": "Watchdog Angelize отказался от ручных callbacks очистки журнала"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.app.agl removes explicit TSynLog.NotifyThreadEnded and log.Family.OnThreadEnded calls from TSynAngelizeRunner and its watchdog creation. Their TThreadAbstract ancestry now supplies the cleanup.",
+        "fr": "mormot.app.agl supprime les appels explicites à TSynLog.NotifyThreadEnded et log.Family.OnThreadEnded dans TSynAngelizeRunner et la création du watchdog. Leur héritage TThreadAbstract assure désormais le nettoyage.",
+        "zh": "mormot.app.agl 从 TSynAngelizeRunner 与看门狗创建中移除显式 TSynLog.NotifyThreadEnded 和 log.Family.OnThreadEnded 调用；其 TThreadAbstract 继承链现在负责清理。",
+        "ru": "mormot.app.agl удаляет явные вызовы TSynLog.NotifyThreadEnded и log.Family.OnThreadEnded из TSynAngelizeRunner и создания watchdog. Очистку обеспечивает наследование TThreadAbstract."
+      },
+      "impact": {
+        "en": "Angelize behavior should remain the same, with one centralized end-of-thread notification instead of manual per-class calls. Application APIs are unchanged.",
+        "fr": "Le comportement Angelize reste identique, avec une notification de fin centralisée au lieu d’appels manuels par classe. Les API applicatives ne changent pas.",
+        "zh": "Angelize 行为应保持不变，线程结束通知由集中机制执行，而非每个类手动调用。应用 API 不变。",
+        "ru": "Поведение Angelize остаётся прежним, но уведомление о завершении централизовано вместо ручных вызовов в каждом классе. API не меняется."
+      },
+      "action": "none",
+      "units": ["mormot.app.agl"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "69869f49271bec0d6d943c2045ba9f197ea58b7a",
+      "headline": {
+        "en": "REST and ORM thread hooks now require TThreadAbstract",
+        "fr": "Les hooks de thread REST et ORM exigent maintenant TThreadAbstract",
+        "zh": "REST 与 ORM 线程钩子现要求 TThreadAbstract",
+        "ru": "REST- и ORM-хуки потоков теперь требуют TThreadAbstract"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "Public BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart and HttpThreadTerminate declarations across mormot.rest.core, mormot.rest.server, mormot.rest.http.server and mormot.orm use TThreadAbstract instead of TThread. The old explicit log-family cleanup is removed.",
+        "fr": "Les déclarations publiques BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart et HttpThreadTerminate dans mormot.rest.core, mormot.rest.server, mormot.rest.http.server et mormot.orm utilisent TThreadAbstract au lieu de TThread. Le nettoyage explicite via la famille de logs est supprimé.",
+        "zh": "mormot.rest.core、mormot.rest.server、mormot.rest.http.server 与 mormot.orm 中公开的 BeginCurrentThread、EndCurrentThread、OnBeginCurrentThread、OnEndCurrentThread、HttpThreadStart 和 HttpThreadTerminate 声明由 TThread 改为 TThreadAbstract，并移除旧的显式日志族清理。",
+        "ru": "Публичные BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart и HttpThreadTerminate в mormot.rest.core, mormot.rest.server, mormot.rest.http.server и mormot.orm теперь принимают TThreadAbstract вместо TThread. Явная очистка семейства логов удалена."
+      },
+      "impact": {
+        "en": "Custom descendants overriding these virtual methods and method variables assigned to the hooks can fail to compile until their Sender parameter is narrowed to TThreadAbstract. Runtime cleanup then comes from the new base class path.",
+        "fr": "Les descendants personnalisés qui redéfinissent ces méthodes virtuelles et les méthodes affectées aux hooks peuvent ne plus compiler avant de remplacer Sender par TThreadAbstract. Le nettoyage à l’exécution vient ensuite de la nouvelle classe de base.",
+        "zh": "重写这些虚方法的自定义派生类以及绑定到钩子的过程变量可能无法编译，需将 Sender 参数收窄为 TThreadAbstract。运行时清理由新基类路径完成。",
+        "ru": "Пользовательские потомки с override этих методов и методы, назначенные хукам, могут не компилироваться до замены Sender на TThreadAbstract. Очистка во время выполнения затем идёт через новый базовый класс."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search overrides and callbacks for BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart and HttpThreadTerminate; change Sender: TThread to Sender: TThreadAbstract and recompile.",
+        "fr": "Recherchez les redéfinitions et callbacks BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart et HttpThreadTerminate ; remplacez Sender: TThread par Sender: TThreadAbstract puis recompilez.",
+        "zh": "搜索 BeginCurrentThread、EndCurrentThread、OnBeginCurrentThread、OnEndCurrentThread、HttpThreadStart 与 HttpThreadTerminate 的重写及回调；将 Sender: TThread 改为 Sender: TThreadAbstract 后重新编译。",
+        "ru": "Найдите override и callbacks BeginCurrentThread, EndCurrentThread, OnBeginCurrentThread, OnEndCurrentThread, HttpThreadStart и HttpThreadTerminate; замените Sender: TThread на Sender: TThreadAbstract и пересоберите."
+      },
+      "units": ["mormot.orm.core", "mormot.orm.server", "mormot.rest.core", "mormot.rest.http.server", "mormot.rest.server", "mormot.soa.client"],
+      "api_changes": [
+        {
+          "symbol": "TRest.BeginCurrentThread / TRest.EndCurrentThread",
+          "change": "signature-changed",
+          "note": {
+            "en": "Sender changes from TThread to TThreadAbstract.",
+            "fr": "Sender passe de TThread à TThreadAbstract.",
+            "zh": "Sender 从 TThread 改为 TThreadAbstract。",
+            "ru": "Sender изменён с TThread на TThreadAbstract."
+          }
+        },
+        {
+          "symbol": "TRestOrmParent.BeginCurrentThread / TRestOrmParent.EndCurrentThread",
+          "change": "signature-changed",
+          "note": {
+            "en": "Sender changes from TThread to TThreadAbstract.",
+            "fr": "Sender passe de TThread à TThreadAbstract.",
+            "zh": "Sender 从 TThread 改为 TThreadAbstract。",
+            "ru": "Sender изменён с TThread на TThreadAbstract."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f115b536b06f98eb8f8fc2148c519749628bbe23",
+      "headline": {
+        "en": "HTTP API WebSocket workers follow the new thread callback type",
+        "fr": "Les workers HTTP API WebSocket suivent le nouveau type de callback",
+        "zh": "HTTP API WebSocket 工作线程跟进新回调类型",
+        "ru": "Рабочие потоки HTTP API WebSocket перешли на новый тип callback"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.net.server changes TSynThreadPoolHttpApiWebSocketServer.OnThreadStart and OnThreadTerminate to accept TThreadAbstract. TSynWebSocketGuard now inherits TThreadAbstract and drops its manual TSynLog.NotifyThreadEnded call.",
+        "fr": "mormot.net.server fait accepter TThreadAbstract à TSynThreadPoolHttpApiWebSocketServer.OnThreadStart et OnThreadTerminate. TSynWebSocketGuard hérite maintenant de TThreadAbstract et supprime son appel manuel à TSynLog.NotifyThreadEnded.",
+        "zh": "mormot.net.server 将 TSynThreadPoolHttpApiWebSocketServer.OnThreadStart 与 OnThreadTerminate 参数改为 TThreadAbstract。TSynWebSocketGuard 现继承 TThreadAbstract，并移除手动 TSynLog.NotifyThreadEnded。",
+        "ru": "mormot.net.server меняет параметры TSynThreadPoolHttpApiWebSocketServer.OnThreadStart и OnThreadTerminate на TThreadAbstract. TSynWebSocketGuard наследуется от TThreadAbstract и удаляет ручной TSynLog.NotifyThreadEnded."
+      },
+      "impact": {
+        "en": "Framework WebSocket worker and guard threads compile with the new TOnNotifyThread contract and receive automatic log cleanup. Custom descendants overriding the protected callbacks may require the same signature update.",
+        "fr": "Les workers et gardes WebSocket compilent avec le nouveau contrat TOnNotifyThread et bénéficient du nettoyage automatique. Les descendants personnalisés redéfinissant les callbacks protégés peuvent devoir adapter leur signature.",
+        "zh": "框架 WebSocket 工作线程与守护线程适配新的 TOnNotifyThread 契约并获得自动日志清理。重写受保护回调的自定义派生类可能也需更新签名。",
+        "ru": "WebSocket workers и guard компилируются с новым TOnNotifyThread и получают автоматическую очистку журнала. Пользовательским потомкам с override защищённых callbacks может понадобиться та же смена сигнатуры."
+      },
+      "action": "review",
+      "units": ["mormot.net.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9a1c1313f8b656504033a548f96b8ab2cad57d7c",
+      "headline": {
+        "en": "SQLite and PostgreSQL threads align with centralized log cleanup",
+        "fr": "Les threads SQLite et PostgreSQL s’alignent sur le nettoyage centralisé",
+        "zh": "SQLite 与 PostgreSQL 线程适配集中式日志清理",
+        "ru": "Потоки SQLite и PostgreSQL согласованы с централизованной очисткой журнала"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.db.sql.postgres removes the redundant SynDBLog.NotifyThreadEnded call from its TThreadAbstract-based async thread. The SQLite backup thread remains a plain TThread and retains an explicitly documented SQLite3Log.NotifyThreadEnded call.",
+        "fr": "mormot.db.sql.postgres supprime l’appel redondant à SynDBLog.NotifyThreadEnded de son thread asynchrone fondé sur TThreadAbstract. Le thread de sauvegarde SQLite reste un TThread et conserve l’appel explicite documenté à SQLite3Log.NotifyThreadEnded.",
+        "zh": "mormot.db.sql.postgres 从基于 TThreadAbstract 的异步线程移除冗余 SynDBLog.NotifyThreadEnded。SQLite 备份线程仍是普通 TThread，并保留注明原因的 SQLite3Log.NotifyThreadEnded 调用。",
+        "ru": "mormot.db.sql.postgres удаляет лишний SynDBLog.NotifyThreadEnded из асинхронного потока на TThreadAbstract. Поток резервной копии SQLite остаётся обычным TThread и сохраняет явно документированный SQLite3Log.NotifyThreadEnded."
+      },
+      "impact": {
+        "en": "Database thread logging cleanup should occur exactly once without changing SQLite backup or PostgreSQL async behavior. No application-facing database API changes.",
+        "fr": "Le nettoyage du journal des threads de base de données doit avoir lieu exactement une fois, sans modifier les sauvegardes SQLite ni l’asynchrone PostgreSQL. Aucune API applicative ne change.",
+        "zh": "数据库线程日志清理应恰好执行一次，不改变 SQLite 备份或 PostgreSQL 异步行为。面向应用的数据库 API 不变。",
+        "ru": "Очистка журналов DB-потоков должна выполняться ровно один раз без изменения SQLite backup и PostgreSQL async. Прикладные API базы данных не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.db.raw.sqlite3", "mormot.db.sql.postgres"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8ef4ae1bfe81f643cdeb7f9d22040bbc2cbef988",
+      "headline": {
+        "en": "TThreadAbstract now always performs end-of-thread log cleanup",
+        "fr": "TThreadAbstract nettoie désormais toujours le journal en fin de thread",
+        "zh": "TThreadAbstract 现在线程结束时总会清理日志",
+        "ru": "TThreadAbstract теперь всегда очищает журнал при завершении"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TThreadAbstract.DoTerminate in mormot.core.threads now calls TSynLog.NotifyThreadEnded after inherited termination and the legacy Finished update, swallowing shutdown exceptions. Framework queues and timers remove their explicit OnThreadEnded callbacks; the independent logging flush TThread keeps a manual call.",
+        "fr": "TThreadAbstract.DoTerminate dans mormot.core.threads appelle maintenant TSynLog.NotifyThreadEnded après la terminaison héritée et la mise à jour legacy de Finished, en absorbant les exceptions de fermeture. Les queues et timers retirent leurs callbacks explicites ; le TThread autonome de flush garde un appel manuel.",
+        "zh": "mormot.core.threads 的 TThreadAbstract.DoTerminate 在继承终止及旧版 Finished 更新后调用 TSynLog.NotifyThreadEnded，并吞掉关闭异常。框架队列和计时器移除显式 OnThreadEnded 回调；独立日志刷新 TThread 保留手动调用。",
+        "ru": "TThreadAbstract.DoTerminate в mormot.core.threads вызывает TSynLog.NotifyThreadEnded после inherited termination и legacy-обновления Finished, подавляя исключения завершения. Очереди и таймеры удаляют явные callbacks, отдельный logging flush TThread сохраняет ручной вызов."
+      },
+      "impact": {
+        "en": "Every descendant that correctly reaches inherited DoTerminate releases its per-thread logging state automatically. Plain TThread descendants that use TSynLog still need to call TSynLog.NotifyThreadEnded themselves.",
+        "fr": "Tout descendant qui atteint correctement inherited DoTerminate libère automatiquement son état de journalisation par thread. Les descendants directs de TThread utilisant TSynLog doivent encore appeler TSynLog.NotifyThreadEnded.",
+        "zh": "正确执行 inherited DoTerminate 的每个派生类都会自动释放逐线程日志状态。直接继承 TThread 且使用 TSynLog 的类仍需自行调用 TSynLog.NotifyThreadEnded。",
+        "ru": "Каждый потомок, корректно вызывающий inherited DoTerminate, автоматически освобождает per-thread состояние журналирования. Потомки обычного TThread с TSynLog всё ещё должны вызывать TSynLog.NotifyThreadEnded сами."
+      },
+      "action": "review",
+      "units": ["mormot.core.log", "mormot.core.os", "mormot.core.threads"],
+      "api_changes": [
+        {
+          "symbol": "TThreadAbstract.DoTerminate",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Calls TSynLog.NotifyThreadEnded automatically at thread shutdown.",
+            "fr": "Appelle automatiquement TSynLog.NotifyThreadEnded à la fermeture du thread.",
+            "zh": "线程关闭时自动调用 TSynLog.NotifyThreadEnded。",
+            "ru": "Автоматически вызывает TSynLog.NotifyThreadEnded при завершении потока."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f1f8d76658dbc5b5d5dae9689364024657eeaf5f",
+      "headline": {
+        "en": "TOnNotifyThread is narrowed and the log-family callback is removed",
+        "fr": "TOnNotifyThread est restreint et le callback de famille de logs supprimé",
+        "zh": "TOnNotifyThread 参数收窄且日志族回调被移除",
+        "ru": "TOnNotifyThread сужен, callback семейства журналов удалён"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.core.threads changes TOnNotifyThread from procedure(Sender: TThread) to procedure(Sender: TThreadAbstract). It adds TThreadAbstract.OnThreadEnded and mormot.core.log removes TSynLogFamily.OnThreadEnded; TLoggedThread cleanup is moved away from its own DoTerminate override.",
+        "fr": "mormot.core.threads change TOnNotifyThread de procedure(Sender: TThread) en procedure(Sender: TThreadAbstract). TThreadAbstract.OnThreadEnded est ajouté, mormot.core.log supprime TSynLogFamily.OnThreadEnded et le nettoyage de TLoggedThread quitte son propre DoTerminate.",
+        "zh": "mormot.core.threads 将 TOnNotifyThread 从 procedure(Sender: TThread) 改为 procedure(Sender: TThreadAbstract)。新增 TThreadAbstract.OnThreadEnded，mormot.core.log 移除 TSynLogFamily.OnThreadEnded，并把 TLoggedThread 清理移出其 DoTerminate。",
+        "ru": "mormot.core.threads меняет TOnNotifyThread с procedure(Sender: TThread) на procedure(Sender: TThreadAbstract). Добавлен TThreadAbstract.OnThreadEnded, из mormot.core.log удалён TSynLogFamily.OnThreadEnded, очистка TLoggedThread вынесена из его DoTerminate."
+      },
+      "impact": {
+        "en": "Existing callback methods declared with Sender: TThread are assignment-incompatible with TOnNotifyThread, and direct references to TSynLogFamily.OnThreadEnded no longer compile. This is a source migration for Delphi and FPC projects.",
+        "fr": "Les méthodes callback déclarées avec Sender: TThread ne sont plus compatibles avec TOnNotifyThread, et les références directes à TSynLogFamily.OnThreadEnded ne compilent plus. Une migration source est nécessaire en Delphi comme en FPC.",
+        "zh": "声明为 Sender: TThread 的现有回调方法不再兼容 TOnNotifyThread，直接引用 TSynLogFamily.OnThreadEnded 也无法编译。Delphi 与 FPC 项目均需源码迁移。",
+        "ru": "Существующие callback-методы с Sender: TThread несовместимы с TOnNotifyThread, прямые ссылки на TSynLogFamily.OnThreadEnded не компилируются. Нужна миграция исходников Delphi и FPC."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for TOnNotifyThread assignments and Sender: TThread handlers, change them to Sender: TThreadAbstract, and replace TSynLogFamily.OnThreadEnded references with TThreadAbstract.OnThreadEnded or automatic TThreadAbstract cleanup.",
+        "fr": "Recherchez les affectations TOnNotifyThread et handlers Sender: TThread, passez-les à Sender: TThreadAbstract et remplacez TSynLogFamily.OnThreadEnded par TThreadAbstract.OnThreadEnded ou le nettoyage automatique de TThreadAbstract.",
+        "zh": "搜索 TOnNotifyThread 绑定及 Sender: TThread 处理器，将其改为 Sender: TThreadAbstract；把 TSynLogFamily.OnThreadEnded 引用替换为 TThreadAbstract.OnThreadEnded 或依赖 TThreadAbstract 自动清理。",
+        "ru": "Найдите назначения TOnNotifyThread и обработчики Sender: TThread, замените на Sender: TThreadAbstract; ссылки TSynLogFamily.OnThreadEnded замените на TThreadAbstract.OnThreadEnded или автоматическую очистку TThreadAbstract."
+      },
+      "units": ["mormot.core.log", "mormot.core.threads"],
+      "api_changes": [
+        {
+          "symbol": "TOnNotifyThread",
+          "change": "signature-changed",
+          "note": {
+            "en": "Sender is now TThreadAbstract instead of TThread.",
+            "fr": "Sender est désormais TThreadAbstract au lieu de TThread.",
+            "zh": "Sender 现为 TThreadAbstract，而非 TThread。",
+            "ru": "Sender теперь TThreadAbstract вместо TThread."
+          }
+        },
+        {
+          "symbol": "TSynLogFamily.OnThreadEnded",
+          "change": "removed",
+          "note": {
+            "en": "Cleanup moves to TThreadAbstract.",
+            "fr": "Le nettoyage passe dans TThreadAbstract.",
+            "zh": "清理职责移至 TThreadAbstract。",
+            "ru": "Очистка перенесена в TThreadAbstract."
+          }
+        },
+        {
+          "symbol": "TThreadAbstract.OnThreadEnded",
+          "change": "added",
+          "note": {
+            "en": "Wrapper around TSynLog.NotifyThreadEnded using the new callback type.",
+            "fr": "Wrapper de TSynLog.NotifyThreadEnded avec le nouveau type de callback.",
+            "zh": "使用新回调类型封装 TSynLog.NotifyThreadEnded。",
+            "ru": "Обёртка TSynLog.NotifyThreadEnded с новым типом callback."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "332614f57f8ec0e958bf390899f313cd7a89d266",
+      "headline": {
+        "en": "StackTrace declarations compile again with Delphi 7",
+        "fr": "Les déclarations StackTrace recompilent avec Delphi 7",
+        "zh": "StackTrace 声明恢复 Delphi 7 编译兼容",
+        "ru": "Объявления StackTrace снова компилируются в Delphi 7"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.log places the static directive on the two overloaded TSynLog.StackTrace declarations only when HASINLINE is defined. Older Delphi compilers no longer parse the unsupported directive there.",
+        "fr": "mormot.core.log place la directive static sur les deux surcharges TSynLog.StackTrace uniquement si HASINLINE est défini. Les anciens compilateurs Delphi ne rencontrent plus cette directive non prise en charge.",
+        "zh": "mormot.core.log 仅在定义 HASINLINE 时为两个重载 TSynLog.StackTrace 声明添加 static 指令，旧版 Delphi 不再解析不支持的指令。",
+        "ru": "mormot.core.log добавляет static к двум перегрузкам TSynLog.StackTrace только при HASINLINE. Старые Delphi больше не разбирают неподдерживаемую директиву."
+      },
+      "impact": {
+        "en": "Delphi 7 builds using mormot.core.log compile again. Newer Delphi and FPC targets keep the same StackTrace API and runtime behavior.",
+        "fr": "Les builds Delphi 7 utilisant mormot.core.log recompilent. Les cibles Delphi récentes et FPC gardent la même API StackTrace et le même comportement.",
+        "zh": "使用 mormot.core.log 的 Delphi 7 构建可再次编译。较新 Delphi 与 FPC 目标的 StackTrace API 及运行行为不变。",
+        "ru": "Сборки Delphi 7 с mormot.core.log снова компилируются. Новые Delphi и FPC сохраняют API StackTrace и поведение."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade if Delphi 7 stopped in the TSynLog.StackTrace declarations.",
+        "fr": "Mettez à niveau si Delphi 7 échouait sur les déclarations TSynLog.StackTrace.",
+        "zh": "若 Delphi 7 在 TSynLog.StackTrace 声明处编译失败，请升级。",
+        "ru": "Обновитесь, если Delphi 7 останавливался на объявлениях TSynLog.StackTrace."
+      },
+      "units": ["mormot.core.log"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "86422854df36929c606400f85bae7cc3aa6b23f2",
+      "headline": {
+        "en": "Compiler feature flags now describe TThread.Finished availability",
+        "fr": "Les drapeaux compilateur décrivent la disponibilité de TThread.Finished",
+        "zh": "编译器特性标志现描述 TThread.Finished 可用性",
+        "ru": "Флаги компилятора теперь отражают наличие TThread.Finished"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.defines adds HASTTHREADFINISHED for FPC and Unicode Delphi, and documents WINDELPHI before defining it for Delphi on Windows. These conditionals support the surrounding legacy TThread compatibility code.",
+        "fr": "mormot.defines ajoute HASTTHREADFINISHED pour FPC et Delphi Unicode, et documente WINDELPHI avant de le définir pour Delphi sous Windows. Ces conditions servent le code de compatibilité TThread ancien.",
+        "zh": "mormot.defines 为 FPC 与 Unicode Delphi 增加 HASTTHREADFINISHED，并在 Windows Delphi 下定义前补充 WINDELPHI 文档。这些条件服务于旧版 TThread 兼容代码。",
+        "ru": "mormot.defines добавляет HASTTHREADFINISHED для FPC и Unicode Delphi и документирует WINDELPHI перед определением для Delphi в Windows. Условия поддерживают legacy-совместимость TThread."
+      },
+      "impact": {
+        "en": "The framework selects its Finished emulation only on Delphi 7/2007 instead of targets that already provide the property. Application code sees no direct API change.",
+        "fr": "Le framework n’active l’émulation de Finished que pour Delphi 7/2007, pas pour les cibles qui possèdent déjà la propriété. Le code applicatif ne voit aucun changement direct d’API.",
+        "zh": "框架仅在 Delphi 7/2007 上启用 Finished 模拟，不再用于已提供该属性的目标。应用代码无直接 API 变化。",
+        "ru": "Фреймворк включает эмуляцию Finished только для Delphi 7/2007, а не для платформ с готовым свойством. Прямого изменения API приложения нет."
+      },
+      "action": "none",
+      "units": ["mormot.defines"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5678b9d9aa17ff454f7949fe2f8d4d4bd1b20e7c",
+      "headline": {
+        "en": "TThreadAbstract exposes Finished consistently on Delphi 7 and 2007",
+        "fr": "TThreadAbstract expose Finished aussi sous Delphi 7 et 2007",
+        "zh": "TThreadAbstract 在 Delphi 7/2007 上统一提供 Finished",
+        "ru": "TThreadAbstract предоставляет Finished и в Delphi 7/2007"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.threads adds an emulated public Finished property and fFinished field to TThreadAbstract when the RTL lacks them, setting the flag in DoTerminate. TLoggedThread.ExecuteDone is removed, and mormot.net.tftp.server switches to Finished.",
+        "fr": "mormot.core.threads ajoute à TThreadAbstract une propriété publique Finished émulée et fFinished lorsque le RTL ne les fournit pas, puis pose le drapeau dans DoTerminate. TLoggedThread.ExecuteDone est supprimé et mormot.net.tftp.server utilise Finished.",
+        "zh": "当 RTL 缺少相关成员时，mormot.core.threads 为 TThreadAbstract 增加模拟的公开 Finished 属性与 fFinished 字段，并在 DoTerminate 设置。TLoggedThread.ExecuteDone 被移除，mormot.net.tftp.server 改用 Finished。",
+        "ru": "mormot.core.threads добавляет в TThreadAbstract публичное эмулированное Finished и fFinished, если их нет в RTL, устанавливая флаг в DoTerminate. TLoggedThread.ExecuteDone удалён, mormot.net.tftp.server использует Finished."
+      },
+      "impact": {
+        "en": "Legacy Delphi can use the same TThreadAbstract.Finished check as modern Delphi and FPC. Code that referenced the public TLoggedThread.ExecuteDone property must migrate to Finished.",
+        "fr": "Les anciens Delphi peuvent tester TThreadAbstract.Finished comme Delphi moderne et FPC. Le code qui référençait la propriété publique TLoggedThread.ExecuteDone doit passer à Finished.",
+        "zh": "旧版 Delphi 可与新版 Delphi/FPC 一样检查 TThreadAbstract.Finished。引用公开 TLoggedThread.ExecuteDone 属性的代码须改用 Finished。",
+        "ru": "Старые Delphi могут проверять TThreadAbstract.Finished так же, как новые Delphi/FPC. Код с публичным TLoggedThread.ExecuteDone должен перейти на Finished."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for TLoggedThread.ExecuteDone and replace it with the inherited Finished property.",
+        "fr": "Recherchez TLoggedThread.ExecuteDone et remplacez-le par la propriété héritée Finished.",
+        "zh": "搜索 TLoggedThread.ExecuteDone，并替换为继承的 Finished 属性。",
+        "ru": "Найдите TLoggedThread.ExecuteDone и замените на унаследованное свойство Finished."
+      },
+      "units": ["mormot.core.threads", "mormot.net.tftp.server"],
+      "api_changes": [
+        {
+          "symbol": "TThreadAbstract.Finished",
+          "change": "added",
+          "note": {
+            "en": "Emulated for Delphi 7/2007; already supplied by newer RTLs.",
+            "fr": "Émulée pour Delphi 7/2007 ; déjà fournie par les RTL récents.",
+            "zh": "在 Delphi 7/2007 上模拟；较新 RTL 已提供。",
+            "ru": "Эмулируется для Delphi 7/2007; в новых RTL уже существует."
+          }
+        },
+        {
+          "symbol": "TLoggedThread.ExecuteDone",
+          "change": "removed",
+          "note": {
+            "en": "Use Finished instead.",
+            "fr": "Utiliser Finished à la place.",
+            "zh": "请改用 Finished。",
+            "ru": "Используйте Finished."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "41dbfbbae68d870ef07cce426785254b9a149abd",
+      "headline": {
+        "en": "HTTP API WebSocket construction now initializes websocket.dll safely",
+        "fr": "La construction HTTP API WebSocket initialise websocket.dll sûrement",
+        "zh": "HTTP API WebSocket 构造时安全初始化 websocket.dll",
+        "ru": "Конструктор HTTP API WebSocket безопасно инициализирует websocket.dll"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpApiWebSocketServer.Create in mormot.net.server calls WebSocketApiInitialize before testing WebSocketApi.WebSocketEnabled. mormot.lib.winhttp performs DLL loading and export binding under the reentrant global lock, and new tests cover constructor-first and 16-thread initialization.",
+        "fr": "THttpApiWebSocketServer.Create dans mormot.net.server appelle WebSocketApiInitialize avant de tester WebSocketApi.WebSocketEnabled. mormot.lib.winhttp charge la DLL et lie ses exports sous le verrou global réentrant ; de nouveaux tests couvrent le constructeur en premier et 16 threads concurrents.",
+        "zh": "mormot.net.server 的 THttpApiWebSocketServer.Create 在检查 WebSocketApi.WebSocketEnabled 前调用 WebSocketApiInitialize。mormot.lib.winhttp 在可重入全局锁内加载 DLL 并绑定导出，新测试覆盖构造器首次使用及 16 线程并发初始化。",
+        "ru": "THttpApiWebSocketServer.Create в mormot.net.server вызывает WebSocketApiInitialize до проверки WebSocketApi.WebSocketEnabled. mormot.lib.winhttp загружает DLL и связывает exports под реентерабельной глобальной блокировкой; тесты покрывают первый вызов конструктора и 16 потоков."
+      },
+      "impact": {
+        "en": "A Windows HTTP API WebSocket server can be the first WebSocket API user in the process without incorrectly raising 'not supported', and concurrent first use cannot observe partially bound function pointers.",
+        "fr": "Un serveur HTTP API WebSocket sous Windows peut être le premier utilisateur de l’API sans lever à tort « not supported », et un premier usage concurrent ne voit pas de pointeurs de fonctions partiellement liés.",
+        "zh": "Windows HTTP API WebSocket 服务器可作为进程首个 WebSocket API 使用者，不再错误抛出“not supported”；并发首次使用也不会看到未完整绑定的函数指针。",
+        "ru": "Windows HTTP API WebSocket сервер может быть первым пользователем API в процессе без ложной ошибки 'not supported'; конкурентный первый вызов не увидит частично связанные указатели функций."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Windows services that construct THttpApiWebSocketServer before any WinHTTP WebSocket client use.",
+        "fr": "Mettez à niveau les services Windows qui construisent THttpApiWebSocketServer avant tout client WebSocket WinHTTP.",
+        "zh": "在任何 WinHTTP WebSocket 客户端之前构造 THttpApiWebSocketServer 的 Windows 服务应升级。",
+        "ru": "Обновите Windows-службы, создающие THttpApiWebSocketServer до любого WinHTTP WebSocket клиента."
+      },
+      "units": ["mormot.lib.winhttp", "mormot.net.server"],
+      "api_changes": [
+        {
+          "symbol": "THttpApiWebSocketServer.Create",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Performs lazy WebSocket API initialization before availability is checked.",
+            "fr": "Initialise paresseusement l’API WebSocket avant de tester sa disponibilité.",
+            "zh": "检查可用性前执行 WebSocket API 延迟初始化。",
+            "ru": "Лениво инициализирует WebSocket API до проверки доступности."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "35d353c919d76f8d4f944001190d131cf6dafa55",
+      "headline": {
+        "en": "Recycled logging thread slots now reset their complete local state",
+        "fr": "Les slots de thread recyclés réinitialisent tout leur état local",
+        "zh": "复用日志线程槽时完整重置本地状态",
+        "ru": "Повторно используемые слоты журналирования полностью сбрасывают состояние"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLog.NotifyThreadEnded in mormot.core.log now clears ThreadNumber as the one-time recycled marker, while InitThreadNumber resets RecursionCount and Flags before assigning a reused slot. ThreadBitLo remains the lazy initialization marker.",
+        "fr": "TSynLog.NotifyThreadEnded dans mormot.core.log efface maintenant ThreadNumber comme marqueur de recyclage unique, tandis que InitThreadNumber remet RecursionCount et Flags à zéro avant de réaffecter un slot. ThreadBitLo reste le marqueur d’initialisation paresseuse.",
+        "zh": "mormot.core.log 的 TSynLog.NotifyThreadEnded 现清零 ThreadNumber 作为一次性复用标记；InitThreadNumber 在分配复用槽前重置 RecursionCount 与 Flags。ThreadBitLo 仍用于延迟初始化标记。",
+        "ru": "TSynLog.NotifyThreadEnded в mormot.core.log обнуляет ThreadNumber как одноразовый маркер возврата, а InitThreadNumber сбрасывает RecursionCount и Flags до назначения повторного слота. ThreadBitLo остаётся маркером lazy initialization."
+      },
+      "impact": {
+        "en": "Short-lived threads that reuse TSynLog slots no longer inherit recursion or per-thread logging flags from a previous thread. This prevents silent logging suppression or stale thread-specific behavior.",
+        "fr": "Les threads courts qui réutilisent des slots TSynLog n’héritent plus du niveau de récursion ni des drapeaux d’un thread précédent. Cela évite une suppression silencieuse du journal ou un comportement périmé.",
+        "zh": "复用 TSynLog 槽的短生命周期线程不再继承前一线程的递归计数或逐线程日志标志，可避免静默抑制日志或残留行为。",
+        "ru": "Короткоживущие потоки при повторном слоте TSynLog не наследуют recursion и per-thread flags предыдущего потока. Это исключает молчаливое подавление записей и устаревшее состояние."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade services that create and destroy many logging threads or customize per-thread TSynLog flags.",
+        "fr": "Mettez à niveau les services qui créent et détruisent beaucoup de threads journalisés ou personnalisent les drapeaux TSynLog par thread.",
+        "zh": "频繁创建销毁日志线程或自定义逐线程 TSynLog 标志的服务应升级。",
+        "ru": "Обновите службы с большим числом коротких logging-потоков или пользовательскими per-thread флагами TSynLog."
+      },
+      "units": ["mormot.core.log"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2c03b28af5cc7536011eac3a2dcbc29f6812c12a",
+      "headline": {
+        "en": "TLoggedThread releases logging state even when it logged nothing",
+        "fr": "TLoggedThread libère son état même sans avoir écrit de journal",
+        "zh": "TLoggedThread 即使未写日志也会释放日志状态",
+        "ru": "TLoggedThread освобождает logging-состояние даже без записей"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TLoggedThread.DoTerminate in mormot.core.threads removes its early exit when fLog is nil and calls the class-level TSynLog.NotifyThreadEnded unconditionally after inherited DoTerminate. It then clears fLog.",
+        "fr": "TLoggedThread.DoTerminate dans mormot.core.threads supprime la sortie anticipée lorsque fLog vaut nil et appelle toujours TSynLog.NotifyThreadEnded après inherited DoTerminate, puis efface fLog.",
+        "zh": "mormot.core.threads 的 TLoggedThread.DoTerminate 移除 fLog 为 nil 时的提前退出，在 inherited DoTerminate 后无条件调用类级 TSynLog.NotifyThreadEnded，再清空 fLog。",
+        "ru": "TLoggedThread.DoTerminate в mormot.core.threads удаляет ранний выход при fLog = nil и безусловно вызывает TSynLog.NotifyThreadEnded после inherited DoTerminate, затем очищает fLog."
+      },
+      "impact": {
+        "en": "A TLoggedThread that acquired thread-local logging metadata but emitted no entry now returns its slot correctly. Long-running services avoid gradual exhaustion of the logging thread registry.",
+        "fr": "Un TLoggedThread ayant obtenu des métadonnées locales sans écrire d’entrée rend maintenant correctement son slot. Les services longs évitent l’épuisement progressif du registre des threads de journalisation.",
+        "zh": "已获取线程本地日志元数据但未输出记录的 TLoggedThread 现在会正确归还槽位，长期运行服务可避免日志线程注册表逐渐耗尽。",
+        "ru": "TLoggedThread, получивший thread-local метаданные, но не записавший строку, теперь корректно возвращает слот. Долгоживущие службы не исчерпывают реестр logging-потоков."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade services with many short-lived TLoggedThread instances, including threads that may complete without logging.",
+        "fr": "Mettez à niveau les services avec beaucoup de TLoggedThread courts, y compris ceux qui finissent sans journaliser.",
+        "zh": "拥有大量短生命周期 TLoggedThread（包括可能不写日志即结束）的服务应升级。",
+        "ru": "Обновите службы с множеством коротких TLoggedThread, включая завершающиеся без записей."
+      },
+      "units": ["mormot.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8d60e5edd9c876f44f2f4c3c0247eb5a2de5be62",
+      "headline": {
+        "en": "Sha256Weak documentation makes its legacy-only status explicit",
+        "fr": "La documentation de Sha256Weak précise son usage strictement legacy",
+        "zh": "Sha256Weak 文档明确仅供旧版兼容",
+        "ru": "Документация Sha256Weak явно ограничивает его legacy-совместимостью"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "Comments in mormot.crypt.core clarify that Sha256Weak pads inputs shorter than 256 bytes, exists only for mORMot 1 compatibility and must not be used for new code or newly generated data. TSynSigner.Pbkdf2 and Modular Crypt are named alternatives.",
+        "fr": "Les commentaires de mormot.crypt.core précisent que Sha256Weak complète les entrées de moins de 256 octets, ne sert qu’à la compatibilité mORMot 1 et ne doit pas être utilisé pour du nouveau code ou de nouvelles données. TSynSigner.Pbkdf2 et Modular Crypt sont proposés.",
+        "zh": "mormot.crypt.core 注释说明 Sha256Weak 会填充短于 256 字节的输入，仅用于 mORMot 1 兼容，不应在新代码或新生成数据中使用，并推荐 TSynSigner.Pbkdf2 与 Modular Crypt。",
+        "ru": "Комментарии mormot.crypt.core уточняют: Sha256Weak дополняет вход короче 256 байт, нужен только для совместимости mORMot 1 и не должен применяться в новом коде или данных. Рекомендованы TSynSigner.Pbkdf2 и Modular Crypt."
+      },
+      "impact": {
+        "en": "There is no runtime or API change. The stronger wording helps security reviews identify existing Sha256Weak use as compatibility debt rather than an approved password derivation choice.",
+        "fr": "Il n’y a aucun changement d’exécution ni d’API. Le texte aide les audits de sécurité à classer Sha256Weak comme dette de compatibilité plutôt que comme dérivation de mot de passe approuvée.",
+        "zh": "运行时及 API 均无变化。更明确的措辞有助于安全审查将 Sha256Weak 使用识别为兼容性债务，而非推荐的密码派生方案。",
+        "ru": "Поведение и API не меняются. Формулировка помогает security review считать Sha256Weak долгом совместимости, а не допустимой схемой вывода пароля."
+      },
+      "action": "review",
+      "units": ["mormot.crypt.core"],
+      "api_changes": [
+        {
+          "symbol": "Sha256Weak",
+          "change": "deprecated",
+          "note": {
+            "en": "Documentation says to retain it only for mORMot 1 compatibility; use TSynSigner.Pbkdf2 or Modular Crypt for new data.",
+            "fr": "La documentation le réserve à la compatibilité mORMot 1 ; utiliser TSynSigner.Pbkdf2 ou Modular Crypt pour les nouvelles données.",
+            "zh": "文档限定其仅用于 mORMot 1 兼容；新数据应使用 TSynSigner.Pbkdf2 或 Modular Crypt。",
+            "ru": "Документация оставляет его только для совместимости mORMot 1; для новых данных используйте TSynSigner.Pbkdf2 или Modular Crypt."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "57660dac29601caf0c6e8f0082ec839a52137ff2",
+      "headline": {
+        "en": "A nil WebSocket settings pointer no longer disables encryption",
+        "fr": "Un pointeur de paramètres WebSocket nil ne désactive plus le chiffrement",
+        "zh": "WebSocket 设置指针为 nil 时不再关闭加密",
+        "ru": "nil в настройках WebSocket больше не отключает шифрование"
+      },
+      "category": "security",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWebSocketProtocol.SetEncryptKey in mormot.net.ws.core now exits only for an empty key, not for a nil aSettings. With nil settings it tries default ECDHE file handling, then full key syntax, and finally derives the legacy Sha256Weak key for AES-CTR-128.",
+        "fr": "TWebSocketProtocol.SetEncryptKey dans mormot.net.ws.core ne sort plus que pour une clé vide, et non pour aSettings nil. Sans paramètres, il essaie le fichier ECDHE par défaut, puis la syntaxe complète, puis dérive une clé legacy Sha256Weak pour AES-CTR-128.",
+        "zh": "mormot.net.ws.core 的 TWebSocketProtocol.SetEncryptKey 现在仅在密钥为空时退出，不再因 aSettings=nil 退出。无设置时先尝试默认 ECDHE 文件处理，再尝试完整密钥语法，最后用旧版 Sha256Weak 派生 AES-CTR-128 密钥。",
+        "ru": "TWebSocketProtocol.SetEncryptKey в mormot.net.ws.core теперь выходит только при пустом ключе, а не при aSettings = nil. Без настроек он пробует ECDHE-файл, полную синтаксическую форму ключа, затем legacy Sha256Weak для AES-CTR-128."
+      },
+      "impact": {
+        "en": "Previously, a non-empty key combined with a nil settings pointer cleared fEncryption and returned, silently leaving the protocol unsecured. The same call now establishes encryption, using documented compatibility defaults when no settings are available.",
+        "fr": "Auparavant, une clé non vide avec aSettings nil effaçait fEncryption puis sortait, laissant silencieusement le protocole non chiffré. Le même appel établit maintenant le chiffrement avec les valeurs de compatibilité documentées.",
+        "zh": "此前非空密钥配合 nil 设置指针会清空 fEncryption 并返回，使协议静默处于未加密状态。相同调用现在会按文档兼容默认值建立加密。",
+        "ru": "Раньше непустой ключ с aSettings = nil очищал fEncryption и выходил, молча оставляя протокол без защиты. Теперь такой вызов включает шифрование с документированными настройками совместимости."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade any endpoint that calls SetEncryptKey with a non-empty key and nil settings, then verify both peers negotiate the expected cipher. Prefer explicit PBKDF2 settings for newly configured passwords.",
+        "fr": "Mettez à niveau tout endpoint appelant SetEncryptKey avec une clé non vide et des paramètres nil, puis vérifiez que les deux pairs négocient le chiffrement attendu. Préférez des paramètres PBKDF2 explicites pour les nouveaux mots de passe.",
+        "zh": "凡以非空密钥和 nil 设置调用 SetEncryptKey 的端点均应升级，并确认两端协商预期密码算法。新配置的密码应优先使用显式 PBKDF2 设置。",
+        "ru": "Обновите endpoints, вызывающие SetEncryptKey с непустым ключом и nil settings, затем проверьте одинаковый cipher на обеих сторонах. Для новых паролей задавайте явные PBKDF2-настройки."
+      },
+      "units": ["mormot.net.ws.core"],
+      "api_changes": [
+        {
+          "symbol": "TWebSocketProtocol.SetEncryptKey",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "nil aSettings now selects compatibility defaults instead of disabling encryption.",
+            "fr": "aSettings nil choisit maintenant des valeurs de compatibilité au lieu de désactiver le chiffrement.",
+            "zh": "aSettings=nil 现在选择兼容默认值，而非关闭加密。",
+            "ru": "nil в aSettings теперь выбирает настройки совместимости, а не отключает шифрование."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "677a35798f971fcda3c095391fd93d36b07011d6",
+      "headline": {
+        "en": "Preconnected tunnel workers now start with a successful network result",
+        "fr": "Les workers tunnel préconnectés démarrent avec un résultat réseau valide",
+        "zh": "预连接隧道工作线程现在以成功网络结果启动",
+        "ru": "Предварительно подключённые tunnel workers начинают с успешного результата"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TTunnelLocalThread.DoExecute in mormot.net.tunnel assigns res := nrOk when the socket connection was already created by the main thread, before setting fState := stProcessing. The branch previously left res uninitialized or stale.",
+        "fr": "TTunnelLocalThread.DoExecute dans mormot.net.tunnel affecte res := nrOk lorsque la connexion socket a déjà été créée par le thread principal, avant fState := stProcessing. Cette branche laissait auparavant res non initialisé ou périmé.",
+        "zh": "mormot.net.tunnel 的 TTunnelLocalThread.DoExecute 在主线程已建立 socket 连接时，先设置 res := nrOk，再设置 fState := stProcessing。此前该分支会留下未初始化或陈旧的 res。",
+        "ru": "TTunnelLocalThread.DoExecute в mormot.net.tunnel устанавливает res := nrOk, когда socket уже подключён главным потоком, до fState := stProcessing. Раньше ветка оставляла res неинициализированным или старым."
+      },
+      "impact": {
+        "en": "Tunnel sessions using a socket connected on the main thread no longer carry an undefined network result into later shutdown or error handling. The connection workflow and API signatures are unchanged.",
+        "fr": "Les sessions tunnel dont le socket est connecté dans le thread principal n’emportent plus un résultat réseau indéfini vers la gestion des erreurs ou de fermeture. Le workflow et les signatures restent identiques.",
+        "zh": "使用主线程已连接 socket 的隧道会话不再把未定义网络结果带入后续关闭或错误处理。连接流程及 API 签名不变。",
+        "ru": "Tunnel-сессии с socket, подключённым главным потоком, больше не передают неопределённый результат в обработку ошибок или завершения. Процесс и API прежние."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade deployments using TTunnelLocalThread with main-thread socket connection setup.",
+        "fr": "Mettez à niveau les déploiements utilisant TTunnelLocalThread avec connexion du socket dans le thread principal.",
+        "zh": "使用主线程建立 socket 的 TTunnelLocalThread 部署应升级。",
+        "ru": "Обновите развёртывания TTunnelLocalThread, где socket подключается главным потоком."
+      },
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7627b1ad104e5408fb93e63296191c00579aae5c",
+      "headline": {
+        "en": "Response-stream follow-up tightens cleanup and test diagnostics",
+        "fr": "Le suivi des flux de réponse resserre le nettoyage et les diagnostics",
+        "zh": "响应流后续整理加强清理与测试诊断",
+        "ru": "Правка response streams уточняет очистку и диагностику тестов"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "After the SetOutStream merge, mormot.net.http makes OutContentStreamDiscard nil-safe and resets its fields in one place. mormot.net.async clarifies that AsyncResponse discards a pending stream, while tests use RaiseStreamError and ignore expected EStreamError logging.",
+        "fr": "Après la fusion de SetOutStream, mormot.net.http rend OutContentStreamDiscard sûr avec nil et réinitialise ses champs au même endroit. mormot.net.async précise que AsyncResponse abandonne un flux en attente ; les tests utilisent RaiseStreamError et ignorent les EStreamError attendues.",
+        "zh": "SetOutStream 合并后，mormot.net.http 让 OutContentStreamDiscard 对 nil 安全，并集中重置字段。mormot.net.async 明确 AsyncResponse 会丢弃待发送流；测试改用 RaiseStreamError 并忽略预期 EStreamError 日志。",
+        "ru": "После merge SetOutStream mormot.net.http делает OutContentStreamDiscard безопасным для nil и централизованно сбрасывает поля. mormot.net.async уточняет, что AsyncResponse удаляет ожидающий поток; тесты используют RaiseStreamError и игнорируют ожидаемый EStreamError."
+      },
+      "impact": {
+        "en": "Owned response streams remain released and delayed asynchronous content still replaces any pending stream. This follow-up does not change the documented SetOutStream API or server capability limits.",
+        "fr": "Les flux de réponse possédés restent libérés et le contenu asynchrone retardé remplace toujours tout flux en attente. Ce suivi ne change ni l’API SetOutStream documentée ni les limites des serveurs.",
+        "zh": "自有响应流仍会释放，延迟异步内容仍替换任何待发送流。本后续提交不改变文档中的 SetOutStream API 或服务器能力限制。",
+        "ru": "Owned response streams по-прежнему освобождаются, отложенный async-контент заменяет ожидающий поток. API SetOutStream и ограничения серверов не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.net.async", "mormot.net.http"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a0141ee6f988c4099174af2460b4e9203daef868",
+      "headline": {
+        "en": "Startup nonces stop recursively entering the main Random128 generator",
+        "fr": "Les nonces de démarrage n’entrent plus récursivement dans Random128",
+        "zh": "启动 nonce 不再递归进入主 Random128 生成器",
+        "ru": "Стартовые nonce больше не входят рекурсивно в основной Random128"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TCryptRandomEntropy.Create in mormot.crypt.secure fills its 16-byte per-application nonce through RandomBytes instead of Random128. Related comments clarify that TAes.EncryptInitRandom must avoid Random128 recursion and that OS random calls are fallback seeding.",
+        "fr": "TCryptRandomEntropy.Create dans mormot.crypt.secure remplit son nonce applicatif de 16 octets avec RandomBytes au lieu de Random128. Les commentaires précisent que TAes.EncryptInitRandom doit éviter la récursion Random128 et que l’aléa système sert de repli.",
+        "zh": "mormot.crypt.secure 的 TCryptRandomEntropy.Create 改用 RandomBytes 而非 Random128 填充 16 字节应用级 nonce。相关注释说明 TAes.EncryptInitRandom 必须避免 Random128 递归，系统随机调用用于回退播种。",
+        "ru": "TCryptRandomEntropy.Create в mormot.crypt.secure заполняет 16-байтный nonce приложения через RandomBytes вместо Random128. Комментарии уточняют предотвращение рекурсии Random128 в TAes.EncryptInitRandom и роль системного RNG как fallback seed."
+      },
+      "impact": {
+        "en": "Cryptographic entropy-source initialization avoids re-entering the main PRNG while it is being constructed. The nonce remains random; public random APIs and generated-data formats are unchanged.",
+        "fr": "L’initialisation de la source d’entropie évite de réentrer dans le PRNG principal pendant sa construction. Le nonce reste aléatoire ; les API publiques et formats générés ne changent pas.",
+        "zh": "密码熵源初始化避免在主 PRNG 构造期间再次进入它。nonce 仍为随机值；公开随机 API 与生成数据格式不变。",
+        "ru": "Инициализация источника энтропии не входит повторно в основной PRNG во время его создания. Nonce остаётся случайным; публичные random API и форматы данных не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.core.os.posix", "mormot.core.os.windows", "mormot.crypt.core", "mormot.crypt.secure", "mormot.net.server", "mormot.net.ws.core"],
+      "confidence": "confirmed"
+    }
+  ],
+  "notes": {
+    "en": "The two merge commits need no individual entry. Merge #554 introduces THttpServerRequestAbstract.SetOutStream and related stream ownership/range handling; merge #572 lands the HTTP API WebSocket lazy-initialization change reviewed in its non-merge commit. Version bookkeeping files were ignored.",
+    "fr": "Les deux commits de fusion n’exigent pas d’entrée individuelle. La fusion #554 introduit THttpServerRequestAbstract.SetOutStream et la gestion de propriété/range ; la fusion #572 apporte l’initialisation paresseuse HTTP API WebSocket examinée dans son commit non-merge. Les fichiers de version ont été ignorés.",
+    "zh": "两个合并提交无需单独条目。合并 #554 引入 THttpServerRequestAbstract.SetOutStream 及流所有权/Range 处理；合并 #572 落地了已在其非合并提交中审查的 HTTP API WebSocket 延迟初始化。版本记录文件已忽略。",
+    "ru": "Два merge commit не требуют отдельных записей. Merge #554 добавляет THttpServerRequestAbstract.SetOutStream и управление владением/range; merge #572 вносит lazy initialization HTTP API WebSocket, рассмотренную в его non-merge commit. Файлы учёта версии проигнорированы."
+  }
+}
