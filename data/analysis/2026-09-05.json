@@ -1,0 +1,623 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-05",
+  "edition_title": {
+    "en": "Zero-delay WebSockets wake correctly and IOCP unsubscribe turns atomic",
+    "fr": "Les WebSockets sans délai se réveillent et le retrait IOCP devient atomique",
+    "zh": "零延迟 WebSocket 正确唤醒，IOCP 取消订阅实现原子化",
+    "ru": "WebSocket без задержки пробуждается, отписка IOCP стала атомарной"
+  },
+  "intro": {
+    "en": "Network backends receive several concrete concurrency fixes: zero-delay WebSocket frames wake the async server, connected tunnel sockets follow the processing path, and Windows IOCP subscriptions can be claimed for removal only once. TSynLog thread-slot recycling is also finalized so a slot is not published for reuse before its per-log naming bits are cleared. UI users should review the new HAS_UI_PDF conditional and the removal of HASUIPDF, while the PDF changes themselves are mainly test and platform-selection work.",
+    "fr": "Les backends réseau reçoivent plusieurs corrections concrètes de concurrence : les trames WebSocket sans délai réveillent le serveur asynchrone, les sockets tunnel déjà connectés suivent le bon traitement et une souscription IOCP Windows ne peut être retirée qu’une fois. Le recyclage des slots de thread TSynLog est aussi finalisé afin qu’un slot ne soit pas réutilisé avant l’effacement de ses bits de nom dans chaque journal. Les utilisateurs UI doivent vérifier la nouvelle condition HAS_UI_PDF et la suppression de HASUIPDF ; les changements PDF restants concernent surtout les tests et la sélection de plateforme.",
+    "zh": "网络后端获得多项明确的并发修复：零延迟 WebSocket 帧会唤醒异步服务器，已连接的隧道 socket 进入正确处理路径，Windows IOCP 订阅只能被一个调用者取得并移除。TSynLog 线程槽复用也已完善，只有清除各日志中的线程命名位后才会发布槽位供复用。UI 使用者应检查新的 HAS_UI_PDF 条件及 HASUIPDF 的移除；其余 PDF 改动主要涉及测试与平台选择。",
+    "ru": "Сетевые backend получили несколько конкретных исправлений конкурентности: WebSocket-кадры с нулевой задержкой будят async-сервер, уже подключённые tunnel sockets идут по правильному пути, а Windows IOCP subscription может быть захвачена для удаления только один раз. Завершена и переработка слотов TSynLog: слот не публикуется для повторного использования до очистки его битов имени во всех журналах. Пользователям UI следует проверить новый conditional HAS_UI_PDF и удаление HASUIPDF; остальные PDF-изменения в основном относятся к тестам и выбору платформы."
+  },
+  "tldr": {
+    "en": [
+      "TWebSocketAsyncConnections now wakes the main async-server thread when SendDelay=0 and the outgoing queue changes from empty to non-empty.",
+      "TWinIocp.Unsubscribe atomically changes the caller's subscription pointer to nil, preventing concurrent removers from processing the same object.",
+      "TTunnelLocal now distinguishes a bound listening socket from an already connected socket, restoring the connected processing path.",
+      "TSynLog clears per-log thread-name bits before returning a thread number to the reusable-slot pool.",
+      "HASUIPDF is replaced by HAS_UI_PDF, alongside new NO_UI, NO_UI_VCL and NO_UI_PDF project controls."
+    ],
+    "fr": [
+      "TWebSocketAsyncConnections réveille maintenant le thread principal du serveur asynchrone lorsque SendDelay=0 et que la file de sortie devient non vide.",
+      "TWinIocp.Unsubscribe met atomiquement le pointeur de souscription de l’appelant à nil, empêchant deux retraits du même objet.",
+      "TTunnelLocal distingue maintenant un socket d’écoute lié d’un socket déjà connecté, restaurant le bon chemin de traitement.",
+      "TSynLog efface les bits de nom de thread dans chaque journal avant de rendre le numéro au pool de slots réutilisables.",
+      "HASUIPDF est remplacé par HAS_UI_PDF, avec les nouveaux contrôles de projet NO_UI, NO_UI_VCL et NO_UI_PDF."
+    ],
+    "zh": [
+      "当 SendDelay=0 且发送队列由空变为非空时，TWebSocketAsyncConnections 现在会唤醒异步服务器主线程。",
+      "TWinIocp.Unsubscribe 原子地把调用方订阅指针改为 nil，防止并发移除者处理同一对象。",
+      "TTunnelLocal 现在区分已绑定的监听 socket 与已连接 socket，恢复后者的正确处理路径。",
+      "TSynLog 在把线程编号归还可复用槽池前，先清除各日志中的线程名位。",
+      "HASUIPDF 被 HAS_UI_PDF 替代，并新增 NO_UI、NO_UI_VCL 与 NO_UI_PDF 项目控制。"
+    ],
+    "ru": [
+      "TWebSocketAsyncConnections теперь будит главный поток async-сервера при SendDelay=0 и переходе исходящей очереди из пустой в непустую.",
+      "TWinIocp.Unsubscribe атомарно меняет указатель subscription вызывающего кода на nil, не позволяя конкурентно удалить один объект дважды.",
+      "TTunnelLocal отличает связанный listening socket от уже подключённого socket и восстанавливает правильный путь обработки.",
+      "TSynLog очищает биты имени потока во всех журналах до возврата номера в пул повторно используемых слотов.",
+      "HASUIPDF заменён на HAS_UI_PDF; добавлены project controls NO_UI, NO_UI_VCL и NO_UI_PDF."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Take build 2.4.16753 for async WebSockets, TTunnelLocal, Windows IOCP or high-churn TSynLog workloads; it includes the complete fixes in this payload. Recompile UI/PDF projects and replace any application-level HASUIPDF checks with HAS_UI_PDF. Review NO_UI, NO_UI_VCL and NO_UI_PDF only if you need to exclude those subsystems. The raw payload reports no later successor for these commits within this edition.",
+    "fr": "Prenez la build 2.4.16753 pour les WebSockets asynchrones, TTunnelLocal, IOCP sous Windows ou les charges TSynLog créant beaucoup de threads ; elle contient les correctifs complets du payload. Recompilez les projets UI/PDF et remplacez les tests applicatifs HASUIPDF par HAS_UI_PDF. Examinez NO_UI, NO_UI_VCL et NO_UI_PDF seulement pour exclure ces sous-systèmes. Le payload ne signale aucun successeur ultérieur dans cette édition.",
+    "zh": "异步 WebSocket、TTunnelLocal、Windows IOCP 或高频创建线程的 TSynLog 工作负载应升级到 build 2.4.16753；它包含本批次的完整修复。重新编译 UI/PDF 项目，并将应用层 HASUIPDF 检查替换为 HAS_UI_PDF。仅在需要排除相关子系统时评估 NO_UI、NO_UI_VCL 与 NO_UI_PDF。原始数据未报告本期还有后续替代提交。",
+    "ru": "Для async WebSocket, TTunnelLocal, Windows IOCP и TSynLog с частой сменой потоков берите build 2.4.16753: она включает полные исправления payload. Пересоберите UI/PDF-проекты и замените прикладные проверки HASUIPDF на HAS_UI_PDF. NO_UI, NO_UI_VCL и NO_UI_PDF нужны лишь для исключения этих подсистем. В исходном payload нет более поздних замен этих commit в этой редакции."
+  },
+  "upgrade": {
+    "order": [
+      {
+        "shas": [
+          "a7195425aaa99f7c57f6e3220eb5002a353743ca",
+          "f50a5e53d2727b672739da5960a22d942813ca88"
+        ],
+        "why": "Restore immediate zero-delay frame delivery and consistent async tick scheduling."
+      },
+      {
+        "shas": [
+          "76d9d035a269702786dd1b8959a577cd85101cae"
+        ],
+        "why": "Prevent concurrent Windows IOCP unsubscribe paths from claiming the same subscription."
+      },
+      {
+        "shas": [
+          "9cb2c9bc5e40d1af419a5f938fa380cd206052b5"
+        ],
+        "why": "Restore the already-connected TTunnelLocal socket path."
+      },
+      {
+        "shas": [
+          "6539d93d7073d96b2cc84be01cb1a643fe198841",
+          "68f8a3cbbe015b40d6ae0ef16282598f9b9501b0"
+        ],
+        "why": "Apply the complete TSynLog slot-recycling lock and publication ordering."
+      },
+      {
+        "shas": [
+          "fe0b21d2a95e4a8ba3b646775125b90853ebb370",
+          "cf21f26e9fce6549b424b0c56f32ade40c1c1f8c"
+        ],
+        "why": "Take the UI conditional rename and its PDF/test follow-up together."
+      }
+    ]
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Async network lifecycle",
+        "fr": "Cycle de vie du réseau asynchrone",
+        "zh": "异步网络生命周期",
+        "ru": "Жизненный цикл асинхронной сети"
+      },
+      "summary": {
+        "en": "Outgoing WebSocket work now wakes the correct server thread with zero delay, async timers use one monotonic millisecond scale, connected tunnel sockets no longer enter accept mode, and IOCP unsubscribe claims its pointer atomically.",
+        "fr": "Le travail WebSocket sortant réveille le bon thread sans délai, les timers asynchrones utilisent la même échelle monotone en millisecondes, les tunnels connectés n’entrent plus en mode accept et le retrait IOCP réserve atomiquement son pointeur.",
+        "zh": "WebSocket 发送任务在零延迟时唤醒正确服务器线程，异步计时统一使用单调毫秒尺度，已连接隧道不再进入 accept 模式，IOCP 取消订阅则原子取得指针。",
+        "ru": "Исходящая WebSocket-работа будит нужный поток без задержки, async timers используют единую монотонную миллисекундную шкалу, подключённые tunnel sockets не входят в accept, а IOCP unsubscribe атомарно захватывает указатель."
+      },
+      "shas": [
+        "a7195425aaa99f7c57f6e3220eb5002a353743ca",
+        "f50a5e53d2727b672739da5960a22d942813ca88",
+        "9cb2c9bc5e40d1af419a5f938fa380cd206052b5",
+        "76d9d035a269702786dd1b8959a577cd85101cae"
+      ]
+    },
+    {
+      "title": {
+        "en": "Logging thread-slot recycling",
+        "fr": "Recyclage des slots de thread de journalisation",
+        "zh": "日志线程槽复用",
+        "ru": "Повторное использование слотов журналирования"
+      },
+      "summary": {
+        "en": "TSynLog protects per-family thread-name bitmaps while a thread ends, then publishes the number to the reusable pool only after those bits are clear. Exception rows also identify the numeric thread slot consistently.",
+        "fr": "TSynLog protège les bitmaps de noms de thread de chaque famille pendant la fin du thread, puis ne publie le numéro dans le pool réutilisable qu’après leur effacement. Les lignes d’exception affichent aussi le numéro de slot.",
+        "zh": "TSynLog 在线程结束时保护各日志族的线程名位图，清除相应位后才把编号发布到复用池。异常日志行也会一致显示数字线程槽。",
+        "ru": "TSynLog защищает bitmap имён каждой семьи при завершении потока и публикует номер в reusable pool лишь после очистки битов. Строки исключений также показывают числовой слот потока."
+      },
+      "shas": [
+        "6539d93d7073d96b2cc84be01cb1a643fe198841",
+        "68f8a3cbbe015b40d6ae0ef16282598f9b9501b0",
+        "93da31e1dcd04bc35ff3d401493ffe1fde14e33f"
+      ]
+    },
+    {
+      "title": {
+        "en": "UI capability controls and PDF tests",
+        "fr": "Contrôles de capacité UI et tests PDF",
+        "zh": "UI 能力控制与 PDF 测试",
+        "ru": "Управление возможностями UI и тесты PDF"
+      },
+      "summary": {
+        "en": "Platform UI detection moves to HAS_UI, HAS_UI_VCL_LCL and HAS_UI_PDF, with project switches to disable UI, VCL/LCL use or PDF support. The merged PDF regression suite is then aligned with those names and split cleanly from non-UI test builds.",
+        "fr": "La détection UI passe à HAS_UI, HAS_UI_VCL_LCL et HAS_UI_PDF, avec des options de projet pour désactiver l’UI, VCL/LCL ou le PDF. La suite de régression PDF fusionnée est ensuite alignée sur ces noms et séparée des builds de test sans UI.",
+        "zh": "平台 UI 检测迁移到 HAS_UI、HAS_UI_VCL_LCL 与 HAS_UI_PDF，并提供项目开关以禁用 UI、VCL/LCL 或 PDF。合并后的 PDF 回归套件随后适配这些名称，并与无 UI 的测试构建明确分离。",
+        "ru": "Определение UI перенесено на HAS_UI, HAS_UI_VCL_LCL и HAS_UI_PDF, добавлены switches для отключения UI, VCL/LCL или PDF. Слитый набор PDF-регрессий согласован с новыми именами и отделён от тестовых сборок без UI."
+      },
+      "shas": [
+        "fe0b21d2a95e4a8ba3b646775125b90853ebb370",
+        "cf21f26e9fce6549b424b0c56f32ade40c1c1f8c"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "68f8a3cbbe015b40d6ae0ef16282598f9b9501b0",
+      "headline": {
+        "en": "Logging slots are published for reuse only after name bits are cleared",
+        "fr": "Les slots de journalisation ne sont réutilisés qu’après effacement des bits",
+        "zh": "日志槽仅在线程名位清除后才发布复用",
+        "ru": "Logging-слот публикуется для повторного использования после очистки битов"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynLog.NotifyThreadEnded in mormot.core.log now clears fThreadNameLogged under SynLogGlobalLock before it locks SynLogThreads.Safe and appends the thread number to IndexReleased. The bitmap index expression is also written directly as num - 1.",
+        "fr": "TSynLog.NotifyThreadEnded dans mormot.core.log efface maintenant fThreadNameLogged sous SynLogGlobalLock avant de verrouiller SynLogThreads.Safe et d’ajouter le numéro à IndexReleased. L’index du bitmap est aussi exprimé directement par num - 1.",
+        "zh": "mormot.core.log 的 TSynLog.NotifyThreadEnded 现在先在 SynLogGlobalLock 下清除 fThreadNameLogged，再锁定 SynLogThreads.Safe 并把线程编号加入 IndexReleased。位图索引也直接写为 num - 1。",
+        "ru": "TSynLog.NotifyThreadEnded в mormot.core.log сначала очищает fThreadNameLogged под SynLogGlobalLock, затем блокирует SynLogThreads.Safe и добавляет номер в IndexReleased. Индекс bitmap теперь записан как num - 1."
+      },
+      "impact": {
+        "en": "Another thread cannot acquire a recycled number and set its name bit before the terminating thread clears the old bit. High-churn Delphi/FPC services keep thread-name emission consistent instead of losing the new owner's marker.",
+        "fr": "Un autre thread ne peut plus reprendre un numéro et poser son bit de nom avant que le thread terminé efface l’ancien. Les services Delphi/FPC créant beaucoup de threads conservent un marquage cohérent des noms.",
+        "zh": "其他线程无法在线程终止清除旧位之前取得复用编号并设置新名称位。频繁创建线程的 Delphi/FPC 服务不会再丢失新所有者的标记。",
+        "ru": "Другой поток не успеет получить повторный номер и установить бит имени до очистки старого бита завершающимся потоком. Delphi/FPC-службы с частой сменой потоков не теряют маркер нового владельца."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Use build 2.4.16753 rather than stopping at the earlier logging-lock commit in this edition.",
+        "fr": "Utilisez la build 2.4.16753 plutôt que de vous arrêter au premier commit de verrouillage du journal.",
+        "zh": "请使用 build 2.4.16753，不要停在本期较早的日志锁提交。",
+        "ru": "Используйте build 2.4.16753, не останавливаясь на предыдущем logging-lock commit этой редакции."
+      },
+      "units": ["mormot.core.log"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "93da31e1dcd04bc35ff3d401493ffe1fde14e33f",
+      "headline": {
+        "en": "Exception log context now includes the numeric thread slot",
+        "fr": "Le contexte des exceptions inclut maintenant le numéro de thread",
+        "zh": "异常日志上下文现包含数字线程槽",
+        "ru": "Контекст исключения теперь содержит числовой слот потока"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.log formats regular exception context as [#number name], omitting each component when unavailable. _GetCurrentThreadName is simplified without changing its lock, and TDebugFile.AddLog calls DebugFileGet directly.",
+        "fr": "mormot.core.log formate le contexte d’exception standard en [#numéro nom], en omettant chaque partie indisponible. _GetCurrentThreadName est simplifié sans changer son verrou et TDebugFile.AddLog appelle directement DebugFileGet.",
+        "zh": "mormot.core.log 将普通异常上下文格式化为 [#编号 名称]，不可用的部分会省略。_GetCurrentThreadName 在不改变锁的情况下简化，TDebugFile.AddLog 直接调用 DebugFileGet。",
+        "ru": "mormot.core.log форматирует обычный контекст исключения как [#номер имя], пропуская недоступные части. _GetCurrentThreadName упрощён без изменения блокировки, TDebugFile.AddLog вызывает DebugFileGet напрямую."
+      },
+      "impact": {
+        "en": "Exception rows become easier to correlate with other TSynLog entries, but parsers that expect only a name inside the brackets may need review. Exception handling and public APIs are unchanged.",
+        "fr": "Les lignes d’exception sont plus faciles à corréler avec TSynLog, mais les parseurs qui attendent seulement un nom entre crochets méritent une vérification. La gestion des exceptions et les API ne changent pas.",
+        "zh": "异常行更易与其他 TSynLog 记录关联，但只预期方括号内出现名称的解析器可能需要检查。异常处理及公开 API 不变。",
+        "ru": "Строки исключений проще сопоставлять с TSynLog, но парсеры, ожидающие в скобках только имя, стоит проверить. Обработка исключений и публичные API прежние."
+      },
+      "action": "review",
+      "units": ["mormot.core.log"],
+      "api_changes": [
+        {
+          "symbol": "TSynLog exception row format",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Regular exception context now includes #ThreadNumber before the optional thread name.",
+            "fr": "Le contexte standard ajoute #ThreadNumber avant le nom de thread optionnel.",
+            "zh": "普通异常上下文在可选线程名前增加 #ThreadNumber。",
+            "ru": "В обычном контексте перед необязательным именем добавлен #ThreadNumber."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6539d93d7073d96b2cc84be01cb1a643fe198841",
+      "headline": {
+        "en": "Thread-name bitmap cleanup is brought under the global log lock",
+        "fr": "Le nettoyage du bitmap des noms passe sous le verrou global",
+        "zh": "线程名位图清理纳入全局日志锁",
+        "ru": "Очистка bitmap имён перенесена под глобальную блокировку журнала"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLog.NotifyThreadEnded in mormot.core.log wraps access to SynLogFamily and each fGlobalLog.fThreadNameLogged bitmap with SynLogGlobalLock. Its existing SynLogThreads.Safe work is initially nested inside that protection.",
+        "fr": "TSynLog.NotifyThreadEnded dans mormot.core.log protège l’accès à SynLogFamily et aux bitmaps fGlobalLog.fThreadNameLogged avec SynLogGlobalLock. Le travail existant sous SynLogThreads.Safe est d’abord imbriqué dans cette protection.",
+        "zh": "mormot.core.log 的 TSynLog.NotifyThreadEnded 使用 SynLogGlobalLock 保护 SynLogFamily 及各 fGlobalLog.fThreadNameLogged 位图；原有 SynLogThreads.Safe 工作最初嵌套在该保护内。",
+        "ru": "TSynLog.NotifyThreadEnded в mormot.core.log защищает SynLogFamily и bitmap fGlobalLog.fThreadNameLogged через SynLogGlobalLock. Существующая работа под SynLogThreads.Safe изначально вложена в эту защиту."
+      },
+      "impact": {
+        "en": "A terminating thread no longer modifies per-family name bitmaps concurrently with log-family lifecycle operations. The later 68f8a3c commit completes the ordering before the slot is reusable.",
+        "fr": "Un thread terminé ne modifie plus les bitmaps de nom en concurrence avec le cycle de vie des familles de logs. Le commit ultérieur 68f8a3c finalise l’ordre avant la réutilisation du slot.",
+        "zh": "终止线程不再与日志族生命周期操作并发修改各族名称位图。后续 68f8a3c 在槽位复用前完成了正确顺序。",
+        "ru": "Завершающийся поток больше не меняет bitmap имён параллельно с lifecycle семейства логов. Последующий 68f8a3c завершает порядок до повторного использования слота."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the edition head so this lock addition is paired with the final slot-publication ordering in 68f8a3c.",
+        "fr": "Prenez la tête de l’édition afin d’associer ce verrou à l’ordre final de publication de 68f8a3c.",
+        "zh": "请采用本期最终版本，使该锁修复与 68f8a3c 的最终槽发布顺序配套。",
+        "ru": "Берите итог редакции, чтобы блокировка была дополнена финальным порядком публикации из 68f8a3c."
+      },
+      "units": ["mormot.core.log"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9cb2c9bc5e40d1af419a5f938fa380cd206052b5",
+      "headline": {
+        "en": "Connected local tunnels no longer enter the listening accept path",
+        "fr": "Les tunnels locaux connectés n’entrent plus dans le chemin accept",
+        "zh": "已连接本地隧道不再进入监听 accept 路径",
+        "ru": "Подключённые локальные tunnels больше не входят в listening accept"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TTunnelLocal in mormot.net.tunnel renames its internal fSocketCreated flag to fSocketBound and sets it only after NewSocket performs a bind for port zero. TTunnelLocalThread.DoExecute enters its accept loop only when that bound flag is present.",
+        "fr": "TTunnelLocal dans mormot.net.tunnel renomme le drapeau interne fSocketCreated en fSocketBound et ne le pose qu’après le bind de NewSocket pour le port zéro. TTunnelLocalThread.DoExecute n’entre dans la boucle accept que si ce drapeau est présent.",
+        "zh": "mormot.net.tunnel 的 TTunnelLocal 将内部标志 fSocketCreated 更名为 fSocketBound，并仅在端口为零且 NewSocket 完成 bind 后设置。TTunnelLocalThread.DoExecute 仅在该绑定标志存在时进入 accept 循环。",
+        "ru": "TTunnelLocal в mormot.net.tunnel переименовывает внутренний fSocketCreated в fSocketBound и устанавливает его только после bind через NewSocket для нулевого порта. TTunnelLocalThread.DoExecute входит в accept loop лишь при этом флаге."
+      },
+      "impact": {
+        "en": "A tunnel opened by connecting to an existing local address now proceeds directly to stProcessing instead of trying accept on a connected socket. Bound ephemeral-port tunnels keep their listening behavior.",
+        "fr": "Un tunnel ouvert par connexion à une adresse locale existante passe maintenant directement à stProcessing au lieu d’appeler accept sur un socket connecté. Les tunnels liés à un port éphémère conservent leur écoute.",
+        "zh": "连接到现有本地地址创建的隧道现在直接进入 stProcessing，不再对已连接 socket 调用 accept。绑定临时端口的隧道仍保持监听行为。",
+        "ru": "Tunnel, открытый подключением к существующему локальному адресу, сразу переходит в stProcessing вместо accept на подключённом socket. Bound tunnel с ephemeral port сохраняет listening-поведение."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade TTunnelLocal deployments that connect to a configured non-zero local port, and retest both directions of the tunnel.",
+        "fr": "Mettez à niveau les déploiements TTunnelLocal qui se connectent à un port local non nul, puis retestez les deux sens du tunnel.",
+        "zh": "连接到指定非零本地端口的 TTunnelLocal 部署应升级，并重新测试隧道双向通信。",
+        "ru": "Обновите TTunnelLocal, подключающийся к заданному ненулевому локальному порту, и проверьте оба направления tunnel."
+      },
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "aa0c82133fdae344c21342b964685d5cbc077767",
+      "headline": {
+        "en": "TMultiLightLock uses explicit 32-bit flags and native thread identifiers",
+        "fr": "TMultiLightLock utilise des drapeaux 32 bits et des identifiants natifs",
+        "zh": "TMultiLightLock 改用明确的 32 位标志与原生线程标识",
+        "ru": "TMultiLightLock использует 32-битные flags и нативный идентификатор потока"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os changes private TMultiLightLock.Flags from PtrUInt to cardinal and ThreadID from pointer to TThreadID. Its operations consequently use LockedExc32 and LockedDec32, while zero replaces nil for the thread identifier.",
+        "fr": "mormot.core.os change les champs privés TMultiLightLock.Flags de PtrUInt en cardinal et ThreadID de pointer en TThreadID. Les opérations utilisent donc LockedExc32 et LockedDec32, et zéro remplace nil pour l’identifiant.",
+        "zh": "mormot.core.os 将私有 TMultiLightLock.Flags 从 PtrUInt 改为 cardinal，将 ThreadID 从 pointer 改为 TThreadID。因此操作改用 LockedExc32 与 LockedDec32，线程标识用零替代 nil。",
+        "ru": "mormot.core.os меняет private TMultiLightLock.Flags с PtrUInt на cardinal, а ThreadID с pointer на TThreadID. Операции используют LockedExc32 и LockedDec32, ноль заменяет nil для идентификатора."
+      },
+      "impact": {
+        "en": "Lock ownership and re-entrant count semantics remain the same, with a fixed 32-bit atomic counter on all targets. Source users access only public methods, so no application change is expected after recompilation.",
+        "fr": "La propriété du verrou et le compteur réentrant gardent la même sémantique, avec un compteur atomique 32 bits sur toutes les cibles. Les utilisateurs n’accèdent qu’aux méthodes publiques ; aucun changement applicatif n’est attendu après recompilation.",
+        "zh": "锁所有权与可重入计数语义不变，各目标统一使用 32 位原子计数器。源码使用者只访问公开方法，重新编译后无需修改应用。",
+        "ru": "Семантика владения и re-entrant счётчика прежняя, атомарный счётчик теперь всегда 32-битный. Пользователи работают через публичные методы, после пересборки изменений приложения не ожидается."
+      },
+      "action": "none",
+      "units": ["mormot.core.os"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a697074f5914a0d2cf5f7e07e0e22adbc7729532",
+      "headline": {
+        "en": "TCachedValue now always stores the refresh that finishes last",
+        "fr": "TCachedValue conserve toujours le rafraîchissement terminé en dernier",
+        "zh": "TCachedValue 现在始终保存最后完成的刷新结果",
+        "ru": "TCachedValue всегда сохраняет результат обновления, завершившегося последним"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TCachedValue.Cache in mormot.core.os removes the TixShr = Tix32 condition before assigning Value after the callback. Its public parameter layout is only reformatted, and mormot.core.os.security clarifies that a shift of eight means a 256-second certificate-store cache.",
+        "fr": "TCachedValue.Cache dans mormot.core.os supprime la condition TixShr = Tix32 avant d’affecter Value après le callback. La liste publique de paramètres est seulement reformattée et mormot.core.os.security précise qu’un décalage de huit représente 256 secondes de cache.",
+        "zh": "mormot.core.os 的 TCachedValue.Cache 移除回调后赋值 Value 前的 TixShr = Tix32 条件。公开参数仅重新排版；mormot.core.os.security 说明移位八位代表 256 秒证书存储缓存。",
+        "ru": "TCachedValue.Cache в mormot.core.os удаляет условие TixShr = Tix32 перед присваиванием Value после callback. Публичные параметры только переформатированы; mormot.core.os.security уточняет, что shift 8 означает кэш на 256 секунд."
+      },
+      "impact": {
+        "en": "If refresh callbacks from different cache intervals overlap, the result that completes last is retained even when another caller has advanced Tix32. Typical file and certificate-store cache calls keep the same API and expiry interval.",
+        "fr": "Si des callbacks de rafraîchissement de périodes différentes se chevauchent, le dernier terminé est conservé même si un autre appel a avancé Tix32. Les caches de fichiers et certificats gardent la même API et durée.",
+        "zh": "若不同缓存周期的刷新回调重叠，最后完成的结果会被保留，即使另一调用已推进 Tix32。常见文件与证书存储缓存的 API 和过期周期不变。",
+        "ru": "Если refresh callbacks разных интервалов перекрываются, сохраняется завершившийся последним результат, даже если другой вызов продвинул Tix32. API и интервалы file/certificate cache прежние."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.core.os.security"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f50a5e53d2727b672739da5960a22d942813ca88",
+      "headline": {
+        "en": "Async maintenance ticks use one monotonic clock scale",
+        "fr": "La maintenance asynchrone utilise une seule échelle monotone",
+        "zh": "异步维护计时统一使用单调时钟尺度",
+        "ru": "Async-обслуживание использует единую шкалу монотонного времени"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.net.async records fLastOperationMS before ProcessWaitingWrite can re-enter idle processing, then refreshes it afterward. The non-IOCP callback cadence now derives tix from GetTickCount64 shr 16 instead of GetTickSec shr 6, matching the surrounding millisecond tick logic.",
+        "fr": "mormot.net.async fixe fLastOperationMS avant que ProcessWaitingWrite puisse réentrer dans le traitement idle, puis le rafraîchit après. La cadence des callbacks non-IOCP dérive maintenant tix de GetTickCount64 shr 16 plutôt que GetTickSec shr 6, comme le reste de la logique en millisecondes.",
+        "zh": "mormot.net.async 在 ProcessWaitingWrite 可能重入空闲处理前记录 fLastOperationMS，之后再刷新。非 IOCP 回调周期现从 GetTickCount64 shr 16 计算 tix，而非 GetTickSec shr 6，与周边毫秒 tick 逻辑一致。",
+        "ru": "mormot.net.async записывает fLastOperationMS до возможного re-entry из ProcessWaitingWrite и обновляет после. Период callbacks без IOCP теперь берёт tix из GetTickCount64 shr 16 вместо GetTickSec shr 6, совпадая с миллисекундной логикой вокруг."
+      },
+      "impact": {
+        "en": "Async socket maintenance avoids recursive work on the same tick and uses a consistent approximately 65-second callback bucket. This primarily affects POSIX poll backends; public APIs are unchanged.",
+        "fr": "La maintenance des sockets asynchrones évite un travail récursif au même tick et utilise une tranche cohérente d’environ 65 secondes. Cela concerne surtout les backends poll POSIX ; les API ne changent pas.",
+        "zh": "异步 socket 维护避免在同一 tick 重入工作，并使用一致的约 65 秒回调桶。主要影响 POSIX poll 后端；公开 API 不变。",
+        "ru": "Async socket maintenance избегает рекурсивной работы на одном tick и использует согласованный интервал около 65 секунд. В основном затронуты POSIX poll backend; API не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade busy async servers, especially POSIX poll deployments with queued large writes or periodic callbacks.",
+        "fr": "Mettez à niveau les serveurs asynchrones chargés, surtout les déploiements poll POSIX avec de grosses écritures en attente ou des callbacks périodiques.",
+        "zh": "繁忙的异步服务器应升级，尤其是存在排队大数据写入或周期回调的 POSIX poll 部署。",
+        "ru": "Обновите нагруженные async-серверы, особенно POSIX poll с большими queued writes или периодическими callbacks."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a7195425aaa99f7c57f6e3220eb5002a353743ca",
+      "headline": {
+        "en": "Zero-delay WebSocket frames now wake the async server immediately",
+        "fr": "Les trames WebSocket sans délai réveillent immédiatement le serveur",
+        "zh": "零延迟 WebSocket 帧现在立即唤醒异步服务器",
+        "ru": "WebSocket-кадры без задержки сразу будят async-сервер"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWebSocketAsyncConnections.NotifyOutgoing records whether fOutgoingHandle was empty before adding the connection. When the first item arrives and Connection.fProcess.Settings^.SendDelay is zero, it calls a new THttpAsyncConnections.WakeupServerMainThread helper that signals fExecuteEvent.",
+        "fr": "TWebSocketAsyncConnections.NotifyOutgoing mémorise si fOutgoingHandle était vide avant l’ajout. Quand le premier élément arrive et que Connection.fProcess.Settings^.SendDelay vaut zéro, il appelle le nouveau helper THttpAsyncConnections.WakeupServerMainThread qui signale fExecuteEvent.",
+        "zh": "TWebSocketAsyncConnections.NotifyOutgoing 在加入连接前记录 fOutgoingHandle 是否为空。首项到达且 Connection.fProcess.Settings^.SendDelay 为零时，会调用新的 THttpAsyncConnections.WakeupServerMainThread 并触发 fExecuteEvent。",
+        "ru": "TWebSocketAsyncConnections.NotifyOutgoing запоминает, была ли fOutgoingHandle пустой до добавления. При первом элементе и Connection.fProcess.Settings^.SendDelay = 0 вызывается новый THttpAsyncConnections.WakeupServerMainThread, сигнализирующий fExecuteEvent."
+      },
+      "impact": {
+        "en": "With SendDelay=0, an outgoing frame no longer waits for an unrelated socket event or idle pass before the main async loop sends it. This restores the intended immediate-delivery behavior for Delphi/FPC WebSocket servers.",
+        "fr": "Avec SendDelay=0, une trame sortante n’attend plus un événement socket sans rapport ou un passage idle avant son envoi. Le comportement immédiat attendu est restauré pour les serveurs WebSocket Delphi/FPC.",
+        "zh": "SendDelay=0 时，发送帧不再等待无关 socket 事件或空闲轮询才由异步主循环发出，Delphi/FPC WebSocket 服务器恢复预期的即时发送行为。",
+        "ru": "При SendDelay=0 исходящий кадр больше не ждёт постороннего socket event или idle pass до отправки главным async loop. Восстановлена ожидаемая немедленная доставка на Delphi/FPC WebSocket-серверах."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade servers configured with SendDelay=0 and retest server-originated frames while inbound traffic is idle.",
+        "fr": "Mettez à niveau les serveurs avec SendDelay=0 et retestez les trames émises par le serveur en l’absence de trafic entrant.",
+        "zh": "配置 SendDelay=0 的服务器应升级，并在无入站流量时重新测试服务器主动发送的帧。",
+        "ru": "Обновите серверы с SendDelay=0 и проверьте server-originated frames при отсутствии входящего трафика."
+      },
+      "units": ["mormot.net.async", "mormot.net.ws.async"],
+      "api_changes": [
+        {
+          "symbol": "TWebSocketAsyncConnections with SendDelay=0",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The first queued outgoing connection now wakes the server loop immediately.",
+            "fr": "La première connexion sortante en file réveille immédiatement la boucle serveur.",
+            "zh": "首个排队发送连接会立即唤醒服务器循环。",
+            "ru": "Первое исходящее соединение в очереди сразу будит цикл сервера."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "487c21e6741bec40f7b7ab24bd270e80bcd1b93f",
+      "headline": {
+        "en": "Reusable fixed-size hash and temporary buffer types expand to 4096 bits",
+        "fr": "Les types de hash et buffers fixes s’étendent jusqu’à 4096 bits",
+        "zh": "可复用定长哈希与临时缓冲类型扩展至 4096 位",
+        "ru": "Фиксированные hash- и temp-типы расширены до 4096 бит"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.base adds THash1024, THash2048 and THash4096 with pointer aliases, plus TTemp128 and TTemp256. Existing fixed arrays in SHA-512, CPU sets, SSPI, ISO, DHCP and TFTP code are replaced with the equivalent named types without changing their byte sizes.",
+        "fr": "mormot.core.base ajoute THash1024, THash2048 et THash4096 avec leurs pointeurs, ainsi que TTemp128 et TTemp256. Des tableaux fixes dans SHA-512, CPU sets, SSPI, ISO, DHCP et TFTP sont remplacés par les types nommés équivalents sans changer leur taille.",
+        "zh": "mormot.core.base 新增 THash1024、THash2048、THash4096 及其指针别名，并增加 TTemp128 与 TTemp256。SHA-512、CPU 集、SSPI、ISO、DHCP 与 TFTP 中现有定长数组改用等长命名类型。",
+        "ru": "mormot.core.base добавляет THash1024, THash2048 и THash4096 с pointer aliases, а также TTemp128 и TTemp256. Фиксированные массивы SHA-512, CPU sets, SSPI, ISO, DHCP и TFTP заменены эквивалентными именованными типами без изменения размера."
+      },
+      "impact": {
+        "en": "Application code gains standard 128-, 256- and 512-byte binary and stack-buffer declarations. Existing records keep the same storage layout, so the internal substitutions do not change wire formats.",
+        "fr": "Le code applicatif gagne des déclarations standard de 128, 256 et 512 octets pour données binaires et buffers de pile. Les records existants gardent leur disposition, sans changement de format réseau.",
+        "zh": "应用代码获得标准的 128、256、512 字节二进制及栈缓冲声明。现有记录保持相同存储布局，因此内部替换不改变线格式。",
+        "ru": "Приложения получают стандартные объявления бинарных и stack buffer размером 128, 256 и 512 байт. Layout существующих records не меняется, wire formats остаются прежними."
+      },
+      "action": "none",
+      "units": ["mormot.core.base", "mormot.core.log", "mormot.core.os", "mormot.crypt.core", "mormot.lib.sspi", "mormot.misc.iso", "mormot.net.dhcp", "mormot.net.tftp.client"],
+      "api_changes": [
+        {
+          "symbol": "THash1024 / PHash1024 / THash2048 / PHash2048 / THash4096 / PHash4096",
+          "change": "added",
+          "note": {
+            "en": "Named byte arrays and pointer aliases for 128-, 256- and 512-byte values.",
+            "fr": "Tableaux d’octets nommés et pointeurs pour des valeurs de 128, 256 et 512 octets.",
+            "zh": "用于 128、256、512 字节值的命名字节数组及指针别名。",
+            "ru": "Именованные byte arrays и pointer aliases для 128, 256 и 512 байт."
+          }
+        },
+        {
+          "symbol": "TTemp128 / TTemp256",
+          "change": "added",
+          "note": {
+            "en": "Fixed AnsiChar temporary buffers of 128 and 256 bytes.",
+            "fr": "Buffers temporaires AnsiChar fixes de 128 et 256 octets.",
+            "zh": "128 与 256 字节的定长 AnsiChar 临时缓冲。",
+            "ru": "Фиксированные временные буферы AnsiChar на 128 и 256 байт."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "76d9d035a269702786dd1b8959a577cd85101cae",
+      "headline": {
+        "en": "Windows IOCP unsubscribe claims the caller pointer atomically",
+        "fr": "Le retrait IOCP Windows réserve atomiquement le pointeur appelant",
+        "zh": "Windows IOCP 取消订阅原子取得调用方指针",
+        "ru": "Windows IOCP unsubscribe атомарно захватывает указатель вызывающего кода"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWinIocp.Unsubscribe in mormot.net.sock.windows copies the subscription pointer locally, then uses LockedExc to replace the caller's var parameter with nil only if it still matches. All shutdown, receive and free operations use the claimed local pointer.",
+        "fr": "TWinIocp.Unsubscribe dans mormot.net.sock.windows copie localement le pointeur de souscription, puis utilise LockedExc pour mettre le paramètre var à nil seulement s’il correspond encore. Les opérations de shutdown, receive et free utilisent le pointeur réservé.",
+        "zh": "mormot.net.sock.windows 的 TWinIocp.Unsubscribe 先本地复制订阅指针，再用 LockedExc 仅在调用方 var 参数仍匹配时原子改为 nil。后续 shutdown、receive 与 free 均使用已取得的本地指针。",
+        "ru": "TWinIocp.Unsubscribe в mormot.net.sock.windows копирует subscription pointer локально, затем через LockedExc меняет var-параметр на nil, только если он ещё совпадает. Shutdown, receive и free используют захваченный локальный указатель."
+      },
+      "impact": {
+        "en": "Concurrent callers cannot both pass the non-nil test and unsubscribe or free the same IOCP subscription. Windows async servers avoid duplicate shutdown work and a potential use-after-free on that path.",
+        "fr": "Deux appels concurrents ne peuvent plus réussir le test non-nil puis retirer ou libérer la même souscription IOCP. Les serveurs asynchrones Windows évitent un double shutdown et un possible accès après libération.",
+        "zh": "并发调用者无法同时通过非 nil 检查并取消或释放同一 IOCP 订阅。Windows 异步服务器可避免重复关闭及该路径上的潜在释放后使用。",
+        "ru": "Два конкурентных вызова не могут пройти non-nil проверку и отписать или освободить один IOCP subscription. Windows async-серверы избегают двойного shutdown и возможного use-after-free."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Windows IOCP servers where connection shutdown and owner cleanup may race.",
+        "fr": "Mettez à niveau les serveurs IOCP Windows où la fermeture d’une connexion peut concurrencer le nettoyage du propriétaire.",
+        "zh": "连接关闭可能与所有者清理并发的 Windows IOCP 服务器应升级。",
+        "ru": "Обновите Windows IOCP-серверы, где shutdown соединения может конкурировать с очисткой владельца."
+      },
+      "units": ["mormot.net.sock.windows"],
+      "api_changes": [
+        {
+          "symbol": "TWinIocp.Unsubscribe",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The var subscription pointer is atomically claimed and cleared before removal starts.",
+            "fr": "Le pointeur var est atomiquement réservé et effacé avant le début du retrait.",
+            "zh": "开始移除前，var 订阅指针会被原子取得并清空。",
+            "ru": "var-указатель атомарно захватывается и очищается до начала удаления."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cf21f26e9fce6549b424b0c56f32ade40c1c1f8c",
+      "headline": {
+        "en": "PDF regression tests are isolated behind the new UI capability names",
+        "fr": "Les tests PDF sont isolés derrière les nouveaux noms de capacité UI",
+        "zh": "PDF 回归测试由新的 UI 能力名称隔离",
+        "ru": "PDF-регрессии изолированы новыми именами UI-возможностей"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.ui.pdf and the integration test runner replace HASUIPDF with HAS_UI_PDF, while mormot.defines adds HAS_UI_LCL for FPC. test.ui.pdf is reorganized, uses mormot.lib.z for its fixture, and keeps a void unit implementation when PDF UI support is absent.",
+        "fr": "mormot.ui.pdf et le runner d’intégration remplacent HASUIPDF par HAS_UI_PDF, tandis que mormot.defines ajoute HAS_UI_LCL pour FPC. test.ui.pdf est réorganisé, utilise mormot.lib.z pour son fixture et garde une unité vide sans support PDF UI.",
+        "zh": "mormot.ui.pdf 与集成测试运行器将 HASUIPDF 替换为 HAS_UI_PDF，mormot.defines 为 FPC 增加 HAS_UI_LCL。test.ui.pdf 经过整理，使用 mormot.lib.z 读取夹具，并在无 PDF UI 支持时保留空实现单元。",
+        "ru": "mormot.ui.pdf и integration runner заменяют HASUIPDF на HAS_UI_PDF, mormot.defines добавляет HAS_UI_LCL для FPC. test.ui.pdf реорганизован, использует mormot.lib.z для fixture и остаётся пустым unit без PDF UI."
+      },
+      "impact": {
+        "en": "Non-UI test builds no longer need to initialize VCL/LCL or include the PDF test unit. Framework PDF runtime behavior is not changed by this follow-up; it completes the conditional rename from the previous commit.",
+        "fr": "Les builds de test sans UI n’initialisent plus VCL/LCL et n’incluent plus l’unité de tests PDF. Ce suivi ne change pas le comportement PDF à l’exécution ; il complète le renommage des conditions.",
+        "zh": "无 UI 的测试构建不再需要初始化 VCL/LCL 或包含 PDF 测试单元。本后续提交不改变框架 PDF 运行时行为，只完成前一提交的条件名迁移。",
+        "ru": "Тестовые сборки без UI не инициализируют VCL/LCL и не включают PDF-тесты. Runtime PDF не меняется; commit завершает переименование conditional из предыдущего изменения."
+      },
+      "action": "none",
+      "units": ["mormot.defines", "mormot.ui.pdf"],
+      "api_changes": [
+        {
+          "symbol": "HAS_UI_LCL",
+          "change": "added",
+          "note": {
+            "en": "Defined for FPC when UI support is enabled.",
+            "fr": "Défini pour FPC lorsque le support UI est actif.",
+            "zh": "FPC 启用 UI 支持时定义。",
+            "ru": "Определяется для FPC при включённой UI-поддержке."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fe0b21d2a95e4a8ba3b646775125b90853ebb370",
+      "headline": {
+        "en": "UI compile controls are renamed and CountOccurrences becomes public",
+        "fr": "Les contrôles UI sont renommés et CountOccurrences devient public",
+        "zh": "UI 编译控制更名，CountOccurrences 成为公开函数",
+        "ru": "UI compile controls переименованы, CountOccurrences стал публичным"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.defines replaces HASUIPDF with HAS_UI_PDF and introduces HAS_UI, HAS_UI_VCL_LCL plus project switches NO_UI, NO_UI_VCL and NO_UI_PDF. mormot.core.unicode adds public CountOccurrences for non-overlapping RawUtf8 matches; mormot.core.text also corrects the parameter name passed by UInt32DigitsToUtf8.",
+        "fr": "mormot.defines remplace HASUIPDF par HAS_UI_PDF et introduit HAS_UI, HAS_UI_VCL_LCL ainsi que NO_UI, NO_UI_VCL et NO_UI_PDF. mormot.core.unicode ajoute CountOccurrences pour les occurrences RawUtf8 non chevauchantes ; mormot.core.text corrige aussi le nom du paramètre transmis par UInt32DigitsToUtf8.",
+        "zh": "mormot.defines 用 HAS_UI_PDF 替换 HASUIPDF，并新增 HAS_UI、HAS_UI_VCL_LCL 以及项目开关 NO_UI、NO_UI_VCL、NO_UI_PDF。mormot.core.unicode 增加公开 CountOccurrences，用于统计 RawUtf8 中不重叠匹配；mormot.core.text 也修正 UInt32DigitsToUtf8 传入的参数名。",
+        "ru": "mormot.defines заменяет HASUIPDF на HAS_UI_PDF и вводит HAS_UI, HAS_UI_VCL_LCL, а также switches NO_UI, NO_UI_VCL и NO_UI_PDF. mormot.core.unicode добавляет публичный CountOccurrences для неперекрывающихся RawUtf8; mormot.core.text исправляет имя параметра в UInt32DigitsToUtf8."
+      },
+      "impact": {
+        "en": "Application or package conditionals that test HASUIPDF stop selecting their PDF branch until renamed. Projects gain explicit ways to exclude all UI, the Delphi VCL path or only PDF; CountOccurrences is available to both Delphi and FPC callers.",
+        "fr": "Les conditions d’application ou de package testant HASUIPDF ne sélectionnent plus leur branche PDF avant renommage. Les projets peuvent exclure toute l’UI, le chemin VCL Delphi ou seulement le PDF ; CountOccurrences est disponible en Delphi et FPC.",
+        "zh": "应用或包中检查 HASUIPDF 的条件在更名前将不再选择 PDF 分支。项目可明确排除全部 UI、Delphi VCL 路径或仅 PDF；Delphi 与 FPC 均可调用 CountOccurrences。",
+        "ru": "Условия приложений или packages с HASUIPDF перестают выбирать PDF-ветку до переименования. Проекты могут исключать весь UI, Delphi VCL или только PDF; CountOccurrences доступен Delphi и FPC."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search project sources, package files and build defines for HASUIPDF and replace it with HAS_UI_PDF; then rebuild each UI and headless target.",
+        "fr": "Recherchez HASUIPDF dans les sources, packages et defines de build, remplacez-le par HAS_UI_PDF puis recompilez chaque cible UI et sans interface.",
+        "zh": "在项目源码、包文件及构建定义中搜索 HASUIPDF，替换为 HAS_UI_PDF，然后重新构建各 UI 与无界面目标。",
+        "ru": "Найдите HASUIPDF в исходниках, package files и build defines, замените на HAS_UI_PDF и пересоберите UI и headless targets."
+      },
+      "units": ["mormot.core.text", "mormot.core.unicode", "mormot.defines", "mormot.ui.core"],
+      "api_changes": [
+        {
+          "symbol": "HASUIPDF",
+          "change": "removed",
+          "note": {
+            "en": "Replace project checks with HAS_UI_PDF.",
+            "fr": "Remplacer les tests de projet par HAS_UI_PDF.",
+            "zh": "项目检查应改用 HAS_UI_PDF。",
+            "ru": "Замените проверки проекта на HAS_UI_PDF."
+          }
+        },
+        {
+          "symbol": "HAS_UI / HAS_UI_VCL_LCL / HAS_UI_PDF",
+          "change": "added",
+          "note": {
+            "en": "Describe enabled UI capabilities after project-level exclusions.",
+            "fr": "Décrivent les capacités UI actives après les exclusions du projet.",
+            "zh": "描述应用项目级排除后的已启用 UI 能力。",
+            "ru": "Описывают доступные UI-возможности после project-level исключений."
+          }
+        },
+        {
+          "symbol": "NO_UI / NO_UI_VCL / NO_UI_PDF",
+          "change": "added",
+          "note": {
+            "en": "Project-level switches to disable all UI, VCL/LCL use, or PDF support.",
+            "fr": "Options projet pour désactiver toute l’UI, VCL/LCL ou le support PDF.",
+            "zh": "用于禁用全部 UI、VCL/LCL 或 PDF 支持的项目级开关。",
+            "ru": "Project switches для отключения всего UI, VCL/LCL или PDF."
+          }
+        },
+        {
+          "symbol": "CountOccurrences",
+          "change": "added",
+          "note": {
+            "en": "Counts non-overlapping SubStr matches in a RawUtf8 Text value.",
+            "fr": "Compte les occurrences non chevauchantes de SubStr dans un RawUtf8 Text.",
+            "zh": "统计 RawUtf8 Text 中不重叠的 SubStr 匹配。",
+            "ru": "Считает неперекрывающиеся вхождения SubStr в RawUtf8 Text."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ],
+  "notes": {
+    "en": "The PDF regression-suite merge commit needs no separate entry. Its functional framework-facing conditional work is covered by the two non-merge UI commits. No superseded_by links or new removal timetable beyond the HASUIPDF rename are present in the raw payload; version bookkeeping files were ignored.",
+    "fr": "Le commit de fusion de la suite de régression PDF ne nécessite pas d’entrée séparée. Son travail fonctionnel visible par le framework est couvert par les deux commits UI non-merge. Le payload ne contient aucun lien superseded_by ni calendrier de suppression supplémentaire au-delà du renommage HASUIPDF ; les fichiers de version ont été ignorés.",
+    "zh": "PDF 回归套件合并提交无需单独条目，其面向框架的条件逻辑已由两个非合并 UI 提交覆盖。原始数据不含 superseded_by 关系，也没有除 HASUIPDF 更名之外的新移除时间表；版本记录文件已忽略。",
+    "ru": "Merge commit набора PDF-регрессий не требует отдельной записи; его framework-facing conditional изменения покрыты двумя non-merge UI commit. В payload нет superseded_by и нового графика удаления помимо переименования HASUIPDF; файлы учёта версии проигнорированы."
+  }
+}
