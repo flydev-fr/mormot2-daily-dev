@@ -1,0 +1,1026 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-10",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-10T03:37:22Z",
+  "range": {
+    "since": "2026-09-08T18:19:03Z",
+    "until": "2026-09-10T03:37:22Z",
+    "head_sha": "d66a106e22a6ccb80540861d27151cf56825e4a0"
+  },
+  "version": {
+    "after": "2.4.16805",
+    "before": "2.4.16790"
+  },
+  "totals": {
+    "commits": 17,
+    "additions": 559,
+    "deletions": 370
+  },
+  "commits": [
+    {
+      "sha": "d66a106e22a6ccb80540861d27151cf56825e4a0",
+      "short_sha": "d66a106e",
+      "subject": "Merge pull request #577 from zen010101/dhcp-domain-name-option15",
+      "body": "net: DHCP server was never sending the domain-name option 15",
+      "author": "ab",
+      "date": "2026-09-09T18:11:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d66a106e22a6ccb80540861d27151cf56825e4a0",
+      "parents": [
+        "a415524a716aad558b1598ef38eb2db091cea3aa",
+        "3ad9e8c12fe18003a643a3771c82b130119cc8a1"
+      ],
+      "stats": {
+        "additions": 29,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -4321,6 +4321,7 @@ procedure TDhcpState.AddRegularOptions;\n   AddOptionOnce32(doBroadcastAddress,   Scope^.Broadcast);\r\n   AddOptionOnce32(doRouters,            Scope^.Gateway);\r\n   AddOptionOnceA32(doDomainNameServers, pointer(Scope^.DnsServers));\r\n+  AddOptionOnceU(doDomainName,          pointer(Scope^.DomainName));\r\n   AddOptionOnceA32(doNtpServers,        pointer(Scope^.NtpServers));\r\n   // optional 51,58,59 lease timing options\r\n   if (RecvType <> dmtInform) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 0,
+          "patch": "@@ -3141,6 +3141,34 @@ procedure TNetworkProtocols.DHCP;\n       '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n       '201:\"toto\",subnet-mask:\"255.252.0.0\",' +\r\n       'lease-time:120,renewal-time:60,rebinding-time:105}');\r\n+    // validate scope \"domain-name\" option 15 sent with the regular options\r\n+    settings.Scope[0].DomainName := 'lan.local';\r\n+    server.Setup(settings); // Setup() can be called again on a live server\r\n+    mac := MacToText(@macs[9]);\r\n+    f := d.ClientNew(dmtDiscover, macs[9]);\r\n+    d.ClientFlush(f);\r\n+    CheckNotEqual(server.ComputeResponse(d), 0, 'domain');\r\n+    ip := IP4ToText(@d.Send.yiaddr);\r\n+    CheckEqual(d.SendToJson(true),\r\n+      '{op:\"reply\",yiaddr:\"' + ip + '\",siaddr:\"192.168.0.1\",chaddr:\"' + mac +\r\n+      '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n+      'subnet-mask:\"255.252.0.0\",domain-name:\"lan.local\",' +\r\n+      'lease-time:120,renewal-time:60,rebinding-time:105}');\r\n+    // \"rule\" domain-name has precedence over the scope domain-name\r\n+    pool := @server.Scope[0].Main; // Setup() did rebuild the scope\r\n+    mac := MacToText(@macs[12]);\r\n+    pool.AddRule([\r\n+      '{mac:\"', mac, '\",requested:{domain-name:\"mydomain\"}}']);\r\n+    f := d.ClientNew(dmtDiscover, macs[12]);\r\n+    d.ClientFlush(f);\r\n+    CheckNotEqual(server.ComputeResponse(d), 0, 'domain rule');\r\n+    ip := IP4ToText(@d.Send.yiaddr);\r\n+    CheckEqual(d.SendToJson(true),\r\n+      '{op:\"reply\",yiaddr:\"' + ip + '\",siaddr:\"192.168.0.1\",chaddr:\"' + mac +\r\n+      '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n+      'domain-name:\"mydomain\",' +\r\n+      'subnet-mask:\"255.252.0.0\",lease-time:120,renewal-time:' +\r\n+      '60,rebinding-time:105}');\r\n   finally\r\n     server.Free;\r\n     settings.Free;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": 577,
+      "is_merge": true
+    },
+    {
+      "sha": "3ad9e8c12fe18003a643a3771c82b130119cc8a1",
+      "short_sha": "3ad9e8c1",
+      "subject": "net: DHCP server was never sending the domain-name option 15",
+      "body": "TDhcpState.AddRegularOptions() is documented (twice) as appending the\n\"1,3,6,15,28,42\" regular options, and the DHCP_REQUEST default client\nlist does ask for option 15, but TDhcpScopeSettings.DomainName was only\nused to compute the DDNS FQDN - never written into OFFER/ACK. So the\ndocumented \"domain-name\" setting silently had no effect, unless\nduplicated into a \"rule\" as \"always\"/\"requested\".\n\nAppended after AddRulesOptions() so a \"rule\" value still has precedence,\nand via AddOptionOnceU() as already used for options 66/67, which skips\nan unset (nil) value: scopes without a domain-name are unchanged.\n\nTests: the scope value now shows up in the OFFER, and a \"rule\" one still\noverrides it.",
+      "author": "zen010101",
+      "date": "2026-09-09T17:43:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3ad9e8c12fe18003a643a3771c82b130119cc8a1",
+      "parents": [
+        "a415524a716aad558b1598ef38eb2db091cea3aa"
+      ],
+      "stats": {
+        "additions": 29,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -4321,6 +4321,7 @@ procedure TDhcpState.AddRegularOptions;\n   AddOptionOnce32(doBroadcastAddress,   Scope^.Broadcast);\r\n   AddOptionOnce32(doRouters,            Scope^.Gateway);\r\n   AddOptionOnceA32(doDomainNameServers, pointer(Scope^.DnsServers));\r\n+  AddOptionOnceU(doDomainName,          pointer(Scope^.DomainName));\r\n   AddOptionOnceA32(doNtpServers,        pointer(Scope^.NtpServers));\r\n   // optional 51,58,59 lease timing options\r\n   if (RecvType <> dmtInform) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 0,
+          "patch": "@@ -3141,6 +3141,34 @@ procedure TNetworkProtocols.DHCP;\n       '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n       '201:\"toto\",subnet-mask:\"255.252.0.0\",' +\r\n       'lease-time:120,renewal-time:60,rebinding-time:105}');\r\n+    // validate scope \"domain-name\" option 15 sent with the regular options\r\n+    settings.Scope[0].DomainName := 'lan.local';\r\n+    server.Setup(settings); // Setup() can be called again on a live server\r\n+    mac := MacToText(@macs[9]);\r\n+    f := d.ClientNew(dmtDiscover, macs[9]);\r\n+    d.ClientFlush(f);\r\n+    CheckNotEqual(server.ComputeResponse(d), 0, 'domain');\r\n+    ip := IP4ToText(@d.Send.yiaddr);\r\n+    CheckEqual(d.SendToJson(true),\r\n+      '{op:\"reply\",yiaddr:\"' + ip + '\",siaddr:\"192.168.0.1\",chaddr:\"' + mac +\r\n+      '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n+      'subnet-mask:\"255.252.0.0\",domain-name:\"lan.local\",' +\r\n+      'lease-time:120,renewal-time:60,rebinding-time:105}');\r\n+    // \"rule\" domain-name has precedence over the scope domain-name\r\n+    pool := @server.Scope[0].Main; // Setup() did rebuild the scope\r\n+    mac := MacToText(@macs[12]);\r\n+    pool.AddRule([\r\n+      '{mac:\"', mac, '\",requested:{domain-name:\"mydomain\"}}']);\r\n+    f := d.ClientNew(dmtDiscover, macs[12]);\r\n+    d.ClientFlush(f);\r\n+    CheckNotEqual(server.ComputeResponse(d), 0, 'domain rule');\r\n+    ip := IP4ToText(@d.Send.yiaddr);\r\n+    CheckEqual(d.SendToJson(true),\r\n+      '{op:\"reply\",yiaddr:\"' + ip + '\",siaddr:\"192.168.0.1\",chaddr:\"' + mac +\r\n+      '\",message-type:\"OFFER\",server-identifier:\"192.168.0.1\",' +\r\n+      'domain-name:\"mydomain\",' +\r\n+      'subnet-mask:\"255.252.0.0\",lease-time:120,renewal-time:' +\r\n+      '60,rebinding-time:105}');\r\n   finally\r\n     server.Free;\r\n     settings.Free;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a415524a716aad558b1598ef38eb2db091cea3aa",
+      "short_sha": "a415524a",
+      "subject": "net: several DNS fixes",
+      "body": "- allow IPv6 server address\n- fixed Z flag setting\n- reject invalid responses ASAP to continue with the next server\n- (I hope) last refactoring and cleaning pass\n- we should be pretty much compliant with most DNS requirements including the latest RFC",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T17:33:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a415524a716aad558b1598ef38eb2db091cea3aa",
+      "parents": [
+        "3b7a2a4f55adcf28e46c62d3f4f535b0c09b2801"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 62,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16804\n+16805",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16804'\r\n+'2.4.16805'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 67,
+          "deletions": 60,
+          "patch": "@@ -449,12 +449,12 @@ procedure TDnsHeader.SetRD(const AValue: boolean);\n \r\n procedure TDnsHeader.SetZ(const AValue: byte);\r\n begin\r\n-  Flags := (Flags2 and not(QF_Z)) or ((AValue and $7) shl 4);\r\n+  Flags2 := (Flags2 and not(QF_Z)) or ((AValue and $7) shl 4);\r\n end;\r\n \r\n \r\n-function DnsDecompress(p: PByteArray; max, pos: PtrInt;\r\n-  Dest: PRawUtf8 = nil; tmp: PAnsiChar = nil): PtrInt;\r\n+function DnsDecompress(p: PByteArray; max, pos: PtrInt; var dest: RawUtf8;\r\n+  tmp: PAnsiChar): PtrInt;\r\n var\r\n   d: PAnsiChar;\r\n   len, nextpos, lastoffset: PtrInt;\r\n@@ -490,31 +490,25 @@ function DnsDecompress(p: PByteArray; max, pos: PtrInt;\n       if nextpos = 0 then\r\n         nextpos := pos + 1; // return position just after the first pointer\r\n       pos := len;\r\n-      len := p[pos]; // 8-bit length from offset\r\n+      len := p[pos];        // 8-bit length from offset\r\n       inc(pos);\r\n     until false;\r\n     if len = 0 then\r\n       break;\r\n     if pos + len > max then\r\n       exit;\r\n-    if Dest <> nil then\r\n-    begin\r\n-      if PtrInt(d - tmp) + len >= 254 then\r\n-        exit; // max 255 chars per RFC 1035\r\n-      MoveFast(p[pos], d^, len);\r\n-      inc(d, len);\r\n-      d^ := '.';\r\n-      inc(d);\r\n-    end;\r\n+    if PtrInt(d - tmp) + len >= 254 then\r\n+      exit; // max 255 chars per RFC 1035\r\n+    MoveFast(p[pos], d^, len);\r\n+    inc(d, len);\r\n+    d^ := '.';\r\n+    inc(d);\r\n     inc(pos, len);\r\n   until false;\r\n-  if Dest <> nil then\r\n-  begin\r\n-    if (d > tmp) and\r\n-       (d[-1] = '.') then\r\n-      dec(d);\r\n-    FastSetString(Dest^, tmp, d);\r\n-  end;\r\n+  if (d <> tmp) and\r\n+     (d[-1] = '.') then\r\n+    dec(d);\r\n+  FastSetString(dest, tmp, d);\r\n   if nextpos = 0 then\r\n     result := pos\r\n   else\r\n@@ -526,7 +520,7 @@ function DnsParseString(const Answer: RawByteString; Pos: PtrInt;\n var\r\n   tmp: TByteToAnsiChar;\r\n begin\r\n-  result := DnsDecompress(pointer(Answer), length(Answer), Pos, @Text, @tmp);\r\n+  result := DnsDecompress(pointer(Answer), length(Answer), Pos, Text, @tmp);\r\n end;\r\n \r\n function DnsParseCharString(const Answer: RawByteString;\r\n@@ -678,7 +672,7 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n end;\r\n \r\n var\r\n-  NoTcpList, NoEdnsList: TCachedValues; // flushed every 64 seconds (TixShr = 6)\r\n+  NoTcpList, NoEdnsList: TCachedValues; // store server names with period flush\r\n \r\n function DnsSendQuestionRaw(Address, Port: RawUtf8; const Request: RawByteString;\r\n   var Answer: RawByteString; TimeOutMS: integer): boolean;\r\n@@ -706,7 +700,8 @@ function DnsSendQuestionRaw(Address, Port: RawUtf8; const Request: RawByteString\n     SetLength(Address, i - 1);\r\n   end;\r\n   FillCharFast(addr, SizeOf(addr), 0);\r\n-  if not addr.SetFromIP4(Address, {nolookup=}true) or\r\n+  if not (addr.SetFromIP4(Address, {nolookup=}true) or\r\n+          addr.SetFromIP6(Address)) or\r\n      (addr.SetPort(GetCardinalDef(pointer(Port), 53)) <> nrOk) then\r\n     exit;\r\n   if not tcponly then\r\n@@ -728,6 +723,7 @@ function DnsSendQuestionRaw(Address, Port: RawUtf8; const Request: RawByteString\n     hdr := @tmp;\r\n     if (len < SizeOf(hdr^)) or\r\n        not addr.IPEqual(resp) or\r\n+       (resp.Port <> addr.Port) or\r\n        (hdr^.Xid <> PDnsHeader(Request)^.Xid) or\r\n        not hdr^.IsResponse then\r\n       exit; // clearly invalid response\r\n@@ -830,9 +826,9 @@ function DnsParseRecord(const Answer: RawByteString; var Pos: PtrInt;\n   result := true;\r\n end;\r\n \r\n-function ParseDnsResult(var Res: TDnsResult; QClass: cardinal): boolean;\r\n+function ParseDnsResult(var Res: TDnsResult; QClass: cardinal; Pos: PtrInt): boolean;\r\n var\r\n-  pos, i, n: PtrInt;\r\n+  i, n: PtrInt;\r\n begin\r\n   result := false;\r\n   // decode response header into native little-endian\r\n@@ -841,35 +837,29 @@ function ParseDnsResult(var Res: TDnsResult; QClass: cardinal): boolean;\n   Res.Header.AnswerCount     := bswap16(Res.Header.AnswerCount);\r\n   Res.Header.NameServerCount := bswap16(Res.Header.NameServerCount);\r\n   Res.Header.AdditionalCount := bswap16(Res.Header.Additio\n... [truncated, 5327 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3b7a2a4f55adcf28e46c62d3f4f535b0c09b2801",
+      "short_sha": "3b7a2a4f",
+      "subject": "net: refactored GetRemoteMacAddress() on Linux",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T17:33:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3b7a2a4f55adcf28e46c62d3f4f535b0c09b2801",
+      "parents": [
+        "eee501611a7c8b27a28e27f56c31d429fed1a8d9"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16803\n+16804",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16803'\r\n+'2.4.16804'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 13,
+          "patch": "@@ -802,6 +802,8 @@ const\n \r\n   ETH_P_IP  = $0800;\r\n   ETH_P_ARP = $0806;\r\n+  ETH_P_IP_LE  = $0008;\r\n+  ETH_P_ARP_LE = $0608;\r\n \r\n   ARPOP_REQUEST   = 1;  // ARP request\r\n   ARPOP_REPLY     = 2;  // ARP reply\r\n@@ -1131,7 +1133,7 @@ end;\n \r\n type\r\n   // a low-level ARP frame binary content, with its SOCK_RAW ethernet header\r\n-  TRawARP = packed record\r\n+  TRawArp = packed record\r\n     Dest: TNetMac;\r\n     Src: TNetMac;\r\n     EType: word;\r\n@@ -1145,7 +1147,7 @@ type\n     THA: TNetMac;\r\n     TPA: TNetIP4;\r\n   end;\r\n-  PRawARP = ^TRawARP;\r\n+  PRawArp = ^TRawArp;\r\n \r\n const\r\n   MAC_BROADCAST: TNetMac = ($ff, $ff, $ff, $ff, $ff, $ff);\r\n@@ -1160,7 +1162,7 @@ var\n   s: TSocket;\r\n   ns: TNetSocket absolute s;\r\n   local: TMacAddress;\r\n-  arp: TRawARP;\r\n+  arp: TRawArp;\r\n   addr: SockAddr_ll;\r\n   resp: RawByteString;\r\n   retry: integer;\r\n@@ -1179,25 +1181,25 @@ begin\n     exit;\r\n   end;\r\n   arp.Dest  := MAC_BROADCAST;\r\n-  arp.EType := bswap16(ETH_P_ARP);\r\n-  arp.HType := bswap16(ARPHRD_ETHER);\r\n-  arp.PType := bswap16(ETH_P_IP);\r\n+  arp.EType := ETH_P_ARP_LE;\r\n+  arp.HType := ARPHRD_ETHER shl 8;\r\n+  arp.PType := ETH_P_IP_LE;\r\n   arp.HLen  := SizeOf(TNetMac);\r\n   arp.PLen  := SizeOf(TNetIP4);\r\n-  arp.Op    := bswap16(ARPOP_REQUEST);\r\n+  arp.Op    := ARPOP_REQUEST shl 8;\r\n   arp.SHA   := arp.Src;\r\n   arp.THA   := MAC_ZERO;\r\n   FillCharFast(addr, SizeOf(addr), 0);\r\n   addr.sll_family   := AF_PACKET;\r\n-  addr.sll_protocol := bswap16(ETH_P_ARP);\r\n+  addr.sll_protocol := ETH_P_ARP_LE;\r\n   addr.sll_ifindex  := local.IfIndex;\r\n   addr.sll_halen    := SizeOf(MAC_BROADCAST);\r\n   PNetMac(@addr.sll_addr)^ := MAC_BROADCAST;\r\n   // acquire a SOCK_RAW - shared between calls since closesocket() is slow\r\n   if SharedArpLock.TryLock then\r\n   begin\r\n     if SharedArpSock = 0 then\r\n-      SharedArpSock := socket(AF_PACKET, SOCK_RAW, bswap16(ETH_P_ARP));\r\n+      SharedArpSock := socket(AF_PACKET, SOCK_RAW, ETH_P_ARP_LE);\r\n     s := SharedArpSock;\r\n     if s <= 0 then // typically not root or CAP_NET_RAW\r\n     begin\r\n@@ -1207,7 +1209,7 @@ begin\n   end\r\n   else\r\n   begin\r\n-    s := socket(AF_PACKET, SOCK_RAW, bswap16(ETH_P_ARP)); // transient socket\r\n+    s := socket(AF_PACKET, SOCK_RAW, ETH_P_ARP_LE); // transient socket\r\n     if s <= 0 then\r\n       exit; // paranoid (e.g. fd exhaustion)\r\n   end;\r\n@@ -1222,9 +1224,9 @@ begin\n       if ns.RecvWait(100 + retry * 50, resp) = nrOK then\r\n         repeat\r\n           if length(resp) >= SizeOf(TRawArp) then\r\n-            with PRawARP(resp)^ do\r\n-              if (Op = bswap16(ARPOP_REPLY)) and // reply\r\n-                 (TPA = arp.SPA) and             // from expected IPs\r\n+            with PRawArp(resp)^ do\r\n+              if (Op = ARPOP_REPLY shl 8) and // reply\r\n+                 (TPA = arp.SPA) and          // from expected IPs\r\n                  (SPA = arp.TPA) then\r\n               begin\r\n                 result := MacToText(@SHA);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "eee501611a7c8b27a28e27f56c31d429fed1a8d9",
+      "short_sha": "eee50161",
+      "subject": "net: minor TFTP logic refactoring",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T17:31:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/eee501611a7c8b27a28e27f56c31d429fed1a8d9",
+      "parents": [
+        "e00798bb77eb6a0a97e4543e7fb66c7d497666ad"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16802\n+16803",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16802'\r\n+'2.4.16803'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tftp.client.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -535,7 +535,7 @@ function TTftpContext.ParseRequestOptions: TTftpError;\n       //       +-------+---~~---+---+---~~---+---+---~~---+---+---~~---+---+\r\n       // OACK |   6   |  opt1  | 0 | value1 | 0 |  optN  | 0 | valueN | 0 |\r\n       //      +-------+---~~---+---+---~~---+---+---~~---+---+---~~---+---+\r\n-      Frame^.Opcode := bswap16(TFTP_OACK);\r\n+      Frame^.Opcode := TFTP_OACK shl 8;\r\n   end\r\n   else\r\n     // RFC 1350 regular response\r\n@@ -647,7 +647,7 @@ procedure TTftpContext.GenerateAckFrame;\n   //        ------------------\r\n   //  ACK  | 04    |  seq    |\r\n   //       ------------------\r\n-  Frame^.Opcode := bswap16(TFTP_ACK);\r\n+  Frame^.Opcode := TFTP_ACK shl 8;\r\n   Frame^.Sequence := bswap16(LastReceivedSequence);\r\n   FrameLen := SizeOf(Frame^.Opcode) + SizeOf(Frame^.Sequence);\r\n end;\r\n@@ -661,7 +661,7 @@ procedure TTftpContext.GenerateNextDataFrame;\n   inc(LastReceivedSequence);\r\n   if LastReceivedSequence = 0 then\r\n     inc(LastReceivedSequenceHi, 1 shl 16); // handle 16-bit sequence overflow\r\n-  Frame^.Opcode := bswap16(TFTP_DAT);\r\n+  Frame^.Opcode := TFTP_DAT shl 8;\r\n   Frame^.Sequence := bswap16(LastReceivedSequence);\r\n   if CurrentSize <> FileStream.Position then\r\n     FileStream.Seek(Int64(CurrentSize), soBeginning); // may break on TPipeStream\r\n@@ -709,7 +709,7 @@ procedure TTftpContext.GenerateErrorFrame(\n   //        -----------------------------------------\r\n   // ERROR | 05    |  ErrorCode |   ErrMsg   |   0  |\r\n   //       -----------------------------------------\r\n-  Frame^.Opcode := bswap16(TFTP_ERR);\r\n+  Frame^.Opcode := TFTP_ERR shl 8;\r\n   if err > teLast then\r\n     Frame^.ErrorCode := 0\r\n   else\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tftp.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e00798bb77eb6a0a97e4543e7fb66c7d497666ad",
+      "short_sha": "e00798bb",
+      "subject": "core: optimized bswap16() function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T17:31:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e00798bb77eb6a0a97e4543e7fb66c7d497666ad",
+      "parents": [
+        "ae18fe67a2e687e2184432e9f8b407663738226f"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -3574,7 +3574,7 @@ procedure XorEntropy(var e: THash512Rec);\n   _Fill256FromOs: procedure(out e: THash256Rec);\r\n \r\n /// convert the endianness of a given unsigned 16-bit integer\r\n-function bswap16(const a: cardinal): cardinal;\r\n+function bswap16(a: cardinal): cardinal;\r\n   {$ifdef HASINLINE}inline;{$endif}\r\n \r\n /// internal function to swap 16-bit LE/BE endianess of a buffer\r\n@@ -10344,9 +10344,10 @@ procedure XorMemory(var Dest: THash128Rec;\n   Dest.Hi := Dest.Hi xor Source.Hi;\r\n end;\r\n \r\n-function bswap16(const a: cardinal): cardinal; // inlining is good enough\r\n+function bswap16(a: cardinal): cardinal; // inlining is good enough\r\n begin\r\n-  result := ((a and 255) shl 8) or (a shr 8);\r\n+  result := ToByte(a); // better in two steps, especially on FPC\r\n+  result := (result shl 8) or (a shr 8);\r\n end;\r\n \r\n procedure bswap16array(buf: PWord; len: PtrInt);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16801\n+16802",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16801'\r\n+'2.4.16802'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ae18fe67a2e687e2184432e9f8b407663738226f",
+      "short_sha": "ae18fe67",
+      "subject": "net: hardened DNS decompression logic",
+      "body": "- both faster and more contraint against the RFC and any malformed input",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T15:13:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ae18fe67a2e687e2184432e9f8b407663738226f",
+      "parents": [
+        "3da23281edb004a68b64cc35cad8af2fce777c69"
+      ],
+      "stats": {
+        "additions": 53,
+        "deletions": 44,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.nosql.bson.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -249,7 +249,7 @@   TBsonObjectID = record\n     // - ComputeNew will use a hash of Executable.Host and Executable.User\r\n     MachineID: TBson24;\r\n     /// 16-bit process id\r\n-    // - ComputeNew will derivate it from MainThreadID\r\n+    // - ComputeNew will derive it from MainThreadID\r\n     ProcessID: word;\r\n     /// 24-bit counter, starting with a random value\r\n     // - used to avoid collision\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16800\n+16801",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16800'\r\n+'2.4.16801'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 50,
+          "deletions": 41,
+          "patch": "@@ -453,71 +453,80 @@ procedure TDnsHeader.SetZ(const AValue: byte);\n end;\r\n \r\n \r\n-function DnsDecompress(const Answer: RawByteString; Pos: PtrInt;\r\n-  Text: PRawUtf8): PtrInt;\r\n+function DnsDecompress(p: PByteArray; max, pos: PtrInt;\r\n+  Dest: PRawUtf8 = nil; tmp: PAnsiChar = nil): PtrInt;\r\n var\r\n-  p: PByteArray;\r\n-  nextpos, max, offset: PtrInt;\r\n-  len: byte;\r\n-  tmp: ShortString;\r\n+  d: PAnsiChar;\r\n+  len, nextpos, lastoffset: PtrInt;\r\n+  l: byte;\r\n begin\r\n   result := 0; // indicates error\r\n+  if pos < 0 then\r\n+    exit;\r\n   nextpos := 0;\r\n-  p := pointer(Answer);\r\n-  max := length(Answer);\r\n-  tmp[0] := #0;\r\n+  lastoffset := max;\r\n+  d := tmp;\r\n   repeat\r\n-    if Pos >= max then\r\n+    if pos >= max then\r\n       exit; // avoid any buffer overflow on malformed/malicious input\r\n-    len := p[Pos];\r\n-    inc(Pos);\r\n+    len := p[pos];\r\n+    inc(pos);\r\n     if len = 0 then\r\n       break;\r\n-    while (len and DNS_RELATIVE) = DNS_RELATIVE do\r\n-    begin\r\n-      // see https://www.rfc-editor.org/rfc/rfc1035.html#section-4.1.4\r\n-      if Pos >= max then\r\n+    repeat\r\n+      // see RFC 1035 section 4.1.4 and RFC 9267 section 2\r\n+      l := byte(len) and DNS_RELATIVE;\r\n+      if l = 0 then\r\n+        break;\r\n+      if (l <> DNS_RELATIVE) or // reserved combination\r\n+         (pos >= max) then\r\n         exit;\r\n-      len := len and not DNS_RELATIVE;\r\n-      offset := (PtrInt(len) shl 8) + p[Pos];\r\n-      if (offset >= Pos - 1) or\r\n-         (offset >= max) then\r\n-        exit; // reject forward/self pointers and malformed offsets\r\n+      len := ((len and $3f) shl 8) + p[pos]; // here len is the offset\r\n+      if (len >= pos - 1) or                 // forward/self pointer\r\n+         (len >= lastoffset) or              // recursive/cyclic pointer\r\n+         (len >= max) then\r\n+        exit;\r\n+      lastoffset := len;\r\n       if nextpos = 0 then\r\n-        nextpos := Pos + 1; // return position just after the first pointer\r\n-      Pos := offset;\r\n-      len := p[Pos]; // 8-bit length from offset\r\n-      inc(Pos);\r\n-    end;\r\n-    if (len and DNS_RELATIVE) <> 0 then\r\n-      exit; // %01xxxxxx and %10xxxxxx are reserved\r\n+        nextpos := pos + 1; // return position just after the first pointer\r\n+      pos := len;\r\n+      len := p[pos]; // 8-bit length from offset\r\n+      inc(pos);\r\n+    until false;\r\n     if len = 0 then\r\n       break;\r\n-    if Pos + len > max then\r\n+    if pos + len > max then\r\n       exit;\r\n-    if Text <> nil then\r\n+    if Dest <> nil then\r\n     begin\r\n-      AppendShortBuffer(pointer(@p[Pos]), len, high(tmp), @tmp);\r\n-      AppendShortCharSafe('.', tmp);\r\n+      if PtrInt(d - tmp) + len >= 254 then\r\n+        exit; // max 255 chars per RFC 1035\r\n+      MoveFast(p[pos], d^, len);\r\n+      inc(d, len);\r\n+      d^ := '.';\r\n+      inc(d);\r\n     end;\r\n-    inc(Pos, len);\r\n+    inc(pos, len);\r\n   until false;\r\n-  if Text <> nil then\r\n+  if Dest <> nil then\r\n   begin\r\n-    if tmp[ord(tmp[0])] = '.' then\r\n-      dec(tmp[0]);\r\n-    FastSetString(Text^, @tmp[1], ord(tmp[0]));\r\n+    if (d > tmp) and\r\n+       (d[-1] = '.') then\r\n+      dec(d);\r\n+    FastSetString(Dest^, tmp, d);\r\n   end;\r\n   if nextpos = 0 then\r\n-    result := Pos\r\n+    result := pos\r\n   else\r\n     result := nextpos;\r\n end;\r\n \r\n function DnsParseString(const Answer: RawByteString; Pos: PtrInt;\r\n   var Text: RawUtf8): PtrInt;\r\n+var\r\n+  tmp: TByteToAnsiChar;\r\n begin\r\n-  result := DnsDecompress(Answer, Pos, @Text);\r\n+  result := DnsDecompress(pointer(Answer), length(Answer), Pos, @Text, @tmp);\r\n end;\r\n \r\n function DnsParseCharString(const Answer: RawByteString;\r\n@@ -832,8 +841,8 @@ function ParseDnsResult(var Res: TDnsResult; QClass: cardinal): boolean;\n   Res.Header.AnswerCount     := bswap16(Res.Header.AnswerCount);\r\n   Res.Header.NameServerCount := bswap16(Res.Header.NameServerCount);\r\n   Res.Header.AdditionalCount := bswap16(Res.Header.AdditionalCount);\r\n-  // derivate actual response position from the QName in returned packet\r\n-  pos := DnsDecompress(Res.RawAn\n... [truncated, 276 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Database"
+      ],
+      "units": [
+        "mormot.db.nosql.bson",
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3da23281edb004a68b64cc35cad8af2fce777c69",
+      "short_sha": "3da23281",
+      "subject": "net: several DNS fixes",
+      "body": "- derivate actual response position from the QName in returned packet\n- reject responses with QuestionCount <> 1\n- fixed TCP size assessment",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T13:52:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3da23281edb004a68b64cc35cad8af2fce777c69",
+      "parents": [
+        "c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796"
+      ],
+      "stats": {
+        "additions": 41,
+        "deletions": 22,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16799\n+16800",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16799'\r\n+'2.4.16800'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 20,
+          "patch": "@@ -220,8 +220,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n \r\n /// raw computation of a DNS query message\r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass: cardinal = QC_INET; EdnsUdpSize: cardinal = 0;\r\n-  BodySize: PPtrInt = nil): RawByteString;\r\n+  QClass: cardinal = QC_INET; EdnsUdpSize: cardinal = 0): RawByteString;\r\n \r\n /// raw sending and receiving of DNS query message over UDP\r\n // - Address is expected to be an IPv4 address, maybe prefixed as 'tcp@1.2.3.4'\r\n@@ -454,8 +453,8 @@ procedure TDnsHeader.SetZ(const AValue: byte);\n end;\r\n \r\n \r\n-function DnsParseString(const Answer: RawByteString; Pos: PtrInt;\r\n-  var Text: RawUtf8): PtrInt;\r\n+function DnsDecompress(const Answer: RawByteString; Pos: PtrInt;\r\n+  Text: PRawUtf8): PtrInt;\r\n var\r\n   p: PByteArray;\r\n   nextpos, max, offset: PtrInt;\r\n@@ -496,19 +495,31 @@ function DnsParseString(const Answer: RawByteString; Pos: PtrInt;\n       break;\r\n     if Pos + len > max then\r\n       exit;\r\n-    AppendShortBuffer(pointer(@p[Pos]), len, high(tmp), @tmp);\r\n-    AppendShortCharSafe('.', tmp);\r\n+    if Text <> nil then\r\n+    begin\r\n+      AppendShortBuffer(pointer(@p[Pos]), len, high(tmp), @tmp);\r\n+      AppendShortCharSafe('.', tmp);\r\n+    end;\r\n     inc(Pos, len);\r\n   until false;\r\n-  if tmp[ord(tmp[0])] = '.' then\r\n-    dec(tmp[0]);\r\n-  FastSetString(Text, @tmp[1], ord(tmp[0]));\r\n+  if Text <> nil then\r\n+  begin\r\n+    if tmp[ord(tmp[0])] = '.' then\r\n+      dec(tmp[0]);\r\n+    FastSetString(Text^, @tmp[1], ord(tmp[0]));\r\n+  end;\r\n   if nextpos = 0 then\r\n     result := Pos\r\n   else\r\n     result := nextpos;\r\n end;\r\n \r\n+function DnsParseString(const Answer: RawByteString; Pos: PtrInt;\r\n+  var Text: RawUtf8): PtrInt;\r\n+begin\r\n+  result := DnsDecompress(Answer, Pos, @Text);\r\n+end;\r\n+\r\n function DnsParseCharString(const Answer: RawByteString;\r\n   var Pos: PtrInt; EndPos: PtrInt; var Text: RawUtf8): boolean;\r\n var\r\n@@ -614,7 +625,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n end;\r\n \r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass, EdnsUdpSize: cardinal; BodySize: PPtrInt): RawByteString;\r\n+  QClass, EdnsUdpSize: cardinal): RawByteString;\r\n var\r\n   h: PDnsHeader;\r\n   n, v: PUtf8Char;\r\n@@ -643,8 +654,6 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n   tmp.AddDirect(#0); // final #0\r\n   tmp.Add16BigEndian(ord(RR));\r\n   tmp.Add16BigEndian(QClass);\r\n-  if BodySize <> nil then\r\n-    BodySize^ := tmp.Size;\r\n   // optional EDNS(0) OPT pseudo-RR - RFC 6891 section 6.1.2\r\n   if EdnsUdpSize <> 0 then\r\n   begin\r\n@@ -744,7 +753,7 @@ function DnsSendQuestionRaw(Address, Port: RawUtf8; const Request: RawByteString\n         exit;\r\n       end;\r\n       len := bswap16(lenw);\r\n-      if len <= SizeOf(hdr^) then\r\n+      if len < SizeOf(hdr^) then\r\n         exit;\r\n       hdr := FastNewRawByteString(answer, len);\r\n       if (sock.RecvAll(TimeOutMS, pointer(answer), len) <> nrOk) or\r\n@@ -812,16 +821,24 @@ function DnsParseRecord(const Answer: RawByteString; var Pos: PtrInt;\n   result := true;\r\n end;\r\n \r\n-function ParseDnsResult(var Res: TDnsResult; pos: PtrInt; QClass: cardinal): boolean;\r\n+function ParseDnsResult(var Res: TDnsResult; QClass: cardinal): boolean;\r\n var\r\n-  i, n: PtrInt;\r\n+  pos, i, n: PtrInt;\r\n begin\r\n   result := false;\r\n+  // decode response header into native little-endian\r\n   Res.Header := PDnsHeader(Res.RawAnswer)^;\r\n   Res.Header.QuestionCount   := bswap16(Res.Header.QuestionCount);\r\n   Res.Header.AnswerCount     := bswap16(Res.Header.AnswerCount);\r\n   Res.Header.NameServerCount := bswap16(Res.Header.NameServerCount);\r\n   Res.Header.AdditionalCount := bswap16(Res.Header.AdditionalCount);\r\n+  // derivate actual response position from the QName in returned packet\r\n+  pos := DnsDecompress(Res.RawAnswer, SizeOf(Res.Header), nil);\r\n+  if (pos = 0) or\r\n+     (pos + 4 > length(Res.RawAnswer)) then\r\n+    exit;\r\n+  inc(pos, 4); // QTYPE + QCLASS\r\n+  // fill Res.Answer[] Res.Autority[] \n... [truncated, 1898 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796",
+      "short_sha": "c6756d1e",
+      "subject": "dns: allow 'ip:port' for DNS servers definitions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T13:07:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796",
+      "parents": [
+        "432444d390c0d74b7ad3ecbb6c9ae69d7e733dee"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16798\n+16799",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16798'\r\n+'2.4.16799'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 10,
+          "patch": "@@ -662,28 +662,33 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n var\r\n   NoTcpList, NoEdnsList: TCachedValues; // flushed every 64 seconds (TixShr = 6)\r\n \r\n-function DnsSendQuestionRaw(const Address, Port: RawUtf8;\r\n-  const Request: RawByteString; var Answer: RawByteString; TimeOutMS: integer): boolean;\r\n+function DnsSendQuestionRaw(Address, Port: RawUtf8; const Request: RawByteString;\r\n+  var Answer: RawByteString; TimeOutMS: integer): boolean;\r\n var\r\n-  server: RawUtf8;\r\n   tcponly: boolean;\r\n   addr, resp: TNetAddr;\r\n   sock: TNetSocket;\r\n-  len: PtrInt;\r\n+  i, len: PtrInt;\r\n   lenw: word;\r\n   hdr: PDnsHeader;\r\n   tmp: TBuffer4K;\r\n begin\r\n   result := false;\r\n   // validate input parameters\r\n-  server := Address;\r\n-  tcponly := IdemPChar(pointer(server), 'TCP@');\r\n+  tcponly := IdemPChar(pointer(Address), 'TCP@');\r\n   if tcponly then\r\n-    delete(server, 1, 4)\r\n+    delete(Address, 1, 4)\r\n   else\r\n     tcponly := DnsSendOverTcp; // global setting\r\n+  i := PosExChar(':', Address);\r\n+  if (i <> 0) and\r\n+     (PosEx(':', Address, i + 1) = 0) then\r\n+  begin\r\n+    Port := copy(Address, i + 1, 100);\r\n+    SetLength(Address, i - 1);\r\n+  end;\r\n   FillCharFast(addr, SizeOf(addr), 0);\r\n-  if not addr.SetFromIP4(server, {nolookup=}true) or\r\n+  if not addr.SetFromIP4(Address, {nolookup=}true) or\r\n      (addr.SetPort(GetCardinalDef(pointer(Port), 53)) <> nrOk) then\r\n     exit;\r\n   if not tcponly then\r\n@@ -715,7 +720,7 @@ function DnsSendQuestionRaw(const Address, Port: RawUtf8;\n   if tcponly then\r\n   begin\r\n     // ensure was not marked in NoTcpServers (avoid unneeded timeout)\r\n-    if NoTcpList.Exists(server, {tixshr=}6) then\r\n+    if NoTcpList.Exists(Address, {tixshr=}6) then\r\n       exit;\r\n     // UDP frame was too small: try with a TCP connection\r\n     sock := addr.NewSocket(nlTcp);\r\n@@ -735,7 +740,7 @@ function DnsSendQuestionRaw(const Address, Port: RawUtf8;\n       lenw := 0;\r\n       if sock.RecvAll(TimeOutMS, @lenw, 2) <> nrOk then // first 2 bytes are len\r\n       begin\r\n-        NoTcpList.Add(server, {tixshr=}6); // won't try again in the next minute\r\n+        NoTcpList.Add(Address, {tixshr=}6); // won't try again in the next minute\r\n         exit;\r\n       end;\r\n       len := bswap16(lenw);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "432444d390c0d74b7ad3ecbb6c9ae69d7e733dee",
+      "short_sha": "432444d3",
+      "subject": "net: several fixes to EDNS(0) support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T12:40:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/432444d390c0d74b7ad3ecbb6c9ae69d7e733dee",
+      "parents": [
+        "fb1b51278a7e5cd7e5a475f4382d378c6a022305"
+      ],
+      "stats": {
+        "additions": 63,
+        "deletions": 52,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16797\n+16798",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16797'\r\n+'2.4.16798'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 50,
+          "patch": "@@ -220,7 +220,8 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n \r\n /// raw computation of a DNS query message\r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass: cardinal = QC_INET; EdnsUdpSize: cardinal = 0): RawByteString;\r\n+  QClass: cardinal = QC_INET; EdnsUdpSize: cardinal = 0;\r\n+  BodySize: PPtrInt = nil): RawByteString;\r\n \r\n /// raw sending and receiving of DNS query message over UDP\r\n // - Address is expected to be an IPv4 address, maybe prefixed as 'tcp@1.2.3.4'\r\n@@ -613,7 +614,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n end;\r\n \r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass, EdnsUdpSize: cardinal): RawByteString;\r\n+  QClass, EdnsUdpSize: cardinal; BodySize: PPtrInt): RawByteString;\r\n var\r\n   h: PDnsHeader;\r\n   n, v: PUtf8Char;\r\n@@ -642,6 +643,8 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n   tmp.AddDirect(#0); // final #0\r\n   tmp.Add16BigEndian(ord(RR));\r\n   tmp.Add16BigEndian(QClass);\r\n+  if BodySize <> nil then\r\n+    BodySize^ := tmp.Size;\r\n   // optional EDNS(0) OPT pseudo-RR - RFC 6891 section 6.1.2\r\n   if EdnsUdpSize <> 0 then\r\n   begin\r\n@@ -736,7 +739,7 @@ function DnsSendQuestionRaw(const Address, Port: RawUtf8;\n         exit;\r\n       end;\r\n       len := bswap16(lenw);\r\n-      if len <= length(Request) then\r\n+      if len <= SizeOf(hdr^) then\r\n         exit;\r\n       hdr := FastNewRawByteString(answer, len);\r\n       if (sock.RecvAll(TimeOutMS, pointer(answer), len) <> nrOk) or\r\n@@ -804,13 +807,50 @@ function DnsParseRecord(const Answer: RawByteString; var Pos: PtrInt;\n   result := true;\r\n end;\r\n \r\n+function ParseDnsResult(var Res: TDnsResult; pos: PtrInt; QClass: cardinal): boolean;\r\n+var\r\n+  i, n: PtrInt;\r\n+begin\r\n+  result := false;\r\n+  Res.Header := PDnsHeader(Res.RawAnswer)^;\r\n+  Res.Header.QuestionCount   := bswap16(Res.Header.QuestionCount);\r\n+  Res.Header.AnswerCount     := bswap16(Res.Header.AnswerCount);\r\n+  Res.Header.NameServerCount := bswap16(Res.Header.NameServerCount);\r\n+  Res.Header.AdditionalCount := bswap16(Res.Header.AdditionalCount);\r\n+  n := Res.Header.AnswerCount;\r\n+  if n <> 0 then\r\n+  begin\r\n+    SetLength(Res.Answer, n);\r\n+    for i := 0 to n - 1 do\r\n+      if not DnsParseRecord(Res.RawAnswer, pos, Res.Answer[i], QClass) then\r\n+        exit;\r\n+  end;\r\n+  n := Res.Header.NameServerCount;\r\n+  if n <> 0 then\r\n+  begin\r\n+    SetLength(Res.Authority, n);\r\n+    for i := 0 to n - 1 do\r\n+      if not DnsParseRecord(Res.RawAnswer, pos, Res.Authority[i], QClass) then\r\n+        exit;\r\n+  end;\r\n+  n := Res.Header.AdditionalCount;\r\n+  if n <> 0 then\r\n+  begin\r\n+    SetLength(Res.Additional, n);\r\n+    for i := 0 to n - 1 do\r\n+      if not DnsParseRecord(Res.RawAnswer, pos, Res.Additional[i], QClass) then\r\n+        exit;\r\n+  end;\r\n+  result := true;\r\n+end;\r\n+\r\n function DnsQuery(const QName: RawUtf8; var Res: TDnsResult;\r\n   RR: TDnsResourceRecord; const NameServers: RawUtf8;\r\n   TimeOutMS: integer; QClass: cardinal): boolean;\r\n var\r\n-  i, n, pos, code: PtrInt;\r\n+  i, code, bodysize: PtrInt;\r\n   servers: TRawUtf8DynArray;\r\n-  request, requestEdns: RawByteString;\r\n+  plain, edns: RawByteString;\r\n   start, stop: Int64;\r\n   hdr: PDnsHeader;\r\n begin\r\n@@ -822,24 +862,24 @@ function DnsQuery(const QName: RawUtf8; var Res: TDnsResult;\n   QueryPerformanceMicroSeconds(start);\r\n   Finalize(Res);\r\n   FillCharFast(Res, SizeOf(Res), 0);\r\n-  request := DnsBuildQuestion(QName, RR, QClass);\r\n   if NameServers = '' then\r\n     // if no NameServer is specified, will ask all OS DNS in order\r\n     servers := GetDnsAddresses\r\n   else\r\n     // the DNS server IP(s) have been specified\r\n     CsvToRawUtf8DynArray(pointer(NameServers), servers);\r\n-  // send the DNS request to the DNS server(s)\r\n+  // send the DNS plain to the DNS server(s)\r\n+  bodysize := 0;\r\n   hdr := nil;\r\n   for i := 0 to length(servers) - 1 do\r\n   begin\r\n-    // assume EDNS works until this server returned FORMERR\r\n+    // assume RFC 6891 EDNS s\n... [truncated, 3431 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fb1b51278a7e5cd7e5a475f4382d378c6a022305",
+      "short_sha": "fb1b5127",
+      "subject": "net: implemented EDNS(0) advertised UDP payload size",
+      "body": "- as defined by RFC 6891\n- allow UDP frames up to 1232 bytes by default\n- therefore TCP fallback would not be usually needed",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T11:26:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fb1b51278a7e5cd7e5a475f4382d378c6a022305",
+      "parents": [
+        "f1b7dcaff0b8e798607894392f07d053ac507e40"
+      ],
+      "stats": {
+        "additions": 81,
+        "deletions": 38,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16796\n+16797",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16796'\r\n+'2.4.16797'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 78,
+          "deletions": 35,
+          "patch": "@@ -238,6 +238,11 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n   // for which DnsSendQuestion() did previously block\r\n   DnsSendOverTcp: boolean;\r\n \r\n+  /// global EDNS(0) advertised UDP payload size as defined by RFC 6891\r\n+  // - 0 would disable EDNS(0)\r\n+  // - actual value used by DnsQuery() won't exceed its 4KB UDP buffer\r\n+  DnsEdnsUdpSize: cardinal = 1232;\r\n+\r\n \r\n { **************** High-Level DNS Query }\r\n \r\n@@ -295,7 +300,7 @@ function DnsParseRecord(const Answer: RawByteString; var Pos: PtrInt;\n // be IPv4 address(es) CSV, maybe prefixed as 'tcp@1.2.3.4' to force TCP\r\n // - the TDnsResult output gives access to all returned DNS records\r\n // - use DnsLookup/DnsReverseLookup/DnsServices() for most simple requests\r\n-function DnsQuery(const QName: RawUtf8; out Res: TDnsResult;\r\n+function DnsQuery(const QName: RawUtf8; var Res: TDnsResult;\r\n   RR: TDnsResourceRecord = drrA; const NameServers: RawUtf8 = '';\r\n   TimeOutMS: integer = DNSQUERY_TIMEOUT; QClass: cardinal = QC_INET): boolean;\r\n \r\n@@ -376,6 +381,7 @@ implementation\n   QF_RCODE  = $0F;\r\n \r\n   DNS_RESP_SUCCESS = $00;\r\n+  DNS_RESP_FORMERR = $01;\r\n \r\n   DNS_RELATIVE = $c0; // two high bits set = offset within the response message\r\n \r\n@@ -651,25 +657,21 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n end;\r\n \r\n var\r\n-  NoTcpList: TCachedValues; // cache flushed after 64 seconds (TixShr = 6)\r\n+  NoTcpList, NoEdnsList: TCachedValues; // flushed every 64 seconds (TixShr = 6)\r\n \r\n function DnsSendQuestionRaw(const Address, Port: RawUtf8;\r\n-  const Request: RawByteString; var Answer: RawByteString;\r\n-  out TimeElapsed: cardinal; TimeOutMS: integer): boolean;\r\n+  const Request: RawByteString; var Answer: RawByteString; TimeOutMS: integer): boolean;\r\n var\r\n   server: RawUtf8;\r\n   tcponly: boolean;\r\n   addr, resp: TNetAddr;\r\n   sock: TNetSocket;\r\n   len: PtrInt;\r\n-  start, stop: Int64;\r\n   lenw: word;\r\n   hdr: PDnsHeader;\r\n   tmp: TBuffer4K;\r\n begin\r\n   result := false;\r\n-  TimeElapsed := 0;\r\n-  QueryPerformanceMicroSeconds(start);\r\n   // validate input parameters\r\n   server := Address;\r\n   tcponly := IdemPChar(pointer(server), 'TCP@');\r\n@@ -679,7 +681,7 @@ function DnsSendQuestionRaw(const Address, Port: RawUtf8;\n     tcponly := DnsSendOverTcp; // global setting\r\n   FillCharFast(addr, SizeOf(addr), 0);\r\n   if not addr.SetFromIP4(server, {nolookup=}true) or\r\n-     (addr.SetPort(GetCardinalDef(pointer(Port), 389)) <> nrOk) then\r\n+     (addr.SetPort(GetCardinalDef(pointer(Port), 53)) <> nrOk) then\r\n     exit;\r\n   if not tcponly then\r\n   begin\r\n@@ -747,23 +749,27 @@ function DnsSendQuestionRaw(const Address, Port: RawUtf8;\n     end;\r\n   end;\r\n   // we got a valid answer\r\n-  QueryPerformanceMicroSeconds(stop);\r\n-  TimeElapsed := stop - start;\r\n   result := true;\r\n end;\r\n \r\n function DnsSendQuestion(const Address, Port: RawUtf8;\r\n   const Request: RawByteString; out Answer: RawByteString;\r\n   out TimeElapsed: cardinal; TimeOutMS: integer): boolean;\r\n+var\r\n+  start, stop: Int64;\r\n begin\r\n+  TimeElapsed := 0;\r\n+  QueryPerformanceMicroSeconds(start);\r\n   result := false;\r\n-  if not DnsSendQuestionRaw(Address, Port, Request, Answer, TimeElapsed, TimeOutMS) then\r\n+  if not DnsSendQuestionRaw(Address, Port, Request, Answer, TimeOutMS) then\r\n     exit;\r\n   with PDnsHeader(Answer)^ do\r\n     result := (ResponseCode = DNS_RESP_SUCCESS) and\r\n               (AnswerCount <> 0);\r\n   if not result then\r\n     FastAssignNew(Answer);\r\n+  QueryPerformanceMicroSeconds(stop);\r\n+  TimeElapsed := stop - start;\r\n end;\r\n \r\n \r\n@@ -798,19 +804,22 @@ function DnsParseRecord(const Answer: RawByteString; var Pos: PtrInt;\n   result := true;\r\n end;\r\n \r\n-function DnsQuery(const QName: RawUtf8; out Res: TDnsResult;\r\n+function DnsQuery(const QName: RawUtf8; var Res: TDnsResult;\r\n   RR: TDnsResourceRecord; const NameServers: RawUtf8;\r\n   TimeOutMS: integer; QClass: cardinal): boolean;\r\n var\r\n-  i, pos: PtrInt;\r\n+  i, n, pos, code: PtrInt;\r\n   servers: TRawUtf8DynArray;\r\n-  re\n... [truncated, 4347 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4630,7 +4630,7 @@ function GetDnsAddresses(usePosixEnv: boolean): TRawUtf8DynArray;\n   tix32: cardinal;\r\n   i: PtrInt;\r\n begin\r\n-  tix32 := mormot.core.os.GetTickSec shr 6 + 1; // 64 seconds period\r\n+  tix32 := mormot.core.os.GetTickSec shr 6 + 1; // flushed every 64 seconds\r\n   DnsCacheSafe.Lock;\r\n   try\r\n     if tix32 <> DnsCacheTix then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f1b7dcaff0b8e798607894392f07d053ac507e40",
+      "short_sha": "f1b7dcaf",
+      "subject": "net: fixed and refactored DnsSendQuestion()",
+      "body": "- to prepare for EDNS(0) support",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T09:29:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f1b7dcaff0b8e798607894392f07d053ac507e40",
+      "parents": [
+        "cd234840423f889ec6c555427336cc3e6583b70b"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 20,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16795\n+16796",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16795'\r\n+'2.4.16796'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 18,
+          "patch": "@@ -556,7 +556,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n     drrMG,\r\n     drrNS,\r\n     drrPTR:\r\n-      // single text Value\r\n+      // single domain-compressed text Value\r\n       DnsParseString(Answer, Pos, Text);\r\n     drrTXT:\r\n       begin\r\n@@ -653,15 +653,15 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n var\r\n   NoTcpList: TCachedValues; // cache flushed after 64 seconds (TixShr = 6)\r\n \r\n-function DnsSendQuestion(const Address, Port: RawUtf8;\r\n-  const Request: RawByteString; out Answer: RawByteString;\r\n+function DnsSendQuestionRaw(const Address, Port: RawUtf8;\r\n+  const Request: RawByteString; var Answer: RawByteString;\r\n   out TimeElapsed: cardinal; TimeOutMS: integer): boolean;\r\n var\r\n   server: RawUtf8;\r\n   tcponly: boolean;\r\n   addr, resp: TNetAddr;\r\n   sock: TNetSocket;\r\n-  len, notcp: PtrInt;\r\n+  len: PtrInt;\r\n   start, stop: Int64;\r\n   lenw: word;\r\n   hdr: PDnsHeader;\r\n@@ -702,24 +702,17 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n        not addr.IPEqual(resp) or\r\n        (hdr^.Xid <> PDnsHeader(Request)^.Xid) or\r\n        not hdr^.IsResponse then\r\n-      exit; // clearlu invalid response\r\n+      exit; // clearly invalid response\r\n     tcponly := hdr^.Truncation; // TC=1 requires TCP as per RFC 2181\r\n     if not tcponly then\r\n-      if (hdr^.ResponseCode <> DNS_RESP_SUCCESS) or\r\n-         (len <= length(Request)) or\r\n-         (hdr^.AnswerCount = 0) then\r\n-         // hdr^.NameServerCount or hdr^.AdditionalCount wouldn't be enough\r\n-        exit\r\n-      else\r\n-        FastSetRawByteString(answer, @tmp, len);\r\n+      FastSetRawByteString(answer, @tmp, len);\r\n   end;\r\n   if tcponly then\r\n   begin\r\n-    // UDP frame was too small: try with a TCP connection\r\n     // ensure was not marked in NoTcpServers (avoid unneeded timeout)\r\n     if NoTcpList.Exists(server, {tixshr=}6) then\r\n       exit;\r\n-    // setup the connection\r\n+    // UDP frame was too small: try with a TCP connection\r\n     sock := addr.NewSocket(nlTcp);\r\n     try\r\n       if addr.SocketConnect(sock, TimeOutMS) <> nrOk then\r\n@@ -737,7 +730,7 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n       lenw := 0;\r\n       if sock.RecvAll(TimeOutMS, @lenw, 2) <> nrOk then // first 2 bytes are len\r\n       begin\r\n-        NoTcpList.Add(server); // won't try again in the next minute\r\n+        NoTcpList.Add(server, {tixshr=}6); // won't try again in the next minute\r\n         exit;\r\n       end;\r\n       len := bswap16(lenw);\r\n@@ -747,9 +740,7 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n       if (sock.RecvAll(TimeOutMS, pointer(answer), len) <> nrOk) or\r\n          (hdr^.Xid <> PDnsHeader(Request)^.Xid) or\r\n          not hdr^.IsResponse or\r\n-         hdr^.Truncation or\r\n-         (hdr^.ResponseCode <> DNS_RESP_SUCCESS) or\r\n-         (hdr^.AnswerCount = 0) then\r\n+         hdr^.Truncation then\r\n         exit;\r\n     finally\r\n       sock.Close;\r\n@@ -761,6 +752,20 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n   result := true;\r\n end;\r\n \r\n+function DnsSendQuestion(const Address, Port: RawUtf8;\r\n+  const Request: RawByteString; out Answer: RawByteString;\r\n+  out TimeElapsed: cardinal; TimeOutMS: integer): boolean;\r\n+begin\r\n+  result := false;\r\n+  if not DnsSendQuestionRaw(Address, Port, Request, Answer, TimeElapsed, TimeOutMS) then\r\n+    exit;\r\n+  with PDnsHeader(Answer)^ do\r\n+    result := (ResponseCode = DNS_RESP_SUCCESS) and\r\n+              (AnswerCount <> 0);\r\n+  if not result then\r\n+    FastAssignNew(Answer);\r\n+end;\r\n+\r\n \r\n { **************** High-Level DNS Query }\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cd234840423f889ec6c555427336cc3e6583b70b",
+      "short_sha": "cd234840",
+      "subject": "net: optional EDNS(0) support for DnsBuildQuestion()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T09:08:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cd234840423f889ec6c555427336cc3e6583b70b",
+      "parents": [
+        "e8fd8b733a9a1420ae015979166e3bcc56f1884a"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2819,7 +2819,7 @@   TCachedValues = record\n   public\r\n     Safe: TLightLock; // single 32-bit field\r\n     Tix32: cardinal;\r\n-    Values: TRawUtf8DynArray; // sorted array of RawUtf8\r\n+    Values: TRawUtf8DynArray; // sorted array for O(log(n)) binary search\r\n     ValuesCount: integer;\r\n     CustomCompare: TUtf8Compare;\r\n     procedure Reset;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16794\n+16795",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16794'\r\n+'2.4.16795'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 2,
+          "patch": "@@ -220,7 +220,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n \r\n /// raw computation of a DNS query message\r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass: cardinal = QC_INET): RawByteString;\r\n+  QClass: cardinal = QC_INET; EdnsUdpSize: cardinal = 0): RawByteString;\r\n \r\n /// raw sending and receiving of DNS query message over UDP\r\n // - Address is expected to be an IPv4 address, maybe prefixed as 'tcp@1.2.3.4'\r\n@@ -607,7 +607,7 @@ procedure DnsParseData(RR: TDnsResourceRecord;\n end;\r\n \r\n function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\r\n-  QClass: cardinal): RawByteString;\r\n+  QClass, EdnsUdpSize: cardinal): RawByteString;\r\n var\r\n   h: PDnsHeader;\r\n   n, v: PUtf8Char;\r\n@@ -622,6 +622,8 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n   until h^.XId <> 0; // truncated to 16-bit - should just be unpredictable\r\n   h^.RecursionDesired := true;\r\n   h^.QuestionCount := 1 shl 8;\r\n+  if EdnsUdpSize <> 0 then\r\n+    h^.AdditionalCount := 1 shl 8; // one OPT pseudo-RR\r\n   n := pointer(QName);\r\n   while n <> nil do\r\n   begin\r\n@@ -634,6 +636,17 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n   tmp.AddDirect(#0); // final #0\r\n   tmp.Add16BigEndian(ord(RR));\r\n   tmp.Add16BigEndian(QClass);\r\n+  // optional EDNS(0) OPT pseudo-RR - RFC 6891 section 6.1.2\r\n+  if EdnsUdpSize <> 0 then\r\n+  begin\r\n+    // refine advertised size according to RFC 6891 section 6.2.3\r\n+    EdnsUdpSize := MinPtrUInt(SizeOf(TBuffer4K), MaxPtrUInt(512, EdnsUdpSize));\r\n+    tmp.AddDirect(#0);                 // NAME = root\r\n+    tmp.Add16BigEndian(ord(drrOPT));   // TYPE = OPT (41)\r\n+    tmp.Add16BigEndian(EdnsUdpSize);   // CLASS = UDP payload size\r\n+    tmp.Add32BigEndian(0);             // ext RCODE=0, version=0, flags=0\r\n+    tmp.Add16BigEndian(0);             // RDLEN = no options\r\n+  end;\r\n   tmp.Done(result, CP_RAWBYTESTRING);\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.unicode",
+        "mormot.net.dns"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+      "short_sha": "e8fd8b73",
+      "subject": "net: some DNS code simplification",
+      "body": "- \"no TCP\" list can use the new TCachedValues thread-safe wrapper",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T08:36:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+      "parents": [
+        "816a0e1941cf1dedc75e7404e61437ce9b213935"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 21,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -5358,6 +5358,7 @@ function NewSynLocker: PSynLocker;\n type\r\n   TCachedValueCall = function(Param: pointer): RawByteString;\r\n   /// raw thread-safe cache of a RawByteString content\r\n+  // - should be filled with 0 before usage, e.g. as class field or global var\r\n   {$ifdef USERECORDWITHMETHODS}\r\n   TCachedValue = record\r\n   {$else}\r\n@@ -11364,7 +11365,8 @@ procedure TCachedValue.Reset;\n procedure TCachedValue.Cache(Call: TCachedValueCall; CallParam: pointer;\r\n   TixShr: cardinal; var Dest; Flush: boolean);\r\n begin\r\n-  TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n+  if TixShr <> 0 then\r\n+    TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n   Safe.Lock;\r\n   if (TixShr = Tix32) and\r\n      not Flush then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 2,
+          "patch": "@@ -2810,6 +2810,7 @@ procedure DeduplicateRawUtf8(var Values: TRawUtf8DynArray);\n \r\n type\r\n   /// raw thread-safe cache of a RawUtf8 content, stored as sorted dynamic array\r\n+  // - should be filled with 0 before usage, e.g. as class field or global var\r\n   {$ifdef USERECORDWITHMETHODS}\r\n   TCachedValues = record\r\n   {$else}\r\n@@ -10927,7 +10928,7 @@ function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt;\n         cmovnc  r9, r10\r\n @nxt:   cmp     r9, R\r\n         jle     @s                      // branchless main loop\r\n-@err:   or      rax, -1                 // first char differ: no branch\r\n+@err:   or      rax, -1\r\n         {$ifdef win64}\r\n         pop     rdi\r\n         {$endif win64}\r\n@@ -11115,10 +11116,12 @@ procedure TCachedValues.Reset;\n \r\n function TCachedValues.Exists(const Value: RawUtf8; TixShr: cardinal): boolean;\r\n begin\r\n+  result := false;\r\n+  if ValuesCount = 0 then\r\n+    exit;\r\n   if TixShr <> 0 then\r\n     TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n   Safe.Lock;\r\n-  result := false;\r\n   if ValuesCount <> 0 then\r\n     if TixShr = Tix32 then\r\n       if Assigned(CustomCompare) then // O(log(n)) binary search\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16793\n+16794",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16793'\r\n+'2.4.16794'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dns.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 15,
+          "patch": "@@ -638,9 +638,7 @@ function DnsBuildQuestion(const QName: RawUtf8; RR: TDnsResourceRecord;\n end;\r\n \r\n var\r\n-  NoTcpSafe: TLightLock;\r\n-  NoTcpTix16: cardinal; // cache flushed after 64 seconds\r\n-  NoTcpServers: TRawUtf8DynArray;\r\n+  NoTcpList: TCachedValues; // cache flushed after 64 seconds (TixShr = 6)\r\n \r\n function DnsSendQuestion(const Address, Port: RawUtf8;\r\n   const Request: RawByteString; out Answer: RawByteString;\r\n@@ -652,7 +650,6 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n   sock: TNetSocket;\r\n   len, notcp: PtrInt;\r\n   start, stop: Int64;\r\n-  tix16: cardinal;\r\n   lenw: word;\r\n   hdr: PDnsHeader;\r\n   tmp: TBuffer4K;\r\n@@ -707,14 +704,7 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n   begin\r\n     // UDP frame was too small: try with a TCP connection\r\n     // ensure was not marked in NoTcpServers (avoid unneeded timeout)\r\n-    tix16 := GetTickSec shr 6;\r\n-    NoTcpSafe.Lock;\r\n-    if NoTcpTix16 <> tix16 then\r\n-      NoTcpServers := nil; // flush after 1 minute\r\n-    NoTcpTix16 := tix16;\r\n-    notcp := FindPropName(pointer(NoTcpServers), server, length(NoTcpServers));\r\n-    NoTcpSafe.UnLock;\r\n-    if notcp >= 0 then\r\n+    if NoTcpList.Exists(server, {tixshr=}6) then\r\n       exit;\r\n     // setup the connection\r\n     sock := addr.NewSocket(nlTcp);\r\n@@ -734,9 +724,7 @@ function DnsSendQuestion(const Address, Port: RawUtf8;\n       lenw := 0;\r\n       if sock.RecvAll(TimeOutMS, @lenw, 2) <> nrOk then // first 2 bytes are len\r\n       begin\r\n-        NoTcpSafe.Lock;\r\n-        AddRawUtf8(NoTcpServers, server); // won't try again in the next minute\r\n-        NoTcpSafe.UnLock;\r\n+        NoTcpList.Add(server); // won't try again in the next minute\r\n         exit;\r\n       end;\r\n       len := bswap16(lenw);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4630,7 +4630,7 @@ function GetDnsAddresses(usePosixEnv: boolean): TRawUtf8DynArray;\n   tix32: cardinal;\r\n   i: PtrInt;\r\n begin\r\n-  tix32 := mormot.core.os.GetTickSec shr 6 + 1; // TCachedValue resolution\r\n+  tix32 := mormot.core.os.GetTickSec shr 6 + 1; // 64 seconds period\r\n   DnsCacheSafe.Lock;\r\n   try\r\n     if tix32 <> DnsCacheTix then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.unicode",
+        "mormot.net.dns",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "816a0e1941cf1dedc75e7404e61437ce9b213935",
+      "short_sha": "816a0e19",
+      "subject": "tests: enhanced coverage",
+      "body": "- especially include TCachedValues proper testing",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T08:04:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/816a0e1941cf1dedc75e7404e61437ce9b213935",
+      "parents": [
+        "256cc2f4a4b2c509f0d61b385f00376f31ebd2f1"
+      ],
+      "stats": {
+        "additions": 24,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16792\n+16793",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16792'\r\n+'2.4.16793'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 1,
+          "patch": "@@ -1135,6 +1135,7 @@ procedure TTestCoreBase.TRawUtf8ListSlow(Context: TObject);\n   v64: Int64;\r\n   sl: TStrings;\r\n   timer: TPrecisionTimer;\r\n+  cv: TCachedValues;\r\n \r\n   procedure TestSort;\r\n   begin\r\n@@ -1180,6 +1181,7 @@ procedure TTestCoreBase.TRawUtf8ListSlow(Context: TObject);\n   SetLength(v, MAX + 1); // allocate once the strings\r\n   for i := 0 to MAX do\r\n     UInt32ToUtf8(i, v[i]);\r\n+  // validate TRawUtf8List\r\n   L := TRawUtf8List.CreateEx([fObjectsOwned]);\r\n   try // no hash table involved\r\n     timer.Start;\r\n@@ -1272,6 +1274,7 @@ procedure TTestCoreBase.TRawUtf8ListSlow(Context: TObject);\n   finally\r\n     L.Free;\r\n   end;\r\n+  // validate TBinDictionary\r\n   B := TBinDictionary.Create;\r\n   try // with hash table\r\n     timer.Start;\r\n@@ -1314,9 +1317,25 @@ procedure TTestCoreBase.TRawUtf8ListSlow(Context: TObject);\n     len := 1;\r\n     Check(PInteger(B.Find(nil, 0, @len))^ = 0);\r\n     Check(len = 0);\r\n-finally\r\n+  finally\r\n     B.Free;\r\n   end;\r\n+  // validate TCachedValues\r\n+  cv.Safe.Init;\r\n+  cv.CustomCompare := nil;\r\n+  cv.Reset;\r\n+  for i := 0 to MAX do\r\n+    check(not cv.Exists(v[i]));\r\n+  for i := 0 to MAX do\r\n+    check(cv.Add(v[i]));\r\n+  for i := 0 to MAX do\r\n+    check(not cv.Add(v[i]));\r\n+  for i := 0 to MAX do\r\n+    check(cv.Exists(v[i]));\r\n+  check(not cv.Exists('toto'));\r\n+  cv.Reset;\r\n+  for i := 0 to MAX do\r\n+    check(not cv.Exists(v[i]));\r\n end;\r\n \r\n type\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -63,8 +63,8 @@ procedure TTestUiPdf.FontEmbeddingAndHashValidation;\n   h: cardinal;\r\n   WS: SynUnicode;\r\n const\r\n-  Hash: array[0 .. 4] of cardinal  = ( // depends on OS available font \r\n-    $8B40C230, $8DCCC22A, $753E2D40, $6870208B, $33E290AB);\r\n+  Hash: array[0 .. 5] of cardinal  = ( // depends on OS available font\r\n+    $8B40C230, $8DCCC22A, $753E2D40, $6870208B, $33E290AB, $17842091);\r\n   Name: array[boolean] of PDFString = ('Arial', 'Helvetica');\r\n begin\r\n   MS := TMemoryStream.Create;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "256cc2f4a4b2c509f0d61b385f00376f31ebd2f1",
+      "short_sha": "256cc2f4",
+      "subject": "core: fixed TCachedValues",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T08:04:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/256cc2f4a4b2c509f0d61b385f00376f31ebd2f1",
+      "parents": [
+        "1daae163dd1e4c9c8e7f81c9135e6e0440ce060f"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 11,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 9,
+          "patch": "@@ -2822,8 +2822,8 @@   TCachedValues = record\n     ValuesCount: integer;\r\n     CustomCompare: TUtf8Compare;\r\n     procedure Reset;\r\n-    function Exists(const Value: RawUtf8; TixShr: cardinal): boolean;\r\n-    function Add(const Value: RawUtf8; TixShr: cardinal): boolean;\r\n+    function Exists(const Value: RawUtf8; TixShr: cardinal = 0): boolean;\r\n+    function Add(const Value: RawUtf8; TixShr: cardinal = 0): boolean;\r\n   end;\r\n \r\n   /// a read-only virtual TStrings using internal TRawUtf8DynArray storage\r\n@@ -11115,33 +11115,35 @@ procedure TCachedValues.Reset;\n \r\n function TCachedValues.Exists(const Value: RawUtf8; TixShr: cardinal): boolean;\r\n begin\r\n-  TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n+  if TixShr <> 0 then\r\n+    TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n   Safe.Lock;\r\n   result := false;\r\n   if ValuesCount <> 0 then\r\n     if TixShr = Tix32 then\r\n-      if Assigned(CustomCompare) then\r\n+      if Assigned(CustomCompare) then // O(log(n)) binary search\r\n         result := FastFindPUtf8CharSorted(pointer(Values), ValuesCount - 1,\r\n-          pointer(Value)) >= 0\r\n+          pointer(Value), CustomCompare) >= 0\r\n       else\r\n         result := FastFindPUtf8CharSorted(pointer(Values), ValuesCount - 1,\r\n-          pointer(Value), CustomCompare) >= 0\r\n+          pointer(Value)) >= 0\r\n     else\r\n     begin\r\n       Tix32 := TixShr;\r\n-      ValuesCount := 0;\r\n+      ValuesCount := 0; // flush cache\r\n     end;\r\n   Safe.UnLock;\r\n end;\r\n \r\n function TCachedValues.Add(const Value: RawUtf8; TixShr: cardinal): boolean;\r\n begin\r\n-  TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n+  if TixShr <> 0 then\r\n+    TixShr := (GetTickSec shr TixShr) + 1; // big shr may get 0 just after boot\r\n   Safe.Lock;\r\n   if TixShr <> Tix32 then\r\n   begin\r\n     Tix32 := TixShr;\r\n-    ValuesCount := 0;\r\n+    ValuesCount := 0; // flush cache\r\n   end;\r\n   result := AddSortedRawUtf8(Values, ValuesCount, Value, nil, -1, CustomCompare) >= 0;\r\n   Safe.UnLock;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16791\n+16792",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16791'\r\n+'2.4.16792'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1daae163dd1e4c9c8e7f81c9135e6e0440ce060f",
+      "short_sha": "1daae163",
+      "subject": "core: optimized Intel/AMD asm",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-09T08:03:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1daae163dd1e4c9c8e7f81c9135e6e0440ce060f",
+      "parents": [
+        "047555cae03b7ce710d0d6a3df35f7a0d44dbf65"
+      ],
+      "stats": {
+        "additions": 54,
+        "deletions": 52,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 7,
+          "patch": "@@ -2280,7 +2280,7 @@ function ByteScanIndex(P: PByteArray; Count: PtrInt; Value: byte): PtrInt;\n         jnz     @fnd\r\n         cmp     rdx, rcx\r\n         ja      @by16\r\n-@no:    mov     rax, -1\r\n+@no:    or      rax, -1\r\n         ret\r\n @fnd:   bsf     eax, eax\r\n         lea     rax, qword ptr [rcx + rax - 16]\r\n@@ -2331,7 +2331,7 @@ function WordScanIndex(P: PWordArray; Count: PtrInt; Value: word): PtrInt;\n         jnz     @fnd\r\n         cmp     rdx, rcx\r\n         ja      @by16\r\n-@no:    mov     rax, -1\r\n+@no:    or      rax, -1\r\n         ret\r\n         bsf     eax, eax\r\n @fnd:   shr     eax, 1\r\n@@ -2397,7 +2397,7 @@ function IntegerScanIndex(P: PCardinalArray; Count: PtrInt; Value: cardinal): Pt\n         jnz     @fnd\r\n         cmp     rdx, rcx\r\n         ja      @by16\r\n-@no:    mov     rax, -1\r\n+@no:    or      rax, -1\r\n         ret\r\n         bsf     eax, eax\r\n @fnd:   shr     eax, 2\r\n@@ -2521,7 +2521,7 @@ function FastFindWordSorted(P: PWordArray; R: PtrInt; Value: Word): PtrInt;\n         cmovl   r9, r11\r\n         cmp     r9, R\r\n         jle     @s\r\n-@ko:    mov     rax, -1\r\n+@ko:    or      rax, -1\r\n @ok:    {$ifdef ABIWINX64}\r\n         pop     rdi\r\n         {$endif ABIWINX64}\r\n@@ -2544,7 +2544,7 @@ function FastFindIntegerSorted(P: PIntegerArray; R: PtrInt; Value: integer): Ptr\n         lea     rax, [r9 + R]\r\n         cmp     r9, R\r\n         jle     @s\r\n-@ko:    mov     rax, -1\r\n+@ko:    or      rax, -1\r\n @ok:\r\n end;\r\n \r\n@@ -2565,7 +2565,7 @@ function FastFindInt64Sorted(P: PInt64Array; R: PtrInt; const Value: Int64): Ptr\n         lea     rax, [r9 + R]\r\n         cmp     r9, R\r\n         jle     @s\r\n-@ko:    mov     rax, -1\r\n+@ko:    or      rax, -1\r\n @ok:\r\n end;\r\n \r\n@@ -3031,7 +3031,7 @@ end;\n \r\n function InterlockedDecrement(var I: integer): integer;\r\n {$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n-        mov     eax, -1\r\n+        or      eax, -1\r\n    lock xadd    dword ptr [I], eax // atomic eax=[I] + [I]:=[I]+eax\r\n         sub     eax, 1\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 7,
+          "patch": "@@ -1165,7 +1165,7 @@ asm\n         jnz     @fnd2\r\n         cmp     edx, ecx\r\n         ja      @by16\r\n-@no:    mov     eax, -1\r\n+@no:    or      eax, -1\r\n         pop     ebx\r\n         ret\r\n @fnd:   bsf     eax, eax\r\n@@ -1219,7 +1219,7 @@ asm\n         jnz     @fnd\r\n @nxt:   cmp     edx, ecx\r\n         ja      @by16\r\n-@no:    mov     eax, -1\r\n+@no:    or      eax, -1\r\n         pop     ebx\r\n         ret\r\n         // 16bit-unaligned loop (hardly called)\r\n@@ -1278,7 +1278,7 @@ asm\n         jnz     @fnd\r\n @nxt:   cmp     edx, ecx\r\n         ja      @by16\r\n-@no:    mov     eax, -1\r\n+@no:    or      eax, -1\r\n         pop     ebx\r\n         ret\r\n         // 32bit-unaligned loop (hardly called)\r\n@@ -1728,7 +1728,7 @@ asm\n         cmp     ecx, [edx]\r\n         jz      @0\r\n         jnb     @p\r\n-@n:     mov     eax, -1\r\n+@n:     or      eax, -1\r\n         ret\r\n @0:     xor     eax, eax\r\n         ret\r\n@@ -1747,7 +1747,7 @@ asm\n         cmp     ecx, [edx]\r\n         jz      @0\r\n @nz:    jnb     @p\r\n-        mov     eax, -1\r\n+        or      eax, -1\r\n         ret\r\n @0:     xor     eax, eax\r\n         ret\r\n@@ -1821,7 +1821,7 @@ asm\n         sahf\r\n         jz      @0\r\n @nz:    jnb     @p\r\n-        mov     eax, -1\r\n+        or      eax, -1\r\n         ret\r\n @0:     xor     eax, eax\r\n         ret\r\n@@ -1837,7 +1837,7 @@ asm\n         sahf\r\n         jz      @0\r\n @nz:    jnb     @p\r\n-        mov     eax, -1\r\n+        or      eax, -1\r\n         ret\r\n @0:     xor     eax, eax\r\n         ret\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 38,
+          "deletions": 36,
+          "patch": "@@ -10899,62 +10899,64 @@ function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt;\n \r\n {$ifdef ASMX64}\r\n \r\n-function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt; Value: PUtf8Char): PtrInt;\r\n+function FastFindPUtf8CharSorted(P: PPUtf8CharArray; R: PtrInt;\r\n+  Value: PUtf8Char): PtrInt;\r\n {$ifdef FPC} assembler; nostackframe; asm {$else} asm .noframe {$endif}\r\n-        {$ifdef win64}  // P=rcx/rdi R=rdx/rsi Value=r8/rdx\r\n+        // P=rcx/rdi R=rdx/rsi Value=r8/rdx\r\n+        {$ifdef win64}\r\n         push    rdi\r\n-        mov     rdi, P  // P=rdi\r\n+        mov     rdi, P\r\n         {$endif win64}\r\n-        push    r12\r\n-        push    r13\r\n-        xor     r9, r9  // L=r9\r\n         test    R, R\r\n         jl      @err\r\n         test    Value, Value\r\n         jz      @void\r\n-        mov     cl, byte ptr [Value]  // to check first char (likely diverse)\r\n+        xor     r9, r9                  // r9 = L = 0\r\n+        movzx   ecx, byte ptr [Value]   // cl = cached Value[0]\r\n {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @s:     lea     rax, qword ptr [r9 + R]\r\n-        shr     rax, 1\r\n-        lea     r12, qword ptr [rax - 1]  // branchless main loop\r\n-        lea     r13, qword ptr [rax + 1]\r\n+        shr     rax, 1                  // rax = result = (L + R) shr 1\r\n         mov     r10, qword ptr [rdi + rax * 8]\r\n         test    r10, r10\r\n         jz      @lt\r\n-        cmp     cl, byte ptr [r10]\r\n+        cmp     cl, byte ptr [r10]      // Value[0] vs pivot[0]\r\n         je      @eq\r\n-        cmovc   R, r12\r\n-        cmovnc  r9, r13\r\n+@diff:  lea     r11, qword ptr [rax - 1]\r\n+        lea     r10, qword ptr [rax + 1]\r\n+        cmovc   R, r11                  // CF = Value[0] < pivot[0]\r\n+        cmovnc  r9, r10\r\n @nxt:   cmp     r9, R\r\n-        jle     @s\r\n-@err:   mov     rax, -1\r\n-@found: pop     r13\r\n-        pop     r12\r\n+        jle     @s                      // branchless main loop\r\n+@err:   or      rax, -1                 // first char differ: no branch\r\n         {$ifdef win64}\r\n         pop     rdi\r\n         {$endif win64}\r\n         ret\r\n-@void:  mov     rax, -1\r\n-        cmp     qword ptr [P], 0\r\n-        cmove   rax, Value\r\n-        jmp     @found\r\n-@lt:    mov     r9, r13 // very unlikely P[rax]=nil\r\n+@lt:    lea     r9, qword ptr [rax + 1]\r\n         jmp     @nxt\r\n-@eq:    mov     r11, Value // first char equal -> check others\r\n-@sub:   mov     cl, byte ptr [r10]\r\n-        add     r10, 1\r\n-        add     r11, 1\r\n+@void:  or      rax, -1                 // Value = nil\r\n+        cmp     qword ptr [rdi], Value  // if P^[0] = nil then result := 0\r\n+        cmove   rax, Value\r\n+        {$ifdef win64}\r\n+        pop     rdi\r\n+        {$endif win64}\r\n+        ret\r\n+@subd:  movzx   ecx, byte ptr [Value]   // restore Value[0]\r\n+        jmp     @diff\r\n+@eq:    test    cl, cl\r\n+        jz      @found                  // if c = 0 then exit in pascal code\r\n+        mov     r11, Value\r\n+        sub     r11, r10\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n+@sub:   add     r10, 1\r\n+        movzx   ecx, byte ptr [r11 + r10] // Value byte\r\n+        cmp     cl, byte ptr [r10]        // Value vs pivot\r\n+        jne     @subd\r\n         test    cl, cl\r\n-        jz      @found\r\n-        mov     cl, byte ptr [r11]\r\n-        cmp     cl, byte ptr [r10]\r\n-        je      @sub\r\n-        mov     cl, byte ptr [Value]  // reset first char\r\n-        cmovc   R, r12\r\n-        cmovnc  r9, r13\r\n-        cmp     r9, R\r\n-        jle     @s\r\n-        jmp     @err\r\n+        jnz     @sub                     // continue till end of Value\r\n+@found: {$ifdef win64}\r\n+        pop     rdi\r\n+        {$endif win64}\r\n end;\r\n \r\n {$else}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16790\n+16791",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16790'\r\n+'2.4.16791'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86",
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
