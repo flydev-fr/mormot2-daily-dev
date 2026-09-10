@@ -1,0 +1,753 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-10",
+  "edition_title": {
+    "en": "DNS gains EDNS, stricter reply validation and IPv6 resolvers",
+    "fr": "DNS gagne EDNS, une validation stricte et les résolveurs IPv6",
+    "zh": "DNS 新增 EDNS、严格响应验证和 IPv6 resolver",
+    "ru": "DNS получил EDNS, строгую проверку ответов и IPv6 resolvers"
+  },
+  "intro": {
+    "en": "The DNS client now advertises a 1232-byte EDNS UDP payload, falls back when a server returns FORMERR, accepts resolver ports and IPv6 addresses, and validates the echoed question and response source before parsing records. The implementation changed repeatedly across the batch, so DNS users should take the final build rather than an intermediate revision. TCachedValues.Exists is corrected and tested, and DHCP scopes finally emit their configured domain name.",
+    "fr": "Le client DNS annonce maintenant un payload UDP EDNS de 1232 octets, revient au format classique lorsque le serveur retourne FORMERR, accepte les ports de résolveur et les adresses IPv6, puis valide la question renvoyée et la source de la réponse avant d’analyser les enregistrements. L’implémentation a changé plusieurs fois dans ce lot : les utilisateurs DNS doivent donc prendre la build finale plutôt qu’une révision intermédiaire. TCachedValues.Exists est corrigé et testé, et les scopes DHCP émettent enfin leur nom de domaine configuré.",
+    "zh": "DNS 客户端现在会声明 1232 字节的 EDNS UDP payload，在服务器返回 FORMERR 时回退，接受 resolver port 与 IPv6 地址，并在解析记录前验证回显的问题和响应来源。本批次中该实现经历了多次修正，因此 DNS 用户应采用最终 build，而不要停在中间修订。TCachedValues.Exists 已修复并加入测试，DHCP scope 也终于会发送配置的域名。",
+    "ru": "DNS-клиент теперь объявляет EDNS UDP payload размером 1232 байта, откатывается при FORMERR, принимает port resolver и IPv6-адреса и до разбора записей проверяет отражённый вопрос и источник ответа. Реализация несколько раз исправлялась в этом наборе, поэтому пользователям DNS следует брать финальную build, а не промежуточную ревизию. TCachedValues.Exists исправлен и протестирован, а DHCP scope теперь отправляет настроенное доменное имя."
+  },
+  "tldr": {
+    "en": [
+      "Land on 2.4.16805 for the complete DNS series; builds 2.4.16794 through 2.4.16804 contain intermediate cache, EDNS, parsing or validation states.",
+      "DnsQuery uses EDNS with a 1232-byte default, remembers FORMERR fallback, and validates the response question, type, class, source address and source port.",
+      "Resolver definitions now accept IPv4 with an inline port and IPv6 addresses; DnsBuildQuestion exposes an optional EDNS payload size.",
+      "TCachedValues.Exists now selects the correct comparator, and Exists/Add default to a non-expiring cache window.",
+      "TDhcpState.AddRegularOptions now sends DHCP option 15 from Scope.DomainName, while a per-client rule still takes precedence."
+    ],
+    "fr": [
+      "Passez à 2.4.16805 pour la série DNS complète ; les builds 2.4.16794 à 2.4.16804 contiennent des états intermédiaires du cache, d’EDNS, du parsing ou de la validation.",
+      "DnsQuery utilise EDNS avec 1232 octets par défaut, mémorise le fallback FORMERR et valide la question, le type, la classe, l’adresse source et le port source de la réponse.",
+      "Les définitions de résolveur acceptent maintenant une IPv4 avec port intégré et les adresses IPv6 ; DnsBuildQuestion expose une taille de payload EDNS optionnelle.",
+      "TCachedValues.Exists choisit maintenant le bon comparateur, et Exists/Add utilisent par défaut une fenêtre de cache sans expiration.",
+      "TDhcpState.AddRegularOptions envoie maintenant l’option DHCP 15 depuis Scope.DomainName, avec priorité conservée pour une règle par client."
+    ],
+    "zh": [
+      "完整 DNS 系列应采用 2.4.16805；build 2.4.16794 至 2.4.16804 包含 cache、EDNS、解析或验证的中间状态。",
+      "DnsQuery 默认使用 1232 字节 EDNS，记住 FORMERR 回退，并验证响应的问题、类型、class、来源地址及来源 port。",
+      "Resolver 定义现在支持带内联 port 的 IPv4 和 IPv6 地址；DnsBuildQuestion 公开可选的 EDNS payload size。",
+      "TCachedValues.Exists 现在会选择正确的 comparator，Exists/Add 默认使用不过期的 cache window。",
+      "TDhcpState.AddRegularOptions 现在从 Scope.DomainName 发送 DHCP option 15，同时仍由 per-client rule 优先覆盖。"
+    ],
+    "ru": [
+      "Для полной серии DNS переходите на 2.4.16805; builds 2.4.16794–2.4.16804 содержат промежуточные состояния cache, EDNS, parsing или validation.",
+      "DnsQuery использует EDNS с 1232 байтами по умолчанию, запоминает fallback после FORMERR и проверяет question, type, class, source address и source port ответа.",
+      "Определения resolver теперь принимают IPv4 со встроенным port и IPv6-адреса; DnsBuildQuestion открывает необязательный EDNS payload size.",
+      "TCachedValues.Exists теперь выбирает правильный comparator, а Exists/Add по умолчанию используют cache window без истечения.",
+      "TDhcpState.AddRegularOptions теперь отправляет DHCP option 15 из Scope.DomainName, сохраняя приоритет per-client rule."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "DNS users should land on build 2.4.16805 and take the whole series. Do not stop between 2.4.16794 and 2.4.16804: successive commits correct cache expiry, EDNS FORMERR fallback, response positioning, decompression and reply matching. Users of TCachedValues should upgrade from 2.4.16790 to receive the comparator fix. DHCP servers relying on Scope.DomainName should take the final head commit on top of 2.4.16805.",
+    "fr": "Les utilisateurs DNS doivent passer à la build 2.4.16805 et prendre toute la série. Ne vous arrêtez pas entre 2.4.16794 et 2.4.16804 : les commits successifs corrigent l’expiration du cache, le fallback EDNS FORMERR, la position de réponse, la décompression et la correspondance des réponses. Les utilisateurs de TCachedValues doivent quitter 2.4.16790 pour obtenir la correction du comparateur. Les serveurs DHCP utilisant Scope.DomainName doivent prendre le commit de tête au-dessus de 2.4.16805.",
+    "zh": "DNS 用户应采用 build 2.4.16805 并完整合入整个系列。不要停在 2.4.16794 至 2.4.16804：连续 commit 依次修正了 cache 过期、EDNS FORMERR 回退、响应定位、解压和响应匹配。TCachedValues 用户应从 2.4.16790 升级以获得 comparator 修复。依赖 Scope.DomainName 的 DHCP server 应采用 2.4.16805 之上的最终 head commit。",
+    "ru": "Пользователям DNS следует перейти на build 2.4.16805 и взять всю серию. Не останавливайтесь на 2.4.16794–2.4.16804: последовательные commits исправляют cache expiry, EDNS FORMERR fallback, позиционирование ответа, decompression и reply matching. Пользователям TCachedValues нужно обновиться с 2.4.16790 ради исправления comparator. DHCP-серверам с Scope.DomainName нужен финальный head commit поверх 2.4.16805."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16794",
+        "to_build": "2.4.16804",
+        "why": "The DNS series is intermediate here: NoTcpList initially uses mismatched cache windows, EDNS FORMERR fallback is reversed in 2.4.16797, and later commits replace response positioning, harden decompression and validate the echoed question and source port."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "256cc2f4a4b2c509f0d61b385f00376f31ebd2f1",
+          "816a0e1941cf1dedc75e7404e61437ce9b213935",
+          "e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+          "cd234840423f889ec6c555427336cc3e6583b70b",
+          "f1b7dcaff0b8e798607894392f07d053ac507e40",
+          "fb1b51278a7e5cd7e5a475f4382d378c6a022305",
+          "432444d390c0d74b7ad3ecbb6c9ae69d7e733dee",
+          "c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796",
+          "3da23281edb004a68b64cc35cad8af2fce777c69",
+          "ae18fe67a2e687e2184432e9f8b407663738226f",
+          "a415524a716aad558b1598ef38eb2db091cea3aa"
+        ],
+        "why": "Take the cache repair and the complete DNS/EDNS sequence together; later commits explicitly correct assumptions introduced earlier in the sequence."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "The raw payload carries no superseded_by markers. The avoid range is based on the embedded consecutive diffs, which visibly correct earlier commits in this same edition. The DHCP merge keeps mormot.commit-num.inc at 16805, so the recommended revision is newer than the numbered build without changing its displayed version.",
+    "fr": "Le payload brut ne contient aucun marqueur superseded_by. La plage à éviter repose sur les diffs consécutifs intégrés, qui corrigent clairement des commits antérieurs de cette même édition. Le merge DHCP laisse mormot.commit-num.inc à 16805 : la révision recommandée est donc plus récente que la build numérotée sans changer sa version affichée.",
+    "zh": "原始 payload 不含 superseded_by 标记。应避开的范围依据内嵌的连续 diff；这些 diff 明确修正了本期更早的 commit。DHCP merge 将 mormot.commit-num.inc 保持在 16805，因此推荐修订比该编号 build 更新，但显示版本不变。",
+    "ru": "В исходном payload нет отметок superseded_by. Диапазон исключения основан на встроенных последовательных diffs, которые явно исправляют более ранние commits этой же редакции. DHCP merge оставляет mormot.commit-num.inc равным 16805, поэтому рекомендуемая ревизия новее нумерованной build без смены отображаемой версии."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "EDNS transport and DNS reply validation",
+        "fr": "Transport EDNS et validation des réponses DNS",
+        "zh": "EDNS 传输与 DNS 响应验证",
+        "ru": "EDNS transport и проверка DNS-ответов"
+      },
+      "summary": {
+        "en": "Nine commits move DnsQuery to EDNS with bounded UDP payloads and classic-query fallback, then tighten server addressing, response positioning, compression parsing and request-response matching. The final state accepts IPv6 resolvers and rejects replies from the wrong port or carrying a different question.",
+        "fr": "Neuf commits font passer DnsQuery à EDNS avec un payload UDP borné et un fallback vers la requête classique, puis renforcent l’adressage du serveur, la position de réponse, le parsing de compression et la correspondance requête-réponse. L’état final accepte les résolveurs IPv6 et rejette les réponses provenant d’un mauvais port ou contenant une question différente.",
+        "zh": "九个 commit 将 DnsQuery 改为使用有界 UDP payload 的 EDNS，并支持 classic query 回退，随后收紧 server addressing、响应定位、compression parsing 和请求响应匹配。最终状态支持 IPv6 resolver，并拒绝来自错误 port 或携带不同问题的响应。",
+        "ru": "Девять commits переводят DnsQuery на EDNS с ограниченным UDP payload и fallback к обычному запросу, затем усиливают server addressing, позиционирование ответа, compression parsing и сопоставление запрос-ответ. Финальное состояние принимает IPv6 resolvers и отвергает ответы с неверного port или с другим вопросом."
+      },
+      "shas": [
+        "e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+        "cd234840423f889ec6c555427336cc3e6583b70b",
+        "f1b7dcaff0b8e798607894392f07d053ac507e40",
+        "fb1b51278a7e5cd7e5a475f4382d378c6a022305",
+        "432444d390c0d74b7ad3ecbb6c9ae69d7e733dee",
+        "c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796",
+        "3da23281edb004a68b64cc35cad8af2fce777c69",
+        "ae18fe67a2e687e2184432e9f8b407663738226f",
+        "a415524a716aad558b1598ef38eb2db091cea3aa"
+      ]
+    },
+    {
+      "title": {
+        "en": "TCachedValues becomes usable",
+        "fr": "TCachedValues devient utilisable",
+        "zh": "TCachedValues 现已可用",
+        "ru": "TCachedValues стал пригоден к применению"
+      },
+      "summary": {
+        "en": "TCachedValues fixes the reversed comparator branches reported in the previous edition, gains non-expiring defaults, receives direct tests and replaces the DNS no-TCP list. The DNS call site is subsequently corrected to use the same 64-second window for lookup and insertion.",
+        "fr": "TCachedValues corrige les branches de comparateur inversées signalées dans l’édition précédente, gagne des valeurs par défaut sans expiration, reçoit des tests directs et remplace la liste DNS no-TCP. Le site d’appel DNS est ensuite corrigé pour utiliser la même fenêtre de 64 secondes en recherche et en insertion.",
+        "zh": "TCachedValues 修复上一期指出的 comparator 分支反转，新增不过期的默认值和直接测试，并替代 DNS no-TCP list。随后 DNS 调用点也被修正，使查找与插入使用相同的 64 秒窗口。",
+        "ru": "TCachedValues исправляет перепутанные ветви comparator из предыдущей редакции, получает default без истечения и прямые тесты и заменяет DNS no-TCP list. Затем DNS call site исправляется так, чтобы lookup и insertion использовали одно окно 64 секунды."
+      },
+      "shas": [
+        "256cc2f4a4b2c509f0d61b385f00376f31ebd2f1",
+        "816a0e1941cf1dedc75e7404e61437ce9b213935",
+        "e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+        "f1b7dcaff0b8e798607894392f07d053ac507e40"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "3ad9e8c12fe18003a643a3771c82b130119cc8a1",
+      "headline": {
+        "en": "DHCP scopes now send their configured domain name",
+        "fr": "Les scopes DHCP envoient maintenant leur nom de domaine configuré",
+        "zh": "DHCP scope 现在会发送配置的域名",
+        "ru": "DHCP scope теперь отправляет настроенное доменное имя"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TDhcpState.AddRegularOptions in mormot.net.dhcp now calls AddOptionOnceU for doDomainName using Scope.DomainName. Tests cover the scope value and confirm that a requested domain-name supplied by a per-client rule is emitted first and therefore keeps precedence.",
+        "fr": "TDhcpState.AddRegularOptions dans mormot.net.dhcp appelle maintenant AddOptionOnceU pour doDomainName avec Scope.DomainName. Les tests couvrent la valeur du scope et confirment qu’un domain-name demandé par une règle client est émis en premier et conserve donc la priorité.",
+        "zh": "mormot.net.dhcp 的 TDhcpState.AddRegularOptions 现在调用 AddOptionOnceU，以 Scope.DomainName 生成 doDomainName。测试覆盖 scope 值，并确认 per-client rule 请求的 domain-name 会先发出，因此仍具有优先级。",
+        "ru": "TDhcpState.AddRegularOptions в mormot.net.dhcp теперь вызывает AddOptionOnceU для doDomainName из Scope.DomainName. Тесты проверяют значение scope и подтверждают, что domain-name из per-client rule отправляется первым и сохраняет приоритет."
+      },
+      "impact": {
+        "en": "Clients receiving leases from TDhcpServer can now obtain DHCP option 15 from the scope configuration. Existing per-client domain-name overrides keep their behavior.",
+        "fr": "Les clients recevant un bail de TDhcpServer peuvent maintenant obtenir l’option DHCP 15 depuis la configuration du scope. Les surcharges domain-name par client conservent leur comportement.",
+        "zh": "从 TDhcpServer 获取 lease 的客户端现在可以从 scope 配置收到 DHCP option 15。现有 per-client domain-name override 行为不变。",
+        "ru": "Клиенты с lease от TDhcpServer теперь получают DHCP option 15 из конфигурации scope. Существующие per-client domain-name overrides сохраняют поведение."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade DHCP servers that set Scope.DomainName and verify that clients receive option 15 after lease renewal.",
+        "fr": "Mettez à niveau les serveurs DHCP qui définissent Scope.DomainName et vérifiez que les clients reçoivent l’option 15 après renouvellement du bail.",
+        "zh": "设置 Scope.DomainName 的 DHCP server 应升级，并在 lease 更新后验证客户端收到 option 15。",
+        "ru": "Обновите DHCP-серверы с Scope.DomainName и проверьте получение option 15 после renewal lease."
+      },
+      "units": ["mormot.net.dhcp"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a415524a716aad558b1598ef38eb2db091cea3aa",
+      "headline": {
+        "en": "DNS replies must now match the resolver, port and original question",
+        "fr": "Les réponses DNS doivent correspondre au résolveur, au port et à la question",
+        "zh": "DNS 响应现在必须匹配 resolver、port 和原始问题",
+        "ru": "DNS-ответ теперь должен совпадать с resolver, port и исходным вопросом"
+      },
+      "category": "security",
+      "severity": "high",
+      "what_changed": {
+        "en": "DnsSendQuestionRaw accepts IPv4 or IPv6 resolver addresses and rejects UDP replies whose source IP or port differs from the requested endpoint. DnsQuery decompresses and compares the echoed QName, QTYPE and QCLASS before ParseDnsResult, while TDnsHeader.SetZ now writes Flags2 instead of Flags.",
+        "fr": "DnsSendQuestionRaw accepte les adresses de résolveur IPv4 ou IPv6 et rejette les réponses UDP dont l’IP ou le port source diffère de l’endpoint demandé. DnsQuery décompresse et compare QName, QTYPE et QCLASS renvoyés avant ParseDnsResult, tandis que TDnsHeader.SetZ écrit maintenant Flags2 au lieu de Flags.",
+        "zh": "DnsSendQuestionRaw 支持 IPv4 或 IPv6 resolver 地址，并拒绝来源 IP 或 port 与目标 endpoint 不同的 UDP 响应。DnsQuery 在 ParseDnsResult 前解压并比较回显的 QName、QTYPE 和 QCLASS；TDnsHeader.SetZ 现在写入 Flags2 而不是 Flags。",
+        "ru": "DnsSendQuestionRaw принимает IPv4 или IPv6 адрес resolver и отвергает UDP-ответы, у которых source IP или port отличается от запрошенного endpoint. DnsQuery до ParseDnsResult распаковывает и сравнивает отражённые QName, QTYPE и QCLASS, а TDnsHeader.SetZ теперь пишет Flags2 вместо Flags."
+      },
+      "impact": {
+        "en": "Malformed, mismatched or misdirected replies are skipped in favor of the next configured resolver instead of being parsed as the requested answer. Applications can also query an IPv6 DNS server directly.",
+        "fr": "Les réponses malformées, non correspondantes ou mal dirigées sont ignorées au profit du résolveur configuré suivant au lieu d’être analysées comme la réponse demandée. Les applications peuvent aussi interroger directement un serveur DNS IPv6.",
+        "zh": "畸形、不匹配或发错目标的响应会被跳过并尝试下一个 resolver，而不会作为所请求的答案解析。应用也可直接查询 IPv6 DNS server。",
+        "ru": "Повреждённый, несовпадающий или неверно направленный ответ пропускается в пользу следующего resolver, а не разбирается как запрошенный. Приложения также могут напрямую опрашивать IPv6 DNS server."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade applications that use mormot.net.dns with external resolvers and test any explicit IPv6 or non-default-port configuration.",
+        "fr": "Mettez à niveau les applications utilisant mormot.net.dns avec des résolveurs externes et testez toute configuration IPv6 ou de port non standard.",
+        "zh": "使用 mormot.net.dns 访问外部 resolver 的应用应升级，并测试显式 IPv6 或非默认 port 配置。",
+        "ru": "Обновите приложения с mormot.net.dns и внешними resolvers и проверьте явную IPv6 либо нестандартный port конфигурацию."
+      },
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsSendQuestion",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Resolver endpoints may be IPv6, and UDP responses must match both source address and port.",
+            "fr": "Les endpoints de résolveur peuvent être IPv6, et les réponses UDP doivent correspondre à l’adresse et au port source.",
+            "zh": "Resolver endpoint 可使用 IPv6，且 UDP 响应必须同时匹配来源地址与 port。",
+            "ru": "Endpoint resolver может быть IPv6, а UDP-ответ обязан совпадать по source address и port."
+          }
+        },
+        {
+          "symbol": "DnsQuery",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "A successful reply must echo the requested QName, QTYPE and QCLASS before records are accepted.",
+            "fr": "Une réponse réussie doit renvoyer les QName, QTYPE et QCLASS demandés avant que les enregistrements soient acceptés.",
+            "zh": "成功响应必须回显请求的 QName、QTYPE 与 QCLASS，记录才会被接受。",
+            "ru": "Успешный ответ должен отражать запрошенные QName, QTYPE и QCLASS до принятия записей."
+          }
+        },
+        {
+          "symbol": "TDnsHeader.Z",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The setter now updates the second DNS flags byte where the Z bits are stored.",
+            "fr": "Le setter met maintenant à jour le second octet de flags DNS où sont stockés les bits Z.",
+            "zh": "Setter 现在会更新保存 Z bits 的第二个 DNS flags 字节。",
+            "ru": "Setter теперь обновляет второй байт DNS flags, где хранятся Z bits."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3b7a2a4f55adcf28e46c62d3f4f535b0c09b2801",
+      "headline": {
+        "en": "Linux ARP lookup uses explicit wire-order constants",
+        "fr": "La recherche ARP Linux utilise des constantes d’ordre réseau explicites",
+        "zh": "Linux ARP 查找改用显式网络字节序常量",
+        "ru": "Linux ARP lookup использует явные константы wire order"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "GetRemoteMacAddress in mormot.net.sock.posix.inc replaces repeated bswap16 calls with ETH_P_IP_LE, ETH_P_ARP_LE and shifted ARP constants when building and checking raw Ethernet frames. TRawARP is normalized to TRawArp inside the implementation include.",
+        "fr": "GetRemoteMacAddress dans mormot.net.sock.posix.inc remplace les appels répétés à bswap16 par ETH_P_IP_LE, ETH_P_ARP_LE et des constantes ARP décalées lors de la construction et de la vérification des frames Ethernet brutes. TRawARP devient TRawArp dans l’include d’implémentation.",
+        "zh": "mormot.net.sock.posix.inc 的 GetRemoteMacAddress 在构建和检查原始 Ethernet frame 时，以 ETH_P_IP_LE、ETH_P_ARP_LE 及移位 ARP 常量替代重复的 bswap16 调用。实现 include 内的 TRawARP 规范为 TRawArp。",
+        "ru": "GetRemoteMacAddress в mormot.net.sock.posix.inc заменяет повторные bswap16 на ETH_P_IP_LE, ETH_P_ARP_LE и сдвинутые ARP constants при построении и проверке raw Ethernet frames. В implementation include TRawARP нормализован в TRawArp."
+      },
+      "impact": {
+        "en": "Linux remote-MAC discovery keeps the same packet layout and privilege requirements. The change removes runtime byte swaps from this low-level path without changing application calls.",
+        "fr": "La découverte d’adresse MAC distante sous Linux conserve le même format de paquet et les mêmes privilèges requis. Le changement supprime des inversions d’octets à l’exécution sans modifier les appels applicatifs.",
+        "zh": "Linux 远程 MAC discovery 保持相同 packet layout 与权限要求。该变更移除低层路径中的运行时 byte swap，不改变应用调用。",
+        "ru": "Linux remote-MAC discovery сохраняет layout пакета и требования привилегий. Из low-level path удалены runtime byte swaps без изменения вызовов приложения."
+      },
+      "action": "none",
+      "action_detail": {"en": "No application change is required.", "fr": "Aucun changement applicatif n’est requis.", "zh": "无需修改应用。", "ru": "Изменения приложения не требуются."},
+      "units": ["mormot.net.sock"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "eee501611a7c8b27a28e27f56c31d429fed1a8d9",
+      "headline": {
+        "en": "TFTP frame opcodes are written directly in wire order",
+        "fr": "Les opcodes des frames TFTP sont écrits directement en ordre réseau",
+        "zh": "TFTP frame opcode 直接按网络字节序写入",
+        "ru": "Opcode TFTP frame записывается сразу в wire order"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TTftpContext replaces bswap16 calls with constant shifts when writing OACK, ACK, DAT and ERR opcodes. Sequence and error-code fields retain their existing conversion logic.",
+        "fr": "TTftpContext remplace les appels à bswap16 par des décalages constants lors de l’écriture des opcodes OACK, ACK, DAT et ERR. Les champs de séquence et de code d’erreur conservent leur conversion existante.",
+        "zh": "TTftpContext 在写入 OACK、ACK、DAT 与 ERR opcode 时，以常量移位替代 bswap16。Sequence 和 error-code 字段保留原有转换逻辑。",
+        "ru": "TTftpContext заменяет bswap16 на сдвиг константы при записи opcode OACK, ACK, DAT и ERR. Поля sequence и error-code сохраняют прежнее преобразование."
+      },
+      "impact": {
+        "en": "Generated TFTP frames are unchanged; this is a small internal simplification with no API or protocol migration.",
+        "fr": "Les frames TFTP générées restent identiques ; il s’agit d’une petite simplification interne sans migration d’API ni de protocole.",
+        "zh": "生成的 TFTP frame 不变；这是内部小幅简化，不涉及 API 或协议迁移。",
+        "ru": "Сформированные TFTP frames не меняются; это небольшое внутреннее упрощение без миграции API или протокола."
+      },
+      "action": "none",
+      "action_detail": {"en": "No action is required.", "fr": "Aucune action n’est requise.", "zh": "无需操作。", "ru": "Действия не требуются."},
+      "units": ["mormot.net.tftp.client"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e00798bb77eb6a0a97e4543e7fb66c7d497666ad",
+      "headline": {
+        "en": "The 16-bit byte swap emits simpler FPC code",
+        "fr": "L’inversion 16 bits produit un code FPC plus simple",
+        "zh": "16-bit byte swap 生成更简洁的 FPC 代码",
+        "ru": "16-bit byte swap формирует более простой код FPC"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "bswap16 in mormot.core.base now takes its cardinal argument by value and computes the low byte through ToByte before shifting and combining it with the high byte. The function remains inline where supported.",
+        "fr": "bswap16 dans mormot.core.base reçoit maintenant son argument cardinal par valeur et calcule l’octet bas via ToByte avant de le décaler et de le combiner avec l’octet haut. La fonction reste inline lorsque disponible.",
+        "zh": "mormot.core.base 的 bswap16 现在按值接收 cardinal 参数，先通过 ToByte 取得低字节，再移位并与高字节组合。在支持的平台上该函数仍为 inline。",
+        "ru": "bswap16 в mormot.core.base теперь принимает cardinal по значению и получает младший байт через ToByte перед сдвигом и объединением со старшим байтом. Функция остаётся inline при поддержке."
+      },
+      "impact": {
+        "en": "FPC can generate a shorter sequence for a very common endian conversion. Results remain the same for existing callers.",
+        "fr": "FPC peut générer une séquence plus courte pour cette conversion d’endianness très fréquente. Le résultat reste identique pour les appelants existants.",
+        "zh": "FPC 可为这一常用 endian 转换生成更短指令序列。现有调用方的结果不变。",
+        "ru": "FPC может сгенерировать более короткую последовательность для частого endian conversion. Результат для существующих callers не меняется."
+      },
+      "action": "none",
+      "action_detail": {"en": "No action is required.", "fr": "Aucune action n’est requise.", "zh": "无需操作。", "ru": "Действия не требуются."},
+      "units": ["mormot.core.base"],
+      "api_changes": [
+        {
+          "symbol": "bswap16",
+          "change": "signature-changed",
+          "note": {
+            "en": "The scalar parameter changes from const cardinal to cardinal; normal calls remain source-compatible.",
+            "fr": "Le paramètre scalaire passe de const cardinal à cardinal ; les appels ordinaires restent compatibles au niveau source.",
+            "zh": "标量参数由 const cardinal 改为 cardinal；普通调用保持源码兼容。",
+            "ru": "Скалярный параметр меняется с const cardinal на cardinal; обычные вызовы сохраняют source compatibility."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ae18fe67a2e687e2184432e9f8b407663738226f",
+      "headline": {
+        "en": "DNS decompression rejects cyclic pointer chains and oversized names",
+        "fr": "La décompression DNS rejette les cycles de pointeurs et les noms trop longs",
+        "zh": "DNS 解压会拒绝循环指针链和超长名称",
+        "ru": "DNS decompression отвергает циклические pointer chains и длинные имена"
+      },
+      "category": "security",
+      "severity": "high",
+      "what_changed": {
+        "en": "The internal DnsDecompress routine now tracks the last compression offset, requires each pointer to move backward, rejects reserved pointer forms and enforces the 255-character DNS name limit before copying into a fixed buffer. DnsParseString delegates to this bounded routine.",
+        "fr": "La routine interne DnsDecompress mémorise maintenant le dernier offset de compression, exige que chaque pointeur recule, rejette les formes réservées et applique la limite DNS de 255 caractères avant la copie dans un buffer fixe. DnsParseString délègue à cette routine bornée.",
+        "zh": "内部 DnsDecompress 现在跟踪上一个 compression offset，要求每个指针向后移动，拒绝保留指针形式，并在复制到固定 buffer 前执行 DNS 名称 255 字符限制。DnsParseString 委托给该有界例程。",
+        "ru": "Внутренняя DnsDecompress теперь отслеживает последний compression offset, требует движения каждого pointer назад, отвергает reserved forms и до копирования в fixed buffer применяет лимит DNS-имени 255 символов. DnsParseString использует эту bounded routine."
+      },
+      "impact": {
+        "en": "Malformed or hostile DNS packets cannot keep the decompressor in a cyclic chain or overflow its temporary name buffer. Valid backward-compressed names continue to decode.",
+        "fr": "Les paquets DNS malformés ou hostiles ne peuvent plus maintenir le décompresseur dans un cycle ni dépasser son buffer temporaire. Les noms correctement compressés vers l’arrière restent décodés.",
+        "zh": "畸形或恶意 DNS packet 无法再让解压器陷入循环链或溢出临时名称 buffer。有效的向后压缩名称仍可正常解码。",
+        "ru": "Повреждённый или злонамеренный DNS packet больше не удерживает decompressor в цикле и не переполняет временный buffer имени. Корректные backward-compressed names продолжают декодироваться."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade services that parse replies from untrusted DNS servers and retain malformed compression cases in protocol tests.",
+        "fr": "Mettez à niveau les services qui analysent les réponses de serveurs DNS non fiables et conservez des cas de compression malformée dans les tests de protocole.",
+        "zh": "解析不受信任 DNS server 响应的服务应升级，并在协议测试中保留畸形 compression 用例。",
+        "ru": "Обновите службы, разбирающие ответы недоверенных DNS servers, и сохраните malformed compression cases в protocol tests."
+      },
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsParseString",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Cyclic, forward, reserved, out-of-range and oversized compressed names now fail with a zero result.",
+            "fr": "Les noms compressés cycliques, vers l’avant, réservés, hors limites ou trop longs échouent maintenant avec un résultat nul.",
+            "zh": "循环、向前、保留、越界或超长的压缩名称现在会返回零并失败。",
+            "ru": "Циклические, forward, reserved, out-of-range и слишком длинные сжатые имена теперь завершаются нулевым результатом."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3da23281edb004a68b64cc35cad8af2fce777c69",
+      "headline": {
+        "en": "DNS record parsing starts from the question returned by the server",
+        "fr": "Le parsing DNS part de la question réellement renvoyée par le serveur",
+        "zh": "DNS 记录解析从服务器返回的问题位置开始",
+        "ru": "Разбор DNS-записей начинается с вопроса, возвращённого сервером"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "ParseDnsResult derives the first record position by decompressing the QName in the response instead of reusing the locally built request length. DnsQuery requires QuestionCount=1, and TCP accepts a header-sized response rather than requiring more than the header.",
+        "fr": "ParseDnsResult détermine la position du premier enregistrement en décompressant le QName de la réponse au lieu de réutiliser la longueur de la requête locale. DnsQuery exige QuestionCount=1, et TCP accepte une réponse de la taille du header au lieu d’exiger davantage.",
+        "zh": "ParseDnsResult 通过解压响应中的 QName 确定第一条记录位置，不再复用本地构造请求的长度。DnsQuery 要求 QuestionCount=1，TCP 也允许仅有 header 大小的响应。",
+        "ru": "ParseDnsResult определяет позицию первой записи, распаковывая QName в ответе, а не используя длину локально построенного запроса. DnsQuery требует QuestionCount=1, а TCP принимает ответ размером с header."
+      },
+      "impact": {
+        "en": "Responses whose echoed question uses a different valid wire encoding are parsed from their actual boundary. Responses with an unexpected question count are rejected instead of shifting record parsing.",
+        "fr": "Les réponses dont la question renvoyée utilise un encodage réseau valide mais différent sont analysées depuis leur limite réelle. Les réponses avec un nombre de questions inattendu sont rejetées au lieu de décaler le parsing des enregistrements.",
+        "zh": "如果回显问题采用不同但有效的线上编码，响应会从实际边界开始解析。问题数量异常的响应会被拒绝，而不会导致记录解析偏移。",
+        "ru": "Ответы с другим допустимым wire encoding отражённого вопроса разбираются с фактической границы. Ответы с неожиданным числом вопросов отвергаются, а не смещают parsing записей."
+      },
+      "action": "none",
+      "action_detail": {"en": "Take this as part of the complete DNS sequence ending at 2.4.16805.", "fr": "Prenez ce changement dans la série DNS complète se terminant à 2.4.16805.", "zh": "请将其作为截至 2.4.16805 的完整 DNS 系列一并采用。", "ru": "Берите это изменение в составе полной DNS-серии до 2.4.16805."},
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsQuery",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Replies must contain one question, and record parsing follows the returned question encoding.",
+            "fr": "Les réponses doivent contenir une question, et le parsing suit l’encodage de la question renvoyée.",
+            "zh": "响应必须包含一个问题，记录解析会跟随返回问题的编码。",
+            "ru": "Ответ должен содержать один вопрос, а parsing записей следует encoding возвращённого вопроса."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c6756d1ed9c58be7f9f5ea8dc503457e2a5cf796",
+      "headline": {
+        "en": "Resolver entries may carry their own port",
+        "fr": "Chaque entrée de résolveur peut porter son propre port",
+        "zh": "每个 resolver 条目可携带自己的 port",
+        "ru": "Запись resolver может содержать собственный port"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "DnsSendQuestionRaw parses a single colon in Address as an inline IPv4 port, overriding the separate Port argument before TNetAddr setup. The tcp@ prefix is removed before this parsing, and cache keys use the stripped address.",
+        "fr": "DnsSendQuestionRaw interprète un unique deux-points dans Address comme un port IPv4 intégré, qui remplace l’argument Port séparé avant la configuration de TNetAddr. Le préfixe tcp@ est retiré avant cette analyse, et les clés de cache utilisent l’adresse nettoyée.",
+        "zh": "DnsSendQuestionRaw 将 Address 中唯一的冒号解析为内联 IPv4 port，并在设置 TNetAddr 前覆盖单独的 Port 参数。tcp@ 前缀会先移除，cache key 使用处理后的地址。",
+        "ru": "DnsSendQuestionRaw разбирает единственное двоеточие в Address как встроенный IPv4 port, переопределяя отдельный аргумент Port до настройки TNetAddr. Префикс tcp@ удаляется до разбора, а cache key использует очищенный адрес."
+      },
+      "impact": {
+        "en": "NameServers can target resolvers such as 127.0.0.1:5353 without changing the global DnsPort. Multiple-colon IPv6 literals are not mistaken for this inline-port syntax.",
+        "fr": "NameServers peut cibler des résolveurs comme 127.0.0.1:5353 sans modifier DnsPort global. Les littéraux IPv6 contenant plusieurs deux-points ne sont pas confondus avec cette syntaxe de port intégré.",
+        "zh": "NameServers 可指向 127.0.0.1:5353 等 resolver，无需修改全局 DnsPort。包含多个冒号的 IPv6 literal 不会被误判为内联 port 语法。",
+        "ru": "NameServers может указывать resolver вида 127.0.0.1:5353 без смены глобального DnsPort. IPv6 literals с несколькими двоеточиями не принимаются за синтаксис встроенного port."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Review custom resolver configuration if it currently carries a separate port; it may now be expressed per NameServers entry.",
+        "fr": "Revoyez la configuration des résolveurs personnalisés si elle utilise actuellement un port séparé ; il peut maintenant être défini par entrée NameServers.",
+        "zh": "若自定义 resolver 配置当前使用单独 port，请复核；现在可在每个 NameServers 条目中指定。",
+        "ru": "Проверьте custom resolver configuration с отдельным port: теперь его можно задавать в каждой записи NameServers."
+      },
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsSendQuestion",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Address accepts an IPv4 address with an inline :port value.",
+            "fr": "Address accepte une adresse IPv4 avec une valeur :port intégrée.",
+            "zh": "Address 支持带内联 :port 的 IPv4 地址。",
+            "ru": "Address принимает IPv4-адрес со встроенным значением :port."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "432444d390c0d74b7ad3ecbb6c9ae69d7e733dee",
+      "headline": {
+        "en": "EDNS fallback and record positioning are corrected",
+        "fr": "Le fallback EDNS et la position des enregistrements sont corrigés",
+        "zh": "EDNS 回退与记录定位得到修正",
+        "ru": "Исправлены EDNS fallback и позиционирование записей"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "DnsQuery now falls back to a plain RFC 1035 request only when an EDNS request returns FORMERR, caches that server decision for up to four minutes, and separates record parsing into ParseDnsResult. DnsBuildQuestion temporarily reports the question-body boundary used for parsing.",
+        "fr": "DnsQuery revient maintenant à une requête RFC 1035 classique uniquement lorsqu’une requête EDNS retourne FORMERR, mémorise cette décision jusqu’à quatre minutes et sépare le parsing dans ParseDnsResult. DnsBuildQuestion retourne temporairement la limite du corps de question utilisée pour l’analyse.",
+        "zh": "DnsQuery 现在仅在 EDNS 请求返回 FORMERR 时回退到普通 RFC 1035 请求，将该 server 决策缓存最多四分钟，并把记录解析拆分到 ParseDnsResult。DnsBuildQuestion 暂时返回用于解析的问题 body 边界。",
+        "ru": "DnsQuery теперь откатывается к обычному RFC 1035 запросу только при FORMERR от EDNS, кэширует решение server до четырёх минут и выделяет parsing записей в ParseDnsResult. DnsBuildQuestion временно сообщает границу question body для разбора."
+      },
+      "impact": {
+        "en": "This fixes the initial EDNS branch, which treated non-FORMERR errors as a reason to disable EDNS and did not correctly enter the FORMERR fallback. Later commits replace the temporary body-size assumption, so this build is not a stopping point.",
+        "fr": "Cela corrige la branche EDNS initiale, qui désactivait EDNS pour les erreurs autres que FORMERR et n’entrait pas correctement dans le fallback FORMERR. Des commits ultérieurs remplacent l’hypothèse temporaire sur la taille du corps ; cette build n’est donc pas un point d’arrêt.",
+        "zh": "这修复了初始 EDNS 分支：此前会因非 FORMERR 错误禁用 EDNS，却无法正确进入 FORMERR 回退。后续 commit 会替换临时 body-size 假设，因此不应停在此 build。",
+        "ru": "Исправлена начальная ветвь EDNS, которая отключала EDNS при ошибках не FORMERR и неверно входила в FORMERR fallback. Следующие commits заменяют временное предположение о body size, поэтому на этой build останавливаться нельзя."
+      },
+      "action": "none",
+      "action_detail": {"en": "Take the later 2.4.16805 state rather than this intermediate EDNS build.", "fr": "Prenez l’état ultérieur 2.4.16805 plutôt que cette build EDNS intermédiaire.", "zh": "应采用后续 2.4.16805 状态，而非此中间 EDNS build。", "ru": "Берите последующее состояние 2.4.16805, а не эту промежуточную EDNS build."},
+      "units": ["mormot.net.dns"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fb1b51278a7e5cd7e5a475f4382d378c6a022305",
+      "headline": {
+        "en": "DnsQuery enables 1232-byte EDNS and fixes the default DNS port",
+        "fr": "DnsQuery active EDNS à 1232 octets et corrige le port DNS par défaut",
+        "zh": "DnsQuery 启用 1232 字节 EDNS 并修复默认 DNS port",
+        "ru": "DnsQuery включает EDNS 1232 байта и исправляет DNS port по умолчанию"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "DnsQuery first sends an OPT-enabled question using the new global DnsEdnsUdpSize, defaulting to 1232 bytes and bounded to the 4KB receive buffer. DnsSendQuestionRaw changes its empty-Port fallback from 389 to 53, and DnsQuery changes Res from out to var so it can finalize managed fields before reuse.",
+        "fr": "DnsQuery envoie d’abord une question avec OPT via la nouvelle globale DnsEdnsUdpSize, à 1232 octets par défaut et limitée au buffer de réception de 4 Ko. DnsSendQuestionRaw remplace le port de secours 389 par 53 lorsque Port est vide, et DnsQuery passe Res de out à var afin de finaliser les champs managés avant réutilisation.",
+        "zh": "DnsQuery 首先使用新的全局 DnsEdnsUdpSize 发送带 OPT 的问题，默认 1232 字节并限制在 4KB 接收 buffer 内。DnsSendQuestionRaw 在 Port 为空时将 fallback 从 389 改为 53；DnsQuery 把 Res 从 out 改为 var，以便复用前 finalize managed fields。",
+        "ru": "DnsQuery сначала отправляет вопрос с OPT через новую глобальную DnsEdnsUdpSize, по умолчанию 1232 байта и в пределах receive buffer 4KB. DnsSendQuestionRaw меняет fallback пустого Port с 389 на 53, а DnsQuery меняет Res с out на var для finalize managed fields перед повторным использованием."
+      },
+      "impact": {
+        "en": "Most DNS answers up to 1232 bytes can remain on UDP, reducing TCP fallback. Direct DnsSendQuestion calls with an empty Port now target the correct DNS service, but the initial EDNS fallback logic is corrected by the next commit.",
+        "fr": "La plupart des réponses DNS jusqu’à 1232 octets peuvent rester en UDP, ce qui réduit le fallback TCP. Les appels directs à DnsSendQuestion avec Port vide ciblent maintenant le bon service DNS, mais la logique EDNS initiale est corrigée par le commit suivant.",
+        "zh": "大多数不超过 1232 字节的 DNS 响应可继续使用 UDP，减少 TCP 回退。Port 为空的直接 DnsSendQuestion 调用现在指向正确 DNS 服务，但初始 EDNS 回退逻辑由下一 commit 修正。",
+        "ru": "Большинство DNS-ответов до 1232 байт остаётся на UDP, сокращая TCP fallback. Прямой DnsSendQuestion с пустым Port теперь обращается к правильному DNS service, но начальная EDNS fallback logic исправлена следующим commit."
+      },
+      "action": "none",
+      "action_detail": {"en": "Do not stop at this initial EDNS build; take the complete sequence through 2.4.16805.", "fr": "Ne vous arrêtez pas à cette première build EDNS ; prenez toute la série jusqu’à 2.4.16805.", "zh": "不要停在此初始 EDNS build；应采用截至 2.4.16805 的完整系列。", "ru": "Не останавливайтесь на начальной EDNS build; берите всю серию до 2.4.16805."},
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsEdnsUdpSize",
+          "change": "added",
+          "note": {
+            "en": "Public global controlling the advertised EDNS UDP payload; default 1232, zero disables EDNS, and values are bounded to 512..4096.",
+            "fr": "Globale publique contrôlant le payload UDP EDNS annoncé ; 1232 par défaut, zéro désactive EDNS et les valeurs sont bornées à 512..4096.",
+            "zh": "控制 EDNS UDP payload 声明值的公开全局变量；默认 1232，零表示禁用 EDNS，数值限制为 512..4096。",
+            "ru": "Публичная глобальная переменная advertised EDNS UDP payload; default 1232, ноль отключает EDNS, значения ограничены 512..4096."
+          }
+        },
+        {
+          "symbol": "DnsQuery",
+          "change": "signature-changed",
+          "note": {
+            "en": "The TDnsResult parameter changes from out to var; ordinary variable calls keep the same syntax.",
+            "fr": "Le paramètre TDnsResult passe de out à var ; les appels ordinaires avec une variable gardent la même syntaxe.",
+            "zh": "TDnsResult 参数由 out 改为 var；普通变量调用语法不变。",
+            "ru": "Параметр TDnsResult меняется с out на var; обычные вызовы с переменной сохраняют синтаксис."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f1b7dcaff0b8e798607894392f07d053ac507e40",
+      "headline": {
+        "en": "DNS transport accepts raw replies before applying query policy",
+        "fr": "Le transport DNS accepte les réponses brutes avant la politique de requête",
+        "zh": "DNS 传输先接收原始响应，再应用查询策略",
+        "ru": "DNS transport принимает raw reply до применения query policy"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The transport implementation becomes DnsSendQuestionRaw, which accepts structurally valid UDP or TCP replies regardless of RCODE or answer count. The public DnsSendQuestion wrapper retains the old success policy, while the no-TCP cache insertion now uses the same TixShr=6 period as lookup.",
+        "fr": "L’implémentation de transport devient DnsSendQuestionRaw, qui accepte les réponses UDP ou TCP structurellement valides indépendamment de RCODE ou du nombre de réponses. Le wrapper public DnsSendQuestion conserve l’ancienne politique de succès, tandis que l’insertion dans le cache no-TCP utilise maintenant la même période TixShr=6 que la recherche.",
+        "zh": "传输实现改为 DnsSendQuestionRaw，可接收结构有效的 UDP 或 TCP 响应，不受 RCODE 或 answer count 限制。公开 DnsSendQuestion wrapper 保留旧成功策略；no-TCP cache 插入现在与查找同用 TixShr=6。",
+        "ru": "Реализация transport становится DnsSendQuestionRaw и принимает структурно допустимые UDP или TCP ответы независимо от RCODE и answer count. Публичный wrapper DnsSendQuestion сохраняет прежнюю success policy, а insertion в no-TCP cache теперь использует тот же TixShr=6, что и lookup."
+      },
+      "impact": {
+        "en": "Higher-level DnsQuery can inspect FORMERR and implement EDNS fallback without weakening the public raw-query contract. The one-minute suppression of servers that fail TCP becomes effective again.",
+        "fr": "DnsQuery peut inspecter FORMERR et implémenter le fallback EDNS sans affaiblir le contrat public de requête brute. La suppression pendant une minute des serveurs qui échouent en TCP redevient effective.",
+        "zh": "高层 DnsQuery 可检查 FORMERR 并实现 EDNS 回退，同时不削弱公开 raw-query contract。对 TCP 失败 server 的一分钟抑制重新生效。",
+        "ru": "Высокоуровневый DnsQuery может проверять FORMERR и реализовать EDNS fallback без ослабления публичного raw-query contract. Минутное подавление servers с ошибкой TCP снова работает."
+      },
+      "action": "none",
+      "action_detail": {"en": "No source migration is required for public callers.", "fr": "Aucune migration source n’est requise pour les appelants publics.", "zh": "公开调用方无需源码迁移。", "ru": "Миграция исходного кода публичных callers не требуется."},
+      "units": ["mormot.net.dns"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cd234840423f889ec6c555427336cc3e6583b70b",
+      "headline": {
+        "en": "DnsBuildQuestion can append an EDNS OPT record",
+        "fr": "DnsBuildQuestion peut ajouter un enregistrement EDNS OPT",
+        "zh": "DnsBuildQuestion 可附加 EDNS OPT 记录",
+        "ru": "DnsBuildQuestion может добавлять запись EDNS OPT"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "DnsBuildQuestion gains an optional EdnsUdpSize parameter. A nonzero value adds one OPT pseudo-record, sets AdditionalCount, clamps the advertised UDP size to 512..4096, and emits zero extended RCODE, version, flags and option data.",
+        "fr": "DnsBuildQuestion gagne un paramètre optionnel EdnsUdpSize. Une valeur non nulle ajoute un pseudo-enregistrement OPT, définit AdditionalCount, borne la taille UDP annoncée à 512..4096 et émet des RCODE étendu, version, flags et données d’option à zéro.",
+        "zh": "DnsBuildQuestion 新增可选 EdnsUdpSize 参数。非零值会添加一个 OPT pseudo-record、设置 AdditionalCount、把声明 UDP 大小限制在 512..4096，并写入零 extended RCODE、version、flags 与 option data。",
+        "ru": "DnsBuildQuestion получает необязательный параметр EdnsUdpSize. Ненулевое значение добавляет один OPT pseudo-record, задаёт AdditionalCount, ограничивает advertised UDP size диапазоном 512..4096 и записывает нулевые extended RCODE, version, flags и option data."
+      },
+      "impact": {
+        "en": "Low-level callers can construct standards-shaped EDNS questions without assembling the OPT record themselves. Existing three-argument calls keep classic DNS behavior because the new parameter defaults to zero.",
+        "fr": "Les appelants bas niveau peuvent construire des questions EDNS conformes sans assembler eux-mêmes l’enregistrement OPT. Les appels existants à trois arguments gardent le comportement DNS classique, car le nouveau paramètre vaut zéro par défaut.",
+        "zh": "低层调用方无需自行组装 OPT record 即可构建标准 EDNS 问题。现有三参数调用保持 classic DNS 行为，因为新参数默认为零。",
+        "ru": "Низкоуровневые callers могут строить стандартные EDNS questions без ручной сборки OPT record. Существующие вызовы с тремя аргументами сохраняют classic DNS behavior, поскольку новый параметр по умолчанию равен нулю."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Review custom DnsBuildQuestion callers that want larger UDP replies; set EdnsUdpSize explicitly and take the later DNS fixes.",
+        "fr": "Revoyez les appels personnalisés à DnsBuildQuestion qui souhaitent de plus grandes réponses UDP ; définissez EdnsUdpSize et prenez les corrections DNS ultérieures.",
+        "zh": "需要更大 UDP 响应的自定义 DnsBuildQuestion 调用应复核；显式设置 EdnsUdpSize，并合入后续 DNS 修复。",
+        "ru": "Проверьте custom DnsBuildQuestion callers, которым нужны более крупные UDP-ответы; задайте EdnsUdpSize и возьмите последующие DNS fixes."
+      },
+      "units": ["mormot.net.dns"],
+      "api_changes": [
+        {
+          "symbol": "DnsBuildQuestion",
+          "change": "signature-changed",
+          "note": {
+            "en": "Adds optional EdnsUdpSize: cardinal = 0 and emits an OPT pseudo-record when nonzero.",
+            "fr": "Ajoute EdnsUdpSize: cardinal = 0 optionnel et émet un pseudo-enregistrement OPT lorsqu’il est non nul.",
+            "zh": "新增可选 EdnsUdpSize: cardinal = 0；非零时写入 OPT pseudo-record。",
+            "ru": "Добавлен необязательный EdnsUdpSize: cardinal = 0; при ненулевом значении формируется OPT pseudo-record."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e8fd8b733a9a1420ae015979166e3bcc56f1884a",
+      "headline": {
+        "en": "DNS adopts the shared cache wrapper for failed TCP resolvers",
+        "fr": "DNS adopte le cache partagé pour les résolveurs TCP en échec",
+        "zh": "DNS 使用共享 cache wrapper 记录 TCP 失败的 resolver",
+        "ru": "DNS использует общий cache wrapper для failed TCP resolvers"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The bespoke NoTcpSafe, NoTcpTix16 and NoTcpServers storage is replaced by TCachedValues. TCachedValue and TCachedValues also treat TixShr=0 as a non-expiring period and document that their record storage must start zero-filled.",
+        "fr": "Le stockage spécifique NoTcpSafe, NoTcpTix16 et NoTcpServers est remplacé par TCachedValues. TCachedValue et TCachedValues traitent aussi TixShr=0 comme une période sans expiration et documentent que leur record doit être initialement rempli de zéros.",
+        "zh": "专用 NoTcpSafe、NoTcpTix16 与 NoTcpServers 存储被 TCachedValues 替代。TCachedValue 和 TCachedValues 也将 TixShr=0 视为不过期周期，并注明 record 存储必须先清零。",
+        "ru": "Специальные NoTcpSafe, NoTcpTix16 и NoTcpServers заменены на TCachedValues. TCachedValue и TCachedValues также считают TixShr=0 периодом без истечения и документируют необходимость нулевой инициализации record."
+      },
+      "impact": {
+        "en": "The intended behavior remains a 64-second cache of resolvers that do not answer over TCP. This commit inserts with the new default TixShr=0 while lookup uses 6, so the cache is ineffective until the following DnsSendQuestion refactor passes 6 to Add.",
+        "fr": "Le comportement voulu reste un cache de 64 secondes des résolveurs qui ne répondent pas en TCP. Ce commit insère avec le nouveau TixShr=0 par défaut tandis que la recherche utilise 6 ; le cache reste donc inefficace jusqu’au refactor suivant de DnsSendQuestion, qui passe 6 à Add.",
+        "zh": "预期行为仍是将不响应 TCP 的 resolver 缓存 64 秒。此 commit 插入时使用新的默认 TixShr=0，而查找使用 6，因此 cache 在后续 DnsSendQuestion refactor 向 Add 传入 6 前无效。",
+        "ru": "Предполагается 64-секундный cache resolvers без ответа по TCP. Этот commit вставляет с новым default TixShr=0, тогда как lookup использует 6, поэтому cache не работает до следующего refactor DnsSendQuestion, передающего 6 в Add."
+      },
+      "action": "none",
+      "action_detail": {"en": "Do not stop at build 2.4.16794; the cache-window mismatch is corrected in 2.4.16796.", "fr": "Ne vous arrêtez pas à la build 2.4.16794 ; l’écart de fenêtre de cache est corrigé en 2.4.16796.", "zh": "不要停在 build 2.4.16794；cache window 不匹配在 2.4.16796 修正。", "ru": "Не останавливайтесь на build 2.4.16794; mismatch cache window исправлен в 2.4.16796."},
+      "units": ["mormot.core.os", "mormot.core.unicode", "mormot.net.dns", "mormot.net.sock"],
+      "api_changes": [
+        {
+          "symbol": "TCachedValue.Cache",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "TixShr=0 now selects a stable non-expiring cache period instead of deriving a tick value.",
+            "fr": "TixShr=0 sélectionne maintenant une période de cache stable sans expiration au lieu de dériver une valeur de tick.",
+            "zh": "TixShr=0 现在表示稳定不过期的 cache period，不再派生 tick 值。",
+            "ru": "TixShr=0 теперь задаёт стабильный cache period без истечения вместо вычисления tick value."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "816a0e1941cf1dedc75e7404e61437ce9b213935",
+      "headline": {
+        "en": "The cache repair receives direct add, lookup and reset coverage",
+        "fr": "La réparation du cache reçoit des tests directs d’ajout, recherche et reset",
+        "zh": "Cache 修复新增 add、lookup 与 reset 直接测试",
+        "ru": "Исправление cache получает прямые тесты add, lookup и reset"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.core.base initializes TCachedValues and verifies missing lookups, unique insertion, duplicate rejection, successful lookup and Reset. The PDF font test accepts one additional known platform-dependent hash.",
+        "fr": "test.core.base initialise TCachedValues et vérifie les recherches absentes, l’insertion unique, le rejet des doublons, la recherche réussie et Reset. Le test de police PDF accepte un hash supplémentaire dépendant de la plateforme.",
+        "zh": "test.core.base 初始化 TCachedValues，并验证未命中查找、唯一插入、重复拒绝、成功查找和 Reset。PDF font 测试新增一个已知的平台相关 hash。",
+        "ru": "test.core.base инициализирует TCachedValues и проверяет missing lookup, unique insertion, duplicate rejection, successful lookup и Reset. PDF font test принимает ещё один известный platform-dependent hash."
+      },
+      "impact": {
+        "en": "Production code is unchanged. The tests guard the default-comparator defect fixed in the preceding commit and broaden accepted PDF rendering variance.",
+        "fr": "Le code de production ne change pas. Les tests protègent contre le défaut du comparateur par défaut corrigé au commit précédent et élargissent la variance de rendu PDF acceptée.",
+        "zh": "生产代码不变。测试覆盖前一 commit 修复的默认 comparator 缺陷，并扩大可接受的 PDF 渲染差异。",
+        "ru": "Production code не меняется. Тесты защищают исправление дефекта default comparator из предыдущего commit и расширяют допустимые варианты PDF rendering."
+      },
+      "action": "none",
+      "action_detail": {"en": "No application action is required.", "fr": "Aucune action applicative n’est requise.", "zh": "应用无需操作。", "ru": "Действия в приложении не требуются."},
+      "units": ["test.core.base", "test.ui.pdf"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "256cc2f4a4b2c509f0d61b385f00376f31ebd2f1",
+      "headline": {
+        "en": "TCachedValues lookup now uses the comparator that sorted the cache",
+        "fr": "TCachedValues recherche avec le comparateur qui a trié le cache",
+        "zh": "TCachedValues 查找现在使用排序 cache 的 comparator",
+        "ru": "TCachedValues ищет с comparator, которым отсортирован cache"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TCachedValues.Exists reverses the incorrect comparison branches: a configured CustomCompare is passed to the matching FastFindPUtf8CharSorted overload, while nil selects the default overload. Exists and Add also gain TixShr=0 defaults, and zero now means no periodic flush.",
+        "fr": "TCachedValues.Exists inverse les branches de comparaison erronées : un CustomCompare configuré est transmis à la bonne surcharge de FastFindPUtf8CharSorted, tandis que nil sélectionne la surcharge par défaut. Exists et Add gagnent aussi TixShr=0 par défaut, où zéro signifie sans purge périodique.",
+        "zh": "TCachedValues.Exists 修正错误的比较分支：配置 CustomCompare 时传给对应的 FastFindPUtf8CharSorted overload，nil 则选择默认 overload。Exists 与 Add 也新增默认 TixShr=0，零表示不周期清空。",
+        "ru": "TCachedValues.Exists исправляет перепутанные ветви: настроенный CustomCompare передаётся в соответствующий overload FastFindPUtf8CharSorted, а nil выбирает default overload. Exists и Add также получают default TixShr=0, где ноль означает отсутствие периодического flush."
+      },
+      "impact": {
+        "en": "The public cache added in 2.4.16790 can now find values with both the default and a custom comparator. Existing experimental users should replace the defective build before relying on Exists or duplicate suppression.",
+        "fr": "Le cache public ajouté en 2.4.16790 peut maintenant retrouver les valeurs avec le comparateur par défaut ou personnalisé. Les utilisateurs expérimentaux doivent remplacer la build défectueuse avant de se fier à Exists ou à la suppression des doublons.",
+        "zh": "2.4.16790 新增的公开 cache 现在可使用默认或自定义 comparator 正确查找。已有实验用户在依赖 Exists 或重复抑制前应替换有缺陷的 build。",
+        "ru": "Публичный cache из 2.4.16790 теперь находит значения как с default, так и с custom comparator. Экспериментальным пользователям следует заменить дефектную build до применения Exists или duplicate suppression."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade any code that adopted TCachedValues from 2.4.16790 and remove local comparator-branch workarounds after retesting default and custom comparison modes.",
+        "fr": "Mettez à niveau tout code ayant adopté TCachedValues depuis 2.4.16790 et retirez les contournements locaux des branches de comparateur après avoir retesté les modes par défaut et personnalisé.",
+        "zh": "采用 2.4.16790 TCachedValues 的代码应升级；重新测试默认与自定义比较模式后移除本地 comparator 分支 workaround。",
+        "ru": "Обновите код, применивший TCachedValues из 2.4.16790, и после тестов default/custom modes удалите локальные обходы ветвей comparator."
+      },
+      "units": ["mormot.core.unicode"],
+      "api_changes": [
+        {
+          "symbol": "TCachedValues.Exists",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Lookup now uses CustomCompare when assigned and the default comparator otherwise; TixShr defaults to zero.",
+            "fr": "La recherche utilise maintenant CustomCompare lorsqu’il est défini et le comparateur par défaut sinon ; TixShr vaut zéro par défaut.",
+            "zh": "查找现在在已设置时使用 CustomCompare，否则使用默认 comparator；TixShr 默认为零。",
+            "ru": "Lookup теперь использует CustomCompare при его наличии и default comparator иначе; TixShr по умолчанию равен нулю."
+          }
+        },
+        {
+          "symbol": "TCachedValues.Add",
+          "change": "signature-changed",
+          "note": {
+            "en": "TixShr becomes optional with a zero default, representing a non-expiring cache.",
+            "fr": "TixShr devient optionnel avec zéro par défaut, représentant un cache sans expiration.",
+            "zh": "TixShr 改为可选且默认为零，表示不过期 cache。",
+            "ru": "TixShr становится необязательным с default zero, означающим cache без истечения."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1daae163dd1e4c9c8e7f81c9135e6e0440ce060f",
+      "headline": {
+        "en": "Intel and AMD search assembly reduces register and move pressure",
+        "fr": "L’assembleur de recherche Intel et AMD réduit les registres et déplacements",
+        "zh": "Intel/AMD 搜索汇编减少寄存器与 move 压力",
+        "ru": "Intel/AMD search assembly сокращает registers и move operations"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "Several x86 and x64 scan/search routines emit -1 with or instead of mov. The x64 FastFindPUtf8CharSorted implementation is reorganized to avoid r12/r13 saves, cache the first byte and compare subsequent bytes with indexed addressing.",
+        "fr": "Plusieurs routines x86 et x64 de scan/recherche produisent -1 avec or au lieu de mov. L’implémentation x64 de FastFindPUtf8CharSorted est réorganisée pour éviter de sauvegarder r12/r13, mettre en cache le premier octet et comparer les suivants par adressage indexé.",
+        "zh": "多个 x86/x64 scan/search 例程使用 or 而非 mov 生成 -1。x64 FastFindPUtf8CharSorted 重新组织，以避免保存 r12/r13、缓存首字节并通过 indexed addressing 比较后续字节。",
+        "ru": "Несколько x86/x64 scan/search routines формируют -1 через or вместо mov. Реализация x64 FastFindPUtf8CharSorted переработана без сохранения r12/r13, с кэшированием первого байта и indexed addressing для остальных."
+      },
+      "impact": {
+        "en": "Common scans and sorted RawUtf8 lookup use fewer instructions or saved registers on Intel/AMD targets. Public behavior and return values remain unchanged.",
+        "fr": "Les scans fréquents et la recherche RawUtf8 triée utilisent moins d’instructions ou de registres sauvegardés sur les cibles Intel/AMD. Le comportement public et les valeurs de retour restent inchangés.",
+        "zh": "Intel/AMD 目标上的常用 scan 与排序 RawUtf8 查找使用更少指令或保存寄存器。公开行为与返回值不变。",
+        "ru": "Частые scans и sorted RawUtf8 lookup используют меньше инструкций или saved registers на Intel/AMD. Публичное поведение и return values не меняются."
+      },
+      "action": "none",
+      "action_detail": {"en": "No action is required.", "fr": "Aucune action n’est requise.", "zh": "无需操作。", "ru": "Действия не требуются."},
+      "units": ["mormot.core.base", "mormot.core.unicode"],
+      "api_changes": [],
+      "confidence": "confirmed"
+    }
+  ]
+}
