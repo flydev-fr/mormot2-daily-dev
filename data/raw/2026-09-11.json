@@ -1,0 +1,1388 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-11",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-11T03:37:24Z",
+  "range": {
+    "since": "2026-09-09T18:11:55Z",
+    "until": "2026-09-11T03:37:24Z",
+    "head_sha": "692bbbf21960be5fdf89921673a34f928fadddfc"
+  },
+  "version": {
+    "after": "2.4.16828",
+    "before": "2.4.16805"
+  },
+  "totals": {
+    "commits": 23,
+    "additions": 1112,
+    "deletions": 387
+  },
+  "commits": [
+    {
+      "sha": "692bbbf21960be5fdf89921673a34f928fadddfc",
+      "short_sha": "692bbbf2",
+      "subject": "Merge pull request #579 from Moonbot-Tech/codex/numeric-writer-correctness",
+      "body": "core: fix numeric conversion overflow and malformed decimal input",
+      "author": "ab",
+      "date": "2026-09-10T22:47:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/692bbbf21960be5fdf89921673a34f928fadddfc",
+      "parents": [
+        "6356fbaa56c1ef9a4ea4dacda6d6e999b40e52bb",
+        "d48f4634d8da58258e72d1edf6e86a5cd21af8b9"
+      ],
+      "stats": {
+        "additions": 222,
+        "deletions": 25,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 3,
+          "patch": "@@ -1447,7 +1447,7 @@ function GetIntegerDef(P: PUtf8Char; Default: PtrInt): PtrInt;\n \r\n /// get the signed 32-bit integer value stored in P^\r\n // - this version return 0 in err if no error occurred, and 1 if an invalid\r\n-// character was found, not its exact index as for the val() function\r\n+// character or a PtrInt overflow was found, not its exact index as for val()\r\n function GetInteger(P: PUtf8Char; var err: integer): PtrInt; overload;\r\n \r\n /// get the unsigned 32-bit integer value stored in P^\r\n@@ -6337,6 +6337,9 @@ function GetInteger(P: PUtf8Char; var err: integer): PtrInt;\n var\r\n   c: byte;\r\n   minus: boolean;\r\n+  {$ifdef CPU64}\r\n+  digits: PUtf8Char;\r\n+  {$endif CPU64}\r\n begin\r\n   result := 0;\r\n   err := 1; // don't return the exact index, just 1 as error flag\r\n@@ -6368,23 +6371,46 @@ function GetInteger(P: PUtf8Char; var err: integer): PtrInt;\n         c := byte(P^);\r\n       until c <> ord(' ');\r\n   end;\r\n+  while (c = ord('0')) and\r\n+        (P[1] in ['0' .. '9']) do\r\n+  begin\r\n+    inc(P);\r\n+    c := byte(P^);\r\n+  end;\r\n   dec(c, 48);\r\n   if c > 9 then\r\n     exit;\r\n   result := c;\r\n+  {$ifdef CPU64}\r\n+  digits := P;\r\n+  {$endif CPU64}\r\n   repeat\r\n     inc(P);\r\n     c := byte(P^);\r\n     dec(c, 48);\r\n     if c <= 9 then\r\n-      result := result * 10 + PtrInt(c)\r\n+    begin\r\n+      {$ifdef CPU64}\r\n+      if P - digits >= 19 then\r\n+        exit; // at most 19 significant digits: magnitude fits UInt64\r\n+      {$else}\r\n+      if PtrUInt(result) >= PtrUInt(High(PtrInt)) div 10 then\r\n+        if (PtrUInt(result) > PtrUInt(High(PtrInt)) div 10) or\r\n+           (c > High(PtrInt) mod 10 + ord(minus)) then\r\n+          exit;\r\n+      {$endif CPU64}\r\n+      result := PtrInt(PtrUInt(result) * 10 + c);\r\n+    end\r\n     else if c <> 256 - 48 then\r\n       exit\r\n     else\r\n       break;\r\n   until false;\r\n+  if PtrUInt(result) > PtrUInt(High(PtrInt)) + PtrUInt(ord(minus)) then\r\n+    exit;\r\n   err := 0; // success\r\n-  if minus then\r\n+  if minus and\r\n+     (result <> Low(PtrInt)) then\r\n     result := -result;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 8,
+          "patch": "@@ -6726,6 +6726,10 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+const\r\n+  Scale: double = 1.3407807929942597e154; // 2^512\r\n+  InvScale: double = 7.458340731200207e-155; // 2^-512\r\n+  MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n var\r\n   remdigit: integer;\r\n   frac, exp: PtrInt;\r\n@@ -6774,7 +6778,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if byte(ord(P^) - ord('0')) <= 9 then\r\n     begin\r\n       if (remdigit <> 0) or // avoid 64-bit overflow, but allow 19 digits\r\n-         (v64 > 922337203685477580) then\r\n+         (v64 > 922337203685477580) or\r\n+         ((v64 = 922337203685477580) and (P^ > '7')) then\r\n         dec(remdigit);\r\n       if remdigit >= 0 then // over-required digits are just ignored\r\n       begin\r\n@@ -6792,13 +6797,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if P^ <> '.' then\r\n       break;\r\n     inc(P);\r\n-    if frac > 0 then\r\n+    if frac <> 0 then\r\n       goto e; // will return partial value but err=1\r\n     dec(frac);\r\n   until false;\r\n   inc(frac, ord(frac < 0)); // adjust digits after '.'\r\n   if ord(P^) or $20 = ord('e') then\r\n   begin\r\n+    if not (fValid in flags) then\r\n+      goto e;\r\n     exp := 0;\r\n     exclude(flags, fValid);\r\n     inc(P);\r\n@@ -6812,27 +6819,54 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     repeat\r\n       if byte(ord(P^) - ord('0')) > 9 then\r\n         break;\r\n+      if exp >= High(PtrInt) div 10 then\r\n+        if (exp > High(PtrInt) div 10) or\r\n+           (ord(P^) - ord('0') > High(PtrInt) mod 10) then\r\n+          goto e;\r\n       exp := (exp * 10) + ord(P^) - ord('0');\r\n       include(flags, fValid);\r\n       inc(P);\r\n     until false;\r\n     if fNegExp in flags then\r\n-      dec(frac, exp)\r\n+    begin\r\n+      if frac < Low(PtrInt) + exp then\r\n+        goto e;\r\n+      dec(frac, exp);\r\n+    end\r\n     else\r\n-      inc(frac, exp);\r\n-    if (frac <= -324) or\r\n-       (frac >= 308) then\r\n     begin\r\n-      frac := 0;\r\n-      goto e; // limit to 5.0 x 10^-324 .. 1.7 x 10^308 double range\r\n+      if frac > High(PtrInt) - exp then\r\n+        goto e;\r\n+      inc(frac, exp);\r\n     end;\r\n   end;\r\n   if (fValid in flags) and\r\n      (P^ = #0) then\r\n     err := 0\r\n   else\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n+  if (frac <= -324) or\r\n+     (frac >= 308) then\r\n+  begin\r\n+    frac := 0;\r\n+    err := 1; // also bound the scale of numbers without an exponent\r\n+  end;\r\n   d64 := v64;\r\n+  if frac >= 290 then // avoid overflowing the final product, even with unmasked FPU\r\n+  begin\r\n+    result := (POW10[(frac and not 31) shr 5 + 34] *\r\n+               POW10[frac and 31] * InvScale) * d64;\r\n+    if result > MaxScaled then\r\n+    begin\r\n+      result := d64;\r\n+      err := 1;\r\n+    end\r\n+    else\r\n+      result := result * Scale;\r\n+    if fNeg in flags then\r\n+      result := -result;\r\n+    exit;\r\n+  end;\r\n   if frac >= -31 then\r\n     if frac <= 31 then // -31 .. + 31\r\n       result := POW10[frac]\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 14,
+          "patch": "@@ -11515,16 +11515,18 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n \r\n const\r\n   CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n+  CURRENCY_MAX: array[-4 .. -1] of UInt64 = (\r\n+    High(Int64), High(Int64) div 10, High(Int64) div 100, High(Int64) div 1000);\r\n \r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n var\r\n-  // logic below is extracted from mormot.core.base.pas' GetExtended()\r\n+  // logic below is extracted from mormot.core.text.pas' GetExtended()\r\n   remdigit: integer;\r\n   frac, exp {$ifdef CPUX86NOTPIC}, f {$endif}: PtrInt;\r\n   c: AnsiChar;\r\n   flags: set of (fNeg, fNegExp, fValid);\r\n-  v64: Int64; // allows 64-bit resolution for the digits (match 80-bit extended)\r\n+  v64: UInt64; // up to 19 digits, including the magnitude of Low(Int64)\r\n   d: double;\r\n begin\r\n   // 1. parse input text as number into v64, frac, digit, exp\r\n@@ -11541,6 +11543,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     inc(Json);\r\n     include(flags, fNeg);\r\n   end;\r\n+  if not (c in ['0' .. '9']) then\r\n+    exit;\r\n   if (c = '0') and\r\n      (Json[1] in ['0' .. '9']) then // '012' is not Json, but '0.xx' and '0' are\r\n     exit;\r\n@@ -11573,8 +11577,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     if c <> '.' then\r\n       break;\r\n     c := Json[1];\r\n-    if (frac > 0) or\r\n-       (c = #0) then // avoid ##.\r\n+    if (frac <> 0) or\r\n+       not (c in ['0' .. '9']) then // require a single dot followed by a digit\r\n       exit;\r\n     inc(json);\r\n     dec(frac);\r\n@@ -11601,33 +11605,54 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         break;\r\n       inc(Json);\r\n       dec(c, ord('0'));\r\n+      if exp >= High(PtrInt) div 10 then\r\n+        if (exp > High(PtrInt) div 10) or\r\n+           (byte(c) > High(PtrInt) mod 10) then\r\n+          exit;\r\n       exp := (exp * 10) + byte(c);\r\n       include(flags, fValid);\r\n     until false;\r\n     if fNegExp in flags then\r\n-      dec(frac, exp)\r\n+    begin\r\n+      if frac < Low(PtrInt) + exp then\r\n+        exit;\r\n+      dec(frac, exp);\r\n+    end\r\n     else\r\n+    begin\r\n+      if frac > High(PtrInt) - exp then\r\n+        exit;\r\n       inc(frac, exp);\r\n+    end;\r\n   end;\r\n   if not (fValid in flags) then\r\n     exit;\r\n-  if fNeg in flags then\r\n-    v64 := -v64;\r\n   // 2. now v64, frac, digit, exp contain number parsed from Json\r\n   if (frac = 0) and\r\n-     (remdigit >= 0) then // return an integer or Int64 value\r\n-  begin\r\n-    Value.VInt64 := v64;\r\n+     (remdigit >= 0) and\r\n+     ((v64 <= UInt64(High(Int64))) or\r\n+      ((v64 = UInt64(High(Int64)) + 1) and (fNeg in flags))) then\r\n+  begin\r\n+    Value.VInt64 := Int64(v64);\r\n+    if (fNeg in flags) and\r\n+       (v64 <= UInt64(High(Int64))) then\r\n+      Value.VInt64 := -Value.VInt64;\r\n     if remdigit <= 9 then\r\n       TSynVarData(Value).VType := varInt64\r\n     else\r\n       TSynVarData(Value).VType := varInteger;\r\n   end\r\n   else if (frac < 0) and\r\n-          (frac >= -4) then // currency as ###.0123\r\n+          (frac >= -4) and\r\n+          ((v64 <= CURRENCY_MAX[frac]) or\r\n+           ((frac = -4) and (v64 = UInt64(High(Int64)) + 1) and\r\n+            (fNeg in flags))) then // currency as ###.0123\r\n   begin\r\n     TSynVarData(Value).VType := varCurrency;\r\n-    Value.VInt64 := v64 * CURRENCY_FACTOR[frac]; // as round(CurrValue*10000)\r\n+    Value.VInt64 := Int64(v64 * UInt64(CURRENCY_FACTOR[frac]));\r\n+    if (fNeg in flags) and\r\n+       (Value.VInt64 <> Low(Int64)) then\r\n+      Value.VInt64 := -Value.VInt64; // as round(CurrValue*10000)\r\n   end\r\n   else if AllowVarDouble and\r\n           (frac > -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n@@ -11637,7 +11662,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     if f >= -31 then\r\n       if f <= 31 then\r\n         d := POW10[f] // -31 .. + 31\r\n-      else if (18 - remdigit) + integer(f) >= 308 the\n... [truncated, 999 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 109,
+          "deletions": 0,
+          "patch": "@@ -5023,6 +5023,56 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckSame(d, v);\r\n   end;\r\n \r\n+  {$ifdef CPU64}\r\n+  procedure CheckIntegerValue(const text: RawUtf8; expected: Int64);\r\n+  var\r\n+    err: integer;\r\n+    value: Int64;\r\n+  begin\r\n+    value := GetInt64(pointer(text), err);\r\n+    CheckEqual(err, 0, text);\r\n+    CheckEqual(value, expected, text);\r\n+  end;\r\n+\r\n+  {$endif CPU64}\r\n+\r\n+  procedure CheckJsonValue(const text: RawUtf8; kind: integer; expected: double);\r\n+  var\r\n+    v: variant;\r\n+    p: PUtf8Char;\r\n+  begin\r\n+    p := GetNumericVariantFromJson(pointer(text), TVarData(v), true);\r\n+    Check(p = PUtf8Char(pointer(text)) + length(text), text);\r\n+    CheckEqual(TVarData(v).VType, kind, text);\r\n+    CheckSame(double(v), expected, 0, text);\r\n+  end;\r\n+\r\n+  procedure CheckJsonExact(const text: RawUtf8; kind: integer; expected: Int64);\r\n+  var\r\n+    v: variant;\r\n+  begin\r\n+    Check(GetNumericVariantFromJson(pointer(text), TVarData(v), false) <> nil, text);\r\n+    CheckEqual(TVarData(v).VType, kind, text);\r\n+    CheckEqual(TVarData(v).VInt64, expected, text);\r\n+  end;\r\n+\r\n+  procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r\n+  var\r\n+    v: variant;\r\n+    d: double;\r\n+    err: integer;\r\n+  begin\r\n+    Check(GetNumericVariantFromJson(pointer(text), TVarData(v), true) = nil, text);\r\n+    {$ifndef WIN32DELPHI}\r\n+    if extendedToo then\r\n+    begin\r\n+      d := GetExtended(pointer(text), err);\r\n+      Check(err <> 0, text);\r\n+      Check(not IsInfinite(d) and not IsNan(d), text);\r\n+    end;\r\n+    {$endif WIN32DELPHI}\r\n+  end;\r\n+\r\n var\r\n   i, j, b, err: integer;\r\n   juint: cardinal absolute j;\r\n@@ -5503,6 +5553,65 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(184467440737095514);\r\n   CheckDoubleToShortSame(1844674407370955148);\r\n   {$endif FPC}\r\n+  // signed numeric boundaries and JSON grammar\r\n+  {$ifdef CPU64}\r\n+  CheckIntegerValue('9223372036854775807', High(Int64));\r\n+  CheckIntegerValue('-9223372036854775808', Low(Int64));\r\n+  CheckIntegerValue('  -  00000000000000000000000000000000123', -123);\r\n+  CheckIntegerValue('+0000', 0);\r\n+  for i := 0 to 3 do\r\n+  begin\r\n+    s := GetCsvItemString('9223372036854775808,-9223372036854775809,' +\r\n+      '18446744073709551616,99999999999999999999', i);\r\n+    GetInt64(pointer(s), err);\r\n+    Check(err <> 0, s);\r\n+  end;\r\n+  {$endif CPU64}\r\n+  CheckJsonExact('0', varInteger, 0);\r\n+  CheckJsonExact('-123', varInteger, -123);\r\n+  CheckJsonExact('9223372036854775807', varInt64, High(Int64));\r\n+  CheckJsonExact('-9223372036854775808', varInt64, Low(Int64));\r\n+  CheckJsonExact('922337203685477.5807', varCurrency, High(Int64));\r\n+  CheckJsonExact('-922337203685477.5808', varCurrency, Low(Int64));\r\n\n... [truncated, 1901 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": 579,
+      "is_merge": true
+    },
+    {
+      "sha": "6356fbaa56c1ef9a4ea4dacda6d6e999b40e52bb",
+      "short_sha": "6356fbaa",
+      "subject": "tests: cover latest date/time conversion functions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:25:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6356fbaa56c1ef9a4ea4dacda6d6e999b40e52bb",
+      "parents": [
+        "e498b9ef621ffe11580a1a9eb4644f71c203efe2"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16827\n+16828",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16827'\r\n+'2.4.16828'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 3,
+          "patch": "@@ -8139,7 +8139,8 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n \r\n var\r\n   i: integer;\r\n-  D: TDateTime;\r\n+  D, D2: TDateTime;\r\n+  u: Int64; // TUnixTime/TUnixMSTime\r\n   tmp: RawUtf8;\r\n   b: TTimeLogBits;\r\n   st, start: TSynSystemTime;\r\n@@ -8204,14 +8205,24 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n   st.Month := 13;\r\n   st.Normalize;\r\n   CheckEqual(st.ToText, '1984-01-01T00:00:00.000', 'nextyear 2');\r\n-  for i := 1700 to 2500 do\r\n+  for i := 1500 to 2500 do\r\n     Check(mormot.core.datetime.IsLeapYear(i) = SysUtils.IsLeapYear(i), 'IsLeapYear');\r\n   // this will test typically from year 1905 to 2065\r\n   D := Now / 20 + rnd.NextDouble * 20; // some starting random date/time\r\n   for i := 1 to 2000 do\r\n   begin\r\n     Test(D, true);\r\n     Test(D, false);\r\n+    u := DateTimeToUnixTime(D);\r\n+    st.FromUnixTime(u);\r\n+    CheckEqual(st.ToUnixTime, u);\r\n+    D2 := st.ToDateTime;\r\n+    Check(Abs(D2 - D) < (1 / SecsPerDay)); // we allow 999 ms error\r\n+    u := DateTimeToUnixMSTime(D);\r\n+    st.FromUnixMsTime(u);\r\n+    CheckEqual(st.ToUnixMsTime, u);\r\n+    D2 := st.ToDateTime;\r\n+    Check(Abs(D2 - D) < (1 / MilliSecsPerDay)); // we allow 1 ms error\r\n     D := D + rnd.NextDouble * 57; // go further a little bit: change date/time\r\n   end;\r\n   b.Value := Iso8601ToTimeLog('20150504');\r\n@@ -8379,7 +8390,7 @@ procedure TTestCoreBase.TimeZonesSlow(Context: TObject);\n   CheckEqual(DateTimeToIso8601Text(dt), '1994-11-06T08:49:37');\r\n   CheckEqual(DateTimeToHttpDate(dt), 'Sun, 06 Nov 1994 08:49:37 GMT');\r\n   UnixMSTimeUtcToHttpDate(DateTimeToUnixMSTime(dt), s31);\r\n-  Check(s31 = 'Sun, 06 Nov 1994 08:49:37 GMT', 'UnixMSTimeUtcToHttpDate');\r\n+  CheckEqualShort(s31, 'Sun, 06 Nov 1994 08:49:37 GMT', 'UnixMSTimeUtcToHttpDate');\r\n   CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(\r\n     'Sunday, 06-DEC-94 08:49:37 UTC')), '1994-12-06T08:49:37');\r\n   CheckEqual(DateTimeToIso8601Text(HttpDateToDateTime(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -770,7 +770,7 @@ procedure TTestCoreCrypto._SHA3;\n     s, i: PtrInt;\r\n     sign: TSynSigner;\r\n   begin\r\n-    // Original Keccak-256 vectors, independently checked with PyCryptodome.\r\n+    // Original Keccak-256 vectors, independently checked with PyCryptodome\r\n     Keccak('', 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470');\r\n     Keccak('abc', '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45');\r\n     SetLength(data, 1024);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e498b9ef621ffe11580a1a9eb4644f71c203efe2",
+      "short_sha": "e498b9ef",
+      "subject": "core: enhanced HTTP date support",
+      "body": "- to use the newly introducing low-level faster functions",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:24:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e498b9ef621ffe11580a1a9eb4644f71c203efe2",
+      "parents": [
+        "f5669b62f06f2d18f737951e0aa894dc81c294a7"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 12,
+          "patch": "@@ -598,10 +598,9 @@   TSynSystemTime = record\n     // $ Sun, 06 Nov 1994 08:49:37 GMT    ; IMF-fixdate\r\n     // $ Sunday, 06-Nov-94 08:49:37 GMT   ; obsolete RFC 850 format\r\n     // $ Sun Nov  6 08:49:37 1994         ; ANSI C's asctime() format\r\n-    function FromHttpDate(const httpdate: RawUtf8;\r\n-      tolocaltime: boolean = false): boolean;\r\n+    function FromHttpDate(const httpdate: RawUtf8; tolocaltime: boolean = false): boolean;\r\n     /// fill Year/Month/Day and Hour/Minute/Second fields from HTTP-date PUtf8Char\r\n-    function FromHttpDateBuffer(P: PUtf8Char; tolocaltime: boolean): boolean;\r\n+    function FromHttpDateBuffer(P: PUtf8Char; tolocaltime: boolean = false): boolean;\r\n     /// fill Hour/Minute/Second/MilliSecond fields from Microsoft TimeSpan 100 ns ticks\r\n     // - and returns the number of days\r\n     function FromTimeSpan(ticks: Int64): PtrUInt;\r\n@@ -814,6 +813,7 @@ function HttpDateToUnixTime(const httpdate: RawUtf8): TUnixTime;\n \r\n /// convert some \"HTTP-date\" format as defined by RFC 7231 into UTC date/time\r\n function HttpDateToUnixTimeBuffer(httpdate: PUtf8Char): TUnixTime;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n \r\n type\r\n   // HttpDateNowUtc consumes 37 chars, aligned to 40 bytes\r\n@@ -3544,21 +3544,19 @@ function HttpDateToDateTimeBuffer(httpdate: PUtf8Char; var datetime: TDateTime;\n end;\r\n \r\n function HttpDateToUnixTime(const httpdate: RawUtf8): TUnixTime;\r\n-var\r\n-  dt: TDateTime;\r\n begin\r\n-  result := 0;\r\n-  if HttpDateToDateTime(httpdate, dt, {tolocaltime=}false) then\r\n-    result := DateTimeToUnixTime(dt);\r\n+  result := HttpDateToUnixTimeBuffer(pointer(httpdate));\r\n end;\r\n \r\n function HttpDateToUnixTimeBuffer(httpdate: PUtf8Char): TUnixTime;\r\n var\r\n-  dt: TDateTime;\r\n+  T: TSynSystemTime;\r\n begin\r\n-  result := 0;\r\n-  if HttpDateToDateTimeBuffer(httpdate, dt, {tolocaltime=}false) then\r\n-    result := DateTimeToUnixTime(dt);\r\n+  if (httpdate <> nil) and\r\n+     T.FromHttpDateBuffer(httpdate) then\r\n+    result := T.ToUnixTime\r\n+  else\r\n+    result := 0;\r\n end;\r\n \r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16826\n+16827",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16826'\r\n+'2.4.16827'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f5669b62f06f2d18f737951e0aa894dc81c294a7",
+      "short_sha": "f5669b62",
+      "subject": "core: enhanced TTimeLogBits conversion methods",
+      "body": "- e.g. FromUnixTime/FromUnixMsTime wrappers",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:23:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f5669b62f06f2d18f737951e0aa894dc81c294a7",
+      "parents": [
+        "91739dd8d922f52efe3a23963a022aa6c7fc0871"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 19,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 17,
+          "patch": "@@ -3914,25 +3914,26 @@ procedure TTimeLogBits.From(DateTime: TDateTime; DateOnly: boolean);\n   end;\r\n end;\r\n \r\n-procedure TTimeLogBits.FromUnixTime(const UnixTime: TUnixTime);\r\n+procedure TTimeLogBits.From(Time: PSynSystemTime);\r\n+var\r\n+  v: PtrInt;\r\n begin\r\n-  From(UnixTimeToDateTime(UnixTime));\r\n+  v := PtrInt(Time^.Hour) + PtrInt(Time^.Day) shl 5 + PtrInt(Time^.Month) shl 10 +\r\n+       PtrInt(Time^.Year) shl 14 - (1 shl 5 + 1 shl 10);\r\n+  Value := (Int64(v) shl BTS_YY) + (PtrInt(Time^.Second) + PtrInt(Time^.Minute) shl SHR_M);\r\n end;\r\n \r\n-procedure TTimeLogBits.FromUnixMSTime(const UnixMSTime: TUnixMSTime);\r\n+procedure TTimeLogBits.FromUnixTime(const UnixTime: TUnixTime);\r\n+var\r\n+  T: TSynSystemTime;\r\n begin\r\n-  From(UnixMSTimeToDateTime(UnixMSTime));\r\n+  T.FromUnixTime(UnixTime);\r\n+  From(@T);\r\n end;\r\n \r\n-procedure TTimeLogBits.From(Time: PSynSystemTime);\r\n-var\r\n-  v: PtrInt;\r\n+procedure TTimeLogBits.FromUnixMSTime(const UnixMSTime: TUnixMSTime);\r\n begin\r\n-  v := Time^.Hour + Time^.Day shl 5 + Time^.Month shl 10 +\r\n-       Time^.Year shl 14 - (1 shl 5 + 1 shl 10);\r\n-  Value := v; // circumvent C1093 error on Delphi 5\r\n-  v := Time^.Second + Time^.Minute shl SHR_M;\r\n-  Value := (Value shl BTS_YY) + v;\r\n+  FromUnixTime(UnixMSTime div MilliSecsPerSec); // trim milliseconds\r\n end;\r\n \r\n procedure TTimeLogBits.FromUtcTime;\r\n@@ -4032,13 +4033,13 @@ function TTimeLogBits.Second: integer;\n \r\n function TTimeLogBits.ToUnixTime: TUnixTime;\r\n var\r\n-  dt: TDateTime;\r\n+  g: cardinal;\r\n begin\r\n-  dt := ToDateTime;\r\n-  if dt = 0 then\r\n-    result := 0\r\n+  if EncodeGregorian(Year, Month, Day, g) then\r\n+    result := ((Int64(g) - D1970) * SecsPerDay) +\r\n+              Second + (Minute * SecsPerMin) + (Hour * SecsPerHour)\r\n   else\r\n-    result := DateTimeToUnixTime(dt);\r\n+    result := 0;\r\n end;\r\n \r\n function TTimeLogBits.ToUnixMSTime: TUnixMSTime;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16825\n+16826",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16825'\r\n+'2.4.16826'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "91739dd8d922f52efe3a23963a022aa6c7fc0871",
+      "short_sha": "91739dd8",
+      "subject": "core: rewritten TSynSystemTime.FromUnixTime/FromUnixMsTime",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:23:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/91739dd8d922f52efe3a23963a022aa6c7fc0871",
+      "parents": [
+        "d7a78957dfbb0a7721713f313b4278e9d1846a18"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 10,
+          "patch": "@@ -2780,16 +2780,6 @@ procedure TSynSystemTime.FromDateTime(const dt: TDateTime);\n   FromTime(dt);\r\n end;\r\n \r\n-procedure TSynSystemTime.FromUnixTime(ut: TUnixTime);\r\n-begin\r\n-  FromDateTime(ut * SecsPerDate + UnixDateDelta); // via a temp TDateTime\r\n-end;\r\n-\r\n-procedure TSynSystemTime.FromUnixMsTime(ut: TUnixMsTime);\r\n-begin\r\n-  FromDateTime(ut * MilliSecsPerDate + UnixDateDelta); // via a temp TDateTime\r\n-end;\r\n-\r\n procedure TSynSystemTime.FromJulianDay(t: cardinal);\r\n var\r\n   t2, t3: cardinal;\r\n@@ -2831,6 +2821,36 @@ procedure TSynSystemTime.FromTime(const dt: TDateTime);\n   FromMS(QWord(round(abs(dt) * MilliSecsPerDay)) mod MilliSecsPerDay);\r\n end;\r\n \r\n+procedure TSynSystemTime.FromUnixTime(ut: TUnixTime);\r\n+var\r\n+  d, s: PtrInt; // no transient TDateTime needed\r\n+begin\r\n+  d := ut div SecsPerDay;\r\n+  s := ut - Int64(d) * SecsPerDay;\r\n+  if s < 0 then\r\n+  begin\r\n+    dec(d);\r\n+    inc(s, SecsPerDay);\r\n+  end;\r\n+  FromJulianDay(d + C1970);\r\n+  FromSec(s);\r\n+end;\r\n+\r\n+procedure TSynSystemTime.FromUnixMsTime(ut: TUnixMsTime);\r\n+var\r\n+  d, ms: PtrInt; // no transient TDateTime needed\r\n+begin\r\n+  d := ut div MilliSecsPerDay;\r\n+  ms := ut - Int64(d) * MilliSecsPerDay;\r\n+  if ms < 0 then\r\n+  begin\r\n+    dec(d);\r\n+    inc(ms, MilliSecsPerDay);\r\n+  end;\r\n+  FromJulianDay(d + C1970);\r\n+  FromMS(ms);\r\n+end;\r\n+\r\n procedure TSynSystemTime.FromMS(ms: PtrUInt);\r\n var\r\n   t: PtrUInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16824\n+16825",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16824'\r\n+'2.4.16825'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d7a78957dfbb0a7721713f313b4278e9d1846a18",
+      "short_sha": "d7a78957",
+      "subject": "core/db: use EncodeDateOrZero/EncodeTimeOrZero when possible",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:22:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d7a78957dfbb0a7721713f313b4278e9d1846a18",
+      "parents": [
+        "1d5e886139cdcb978229ded03da6c5711b6dbf63"
+      ],
+      "stats": {
+        "additions": 36,
+        "deletions": 73,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 44,
+          "patch": "@@ -1867,9 +1867,10 @@ procedure Iso8601ToDatePUtf8CharVar(P: PUtf8Char; L: PtrInt;\n var\r\n   y, m, d: cardinal;\r\n begin\r\n-  if (P = nil) or\r\n-     not Iso8601ToDatePUtf8Char(P, L, y, m, d) or\r\n-     not mormot.core.datetime.TryEncodeDate(y, m, d, PDateTime(@result)^) then\r\n+  if (P <> nil) and\r\n+     Iso8601ToDatePUtf8Char(P, L, y, m, d) then\r\n+    result := EncodeDateOrZero(y, m, d)\r\n+  else\r\n     PInt64(@result)^ := 0;\r\n end;\r\n \r\n@@ -2673,13 +2674,8 @@ procedure TSynDate.ComputeDayOfWeek;\n end;\r\n \r\n function TSynDate.ToDate: TDate;\r\n-var\r\n-  tmp: TDateTime; // for FPC\r\n begin\r\n-  if mormot.core.datetime.TryEncodeDate(Year, Month, Day, tmp) then\r\n-    result := tmp\r\n-  else\r\n-    result := 0;\r\n+  result := EncodeDateOrZero(Year, Month, Day);\r\n end;\r\n \r\n function TSynDate.ToText(Expanded: boolean): RawUtf8;\r\n@@ -2717,7 +2713,6 @@ function TryEncodeDayOfWeekInMonth(y, m, nthdow, dow: integer;\n function TSynSystemTime.EncodeForTimeChange(const aYear: word): TDateTime;\r\n var\r\n   dow, d: word;\r\n-  t: TDateTime;\r\n begin\r\n   if DayOfWeek = 0 then\r\n     dow := 7 // Delphi/FPC Sunday = 7\r\n@@ -2737,8 +2732,7 @@ function TSynSystemTime.EncodeForTimeChange(const aYear: word): TDateTime;\n     dec(d);\r\n   end;\r\n   // finally add the time when change is due\r\n-  if TryEncodeTime(Hour, Minute, Second, MilliSecond, t) then\r\n-    result := result + t;\r\n+  result := result + EncodeTimeOrZero(Hour, Minute, Second, MilliSecond);\r\n end;\r\n \r\n procedure TSynSystemTime.Clear;\r\n@@ -3258,14 +3252,9 @@ procedure TSynSystemTime.ToTempUtf8(var Dest: TTempUtf8; Expanded: boolean;\n end;\r\n \r\n function TSynSystemTime.ToDateTime: TDateTime;\r\n-var\r\n-  time: TDateTime;\r\n begin\r\n-  if mormot.core.datetime.TryEncodeDate(Year, Month, Day, result) and\r\n-     mormot.core.datetime.TryEncodeTime(Hour, Minute, Second, MilliSecond, time) then\r\n-    result := result + time\r\n-  else\r\n-    result := 0;\r\n+  result := EncodeDateOrZero(Year, Month, Day) +\r\n+            EncodeTimeOrZero(Hour, Minute, Second, MilliSecond);\r\n end;\r\n \r\n function TSynSystemTime.ToUnixTime: TUnixTime;\r\n@@ -3945,17 +3934,15 @@ procedure TTimeLogBits.FromNow;\n function TTimeLogBits.ToTime: TTime;\r\n var\r\n   lo: PtrUInt;\r\n-  tmp: TDateTime; // for FPC\r\n begin\r\n   {$ifdef CPU64}\r\n   lo := Value;\r\n   {$else}\r\n   lo := PCardinal(@Value)^;\r\n   {$endif CPU64}\r\n-  if (lo and (1 shl SHR_DD - 1) <> 0) and\r\n-     mormot.core.datetime.TryEncodeTime((lo shr SHR_H) and AND_H,\r\n-        (lo shr SHR_M) and AND_M, lo and AND_S, 0, tmp) then\r\n-    result := tmp\r\n+  if (lo and (1 shl SHR_DD - 1)) <> 0 then\r\n+    result := EncodeTimeOrZero((lo shr SHR_H) and AND_H,\r\n+      (lo shr SHR_M) and AND_M, lo and AND_S, 0)\r\n   else\r\n     result := 0;\r\n end;\r\n@@ -3971,18 +3958,13 @@ function TTimeLogBits.ToDate: TDate;\n   y := Value shr SHR_YY;\r\n   lo := PCardinal(@Value)^;\r\n   {$endif CPU64}\r\n-  if (y = 0) or\r\n-     not mormot.core.datetime.TryEncodeDate(y,\r\n-                       1 + (lo shr SHR_MM) and AND_MM,\r\n-                       1 + (lo shr SHR_DD) and AND_DD,\r\n-                       TDateTime(result)) then\r\n-    result := 0;\r\n+  result := EncodeDateOrZero(y, 1 + (lo shr SHR_MM) and AND_MM,\r\n+    1 + (lo shr SHR_DD) and AND_DD);\r\n end;\r\n \r\n function TTimeLogBits.ToDateTime: TDateTime;\r\n var\r\n   y, lo: PtrUInt;\r\n-  time: TDateTime;\r\n begin\r\n   {$ifdef CPU64}\r\n   lo := Value;\r\n@@ -3991,19 +3973,11 @@ function TTimeLogBits.ToDateTime: TDateTime;\n   y := Value shr SHR_YY;\r\n   lo := PCardinal(@Value)^;\r\n   {$endif CPU64}\r\n-  if (y = 0) or\r\n-      not mormot.core.datetime.TryEncodeDate(y,\r\n-                        1 + (lo shr SHR_MM) and AND_MM,\r\n-                        1 + (lo shr SHR_DD) and AND_DD,\r\n-                        result) then\r\n-    result := 0;\r\n-  if (lo and (1 shl SHR_DD - 1) <> 0) and\r\n-     mormot.core.datetime.TryEncodeTime((lo shr SHR_H) and AND_H,\r\n-                   (lo shr SHR_M) and AND_M,\r\n-                   lo and AND_S,\r\n-                   0,\r\n-                   time) then\r\n-    result := resul\n... [truncated, 327 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 9,
+          "patch": "@@ -846,17 +846,14 @@ function SQL_TIMESTAMP_STRUCT.From(DateTime: TDateTime;\n end;\r\n \r\n function SQL_TIMESTAMP_STRUCT.ToDateTime(DataType: SqlSmallint): TDateTime;\r\n-var\r\n-  time: TDateTime;\r\n begin\r\n-  if (DataType = SQL_TYPE_TIME) or\r\n-     not mormot.core.datetime.TryEncodeDate(Year, Month, Day, result) then\r\n-    result := 0;\r\n+  if DataType = SQL_TYPE_TIME then\r\n+    result := 0\r\n+  else\r\n+    result := EncodeDateOrZero(Year, Month, Day);\r\n   if (DataType <> SQL_TYPE_DATE) and\r\n-     (PInt64(@Hour)^ <> 0)  and\r\n-     mormot.core.datetime.TryEncodeTime(Hour, Minute, Second,\r\n-                                        Fraction div 1000000, time) then\r\n-    result := result  +  time;\r\n+     (PInt64(@Hour)^ <> 0)  then\r\n+    result := result + EncodeTimeOrZero(Hour, Minute, Second, Fraction div 1000000);\r\n end;\r\n \r\n function SQL_TIMESTAMP_STRUCT.ToIso8601(Dest: PUtf8Char; DataType: SqlSmallint;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.raw.oracle.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 18,
+          "patch": "@@ -1018,27 +1018,19 @@ implementation\n // see http://download.oracle.com/docs/cd/B28359_01/appdev.111/b28395/oci03typ.htm#sthref389\r\n \r\n function TOracleDate.ToDateTime: TDateTime;\r\n-var\r\n-  time: TDateTime;\r\n begin\r\n-  if (PInteger(@self)^ = 0) and\r\n-     (PInteger(PtrUInt(@self) + 3)^ = 0) then\r\n-    // Cent=Year=Month=Day=Hour=Main=Sec=0 -> returns 0\r\n-    result := 0\r\n-  else\r\n+  if (Cent <= 100) or\r\n+     ((PInteger(@self)^ = 0) and\r\n+      (PInteger(PAnsiChar(@self) + 3)^ = 0)) then // 0 or not supported date\r\n   begin\r\n-    if (Cent <= 100) or\r\n-      // avoid TDateTime values < 0 (generates wrong DecodeTime)\r\n-      not mormot.core.datetime.TryEncodeDate(\r\n-            (Cent - 100) * 100 + Year - 100, Month, Day, result) then\r\n-      result := 0;\r\n-    if (Hour > 1) or\r\n-       (Min > 1) or\r\n-       (Sec > 1) then\r\n-      if mormot.core.datetime.TryEncodeTime(\r\n-           Hour - 1, Min - 1, Sec - 1, 0, time) then\r\n-        result := result + time;\r\n+    result := 0;\r\n+    exit;\r\n   end;\r\n+  result := EncodeDateOrZero((Cent - 100) * 100 + Year - 100, Month, Day);\r\n+  if (Hour > 1) or\r\n+     (Min > 1) or\r\n+     (Sec > 1) then\r\n+    result := result + EncodeTimeOrZero(Hour - 1, Min - 1, Sec - 1, 0);\r\n end;\r\n \r\n procedure TOracleDate.ToIso8601(var aIso8601: RawUtf8);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16823\n+16824",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16823'\r\n+'2.4.16824'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Database"
+      ],
+      "units": [
+        "mormot.core.datetime",
+        "mormot.db.raw.odbc",
+        "mormot.db.raw.oracle"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1d5e886139cdcb978229ded03da6c5711b6dbf63",
+      "short_sha": "1d5e8861",
+      "subject": "core: introducing EncodeDateOrZero/EncodeTimeOrZero wrappers",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:20:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1d5e886139cdcb978229ded03da6c5711b6dbf63",
+      "parents": [
+        "c57314969f6ae144cd54d289bf186d19139eaea1"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 0,
+          "patch": "@@ -722,10 +722,18 @@ function EncodeGregorian(Year, Month, Day: cardinal; var Greg: cardinal): boolea\n function TryEncodeDate(Year, Month, Day: cardinal; var Date: TDateTime): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n \r\n+/// our own faster version of \"if not TryEncodeDate(Y, M, D, V) then V := 0\"\r\n+function EncodeDateOrZero(Year, Month, Day: PtrUInt): TDate;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n+\r\n /// our own faster version of the corresponding RTL function\r\n function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; var Time: TDateTime): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n \r\n+  /// our own faster version of \"if not TryEncodeTime(H, M, S, MS, V) then V := 0\"\r\n+function EncodeTimeOrZero(Hour, Min, Sec, MSec: PtrUInt): TTime;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n+\r\n /// our own faster version of the corresponding RTL function\r\n // - returns 0 if TryEncodeDate() failed but just ignore TryEncodeTime() failure\r\n function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDateTime;\r\n@@ -1606,6 +1614,15 @@ function TryEncodeDate(Year, Month, Day: cardinal; var Date: TDateTime): boolean\n     result := false;\r\n end;\r\n \r\n+function EncodeDateOrZero(Year, Month, Day: PtrUInt): TDate;\r\n+var\r\n+  g: cardinal;\r\n+begin\r\n+  if not EncodeGregorian(Year, Month, Day, g) then\r\n+    g := D1899;\r\n+  result := g - D1899; // separated to avoid sign issue\r\n+end;\r\n+\r\n function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; var Time: TDateTime): boolean;\r\n var\r\n   d: cardinal;\r\n@@ -1621,6 +1638,22 @@ function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; var Time: TDateTime): boo\n   result := true;\r\n end;\r\n \r\n+function EncodeTimeOrZero(Hour, Min, Sec, MSec: PtrUInt): TTime;\r\n+var\r\n+  d: cardinal;\r\n+begin\r\n+  if (Hour > 23) or\r\n+     (Min > 59) or\r\n+     (Sec > 59) or\r\n+     (MSec > 999) then\r\n+  begin\r\n+    result := 0;\r\n+    exit;\r\n+  end;\r\n+  d := Hour * MilliSecsPerHour + Min * MilliSecsPerMin + Sec * MilliSecsPerSec + MSec;\r\n+  result := d * MilliSecsPerDate;\r\n+end;\r\n+\r\n function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDateTime;\r\n begin\r\n   result := EncodeDateOrZero(Year, Month, Day) + EncodeTimeOrZero(Hour, Min, Sec, MSec);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16822\n+16823",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16822'\r\n+'2.4.16823'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c57314969f6ae144cd54d289bf186d19139eaea1",
+      "short_sha": "c5731496",
+      "subject": "core: new TSynSystemTime.ToUnixTime/ToUnixMSTime methods",
+      "body": "- will use no transient TDateTime any more\n- just pure fast integer arithmetic",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:20:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c57314969f6ae144cd54d289bf186d19139eaea1",
+      "parents": [
+        "20876cb47d21094868fb0ea380999d0e878bc4d1"
+      ],
+      "stats": {
+        "additions": 15,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 5,
+          "patch": "@@ -669,6 +669,9 @@   TSynSystemTime = record\n     function ToDateTime: TDateTime;\r\n     /// convert the stored time into a TUnixTime in seconds since UNIX Epoch\r\n     function ToUnixTime: TUnixTime;\r\n+    /// convert the stored time into a TUnixMSTime in milliseconds since UNIX Epoch\r\n+    function ToUnixMsTime: TUnixMsTime;\r\n+      {$ifdef HASINLINE}inline;{$endif}\r\n     /// copy Year/Month/DayOfWeek/Day fields to a TSynDate\r\n     procedure ToSynDate(out date: TSynDate);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n@@ -3234,13 +3237,18 @@ function TSynSystemTime.ToDateTime: TDateTime;\n \r\n function TSynSystemTime.ToUnixTime: TUnixTime;\r\n var\r\n-  dt: TDateTime;\r\n+  g: cardinal;\r\n begin\r\n-  dt := ToDateTime;\r\n-  if dt = 0 then\r\n-    result := 0\r\n+  if EncodeGregorian(Year, Month, Day, g) then\r\n+    result := ((Int64(g) - D1970) * SecsPerDay) +\r\n+              Second + (Minute * SecsPerMin) + (Hour * SecsPerHour)\r\n   else\r\n-    result := DateTimeToUnixTime(dt);\r\n+    result := 0;\r\n+end;\r\n+\r\n+function TSynSystemTime.ToUnixMsTime: TUnixMsTime;\r\n+begin\r\n+  result := ToUnixTime * MilliSecsPerSec + MilliSecond;\r\n end;\r\n \r\n procedure TSynSystemTime.ToSynDate(out date: TSynDate);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16821\n+16822",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16821'\r\n+'2.4.16822'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "20876cb47d21094868fb0ea380999d0e878bc4d1",
+      "short_sha": "20876cb4",
+      "subject": "core: new EncodeGregorian() low-level computation function",
+      "body": "- used by our TryEncodeDate() wrapper\n- much faster than the one in SysUtils, and even faster than the one we were using",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:18:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/20876cb47d21094868fb0ea380999d0e878bc4d1",
+      "parents": [
+        "8d552e6b583d3ef730301f123aeeaeefa2ce6dd4"
+      ],
+      "stats": {
+        "additions": 83,
+        "deletions": 65,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 81,
+          "deletions": 63,
+          "patch": "@@ -712,11 +712,15 @@ procedure FromGlobalTime(out NewTime: TSynSystemTime; LocalTime: boolean;\n /// low-level retrieve the current decoded date/time from OS with no cache\r\n procedure RawGlobalTime(out Time: TSynSystemTime; LocalTime: boolean);\r\n \r\n+/// low-level fast Julian/Gregorian calendar calculation\r\n+function EncodeGregorian(Year, Month, Day: cardinal; var Greg: cardinal): boolean;\r\n+\r\n /// our own faster version of the corresponding RTL function\r\n-function TryEncodeDate(Year, Month, Day: cardinal; out Date: TDateTime): boolean;\r\n+function TryEncodeDate(Year, Month, Day: cardinal; var Date: TDateTime): boolean;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n \r\n /// our own faster version of the corresponding RTL function\r\n-function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; out Time: TDateTime): boolean;\r\n+function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; var Time: TDateTime): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n \r\n /// our own faster version of the corresponding RTL function\r\n@@ -1544,6 +1548,81 @@ function TimeSpanToText(value: Int64): RawUtf8;\n   DaysFromMarch: array[0 .. 11] of word = ( // pre-computed (Month * D2 + 2) div 5\r\n     0, 31, 61, 92, 122, 153, 184, 214, 245, 275, 306, 337);\r\n \r\n+function EncodeGregorian(Year, Month, Day: cardinal; var Greg: cardinal): boolean;\r\n+var\r\n+  m, d: cardinal; // code will use fast reciprocal: no TDiv100Rec()\r\n+begin\r\n+  result := false;\r\n+  if (cardinal(Month - 1) >= 12) or     // 1..12\r\n+     (Day = 0) or             // 1..xx\r\n+     (cardinal(Year - 1) >= 9999) then  // 1..9999 as FPC RTL itself\r\n+    exit;\r\n+  {$ifdef WIN64DELPHI}\r\n+  d := (QWord(Year) * DIV100_INV) shr 37; // we can avoid div on Delphi Win64\r\n+  {$else}\r\n+  d := Year div 100; // use fast reciprocal on FPC, plain div on Delphi Win32\r\n+  {$endif WIN64DELPHI}\r\n+  m := Year - (d * 100);\r\n+  if Day > DaysPerMonth[(Year and 3 = 0) and // inlined IsLeapYear()\r\n+            ((m <> 0) or ((d and 3) = 0))][Month] then\r\n+    exit;\r\n+  if Month > 2 then\r\n+    dec(Month, 3)\r\n+  else\r\n+  begin\r\n+    inc(Month, 9);\r\n+    if m = 0 then // Div100(Year - 1, y100)\r\n+    begin\r\n+      dec(d);\r\n+      m := 99;\r\n+    end\r\n+    else\r\n+      dec(m);\r\n+  end;\r\n+  d := d * D1; // in specific steps for better FPC codegen\r\n+  m := m * D0;\r\n+  d := d shr 2;\r\n+  inc(d, m shr 2);\r\n+  inc(d, DaysFromMarch[Month]);\r\n+  inc(d, Day);\r\n+  Greg := d;\r\n+  // Greg := (d * D1) shr 2 + (m * D0) shr 2 + (Month * D2 + 2) div 5 + Day;\r\n+  result := true;\r\n+end;\r\n+\r\n+function TryEncodeDate(Year, Month, Day: cardinal; var Date: TDateTime): boolean;\r\n+var\r\n+  g: cardinal;\r\n+begin\r\n+  if EncodeGregorian(Year, Month, Day, g) then\r\n+  begin\r\n+    unaligned(Date) := g - D1899; // separated to avoid sign issue\r\n+    result := true;\r\n+  end\r\n+  else\r\n+    result := false;\r\n+end;\r\n+\r\n+function TryEncodeTime(Hour, Min, Sec, MSec: cardinal; var Time: TDateTime): boolean;\r\n+var\r\n+  d: cardinal;\r\n+begin\r\n+  result := false;\r\n+  if (Hour > 23) or\r\n+     (Min > 59) or\r\n+     (Sec > 59) or\r\n+     (MSec > 999) then\r\n+    exit;\r\n+  d := Hour * MilliSecsPerHour + Min * MilliSecsPerMin + Sec * MilliSecsPerSec + MSec;\r\n+  unaligned(Time) := d * MilliSecsPerDate;\r\n+  result := true;\r\n+end;\r\n+\r\n+function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDateTime;\r\n+begin\r\n+  result := EncodeDateOrZero(Year, Month, Day) + EncodeTimeOrZero(Hour, Min, Sec, MSec);\r\n+end;\r\n+\r\n function IsLeapYear(Year: cardinal): boolean;\r\n begin\r\n   if Year and 3 <> 0 then\r\n@@ -2466,67 +2545,6 @@ procedure FromGlobalTime(out NewTime: TSynSystemTime; LocalTime: boolean;\n   end;\r\n end;\r\n \r\n-function TryEncodeDate(Year, Month, Day: cardinal; out Date: TDateTime): boolean;\r\n-var\r\n-  y100: TDiv100Rec;\r\n-  d: cardinal;\r\n-begin\r\n-  result := false;\r\n-  if (Month - 1 >= 12) or\r\n-     (Day = 0) or\r\n-     (Year = 0) or\r\n-     (Year > 10000) then\r\n-    exit;\r\n-  Div100(Year, y100{%H-});\r\n-  if Day > DaysPerMonth[(Year and 3 = 0) and // inlined IsLeapYear()\r\n-            ((y\n... [truncated, 1321 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16820\n+16821",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16820'\r\n+'2.4.16821'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8d552e6b583d3ef730301f123aeeaeefa2ce6dd4",
+      "short_sha": "8d552e6b",
+      "subject": "core: rewritten IsLeapYear()",
+      "body": "- for the fastest algorithm possible",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:16:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8d552e6b583d3ef730301f123aeeaeefa2ce6dd4",
+      "parents": [
+        "f8fe89b219f652db80111fd7e4aa90d3ac005d52"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 30,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 28,
+          "patch": "@@ -725,6 +725,7 @@ function EncodeDateTime(Year, Month, Day, Hour, Min, Sec, MSec: cardinal): TDate\n \r\n /// our own faster version of the corresponding RTL function\r\n function IsLeapYear(Year: cardinal): boolean;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n \r\n /// compute how many days there are in a given month\r\n function DaysInMonth(Year, Month: cardinal): cardinal; overload;\r\n@@ -1543,6 +1544,29 @@ function TimeSpanToText(value: Int64): RawUtf8;\n   DaysFromMarch: array[0 .. 11] of word = ( // pre-computed (Month * D2 + 2) div 5\r\n     0, 31, 61, 92, 122, 153, 184, 214, 245, 275, 306, 337);\r\n \r\n+function IsLeapYear(Year: cardinal): boolean;\r\n+begin\r\n+  if Year and 3 <> 0 then\r\n+    result := false\r\n+  else if Year and 15 <> 0 then // need to check (Year mod 25) <> 0\r\n+    result := cardinal(Year * $c28f5c29) > $0a3d70a3 // 25*$C28F5C29 = 1(mod2^32)\r\n+  else\r\n+    result := true;\r\n+end;\r\n+\r\n+function DaysInMonth(Year, Month: cardinal): cardinal;\r\n+begin\r\n+  result := DaysPerMonth[mormot.core.datetime.IsLeapYear(Year)][Month];\r\n+end;\r\n+\r\n+function DaysInMonth(Date: TDateTime): cardinal;\r\n+var\r\n+  dt: TSynSystemTime;\r\n+begin\r\n+  dt.FromDate(Date); // faster than RTL DecodeDate()\r\n+  result := dt.DaysInMonth;\r\n+end;\r\n+\r\n function Iso8601ToDateTimePUtf8Char(P: PUtf8Char; L: PtrInt): TDateTime;\r\n var\r\n   tmp: TDateTime; // circumvent FPC limitation\r\n@@ -2613,34 +2637,6 @@ function TSynDate.ToText(Expanded: boolean): RawUtf8;\n end;\r\n \r\n \r\n-function IsLeapYear(Year: cardinal): boolean;\r\n-var\r\n-  d100: TDiv100Rec;\r\n-begin\r\n-  if Year and 3 = 0 then\r\n-  begin\r\n-    Div100(Year, d100{%H-});\r\n-    result := ((d100.M <> 0) or // (Year mod 100 > 0)\r\n-               (Year - ((d100.D shr 2) * 400) = 0)); // (Year mod 400 = 0))\r\n-  end\r\n-  else\r\n-    result := false;\r\n-end;\r\n-\r\n-function DaysInMonth(Year, Month: cardinal): cardinal;\r\n-begin\r\n-  result := DaysPerMonth[mormot.core.datetime.IsLeapYear(Year)][Month];\r\n-end;\r\n-\r\n-function DaysInMonth(Date: TDateTime): cardinal;\r\n-var\r\n-  dt: TSynSystemTime;\r\n-begin\r\n-  dt.FromDate(Date); // faster than RTL DecodeDate()\r\n-  result := dt.DaysInMonth;\r\n-end;\r\n-\r\n-\r\n { TSynSystemTime }\r\n \r\n function TSynSystemTime.DaysInMonth: cardinal;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16819\n+16820",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16819'\r\n+'2.4.16820'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f8fe89b219f652db80111fd7e4aa90d3ac005d52",
+      "short_sha": "f8fe89b2",
+      "subject": "core: new TSynSystemTime.FromJulianDay method",
+      "body": "- with very optimized algorithm\n- used e.g. by TSynSystemTime.FromDate()",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:14:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f8fe89b219f652db80111fd7e4aa90d3ac005d52",
+      "parents": [
+        "e570e19e37a1838e4c92bd1f4b3d73da61e94b79"
+      ],
+      "stats": {
+        "additions": 46,
+        "deletions": 21,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 44,
+          "deletions": 19,
+          "patch": "@@ -577,6 +577,8 @@   TSynSystemTime = record\n     procedure FromUnixTime(ut: TUnixTime);\r\n     /// fill fields from the given value - but not DayOfWeek\r\n     procedure FromUnixMsTime(ut: TUnixMsTime);\r\n+    /// fill Year/Month/Day fields from the given Julian Day Number\r\n+    procedure FromJulianDay(t: cardinal);\r\n     /// fill Hour/Minute/Second/Millisecond fields from the given number of milliseconds\r\n     // - faster than the RTL DecodeTime() function\r\n     procedure FromMS(ms: PtrUInt);\r\n@@ -835,6 +837,16 @@ function NowToFileMonthShort(localtime: boolean = false): TShort7;\n function TimeToString: RawUtf8;\r\n \r\n const\r\n+  // Date Translation constants - see http://en.wikipedia.org/wiki/Julian_day\r\n+  D0    = 1461;\r\n+  D1    = 146097;\r\n+  D2    = 153;\r\n+  CGREG = 1721119; // algorithm's Gregorian base\r\n+  C1899 = 2415019; // JDN of 1899-12-30 = TDateTime 0\r\n+  C1970 = 2440588; // JDN of 1900-01-01 = Unix Epoch\r\n+  D1899 = C1899 - CGREG; // = 693900\r\n+  D1970 = C1970 - CGREG; // = 719469\r\n+\r\n   /// used e.g. by DateTimeMSToString and TJsonWriter.AddDateTimeMS\r\n   DTMS_FMT: array[boolean] of RawUtf8 = (\r\n     '%%%%%%%%%',\r\n@@ -1523,10 +1535,13 @@ function TimeSpanToText(value: Int64): RawUtf8;\n \r\n { ************ ISO-8601 Compatible Date/Time Text Encoding }\r\n \r\n-const // sysutils' MonthDays[] stores Word values - and better alignment here\r\n+const\r\n+  // tables for Gregorian date translation algorithms (faster than SysUtils)\r\n   DaysPerMonth: array[{leapYear=}boolean, 0 .. 15] of byte = (\r\n    (0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 0, 0, 0),\r\n    (0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 0, 0, 0));\r\n+  DaysFromMarch: array[0 .. 11] of word = ( // pre-computed (Month * D2 + 2) div 5\r\n+    0, 31, 61, 92, 122, 153, 184, 214, 245, 275, 306, 337);\r\n \r\n function Iso8601ToDateTimePUtf8Char(P: PUtf8Char; L: PtrInt): TDateTime;\r\n var\r\n@@ -1660,10 +1675,10 @@ procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\n     if y > 9999 then\r\n       exit; // avoid integer overflow e.g. if '0000' is an invalid date\r\n     Div100(y, d100{%H-});\r\n-    unaligned(result) := cardinal(cardinal(146097 * d100.d) shr 2) +\r\n-                         cardinal(cardinal(1461 * d100.m) shr 2) +\r\n-                         cardinal(cardinal(153 * m + 2) div 5) + d;\r\n-    unaligned(result) := unaligned(result) - 693900; // avoid sign issue\r\n+    unaligned(result) := cardinal(cardinal(D1 * d100.d) shr 2) +\r\n+                         cardinal(cardinal(D0 * d100.m) shr 2) +\r\n+                         cardinal(cardinal(D2 * m + 2) div 5) + d;\r\n+    unaligned(result) := unaligned(result) - D1899; // avoid sign issue\r\n     if L < 15 then\r\n       exit; // not enough space to retrieve the time\r\n   end;\r\n@@ -2731,30 +2746,40 @@ procedure TSynSystemTime.FromUnixMsTime(ut: TUnixMsTime);\n   FromDateTime(ut * MilliSecsPerDate + UnixDateDelta); // via a temp TDateTime\r\n end;\r\n \r\n-procedure TSynSystemTime.FromDate(const dt: TDateTime);\r\n+procedure TSynSystemTime.FromJulianDay(t: cardinal);\r\n var\r\n-  t, t2, t3: PtrUInt;\r\n+  t2, t3: cardinal;\r\n begin\r\n+  t2 := CGREG;\r\n   PInt64(@Year)^ := 0; // quickly reset all Date fields\r\n-  t := Trunc(dt);\r\n-  t := (t + 693900) * 4 - 1;\r\n-  if PtrInt(t) < 0 then\r\n+  if t <= t2 then\r\n     exit;\r\n-  t3 := t div 146097;\r\n-  t2 := (t - t3 * 146097) and not 3;\r\n-  t := PtrUInt(t2 + 3) div 1461; // PtrUInt() needed for FPC i386\r\n+  dec(t, t2);\r\n+  t := t * 4 - 1;\r\n+  t3 := t div D1;\r\n+  t2 := (t - t3 * D1) and not 3;\r\n+  t := (t2 + 3) div D0;\r\n   Year := t3 * 100 + t;\r\n-  t2 := ((t2 + 7 - t * 1461) shr 2) * 5;\r\n-  t3 := PtrUInt(t2 - 3) div 153;\r\n-  Day := PtrUInt(t2 + 2 - t3 * 153) div 5;\r\n+  t3 := t * D0;\r\n+  inc(t2, 7);\r\n+  dec(t2, t3);\r\n+  t2 := t2 shr 2;\r\n+  t3 := t2 * 535;\r\n+  dec(t3, 202);\r\n+  t3 := t3 shr 14;  // exact (t2 * 5 - 3) div D2 for t2 in 1..366\r\n+  Day := t2 - DaysFromMarch[t3]; // pre-computed (Month * D2 + 2) div 5\r\n   if t3 < 10 then\r\n-    inc(t3, 3)\r\n+    Month := t3 + 3\r\n   else\r\n   begin\r\n- \n... [truncated, 263 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16818\n+16819",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16818'\r\n+'2.4.16819'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e570e19e37a1838e4c92bd1f4b3d73da61e94b79",
+      "short_sha": "e570e19e",
+      "subject": "core: new TSynSystemTime.FromTimeBuffer method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:11:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e570e19e37a1838e4c92bd1f4b3d73da61e94b79",
+      "parents": [
+        "bebea2f92f003191c7a85c00ffd4e16804ac581c"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 8,
+          "patch": "@@ -589,6 +589,8 @@   TSynSystemTime = record\n     /// fill Year/Month/Day and Hour/Minute/Second fields from the given ISO-8601 text\r\n     // - returns true on success\r\n     function FromText(const iso: RawUtf8): boolean;\r\n+    /// fill Hour/Minute/Second/MilliSecond fields from the given ISO-8601 text\r\n+    function FromTimeBuffer(P: PUtf8Char; L: PtrInt): boolean;\r\n     /// fill Year/Month/Day and Hour/Minute/Second fields from HTTP-date format\r\n     // - defined e.g. by https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.1\r\n     // $ Sun, 06 Nov 1994 08:49:37 GMT    ; IMF-fixdate\r\n@@ -2804,14 +2806,29 @@ function TSynSystemTime.FromText(const iso: RawUtf8): boolean;\n   end;\r\n end;\r\n \r\n-function TSynSystemTime.FromHttpDateBuffer(\r\n-  P: PUtf8Char; tolocaltime: boolean): boolean;\r\n+function TSynSystemTime.FromTimeBuffer(P: PUtf8Char; L: PtrInt): boolean;\r\n+var\r\n+  h, mi, ss, ms: cardinal;\r\n+begin\r\n+  if Iso8601ToTimePUtf8Char(P, L, h, mi, ss, ms) then\r\n+  begin\r\n+    Hour := h;\r\n+    Minute := mi;\r\n+    Second := ss;\r\n+    MilliSecond := ms;\r\n+    result := true;\r\n+  end\r\n+  else\r\n+    result := false;\r\n+end;\r\n+\r\n+function TSynSystemTime.FromHttpDateBuffer(P: PUtf8Char; tolocaltime: boolean): boolean;\r\n var\r\n   pnt: byte;\r\n   hasday: boolean;\r\n   beg: PUtf8Char;\r\n   zone: integer;\r\n-  v, h, mi, ss, ms: cardinal;\r\n+  v: cardinal;\r\n   dt, t: TDateTime;\r\n begin\r\n   // Sun, 06 Nov 1994 08:49:37 GMT    ; RFC 822, updated by RFC 1123\r\n@@ -2882,12 +2899,8 @@ function TSynSystemTime.FromHttpDateBuffer(\n               end;\r\n             2:\r\n               // e.g. '08:49:37 GMT'\r\n-              if Iso8601ToTimePUtf8Char(beg, P - beg, h, mi, ss, ms) then\r\n+              if FromTimeBuffer(beg, P - beg) then\r\n               begin\r\n-                Hour := h;\r\n-                Minute := mi;\r\n-                Second := ss;\r\n-                MilliSecond := ms;\r\n                 zone := 0; // GMT by default\r\n                 ParseTimeZone(P, zone);\r\n               end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16817\n+16818",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16817'\r\n+'2.4.16818'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bebea2f92f003191c7a85c00ffd4e16804ac581c",
+      "short_sha": "bebea2f9",
+      "subject": "all: some code cleaning with no functional change",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:11:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bebea2f92f003191c7a85c00ffd4e16804ac581c",
+      "parents": [
+        "5313e5454393de7356e97aac1520928d3a083dc8"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 12,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -865,7 +865,7 @@ function ContentHttp304NotModified(const Content: RawUtf8; InHeaders: PUtf8Char;\n   // valid until year 2152 as cardinal (whereas POSIX Epoch up to 2106)\r\n   UNIXTIME_MINIMAL = 1481187020;\r\n   /// a contemporary, but elapsed, TUnixTimeMS millisecond-based value\r\n-  UNIXTIMEMS_MINIMAL = QWord(UNIXTIME_MINIMAL) * MSecsPerSec;\r\n+  UNIXTIMEMS_MINIMAL = QWord(UNIXTIME_MINIMAL) * MilliSecsPerSec;\r\n \r\n /// returns UnixTimeUtc - UNIXTIME_MINIMAL so has no \"Year 2038\" overflow issue\r\n function UnixTimeMinimalUtc: TUnixTimeMinimal;\r\n@@ -2780,12 +2780,12 @@ procedure TSynSystemTime.FromSec(s: PtrUInt);\n var\r\n   t: PtrUInt;\r\n begin\r\n-  t := s div 3600;\r\n+  t := s div SecsPerHour;\r\n   Hour := t;\r\n-  dec(s, t * 3600);\r\n-  t := s div 60;\r\n+  dec(s, t * SecsPerHour);\r\n+  t := s div SecsPerMin;\r\n   Minute := t;\r\n-  dec(s, t * 60);\r\n+  dec(s, t * SecsPerMin);\r\n   Second := s;\r\n   MilliSecond := 0;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.search.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3086,7 +3086,7 @@ function FindFiles(const Directory, Mask, IgnoreFileName: TFileName;\n     {$endif UNICODE}\r\n     if FileInfoByName(dir + d^.Name, d^.Size, ts, @d^.Attr) then // = fpStat()\r\n     begin\r\n-      d^.Timestamp := UnixTimeToLocal(ts div MSecsPerSec);\r\n+      d^.Timestamp := UnixTimeToLocal(ts div MilliSecsPerSec);\r\n       inc(d); // will leave d^.Attr = 0\r\n       inc(r);\r\n     end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1032,7 +1032,7 @@   TSynBackgroundQueue = class(TSynBackgroundThreadAbstract)\n     fOnProcess: TOnSynBackgroundQueueProcess;\r\n     fOnProcessMS, fLastIdleTix32: cardinal;\r\n     fOnIdle: TOnSynBackgroundQueueIdle;\r\n-    fExecuteLoopValue: TBytes;\r\n+    fExecuteLoopValue: TBytes; // ExecuteLoop temp variable for fQueue.Pop()\r\n     fOwner: TSynBackgroundQueue;\r\n     fSubThreads: TSynBackgroundQueues;\r\n     procedure ExecuteLoop; override;\r\n@@ -1049,7 +1049,7 @@   TSynBackgroundQueue = class(TSynBackgroundThreadAbstract)\n     destructor Destroy; override;\r\n     /// properly terminate the thread and its associated sub-threads\r\n     procedure TerminatedSet; override;\r\n-    /// add an event message to the internal processing queue\r\n+    /// add an event message by copying it to the internal processing queue\r\n     // - event parameter should point to one aArrayTypeInfo item\r\n     procedure EnQueue(Event: pointer; ExecuteNow: boolean = false);\r\n     /// adjust OnProcessMS using NextGrow() up to MaxDelay\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16816\n+16817",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16816'\r\n+'2.4.16817'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1519,14 +1519,14 @@   TDhcpServerSettings = class(TSynAutoCreateFields)\n   TDhcpProcess = class(TSynPersistent)\r\n   protected\r\n     fScopeSafe: TRWLightLock; // multi-read reentrant lock to protect Scope[]\r\n+    fOptions: TDhcpServerOptions;\r\n+    fState: (sNone, sSetup, sSetupFailed, sShutdown);\r\n     fScope: TDhcpScopes;\r\n     fFileFlushSeconds, fMetricsCsvSeconds, fDnsScriptThreads: cardinal;\r\n     fIdleTix, fFileFlushTix, fMetricsCsvTix, fModifSequence, fModifSaved: cardinal;\r\n     fLog: TSynLogClass;\r\n     fFileName, fMetricsFolder, fMetricsJson: TFileName;\r\n     fOnComputeResponse: TOnComputeResponse;\r\n-    fOptions: TDhcpServerOptions;\r\n-    fState: (sNone, sSetup, sSetupFailed, sShutdown);\r\n     fMetricsDroppedPackets, fMetricsInvalidRequest: QWord; // no scope counters\r\n     fLogPrefix: RawUtf8;\r\n     fBackgroundExecute: TSynBackgroundQueue;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Cross-cutting",
+        "Core",
+        "Network"
+      ],
+      "units": [
+        "mormot.core.datetime",
+        "mormot.core.search",
+        "mormot.core.threads",
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5313e5454393de7356e97aac1520928d3a083dc8",
+      "short_sha": "5313e545",
+      "subject": "core: rewritten EpochToSystemTime() on POSIX",
+      "body": "- faster process when retrieving the current timestamp from the OS clocks",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:08:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5313e5454393de7356e97aac1520928d3a083dc8",
+      "parents": [
+        "906a9037df508862e8007e0636f305f42c856be6"
+      ],
+      "stats": {
+        "additions": 34,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 27,
+          "patch": "@@ -995,34 +995,39 @@ end;\n \r\n \r\n const\r\n-  // Date Translation - see http://en.wikipedia.org/wiki/Julian_day\r\n-  D0 = 1461;\r\n-  D1 = 146097;\r\n-  D2 = 1721119;\r\n+  // very fast Gregorian date translation - see TSynSystemTime.FromJulianDay\r\n+  D0    = 1461;\r\n+  D1    = 146097;\r\n+  D2    = 153;\r\n+  CGREG = 1721119;\r\n   C1970 = 2440588;\r\n-\r\n-procedure JulianToGregorian(JulianDN: PtrUInt; out result: TSystemTime);\r\n-  {$ifdef HASINLINE}inline;{$endif}\r\n-var\r\n-  YYear, XYear, Temp, TempMonth: PtrUInt;\r\n-begin\r\n-  Temp := ((JulianDN - D2) * 4) - 1;\r\n-  JulianDN := Temp div D1;\r\n-  XYear := (Temp - (JulianDN * D1)) or 3;\r\n-  YYear := XYear div D0;\r\n-  Temp := (((XYear - (YYear * D0) + 4) shr 2) * 5) - 3;\r\n-  TempMonth := Temp div 153;\r\n-  result.Day := PtrUInt((Temp - (TempMonth * 153)) + 5) div 5;\r\n-  if TempMonth >= 10 then\r\n-  begin\r\n-    inc(YYear);\r\n-    dec(TempMonth, 12 - 3);\r\n-  end\r\n+  DaysFromMarch: array[0 .. 11] of word = (\r\n+    0, 31, 61, 92, 122, 153, 184, 214, 245, 275, 306, 337);\r\n+\r\n+procedure DaysToGregorian(t: cardinal; var result: TSystemTime);\r\n+var\r\n+  t2, t3: cardinal;\r\n+begin\r\n+  t := t * 4 - 1;\r\n+  t3 := t div D1;\r\n+  t2 := (t - t3 * D1) and not 3;\r\n+  t := (t2 + 3) div D0;\r\n+  result.Year := t3 * 100 + t;\r\n+  t3 := t * D0;\r\n+  inc(t2, 7);\r\n+  dec(t2, t3);\r\n+  t2 := t2 shr 2;\r\n+  t3 := t2 * 535;\r\n+  dec(t3, 202);\r\n+  t3 := t3 shr 14;\r\n+  result.Day := t2 - DaysFromMarch[t3]; // pre-computed (Month * D2 + 2) div 5\r\n+  if t3 < 10 then\r\n+    result.Month := t3 + 3\r\n   else\r\n-    inc(TempMonth, 3);\r\n-  result.Month := TempMonth;\r\n-  result.Year := YYear + (JulianDN * 100);\r\n-  // initialize fake dayOfWeek - as used by FromGlobalTime()\r\n+  begin\r\n+    result.Month := t3 - 9;\r\n+    inc(result.Year);\r\n+  end;\r\n   result.DayOfWeek := 0;\r\n end;\r\n \r\n@@ -1031,7 +1036,7 @@ var\n   t: PtrUInt;\r\n begin\r\n   t := epoch div SecsPerDay;\r\n-  JulianToGregorian(t + C1970, result);\r\n+  DaysToGregorian(t + (C1970 - CGREG), result);\r\n   dec(epoch, t * SecsPerDay);\r\n   t := epoch div SecsPerHour;\r\n   result.Hour := t;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16815\n+16816",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16815'\r\n+'2.4.16816'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "906a9037df508862e8007e0636f305f42c856be6",
+      "short_sha": "906a9037",
+      "subject": "core: optimized YearToPChar() for Delphi Win64",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T17:07:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/906a9037df508862e8007e0636f305f42c856be6",
+      "parents": [
+        "aa16e656aeaa84deb751d7a9e48a1c660c92174d"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 10,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3116,7 +3116,7 @@ asm\n         mov     r8, res\r\n         mov     edx, Y\r\n         mov     dword ptr [r8].TDiv100Rec.M,edx\r\n-        mov     eax, 1374389535\r\n+        mov     eax, DIV100_INV\r\n         mul     edx\r\n         shr     edx, 5\r\n         mov     dword ptr [r8].TDiv100Rec.D, edx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 6,
+          "patch": "@@ -620,7 +620,7 @@ asm\n         cmp     eax, 100\r\n         jb      @2\r\n         mov     ecx, eax\r\n-        mov     edx, 1374389535 // use power of two reciprocal to avoid division\r\n+        mov     edx, DIV100_INV\r\n         mul     edx\r\n         shr     edx, 5          // now edx=eax div 100\r\n         mov     eax, edx\r\n@@ -667,9 +667,9 @@ asm\n         cmp     eax, 100\r\n         jb      @2\r\n         mov     ecx, eax\r\n-        mov     edx, 1374389535 // use power of two reciprocal to avoid division\r\n+        mov     edx, DIV100_INV\r\n         mul     edx\r\n-        shr     edx, 5          // now edx=eax div 100\r\n+        shr     edx, 5 // now edx=eax div 100\r\n         mov     eax, edx\r\n         imul    edx, -200\r\n         movzx   edx, word ptr [TwoDigitLookup + ecx * 2 + edx]\r\n@@ -698,9 +698,9 @@ asm\n         // eax=Y, edx=P\r\n         push    edx\r\n         mov     ecx, eax\r\n-        mov     edx, 1374389535 // use power of two reciprocal to avoid division\r\n+        mov     edx, DIV100_INV\r\n         mul     edx\r\n-        shr     edx, 5          // now edx=Y div 100\r\n+        shr     edx, 5 // now edx=Y div 100\r\n         movzx   eax, word ptr [TwoDigitLookup + edx * 2]\r\n         imul    edx, -200\r\n         movzx   edx, word ptr [TwoDigitLookup + ecx * 2 + edx]\r\n@@ -2787,7 +2787,7 @@ asm\n         mov     dword ptr [edx].TDiv100Rec.M, eax\r\n         mov     ecx, edx\r\n         mov     edx, eax\r\n-        mov     eax, 1374389535\r\n+        mov     eax, DIV100_INV\r\n         mul     edx\r\n         shr     edx, 5\r\n         mov     dword ptr [ecx].TDiv100Rec.D, edx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 1,
+          "patch": "@@ -1270,6 +1270,8 @@ procedure ToHumanHexP(hex: PAnsiChar; bin: PByte; len: PtrInt;\n      '70', '71', '72', '73', '74', '75', '76', '77', '78', '79',\r\n      '80', '81', '82', '83', '84', '85', '86', '87', '88', '89',\r\n      '90', '91', '92', '93', '94', '95', '96', '97', '98', '99');\r\n+  /// 1 mod 2^32 reciprocal for unsigned div 100\r\n+  DIV100_INV = $51eb851f;\r\n \r\n var\r\n   /// fast lookup table for converting any decimal number from\r\n@@ -13228,7 +13230,11 @@ procedure YearToPChar(Y: PtrUInt; P: PUtf8Char);\n   tab: PWordArray;\r\n begin\r\n   tab := @TwoDigitLookupW;\r\n-  d100 := Y div 100; // FPC will use fast reciprocal\r\n+  {$ifdef WIN64DELPHI}\r\n+  d100 := (QWord(Y) * DIV100_INV) shr 37; // we can avoid div on Delphi Win64\r\n+  {$else}\r\n+  d100 := Y div 100; // FPC will use fast reciprocal (and x86 has its own asm)\r\n+  {$endif WIN64DELPHI}\r\n   PCardinal(P)^ := tab[d100];\r\n   PWordArray(P)[1] := tab[Y - (d100 * 100)];\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16812\n+16815",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16812'\r\n+'2.4.16815'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aa16e656aeaa84deb751d7a9e48a1c660c92174d",
+      "short_sha": "aa16e656",
+      "subject": "Merge pull request #578 from Moonbot-Tech/codex/keccak256",
+      "body": "crypt: support original Keccak-256",
+      "author": "ab",
+      "date": "2026-09-10T17:03:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aa16e656aeaa84deb751d7a9e48a1c660c92174d",
+      "parents": [
+        "1cd2f994544af0ab10079718776e5eefdee2d6da",
+        "c2bc1bf05925213d4044fce1d24cdeafb43edf80"
+      ],
+      "stats": {
+        "additions": 70,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 5,
+          "patch": "@@ -2278,16 +2278,18 @@   TSha512 = record\n   PSha512 = ^TSha512;\r\n \r\n type\r\n-  /// SHA-3 instances, as defined by NIST Standard for Keccak sponge construction\r\n+  /// SHA-3, SHAKE and original Keccak instances\r\n   // - SHA3_224..SHA3_512 output 224, 256, 384 and 512 bits of cryptographic hash\r\n   // - SHAKE_128 and SHAKE_256 implements a XOF/cipher generator\r\n+  // - KECCAK_256 uses the original padding, as required e.g. by Ethereum\r\n   TSha3Algo = (\r\n     SHA3_224,\r\n     SHA3_256,\r\n     SHA3_384,\r\n     SHA3_512,\r\n     SHAKE_128,\r\n-    SHAKE_256);\r\n+    SHAKE_256,\r\n+    KECCAK_256);\r\n \r\n   /// implements SHA-3 (Keccak) hashing\r\n   // - Keccak was the winner of the NIST hashing competition for a new hashing\r\n@@ -2756,6 +2758,12 @@ function Sha3(Algo: TSha3Algo; const s: RawByteString;\n function Sha3(Algo: TSha3Algo; Buffer: pointer; Len: integer;\r\n   DigestBits: integer = 0): RawUtf8; overload;\r\n \r\n+/// compute an original Keccak-256 binary digest (distinct from SHA3-256)\r\n+procedure Keccak256Full(Buffer: pointer; Len: integer; out Digest: THash256);\r\n+\r\n+/// compute an original Keccak-256 lowercase hexadecimal digest\r\n+function Keccak256(const s: RawByteString): RawUtf8;\r\n+\r\n /// SHA-256 hash calculation with length padding if shorter than 256 bytes\r\n // - WARNING: this algorithm is DEPRECATED, and supplied only for backward\r\n // compatibility with mORMot 1 code (CryptDataForCurrentUser or TProtocolAes)\r\n@@ -8969,15 +8977,16 @@   TSha3Context = record\n \r\n const\r\n   SHA3_DEF_LEN: array[TSha3Algo] of integer = (\r\n-    224, 256, 384, 512, 256, 512);\r\n+    224, 256, 384, 512, 256, 512, 256);\r\n \r\n procedure TSha3Context.Init(aAlgo: TSha3Algo);\r\n var\r\n   bits: integer;\r\n begin\r\n   FillCharFast(self, SizeOf(self), 0);\r\n   bits := SHA3_DEF_LEN[aAlgo];\r\n-  if aAlgo < SHAKE_128 then\r\n+  if (aAlgo < SHAKE_128) or\r\n+     (aAlgo = KECCAK_256) then\r\n     bits := bits shl 1;\r\n   Rate := cKeccakPermutationBits - bits;\r\n   Capacity := bits;\r\n@@ -9124,7 +9133,9 @@ procedure TSha3Context.FinalBit_LSB(bits: byte; bitlen: integer;\n   else\r\n     lw := bits and Pred(cardinal(1) shl bitlen);\r\n   // append the domain separation bits\r\n-  if Algo >= SHAKE_128 then\r\n+  if Algo = KECCAK_256 then\r\n+    ll := bitlen // original Keccak: pad10*1 without SHA-3 domain bits\r\n+  else if Algo >= SHAKE_128 then\r\n   begin\r\n     // SHAKE: append four MSB bits 1111\r\n     lw := lw or (cardinal($0f) shl bitlen);\r\n@@ -10500,6 +10511,21 @@ function Sha3(Algo: TSha3Algo; Buffer: pointer; Len, DigestBits: integer): RawUt\n   result := sha.FullStr(Algo, Buffer, Len, DigestBits);\r\n end;\r\n \r\n+procedure Keccak256Full(Buffer: pointer; Len: integer; out Digest: THash256);\r\n+var\r\n+  sha: TSha3;\r\n+begin\r\n+  sha.Full(KECCAK_256, Buffer, Len, @Digest, 256);\r\n+end;\r\n+\r\n+function Keccak256(const s: RawByteString): RawUtf8;\r\n+var\r\n+  dig: THash256;\r\n+begin\r\n+  Keccak256Full(pointer(s), length(s), dig);\r\n+  BinToHexLower(@dig, SizeOf(dig), result);\r\n+end;\r\n+\r\n // required by read_h -> deprecated even if available with PUREMORMOT2\r\n procedure Sha256Weak(const s: RawByteString; out Digest: TSha256Digest);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 0,
+          "patch": "@@ -730,6 +730,33 @@ procedure TTestCoreCrypto._SHA512;\n \r\n procedure TTestCoreCrypto._SHA3;\r\n \r\n+  procedure Keccak(const data, expected: RawByteString);\r\n+  var\r\n+    instance: TSha3;\r\n+    dig: THash256;\r\n+    split, i: PtrInt;\r\n+  begin\r\n+    CheckEqual(Keccak256(data), expected);\r\n+    Keccak256Full(pointer(data), length(data), dig);\r\n+    CheckEqual(Sha256DigestToString(dig), expected);\r\n+    CheckEqual(instance.FullStr(KECCAK_256, pointer(data), length(data)), UpperCase(expected));\r\n+    for split := 0 to length(data) do\r\n+    begin\r\n+      instance.Init(KECCAK_256);\r\n+      Check(instance.Algorithm = KECCAK_256);\r\n+      instance.Update(pointer(data), split);\r\n+      instance.Update(nil, 0);\r\n+      instance.Update(PAnsiChar(pointer(data)) + split, length(data) - split);\r\n+      instance.Final(dig);\r\n+      CheckEqual(Sha256DigestToString(dig), expected);\r\n+    end;\r\n+    instance.Init(KECCAK_256);\r\n+    for i := 1 to length(data) do\r\n+      instance.Update(@data[i], 1);\r\n+    instance.Final(dig);\r\n+    CheckEqual(Sha256DigestToString(dig), expected);\r\n+  end;\r\n+\r\n   procedure DoTest;\r\n   const\r\n     HASH1 = '79f38adec5c20307a98ef76e8324afbfd46cfd81b22e3973c65fa1bd9de31787';\r\n@@ -743,6 +770,18 @@ procedure TTestCoreCrypto._SHA3;\n     s, i: PtrInt;\r\n     sign: TSynSigner;\r\n   begin\r\n+    // Original Keccak-256 vectors, independently checked with PyCryptodome.\r\n+    Keccak('', 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470');\r\n+    Keccak('abc', '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45');\r\n+    SetLength(data, 1024);\r\n+    for i := 1 to length(data) do\r\n+      data[i] := AnsiChar((i - 1) and 255);\r\n+    // One less than, exactly, and one more than the 136-byte absorption rate.\r\n+    Keccak(copy(data, 1, 135), 'cbdfd9dee5faad3818d6b06f95a219fd290b0e1706f6a82e5a595b9ce9faca62');\r\n+    Keccak(copy(data, 1, 136), '7ce759f1ab7f9ce437719970c26b0a66ff11fe3e38e17df89cf5d29c7d7f807e');\r\n+    Keccak(copy(data, 1, 137), 'ac73d4fae68b8453f764007c1a20ce95994187861f0c3227a3a8e99a73a3b1db');\r\n+    Keccak(copy(data, 1, 272), 'fdf2ec49e749960d3c8521a0219af8d03e30e2b3bf19bd16150ee0eaf133d66e');\r\n+    Keccak(data, '5902e53903be0d0f9656bdbd5b9f0d8c2d815f865645d629eef77f5185f6cd7f');\r\n     // validate against official NIST vectors\r\n     // taken from http://csrc.nist.gov/groups/ST/toolkit/examples.html#aHashing\r\n     // see also https://www.di-mgt.com.au/sha_testvectors.html\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": 578,
+      "is_merge": true
+    },
+    {
+      "sha": "d48f4634d8da58258e72d1edf6e86a5cd21af8b9",
+      "short_sha": "d48f4634",
+      "subject": "core: fix numeric conversion overflow and malformed decimal input",
+      "body": "Check signed integer and Currency bounds, exponent arithmetic and decimal grammar while preserving current handling of ordinary values and NaN/Inf. Keep regression coverage in NumericalConversions.",
+      "author": "Mike",
+      "date": "2026-09-10T13:45:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d48f4634d8da58258e72d1edf6e86a5cd21af8b9",
+      "parents": [
+        "1cd2f994544af0ab10079718776e5eefdee2d6da"
+      ],
+      "stats": {
+        "additions": 222,
+        "deletions": 25,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 3,
+          "patch": "@@ -1445,7 +1445,7 @@ function GetIntegerDef(P: PUtf8Char; Default: PtrInt): PtrInt;\n \r\n /// get the signed 32-bit integer value stored in P^\r\n // - this version return 0 in err if no error occurred, and 1 if an invalid\r\n-// character was found, not its exact index as for the val() function\r\n+// character or a PtrInt overflow was found, not its exact index as for val()\r\n function GetInteger(P: PUtf8Char; var err: integer): PtrInt; overload;\r\n \r\n /// get the unsigned 32-bit integer value stored in P^\r\n@@ -6335,6 +6335,9 @@ function GetInteger(P: PUtf8Char; var err: integer): PtrInt;\n var\r\n   c: byte;\r\n   minus: boolean;\r\n+  {$ifdef CPU64}\r\n+  digits: PUtf8Char;\r\n+  {$endif CPU64}\r\n begin\r\n   result := 0;\r\n   err := 1; // don't return the exact index, just 1 as error flag\r\n@@ -6366,23 +6369,46 @@ function GetInteger(P: PUtf8Char; var err: integer): PtrInt;\n         c := byte(P^);\r\n       until c <> ord(' ');\r\n   end;\r\n+  while (c = ord('0')) and\r\n+        (P[1] in ['0' .. '9']) do\r\n+  begin\r\n+    inc(P);\r\n+    c := byte(P^);\r\n+  end;\r\n   dec(c, 48);\r\n   if c > 9 then\r\n     exit;\r\n   result := c;\r\n+  {$ifdef CPU64}\r\n+  digits := P;\r\n+  {$endif CPU64}\r\n   repeat\r\n     inc(P);\r\n     c := byte(P^);\r\n     dec(c, 48);\r\n     if c <= 9 then\r\n-      result := result * 10 + PtrInt(c)\r\n+    begin\r\n+      {$ifdef CPU64}\r\n+      if P - digits >= 19 then\r\n+        exit; // at most 19 significant digits: magnitude fits UInt64\r\n+      {$else}\r\n+      if PtrUInt(result) >= PtrUInt(High(PtrInt)) div 10 then\r\n+        if (PtrUInt(result) > PtrUInt(High(PtrInt)) div 10) or\r\n+           (c > High(PtrInt) mod 10 + ord(minus)) then\r\n+          exit;\r\n+      {$endif CPU64}\r\n+      result := PtrInt(PtrUInt(result) * 10 + c);\r\n+    end\r\n     else if c <> 256 - 48 then\r\n       exit\r\n     else\r\n       break;\r\n   until false;\r\n+  if PtrUInt(result) > PtrUInt(High(PtrInt)) + PtrUInt(ord(minus)) then\r\n+    exit;\r\n   err := 0; // success\r\n-  if minus then\r\n+  if minus and\r\n+     (result <> Low(PtrInt)) then\r\n     result := -result;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 8,
+          "patch": "@@ -6726,6 +6726,10 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+const\r\n+  Scale: double = 1.3407807929942597e154; // 2^512\r\n+  InvScale: double = 7.458340731200207e-155; // 2^-512\r\n+  MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n var\r\n   remdigit: integer;\r\n   frac, exp: PtrInt;\r\n@@ -6774,7 +6778,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if byte(ord(P^) - ord('0')) <= 9 then\r\n     begin\r\n       if (remdigit <> 0) or // avoid 64-bit overflow, but allow 19 digits\r\n-         (v64 > 922337203685477580) then\r\n+         (v64 > 922337203685477580) or\r\n+         ((v64 = 922337203685477580) and (P^ > '7')) then\r\n         dec(remdigit);\r\n       if remdigit >= 0 then // over-required digits are just ignored\r\n       begin\r\n@@ -6792,13 +6797,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if P^ <> '.' then\r\n       break;\r\n     inc(P);\r\n-    if frac > 0 then\r\n+    if frac <> 0 then\r\n       goto e; // will return partial value but err=1\r\n     dec(frac);\r\n   until false;\r\n   inc(frac, ord(frac < 0)); // adjust digits after '.'\r\n   if ord(P^) or $20 = ord('e') then\r\n   begin\r\n+    if not (fValid in flags) then\r\n+      goto e;\r\n     exp := 0;\r\n     exclude(flags, fValid);\r\n     inc(P);\r\n@@ -6812,27 +6819,54 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     repeat\r\n       if byte(ord(P^) - ord('0')) > 9 then\r\n         break;\r\n+      if exp >= High(PtrInt) div 10 then\r\n+        if (exp > High(PtrInt) div 10) or\r\n+           (ord(P^) - ord('0') > High(PtrInt) mod 10) then\r\n+          goto e;\r\n       exp := (exp * 10) + ord(P^) - ord('0');\r\n       include(flags, fValid);\r\n       inc(P);\r\n     until false;\r\n     if fNegExp in flags then\r\n-      dec(frac, exp)\r\n+    begin\r\n+      if frac < Low(PtrInt) + exp then\r\n+        goto e;\r\n+      dec(frac, exp);\r\n+    end\r\n     else\r\n-      inc(frac, exp);\r\n-    if (frac <= -324) or\r\n-       (frac >= 308) then\r\n     begin\r\n-      frac := 0;\r\n-      goto e; // limit to 5.0 x 10^-324 .. 1.7 x 10^308 double range\r\n+      if frac > High(PtrInt) - exp then\r\n+        goto e;\r\n+      inc(frac, exp);\r\n     end;\r\n   end;\r\n   if (fValid in flags) and\r\n      (P^ = #0) then\r\n     err := 0\r\n   else\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n+  if (frac <= -324) or\r\n+     (frac >= 308) then\r\n+  begin\r\n+    frac := 0;\r\n+    err := 1; // also bound the scale of numbers without an exponent\r\n+  end;\r\n   d64 := v64;\r\n+  if frac >= 290 then // avoid overflowing the final product, even with unmasked FPU\r\n+  begin\r\n+    result := (POW10[(frac and not 31) shr 5 + 34] *\r\n+               POW10[frac and 31] * InvScale) * d64;\r\n+    if result > MaxScaled then\r\n+    begin\r\n+      result := d64;\r\n+      err := 1;\r\n+    end\r\n+    else\r\n+      result := result * Scale;\r\n+    if fNeg in flags then\r\n+      result := -result;\r\n+    exit;\r\n+  end;\r\n   if frac >= -31 then\r\n     if frac <= 31 then // -31 .. + 31\r\n       result := POW10[frac]\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 14,
+          "patch": "@@ -11515,16 +11515,18 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n \r\n const\r\n   CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n+  CURRENCY_MAX: array[-4 .. -1] of UInt64 = (\r\n+    High(Int64), High(Int64) div 10, High(Int64) div 100, High(Int64) div 1000);\r\n \r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n var\r\n-  // logic below is extracted from mormot.core.base.pas' GetExtended()\r\n+  // logic below is extracted from mormot.core.text.pas' GetExtended()\r\n   remdigit: integer;\r\n   frac, exp {$ifdef CPUX86NOTPIC}, f {$endif}: PtrInt;\r\n   c: AnsiChar;\r\n   flags: set of (fNeg, fNegExp, fValid);\r\n-  v64: Int64; // allows 64-bit resolution for the digits (match 80-bit extended)\r\n+  v64: UInt64; // up to 19 digits, including the magnitude of Low(Int64)\r\n   d: double;\r\n begin\r\n   // 1. parse input text as number into v64, frac, digit, exp\r\n@@ -11541,6 +11543,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     inc(Json);\r\n     include(flags, fNeg);\r\n   end;\r\n+  if not (c in ['0' .. '9']) then\r\n+    exit;\r\n   if (c = '0') and\r\n      (Json[1] in ['0' .. '9']) then // '012' is not Json, but '0.xx' and '0' are\r\n     exit;\r\n@@ -11573,8 +11577,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     if c <> '.' then\r\n       break;\r\n     c := Json[1];\r\n-    if (frac > 0) or\r\n-       (c = #0) then // avoid ##.\r\n+    if (frac <> 0) or\r\n+       not (c in ['0' .. '9']) then // require a single dot followed by a digit\r\n       exit;\r\n     inc(json);\r\n     dec(frac);\r\n@@ -11601,33 +11605,54 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         break;\r\n       inc(Json);\r\n       dec(c, ord('0'));\r\n+      if exp >= High(PtrInt) div 10 then\r\n+        if (exp > High(PtrInt) div 10) or\r\n+           (byte(c) > High(PtrInt) mod 10) then\r\n+          exit;\r\n       exp := (exp * 10) + byte(c);\r\n       include(flags, fValid);\r\n     until false;\r\n     if fNegExp in flags then\r\n-      dec(frac, exp)\r\n+    begin\r\n+      if frac < Low(PtrInt) + exp then\r\n+        exit;\r\n+      dec(frac, exp);\r\n+    end\r\n     else\r\n+    begin\r\n+      if frac > High(PtrInt) - exp then\r\n+        exit;\r\n       inc(frac, exp);\r\n+    end;\r\n   end;\r\n   if not (fValid in flags) then\r\n     exit;\r\n-  if fNeg in flags then\r\n-    v64 := -v64;\r\n   // 2. now v64, frac, digit, exp contain number parsed from Json\r\n   if (frac = 0) and\r\n-     (remdigit >= 0) then // return an integer or Int64 value\r\n-  begin\r\n-    Value.VInt64 := v64;\r\n+     (remdigit >= 0) and\r\n+     ((v64 <= UInt64(High(Int64))) or\r\n+      ((v64 = UInt64(High(Int64)) + 1) and (fNeg in flags))) then\r\n+  begin\r\n+    Value.VInt64 := Int64(v64);\r\n+    if (fNeg in flags) and\r\n+       (v64 <= UInt64(High(Int64))) then\r\n+      Value.VInt64 := -Value.VInt64;\r\n     if remdigit <= 9 then\r\n       TSynVarData(Value).VType := varInt64\r\n     else\r\n       TSynVarData(Value).VType := varInteger;\r\n   end\r\n   else if (frac < 0) and\r\n-          (frac >= -4) then // currency as ###.0123\r\n+          (frac >= -4) and\r\n+          ((v64 <= CURRENCY_MAX[frac]) or\r\n+           ((frac = -4) and (v64 = UInt64(High(Int64)) + 1) and\r\n+            (fNeg in flags))) then // currency as ###.0123\r\n   begin\r\n     TSynVarData(Value).VType := varCurrency;\r\n-    Value.VInt64 := v64 * CURRENCY_FACTOR[frac]; // as round(CurrValue*10000)\r\n+    Value.VInt64 := Int64(v64 * UInt64(CURRENCY_FACTOR[frac]));\r\n+    if (fNeg in flags) and\r\n+       (Value.VInt64 <> Low(Int64)) then\r\n+      Value.VInt64 := -Value.VInt64; // as round(CurrValue*10000)\r\n   end\r\n   else if AllowVarDouble and\r\n           (frac > -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n@@ -11637,7 +11662,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     if f >= -31 then\r\n       if f <= 31 then\r\n         d := POW10[f] // -31 .. + 31\r\n-      else if (18 - remdigit) + integer(f) >= 308 the\n... [truncated, 999 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 109,
+          "deletions": 0,
+          "patch": "@@ -5023,6 +5023,56 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckSame(d, v);\r\n   end;\r\n \r\n+  {$ifdef CPU64}\r\n+  procedure CheckIntegerValue(const text: RawUtf8; expected: Int64);\r\n+  var\r\n+    err: integer;\r\n+    value: Int64;\r\n+  begin\r\n+    value := GetInt64(pointer(text), err);\r\n+    CheckEqual(err, 0, text);\r\n+    CheckEqual(value, expected, text);\r\n+  end;\r\n+\r\n+  {$endif CPU64}\r\n+\r\n+  procedure CheckJsonValue(const text: RawUtf8; kind: integer; expected: double);\r\n+  var\r\n+    v: variant;\r\n+    p: PUtf8Char;\r\n+  begin\r\n+    p := GetNumericVariantFromJson(pointer(text), TVarData(v), true);\r\n+    Check(p = PUtf8Char(pointer(text)) + length(text), text);\r\n+    CheckEqual(TVarData(v).VType, kind, text);\r\n+    CheckSame(double(v), expected, 0, text);\r\n+  end;\r\n+\r\n+  procedure CheckJsonExact(const text: RawUtf8; kind: integer; expected: Int64);\r\n+  var\r\n+    v: variant;\r\n+  begin\r\n+    Check(GetNumericVariantFromJson(pointer(text), TVarData(v), false) <> nil, text);\r\n+    CheckEqual(TVarData(v).VType, kind, text);\r\n+    CheckEqual(TVarData(v).VInt64, expected, text);\r\n+  end;\r\n+\r\n+  procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r\n+  var\r\n+    v: variant;\r\n+    d: double;\r\n+    err: integer;\r\n+  begin\r\n+    Check(GetNumericVariantFromJson(pointer(text), TVarData(v), true) = nil, text);\r\n+    {$ifndef WIN32DELPHI}\r\n+    if extendedToo then\r\n+    begin\r\n+      d := GetExtended(pointer(text), err);\r\n+      Check(err <> 0, text);\r\n+      Check(not IsInfinite(d) and not IsNan(d), text);\r\n+    end;\r\n+    {$endif WIN32DELPHI}\r\n+  end;\r\n+\r\n var\r\n   i, j, b, err: integer;\r\n   juint: cardinal absolute j;\r\n@@ -5503,6 +5553,65 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(184467440737095514);\r\n   CheckDoubleToShortSame(1844674407370955148);\r\n   {$endif FPC}\r\n+  // signed numeric boundaries and JSON grammar\r\n+  {$ifdef CPU64}\r\n+  CheckIntegerValue('9223372036854775807', High(Int64));\r\n+  CheckIntegerValue('-9223372036854775808', Low(Int64));\r\n+  CheckIntegerValue('  -  00000000000000000000000000000000123', -123);\r\n+  CheckIntegerValue('+0000', 0);\r\n+  for i := 0 to 3 do\r\n+  begin\r\n+    s := GetCsvItemString('9223372036854775808,-9223372036854775809,' +\r\n+      '18446744073709551616,99999999999999999999', i);\r\n+    GetInt64(pointer(s), err);\r\n+    Check(err <> 0, s);\r\n+  end;\r\n+  {$endif CPU64}\r\n+  CheckJsonExact('0', varInteger, 0);\r\n+  CheckJsonExact('-123', varInteger, -123);\r\n+  CheckJsonExact('9223372036854775807', varInt64, High(Int64));\r\n+  CheckJsonExact('-9223372036854775808', varInt64, Low(Int64));\r\n+  CheckJsonExact('922337203685477.5807', varCurrency, High(Int64));\r\n+  CheckJsonExact('-922337203685477.5808', varCurrency, Low(Int64));\r\n\n... [truncated, 1901 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c2bc1bf05925213d4044fce1d24cdeafb43edf80",
+      "short_sha": "c2bc1bf0",
+      "subject": "crypt: support original Keccak-256",
+      "body": "Add a separate mode with the original padding and binary/hex digest helpers. Preserve existing algorithm ordinals and SHA-3/SHAKE behavior; cover reference hashes, block boundaries and incremental input.",
+      "author": "Mike",
+      "date": "2026-09-10T13:26:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c2bc1bf05925213d4044fce1d24cdeafb43edf80",
+      "parents": [
+        "1cd2f994544af0ab10079718776e5eefdee2d6da"
+      ],
+      "stats": {
+        "additions": 70,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 5,
+          "patch": "@@ -2278,16 +2278,18 @@   TSha512 = record\n   PSha512 = ^TSha512;\r\n \r\n type\r\n-  /// SHA-3 instances, as defined by NIST Standard for Keccak sponge construction\r\n+  /// SHA-3, SHAKE and original Keccak instances\r\n   // - SHA3_224..SHA3_512 output 224, 256, 384 and 512 bits of cryptographic hash\r\n   // - SHAKE_128 and SHAKE_256 implements a XOF/cipher generator\r\n+  // - KECCAK_256 uses the original padding, as required e.g. by Ethereum\r\n   TSha3Algo = (\r\n     SHA3_224,\r\n     SHA3_256,\r\n     SHA3_384,\r\n     SHA3_512,\r\n     SHAKE_128,\r\n-    SHAKE_256);\r\n+    SHAKE_256,\r\n+    KECCAK_256);\r\n \r\n   /// implements SHA-3 (Keccak) hashing\r\n   // - Keccak was the winner of the NIST hashing competition for a new hashing\r\n@@ -2756,6 +2758,12 @@ function Sha3(Algo: TSha3Algo; const s: RawByteString;\n function Sha3(Algo: TSha3Algo; Buffer: pointer; Len: integer;\r\n   DigestBits: integer = 0): RawUtf8; overload;\r\n \r\n+/// compute an original Keccak-256 binary digest (distinct from SHA3-256)\r\n+procedure Keccak256Full(Buffer: pointer; Len: integer; out Digest: THash256);\r\n+\r\n+/// compute an original Keccak-256 lowercase hexadecimal digest\r\n+function Keccak256(const s: RawByteString): RawUtf8;\r\n+\r\n /// SHA-256 hash calculation with length padding if shorter than 256 bytes\r\n // - WARNING: this algorithm is DEPRECATED, and supplied only for backward\r\n // compatibility with mORMot 1 code (CryptDataForCurrentUser or TProtocolAes)\r\n@@ -8969,15 +8977,16 @@   TSha3Context = record\n \r\n const\r\n   SHA3_DEF_LEN: array[TSha3Algo] of integer = (\r\n-    224, 256, 384, 512, 256, 512);\r\n+    224, 256, 384, 512, 256, 512, 256);\r\n \r\n procedure TSha3Context.Init(aAlgo: TSha3Algo);\r\n var\r\n   bits: integer;\r\n begin\r\n   FillCharFast(self, SizeOf(self), 0);\r\n   bits := SHA3_DEF_LEN[aAlgo];\r\n-  if aAlgo < SHAKE_128 then\r\n+  if (aAlgo < SHAKE_128) or\r\n+     (aAlgo = KECCAK_256) then\r\n     bits := bits shl 1;\r\n   Rate := cKeccakPermutationBits - bits;\r\n   Capacity := bits;\r\n@@ -9124,7 +9133,9 @@ procedure TSha3Context.FinalBit_LSB(bits: byte; bitlen: integer;\n   else\r\n     lw := bits and Pred(cardinal(1) shl bitlen);\r\n   // append the domain separation bits\r\n-  if Algo >= SHAKE_128 then\r\n+  if Algo = KECCAK_256 then\r\n+    ll := bitlen // original Keccak: pad10*1 without SHA-3 domain bits\r\n+  else if Algo >= SHAKE_128 then\r\n   begin\r\n     // SHAKE: append four MSB bits 1111\r\n     lw := lw or (cardinal($0f) shl bitlen);\r\n@@ -10500,6 +10511,21 @@ function Sha3(Algo: TSha3Algo; Buffer: pointer; Len, DigestBits: integer): RawUt\n   result := sha.FullStr(Algo, Buffer, Len, DigestBits);\r\n end;\r\n \r\n+procedure Keccak256Full(Buffer: pointer; Len: integer; out Digest: THash256);\r\n+var\r\n+  sha: TSha3;\r\n+begin\r\n+  sha.Full(KECCAK_256, Buffer, Len, @Digest, 256);\r\n+end;\r\n+\r\n+function Keccak256(const s: RawByteString): RawUtf8;\r\n+var\r\n+  dig: THash256;\r\n+begin\r\n+  Keccak256Full(pointer(s), length(s), dig);\r\n+  BinToHexLower(@dig, SizeOf(dig), result);\r\n+end;\r\n+\r\n // required by read_h -> deprecated even if available with PUREMORMOT2\r\n procedure Sha256Weak(const s: RawByteString; out Digest: TSha256Digest);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 0,
+          "patch": "@@ -730,6 +730,33 @@ procedure TTestCoreCrypto._SHA512;\n \r\n procedure TTestCoreCrypto._SHA3;\r\n \r\n+  procedure Keccak(const data, expected: RawByteString);\r\n+  var\r\n+    instance: TSha3;\r\n+    dig: THash256;\r\n+    split, i: PtrInt;\r\n+  begin\r\n+    CheckEqual(Keccak256(data), expected);\r\n+    Keccak256Full(pointer(data), length(data), dig);\r\n+    CheckEqual(Sha256DigestToString(dig), expected);\r\n+    CheckEqual(instance.FullStr(KECCAK_256, pointer(data), length(data)), UpperCase(expected));\r\n+    for split := 0 to length(data) do\r\n+    begin\r\n+      instance.Init(KECCAK_256);\r\n+      Check(instance.Algorithm = KECCAK_256);\r\n+      instance.Update(pointer(data), split);\r\n+      instance.Update(nil, 0);\r\n+      instance.Update(PAnsiChar(pointer(data)) + split, length(data) - split);\r\n+      instance.Final(dig);\r\n+      CheckEqual(Sha256DigestToString(dig), expected);\r\n+    end;\r\n+    instance.Init(KECCAK_256);\r\n+    for i := 1 to length(data) do\r\n+      instance.Update(@data[i], 1);\r\n+    instance.Final(dig);\r\n+    CheckEqual(Sha256DigestToString(dig), expected);\r\n+  end;\r\n+\r\n   procedure DoTest;\r\n   const\r\n     HASH1 = '79f38adec5c20307a98ef76e8324afbfd46cfd81b22e3973c65fa1bd9de31787';\r\n@@ -743,6 +770,18 @@ procedure TTestCoreCrypto._SHA3;\n     s, i: PtrInt;\r\n     sign: TSynSigner;\r\n   begin\r\n+    // Original Keccak-256 vectors, independently checked with PyCryptodome.\r\n+    Keccak('', 'c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470');\r\n+    Keccak('abc', '4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45');\r\n+    SetLength(data, 1024);\r\n+    for i := 1 to length(data) do\r\n+      data[i] := AnsiChar((i - 1) and 255);\r\n+    // One less than, exactly, and one more than the 136-byte absorption rate.\r\n+    Keccak(copy(data, 1, 135), 'cbdfd9dee5faad3818d6b06f95a219fd290b0e1706f6a82e5a595b9ce9faca62');\r\n+    Keccak(copy(data, 1, 136), '7ce759f1ab7f9ce437719970c26b0a66ff11fe3e38e17df89cf5d29c7d7f807e');\r\n+    Keccak(copy(data, 1, 137), 'ac73d4fae68b8453f764007c1a20ce95994187861f0c3227a3a8e99a73a3b1db');\r\n+    Keccak(copy(data, 1, 272), 'fdf2ec49e749960d3c8521a0219af8d03e30e2b3bf19bd16150ee0eaf133d66e');\r\n+    Keccak(data, '5902e53903be0d0f9656bdbd5b9f0d8c2d815f865645d629eef77f5185f6cd7f');\r\n     // validate against official NIST vectors\r\n     // taken from http://csrc.nist.gov/groups/ST/toolkit/examples.html#aHashing\r\n     // see also https://www.di-mgt.com.au/sha_testvectors.html\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1cd2f994544af0ab10079718776e5eefdee2d6da",
+      "short_sha": "1cd2f994",
+      "subject": "net: fixed GPF or deadlock in TDhcpProcess.Setup()",
+      "body": "- when some existing configuration is updated, a dangling pointer on the previous scope instances could be kept instead of the newly allocated array",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T12:37:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1cd2f994544af0ab10079718776e5eefdee2d6da",
+      "parents": [
+        "22e8328a8e53cc199c288290f33f8687477a8ead"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16811\n+16812",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16811'\r\n+'2.4.16812'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -5013,9 +5013,9 @@ procedure TDhcpProcess.Setup(aSettings: TDhcpServerSettings);\n       aSettings.Scope[i].PrepareScope(self, new[i]); // compute Subnet\r\n       s := GetScope(new[i].Subnet.ip);\r\n       if s = nil then\r\n-        continue; // brand new subnet\r\n-      aSettings.Scope[i].PrepareScope(self, s^); // may adjust existing leases\r\n-      new[i] := s^;\r\n+        continue;   // brand new subnet was just prepared\r\n+      new[i] := s^; // reuse/update existing\r\n+      aSettings.Scope[i].PrepareScope(self, new[i]); // adjust existing leases\r\n     end;\r\n     fScope := new; // replace\r\n     // support FileName/MetricsFolder background persistence\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "22e8328a8e53cc199c288290f33f8687477a8ead",
+      "short_sha": "22e8328a",
+      "subject": "net: introducing atsTimeSpan LDP attribute decoding",
+      "body": "- properly implement #576",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T08:28:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/22e8328a8e53cc199c288290f33f8687477a8ead",
+      "parents": [
+        "d3dfb00c075eeac5f868df6226a71731fbd2483d"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16810\n+16811",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16810'\r\n+'2.4.16811'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -738,6 +738,7 @@ function LdapToDate(const Text: RawUtf8): TDateTime;\n     atsIntegerAccountType,\r\n     atsIntegerMsdsSupportedEncryptionTypes,\r\n     atsFileTime,\r\n+    atsTimeSpan,\r\n     atsTextTime,\r\n     atsSid,\r\n     atsGuid,\r\n@@ -4003,6 +4004,12 @@ function AttributeValueMakeReadable(var s: RawUtf8; ats: TLdapAttributeTypeStora\n           exit;\r\n         end;\r\n       end;\r\n+    atsTimeSpan:\r\n+      if ToInt64(s, ts.Value) then      // as 100 ns ticks\r\n+      begin\r\n+        TimeSpanToTextVar(ts.Value, s); // display as 'dd.hh:mm:ss.xxx'\r\n+        exit;\r\n+      end;\r\n     atsUnicodePwd:\r\n       begin\r\n         s := 'xxxxxxxx'; // anti-forensic measure (paranoid)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d3dfb00c075eeac5f868df6226a71731fbd2483d",
+      "short_sha": "d3dfb00c",
+      "subject": "tests: validate TimeSpan conversion",
+      "body": "- new functions can now be used for #576",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T07:50:06Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d3dfb00c075eeac5f868df6226a71731fbd2483d",
+      "parents": [
+        "1219fff2d19f0cbd10f18d803467ccb3dd21b1c6"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -332,6 +332,7 @@ interface\n   SecsPerMonth = 2629746; // rough approximation of SecsPerDay * 365.2425 / 12\r\n   SecsPerYear  = 12 * SecsPerMonth;\r\n \r\n+  TicksPerMillisecond  = 10000; // 100 ns e.g. for Windows TimeSpan or FileTime\r\n   MilliSecsPerSec      = 1000;\r\n   MilliSecsPerMin      = MilliSecsPerSec  * SecsPerMin;\r\n   MilliSecsPerHour     = MilliSecsPerMin  * MinsPerHour;\r\n@@ -7560,7 +7561,7 @@ function WindowsFileTimeToDateTime(WinTime: integer): TDateTime;\n end;\r\n \r\n const\r\n-  MilliSecsPerFileTime = 10000; // a tick is 100ns\r\n+  MilliSecsPerFileTime = TicksPerMillisecond; // a tick is 100ns\r\n   SecsPerFileTime      = 10000000;\r\n \r\n procedure UnixTimeToFileTime(I64: TUnixTime; out FT: TFileTime);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16809\n+16810",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16809'\r\n+'2.4.16810'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 0,
+          "patch": "@@ -8498,6 +8498,29 @@ procedure TTestCoreBase.TimeZonesSlow(Context: TObject);\n     tz.Free;\r\n   end;\r\n   CheckSameTime(dtl, UtcToLocal(dt, 'Romance Standard Time'));\r\n+  // validate TimeSpan conversion\r\n+  CheckEqual(TimeSpanToText(0),             '00:00:00');\r\n+  CheckEqual(TimeSpanToText(1),             '00:00:00');\r\n+  CheckEqual(TimeSpanToText(9999),          '00:00:00');\r\n+  CheckEqual(TimeSpanToText(10000),         '00:00:00.001');\r\n+  CheckEqual(TimeSpanToText(9999999),       '00:00:00.999');\r\n+  CheckEqual(TimeSpanToText(10000000),      '00:00:01');\r\n+  CheckEqual(TimeSpanToText(600000000),     '00:01:00');\r\n+  CheckEqual(TimeSpanToText(36000000000),   '01:00:00');\r\n+  CheckEqual(TimeSpanToText(36610000000),   '01:01:01');\r\n+  CheckEqual(TimeSpanToText(36611230000),   '01:01:01.123');\r\n+  CheckEqual(TimeSpanToText(36611234567),   '01:01:01.123');\r\n+  CheckEqual(TimeSpanToText(864000000000),  '1');\r\n+  CheckEqual(TimeSpanToText(864000010000),  '1.00:00:00.001');\r\n+  CheckEqual(TimeSpanToText(865000000000),  '1.00:01:40');\r\n+  CheckEqual(TimeSpanToText(900610000000),  '1.01:01:01');\r\n+  CheckEqual(TimeSpanToText(-10000),        '-00:00:00.001');\r\n+  CheckEqual(TimeSpanToText(-10000000),     '-00:00:01');\r\n+  CheckEqual(TimeSpanToText(-36611230000),  '-01:01:01.123');\r\n+  CheckEqual(TimeSpanToText(-864000000000), '-1');\r\n+  CheckEqual(TimeSpanToText(-864000010000), '-1.00:00:00.001');\r\n+  CheckEqual(TimeSpanToText(High(Int64)),    '10675199.02:48:05.477');\r\n+  CheckEqual(TimeSpanToText(-High(Int64)),   '-10675199.02:48:05.477');\r\n end;\r\n \r\n const\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1219fff2d19f0cbd10f18d803467ccb3dd21b1c6",
+      "short_sha": "1219fff2",
+      "subject": "core: Microsoft TimeSpan 100 ns ticks decoding support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T07:49:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1219fff2d19f0cbd10f18d803467ccb3dd21b1c6",
+      "parents": [
+        "5b281032af193509323707f93dc0362387b70159"
+      ],
+      "stats": {
+        "additions": 48,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -110,6 +110,17 @@ procedure AppendShortBy100(value: cardinal; const valueunit: ShortString;\n // three digits to the left of the decimal separator e.g. '100' '1,000' '10,000'\r\n function IntToThousandString(Value: PtrInt; const Sep: ShortString = ','): TShort31;\r\n \r\n+/// convert a Windows TimeSpan value (i.e. ticks) into millisecond-resolution text\r\n+// - e.g. TimeSpanToText(36611234567) = '01:01:01.123'\r\n+procedure TimeSpanAppendShort(value: Int64; var result: ShortString);\r\n+\r\n+/// convert a Windows TimeSpan value (i.e. ticks) into millisecond-resolution text\r\n+procedure TimeSpanToTextVar(value: Int64; var result: RawUtf8);\r\n+\r\n+/// convert a Windows TimeSpan value (i.e. ticks) into millisecond-resolution text\r\n+function TimeSpanToText(value: Int64): RawUtf8;\r\n+  {$ifdef HASINLINE}inline;{$endif}\r\n+\r\n \r\n { ************ ISO-8601 Compatible Date/Time Text Encoding }\r\n \r\n@@ -587,6 +598,9 @@   TSynSystemTime = record\n       tolocaltime: boolean = false): boolean;\r\n     /// fill Year/Month/Day and Hour/Minute/Second fields from HTTP-date PUtf8Char\r\n     function FromHttpDateBuffer(P: PUtf8Char; tolocaltime: boolean): boolean;\r\n+    /// fill Hour/Minute/Second/MilliSecond fields from Microsoft TimeSpan 100 ns ticks\r\n+    // - and returns the number of days\r\n+    function FromTimeSpan(ticks: Int64): PtrUInt;\r\n     /// encode the stored date/time as ISO-8601 text with Milliseconds\r\n     function ToText(Expanded: boolean = true; FirstTimeChar: AnsiChar = 'T';\r\n       const TZD: RawUtf8 = ''): RawUtf8;\r\n@@ -1481,6 +1495,29 @@ procedure NanoSecToString(Nano: QWord; var result: ShortString);\n     MicroSecToStringVar(Nano div NanoSecsPerMicroSec, result);\r\n end;\r\n \r\n+procedure TimeSpanAppendShort(value: Int64; var result: ShortString);\r\n+var\r\n+  st: TSynSystemTime;\r\n+begin\r\n+  if value < 0 then\r\n+    AppendShortCharSafe('-', result);\r\n+  st.AppendInterval(st.FromTimeSpan(value), result);\r\n+end;\r\n+\r\n+procedure TimeSpanToTextVar(value: Int64; var result: RawUtf8);\r\n+var\r\n+  tmp: TShort31;\r\n+begin\r\n+  tmp[0] := #0;\r\n+  TimeSpanAppendShort(value, tmp);\r\n+  ShortStringToAnsi7String(tmp, result);\r\n+end;\r\n+\r\n+function TimeSpanToText(value: Int64): RawUtf8;\r\n+begin\r\n+  TimeSpanToTextVar(value, result);\r\n+end;\r\n+\r\n \r\n { ************ ISO-8601 Compatible Date/Time Text Encoding }\r\n \r\n@@ -2902,6 +2939,15 @@ function TSynSystemTime.FromHttpDate(const httpdate: RawUtf8;\n             FromHttpDateBuffer(pointer(httpdate), tolocaltime);\r\n end;\r\n \r\n+function TSynSystemTime.FromTimeSpan(ticks: Int64): PtrUInt;\r\n+var\r\n+  ms: QWord;\r\n+begin\r\n+  ms := QWord(abs(ticks)) div TicksPerMillisecond;\r\n+  result := ms div MilliSecsPerDay; // returns the days count\r\n+  FromMS(ms - (QWord(result) * MilliSecsPerDay));\r\n+end;\r\n+\r\n function TSynSystemTime.ToText(Expanded: boolean; FirstTimeChar: AnsiChar;\r\n   const TZD: RawUtf8): RawUtf8;\r\n begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16808\n+16809",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16808'\r\n+'2.4.16809'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5b281032af193509323707f93dc0362387b70159",
+      "short_sha": "5b281032",
+      "subject": "core: new TSynSystemTime.AppendTime/AppendInterval methods",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-10T07:48:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5b281032af193509323707f93dc0362387b70159",
+      "parents": [
+        "d66a106e22a6ccb80540861d27151cf56825e4a0"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -13229,7 +13229,7 @@ procedure YearToPChar(Y: PtrUInt; P: PUtf8Char);\n begin\r\n   tab := @TwoDigitLookupW;\r\n   d100 := Y div 100; // FPC will use fast reciprocal\r\n-  PWordArray(P)[0] := tab[d100];\r\n+  PCardinal(P)^ := tab[d100];\r\n   PWordArray(P)[1] := tab[Y - (d100 * 100)];\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 2,
+          "patch": "@@ -612,13 +612,18 @@   TSynSystemTime = record\n     /// append the stored date and time, in HTTP-like format, to a TJsonWriter\r\n     // - e.g. append '19/Feb/2019:06:18:55 ' - including a trailing space\r\n     procedure AddHttpDate(WR: TTextWriter; const TZD: RawUtf8 = 'GMT');\r\n+    /// append the stored time, in '06:18:55.123' format, into a ShortString\r\n+    procedure AppendTime(var result: ShortString; WithMS: boolean = false);\r\n+    /// append the stored time, in '123.06:18:55:999' format, into a ShortString\r\n+    // - with the supplied days count and Hour/Minute/Second/MilliSecond values\r\n+    procedure AppendInterval(days: PtrUInt; var result: ShortString);\r\n     /// append the stored date and time, in apache-like format, to a memory buffer\r\n     // - e.g. \"Tue, 15 Nov 1994 12:45:26 GMT\" to be used as a value of\r\n     // - e.g. append '19/Feb/2019:06:18:55 ' - including a trailing space\r\n     // - returns the number of chars added to P, i.e. always 21\r\n     function ToNcsaText(P: PUtf8Char): PtrInt;\r\n     /// convert the stored date and time to its text in apache-like format\r\n-    procedure ToNcsaShort(var text: ShortString; const tz: RawUtf8 = 'GMT');\r\n+    procedure ToNcsaShort(var text: TShort23; const tz: RawUtf8 = 'GMT');\r\n     /// convert the stored date and time to its text in HTTP-like format\r\n     // - i.e. \"Tue, 15 Nov 1994 12:45:26 GMT\" to be used as a value of\r\n     // \"Date\", \"Expires\" or \"Last-Modified\" HTTP header\r\n@@ -2977,6 +2982,28 @@ procedure TSynSystemTime.AddHttpDate(WR: TTextWriter; const TZD: RawUtf8);\n   WR.AddShort(tmp);\r\n end;\r\n \r\n+procedure TSynSystemTime.AppendTime(var result: ShortString; WithMS: boolean);\r\n+var\r\n+  p: PAnsiChar;\r\n+begin\r\n+  p := @result;\r\n+  if ord(p^) + 12 <= high(result) then // append all or nothing\r\n+    result[0] := AnsiChar(TimeToIso8601PChar(@p[ord(p[0]) + 1],\r\n+      {exp=}true, Hour, Minute, Second, MilliSecond, #0, WithMS) - (p + 1));\r\n+end;\r\n+\r\n+procedure TSynSystemTime.AppendInterval(days: PtrUInt; var result: ShortString);\r\n+begin\r\n+  if days <> 0 then\r\n+  begin\r\n+    AppendShortCardinal(days, result);\r\n+    if PInt64(@Hour)^ = 0 then // Hour=Minute=Second=MilliSecond=0\r\n+      exit;\r\n+    AppendShortCharSafe('.', result);\r\n+  end;\r\n+  AppendTime(result, MilliSecond <> 0); // 'dd.hh:mm:ss' or 'dd.hh:mm:ss.xxx'\r\n+end;\r\n+\r\n function TSynSystemTime.ToNcsaText(P: PUtf8Char): PtrInt;\r\n var\r\n   y, d100: PtrUInt;\r\n@@ -3007,7 +3034,7 @@ function TSynSystemTime.ToNcsaText(P: PUtf8Char): PtrInt;\n   result := 21;\r\n end;\r\n \r\n-procedure TSynSystemTime.ToNcsaShort(var text: ShortString; const tz: RawUtf8);\r\n+procedure TSynSystemTime.ToNcsaShort(var text: TShort23; const tz: RawUtf8);\r\n begin\r\n   text[0] := AnsiChar(ToNcsaText(@text[1]));\r\n   AppendShortAnsi7String(tz, text);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16805\n+16808",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16805'\r\n+'2.4.16808'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
