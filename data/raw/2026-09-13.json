@@ -1,0 +1,537 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-13",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-13T03:37:34Z",
+  "range": {
+    "since": "2026-09-11T20:19:59Z",
+    "until": "2026-09-13T03:37:34Z",
+    "head_sha": "c9eff2411fc4b3fce5df8c2d28e98adbb08ee6c0"
+  },
+  "version": {
+    "after": "2.4.16851",
+    "before": "2.4.16844"
+  },
+  "totals": {
+    "commits": 9,
+    "additions": 295,
+    "deletions": 77
+  },
+  "commits": [
+    {
+      "sha": "c9eff2411fc4b3fce5df8c2d28e98adbb08ee6c0",
+      "short_sha": "c9eff241",
+      "subject": "Merge pull request #583 from dkounal/decimalerr",
+      "body": "core: correctly rounded GetExtended() and GetNumericVariantFromJson() decimals",
+      "author": "ab",
+      "date": "2026-09-12T23:27:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c9eff2411fc4b3fce5df8c2d28e98adbb08ee6c0",
+      "parents": [
+        "5817814942072a7cb95823e9fabe25c01d25b064",
+        "aa165fe93782927ea6b30cc0dfdff648828b24f7"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 10,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -6845,6 +6845,16 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     goto x;\r\n   end;\r\n   d64 := v64;\r\n+  if (frac < 0) and\r\n+     (frac >= -22) and\r\n+     (v64 <= MAX_SAFE_JS_INTEGER) then\r\n+  begin\r\n+    // Clinger's fast path: d64 and 10^-frac are both exact doubles, so a single\r\n+    // IEEE division is correctly rounded - whereas POW10[frac] * d64 is not,\r\n+    // since 1E-1..1E-22 are inexact (e.g. '1.2' returned 1.2000000000000002)\r\n+    result := d64 / POW10[-frac];\r\n+    goto x;\r\n+  end;\r\n   if PtrUInt(frac) + 31 <= 62 then // -31 .. +31: overwhelmingly common\r\n     result := POW10[frac]\r\n   else if frac < -31 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 10,
+          "patch": "@@ -11662,19 +11662,31 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n      (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r\n   exp := PtrUInt(@POW10);\r\n-  if frac >= -31 then\r\n-    if frac <= 31 then\r\n-      d := PPow10(exp)[frac] // -31 .. + 31 is the most common case\r\n-    else if frac >= remdigit + 290 then\r\n-      exit                   // +308 ..\r\n-    else                     // +32 .. +307\r\n-      d := PPow10(exp)[(frac and not 31) shr 5 + 34] * PPow10(exp)[frac and 31]\r\n+  if (frac < 0) and\r\n+     (frac >= -22) and\r\n+     (v64 >= -MAX_SAFE_JS_INTEGER) then // v64 is negative here\r\n+  begin\r\n+    // Clinger's fast path: v64 and 10^-frac are both exact doubles, so a single\r\n+    // IEEE division is correctly rounded - see GetExtended() in mormot.core.text\r\n+    d := v64;\r\n+    d := d / PPow10(exp)[-frac];\r\n+  end\r\n   else\r\n   begin\r\n-    frac := -frac; // .. -32\r\n-    d := PPow10(exp)[(frac and not 31) shr 5 + 45] / PPow10(exp)[frac and 31];\r\n+    if frac >= -31 then\r\n+      if frac <= 31 then\r\n+        d := PPow10(exp)[frac] // -31 .. + 31 is the most common case\r\n+      else if frac >= remdigit + 290 then\r\n+        exit                   // +308 ..\r\n+      else                     // +32 .. +307\r\n+        d := PPow10(exp)[(frac and not 31) shr 5 + 34] * PPow10(exp)[frac and 31]\r\n+    else\r\n+    begin\r\n+      frac := -frac; // .. -32\r\n+      d := PPow10(exp)[(frac and not 31) shr 5 + 45] / PPow10(exp)[frac and 31];\r\n+    end;\r\n+    d := d * v64;\r\n   end;\r\n-  d := d * v64;\r\n   if not (fNeg in flags) then\r\n     d := -d;\r\n   vd.VType := varDouble;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 55,
+          "deletions": 0,
+          "patch": "@@ -5085,6 +5085,60 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckEqual(TVarData(v).VInt64, expected, text);\r\n   end;\r\n \r\n+  procedure CheckJsonDoubleBits(const text: RawUtf8; expected: QWord);\r\n+  var\r\n+    v: variant;\r\n+  begin\r\n+    CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), true) <> nil, text);\r\n+    CheckEqual(TVarData(v).VType, varDouble, text);\r\n+    CheckUtf8(PQWord(@TVarData(v).VDouble)^ = expected, text);\r\n+  end;\r\n+\r\n+  procedure CheckDecimalRounding;\r\n+  var\r\n+    i, err, bad: integer;\r\n+    s: RawUtf8;\r\n+    d, d0: double;\r\n+  begin\r\n+    // decimal text should be parsed as the nearest IEEE double: digits*POW10[-n]\r\n+    // was not, since 1E-1..1E-22 are inexact - e.g. '1.2' = 1.2000000000000002\r\n+    CheckGetExtendedBits('1.2', $3FF3333333333333);\r\n+    CheckGetExtendedBits('-1.2', QWord($BFF3333333333333));\r\n+    CheckGetExtendedBits('12e-1', $3FF3333333333333);\r\n+    CheckGetExtendedBits('0.1', $3FB999999999999A);\r\n+    CheckGetExtendedBits('0.3', $3FD3333333333333);\r\n+    CheckGetExtendedBits('0.7', $3FE6666666666666);\r\n+    CheckGetExtendedBits('1.15', $3FF2666666666666);\r\n+    CheckGetExtendedBits('39.9', $4043F33333333333);\r\n+    CheckGetExtendedBits('100.1', $4059066666666666);\r\n+    CheckGetExtendedBits('0.35', $3FD6666666666666);\r\n+    CheckGetExtendedBits('4.52', $4012147AE147AE14);\r\n+    CheckGetExtendedBits('452E-2', $4012147AE147AE14);\r\n+    CheckGetExtendedBits('2.675', $4005666666666666);\r\n+    CheckGetExtendedBits('0.009', $3F826E978D4FDF3B);\r\n+    CheckGetExtendedBits('10000.05', $40C3880666666666);\r\n+    CheckGetExtendedBits('0.0003', $3F33A92A30553261);\r\n+    CheckGetExtendedBits('0.00003', $3EFF75104D551D69);\r\n+    // 'x.y' and 'x.y0' are the same number, so should return the same double\r\n+    bad := 0;\r\n+    for i := 1 to 20000 do\r\n+    begin\r\n+      s := FormatUtf8('%.%', [i div 10, i mod 10]);\r\n+      d := GetExtended(pointer(s), err);\r\n+      s := s + '0';\r\n+      d0 := GetExtended(pointer(s), err);\r\n+      if PQWord(@d)^ <> PQWord(@d0)^ then\r\n+        inc(bad);\r\n+    end;\r\n+    CheckEqual(bad, 0, 'x.y = x.y0');\r\n+    // GetNumericVariantFromJson() had the same issue for varDouble values\r\n+    // (with both SSE2 and x87 FPU, since its local d variable is a double)\r\n+    CheckJsonDoubleBits('0.00003', $3EFF75104D551D69);\r\n+    CheckJsonDoubleBits('0.00006', $3F0F75104D551D69);\r\n+    CheckJsonDoubleBits('-0.00007', QWord($BF12599ED7C6FBD2));\r\n+    CheckJsonDoubleBits('0.00012', $3F1F75104D551D69);\r\n+  end;\r\n+\r\n   procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r\n   var\r\n     v: variant;\r\n@@ -5547,6 +5601,7 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(12.345678901234);\r\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n+  CheckDecimalRounding;\r\n   {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n   d := GetExtended('0e400', err);\r\n   CheckEqual(err, 0);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": 583,
+      "is_merge": true
+    },
+    {
+      "sha": "aa165fe93782927ea6b30cc0dfdff648828b24f7",
+      "short_sha": "aa165fe9",
+      "subject": "core: correctly rounded GetExtended() and GetNumericVariantFromJson() decimals",
+      "body": "",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-09-12T22:54:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aa165fe93782927ea6b30cc0dfdff648828b24f7",
+      "parents": [
+        "5817814942072a7cb95823e9fabe25c01d25b064"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 10,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -6845,6 +6845,16 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     goto x;\r\n   end;\r\n   d64 := v64;\r\n+  if (frac < 0) and\r\n+     (frac >= -22) and\r\n+     (v64 <= MAX_SAFE_JS_INTEGER) then\r\n+  begin\r\n+    // Clinger's fast path: d64 and 10^-frac are both exact doubles, so a single\r\n+    // IEEE division is correctly rounded - whereas POW10[frac] * d64 is not,\r\n+    // since 1E-1..1E-22 are inexact (e.g. '1.2' returned 1.2000000000000002)\r\n+    result := d64 / POW10[-frac];\r\n+    goto x;\r\n+  end;\r\n   if PtrUInt(frac) + 31 <= 62 then // -31 .. +31: overwhelmingly common\r\n     result := POW10[frac]\r\n   else if frac < -31 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 10,
+          "patch": "@@ -11662,19 +11662,31 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n      (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r\n   exp := PtrUInt(@POW10);\r\n-  if frac >= -31 then\r\n-    if frac <= 31 then\r\n-      d := PPow10(exp)[frac] // -31 .. + 31 is the most common case\r\n-    else if frac >= remdigit + 290 then\r\n-      exit                   // +308 ..\r\n-    else                     // +32 .. +307\r\n-      d := PPow10(exp)[(frac and not 31) shr 5 + 34] * PPow10(exp)[frac and 31]\r\n+  if (frac < 0) and\r\n+     (frac >= -22) and\r\n+     (v64 >= -MAX_SAFE_JS_INTEGER) then // v64 is negative here\r\n+  begin\r\n+    // Clinger's fast path: v64 and 10^-frac are both exact doubles, so a single\r\n+    // IEEE division is correctly rounded - see GetExtended() in mormot.core.text\r\n+    d := v64;\r\n+    d := d / PPow10(exp)[-frac];\r\n+  end\r\n   else\r\n   begin\r\n-    frac := -frac; // .. -32\r\n-    d := PPow10(exp)[(frac and not 31) shr 5 + 45] / PPow10(exp)[frac and 31];\r\n+    if frac >= -31 then\r\n+      if frac <= 31 then\r\n+        d := PPow10(exp)[frac] // -31 .. + 31 is the most common case\r\n+      else if frac >= remdigit + 290 then\r\n+        exit                   // +308 ..\r\n+      else                     // +32 .. +307\r\n+        d := PPow10(exp)[(frac and not 31) shr 5 + 34] * PPow10(exp)[frac and 31]\r\n+    else\r\n+    begin\r\n+      frac := -frac; // .. -32\r\n+      d := PPow10(exp)[(frac and not 31) shr 5 + 45] / PPow10(exp)[frac and 31];\r\n+    end;\r\n+    d := d * v64;\r\n   end;\r\n-  d := d * v64;\r\n   if not (fNeg in flags) then\r\n     d := -d;\r\n   vd.VType := varDouble;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 55,
+          "deletions": 0,
+          "patch": "@@ -5085,6 +5085,60 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckEqual(TVarData(v).VInt64, expected, text);\r\n   end;\r\n \r\n+  procedure CheckJsonDoubleBits(const text: RawUtf8; expected: QWord);\r\n+  var\r\n+    v: variant;\r\n+  begin\r\n+    CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), true) <> nil, text);\r\n+    CheckEqual(TVarData(v).VType, varDouble, text);\r\n+    CheckUtf8(PQWord(@TVarData(v).VDouble)^ = expected, text);\r\n+  end;\r\n+\r\n+  procedure CheckDecimalRounding;\r\n+  var\r\n+    i, err, bad: integer;\r\n+    s: RawUtf8;\r\n+    d, d0: double;\r\n+  begin\r\n+    // decimal text should be parsed as the nearest IEEE double: digits*POW10[-n]\r\n+    // was not, since 1E-1..1E-22 are inexact - e.g. '1.2' = 1.2000000000000002\r\n+    CheckGetExtendedBits('1.2', $3FF3333333333333);\r\n+    CheckGetExtendedBits('-1.2', QWord($BFF3333333333333));\r\n+    CheckGetExtendedBits('12e-1', $3FF3333333333333);\r\n+    CheckGetExtendedBits('0.1', $3FB999999999999A);\r\n+    CheckGetExtendedBits('0.3', $3FD3333333333333);\r\n+    CheckGetExtendedBits('0.7', $3FE6666666666666);\r\n+    CheckGetExtendedBits('1.15', $3FF2666666666666);\r\n+    CheckGetExtendedBits('39.9', $4043F33333333333);\r\n+    CheckGetExtendedBits('100.1', $4059066666666666);\r\n+    CheckGetExtendedBits('0.35', $3FD6666666666666);\r\n+    CheckGetExtendedBits('4.52', $4012147AE147AE14);\r\n+    CheckGetExtendedBits('452E-2', $4012147AE147AE14);\r\n+    CheckGetExtendedBits('2.675', $4005666666666666);\r\n+    CheckGetExtendedBits('0.009', $3F826E978D4FDF3B);\r\n+    CheckGetExtendedBits('10000.05', $40C3880666666666);\r\n+    CheckGetExtendedBits('0.0003', $3F33A92A30553261);\r\n+    CheckGetExtendedBits('0.00003', $3EFF75104D551D69);\r\n+    // 'x.y' and 'x.y0' are the same number, so should return the same double\r\n+    bad := 0;\r\n+    for i := 1 to 20000 do\r\n+    begin\r\n+      s := FormatUtf8('%.%', [i div 10, i mod 10]);\r\n+      d := GetExtended(pointer(s), err);\r\n+      s := s + '0';\r\n+      d0 := GetExtended(pointer(s), err);\r\n+      if PQWord(@d)^ <> PQWord(@d0)^ then\r\n+        inc(bad);\r\n+    end;\r\n+    CheckEqual(bad, 0, 'x.y = x.y0');\r\n+    // GetNumericVariantFromJson() had the same issue for varDouble values\r\n+    // (with both SSE2 and x87 FPU, since its local d variable is a double)\r\n+    CheckJsonDoubleBits('0.00003', $3EFF75104D551D69);\r\n+    CheckJsonDoubleBits('0.00006', $3F0F75104D551D69);\r\n+    CheckJsonDoubleBits('-0.00007', QWord($BF12599ED7C6FBD2));\r\n+    CheckJsonDoubleBits('0.00012', $3F1F75104D551D69);\r\n+  end;\r\n+\r\n   procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r\n   var\r\n     v: variant;\r\n@@ -5547,6 +5601,7 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(12.345678901234);\r\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n+  CheckDecimalRounding;\r\n   {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n   d := GetExtended('0e400', err);\r\n   CheckEqual(err, 0);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5817814942072a7cb95823e9fabe25c01d25b064",
+      "short_sha": "58178149",
+      "subject": "core: fixed regression in GetNumericVariantFromJson()",
+      "body": "- 0.0 was not parsed as expected",
+      "author": "Arnaud",
+      "date": "2026-09-12T21:34:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5817814942072a7cb95823e9fabe25c01d25b064",
+      "parents": [
+        "8b5a85a4b473fca103625a543b1244579eac1835"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -11580,7 +11580,10 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       inc(Json);\r\n       c := PtrUInt(Json^) - ord('0');\r\n       if c > 9 then // require a single dot followed by a digit\r\n-        exit;\r\n+        if frac = 0 then\r\n+          exit // needs at least one digit after the dot\r\n+        else\r\n+          break;\r\n       dec(frac);\r\n     until (c <> 0) or\r\n           (v64 <> 0);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16850\n+16851",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16850'\r\n+'2.4.16851'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -5633,6 +5633,8 @@ procedure TTestCoreBase.NumericalConversions;\n   end;\r\n   {$endif CPU64}\r\n   CheckJsonExact('0', varInteger, 0);\r\n+  CheckJsonExact('0.0', varInteger, 0);\r\n+  CheckJsonExact('0.000000000', varInteger, 0);\r\n   CheckJsonExact('-123', varInteger, -123);\r\n   CheckJsonExact('9223372036854775807',   varInt64,    High(Int64));\r\n   CheckJsonExact('-9223372036854775808',  varInt64,    Low(Int64));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8b5a85a4b473fca103625a543b1244579eac1835",
+      "short_sha": "8b5a85a4",
+      "subject": "core: refine some GetExtended() specific cases",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T09:13:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8b5a85a4b473fca103625a543b1244579eac1835",
+      "parents": [
+        "a155bf801af4e8ba80e5ed6ae15b6c09ae710123"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 5,
+          "patch": "@@ -6839,6 +6839,11 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   if (P^ <> #0) or\r\n      not (fValid in flags) then\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n+  if v64 = 0 then\r\n+  begin\r\n+    result := 0; // fast path for e.g. '0' or '0E400'\r\n+    goto x;\r\n+  end;\r\n   d64 := v64;\r\n   if PtrUInt(frac) + 31 <= 62 then // -31 .. +31: overwhelmingly common\r\n     result := POW10[frac]\r\n@@ -6849,11 +6854,9 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n       if frac < -342 then\r\n         goto o;\r\n       // avoid creating a subnormal 10^frac before applying d64\r\n-      result := d64 * POW10[50]; // 1E-160\r\n-      inc(frac, 160);\r\n-      frac := -frac;\r\n-      result := result *\r\n-        (POW10[(frac and not 31) shr 5 + 45] / POW10[frac and 31]);\r\n+      frac := -(frac + 160);\r\n+      result := d64 * POW10[50] * // 1E-160\r\n+                (POW10[(frac and not 31) shr 5 + 45] / POW10[frac and 31]);\r\n       goto x;\r\n     end;\r\n     frac := -frac;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16849\n+16850",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16849'\r\n+'2.4.16850'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 0,
+          "patch": "@@ -5548,6 +5548,15 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n   {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n+  d := GetExtended('0e400', err);\r\n+  CheckEqual(err, 0);\r\n+  Check(d = 0);\r\n+  d := GetExtended('0e-400', err);\r\n+  CheckEqual(err, 0);\r\n+  Check(d = 0);\r\n+  d := GetExtended('-0e400', err);\r\n+  CheckEqual(err, 0);\r\n+  Check(PQWord(@d)^ = QWord($8000000000000000));\r\n   CheckGetExtendedBits('4.9406564584124654E-324', $0000000000000001);\r\n   CheckGetExtendedBits('2.2250738585072009E-308', $000FFFFFFFFFFFFF);\r\n   CheckGetExtendedBits('2.2250738585072014E-308', $0010000000000000);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a155bf801af4e8ba80e5ed6ae15b6c09ae710123",
+      "short_sha": "a155bf80",
+      "subject": "tests: enhanced double / text conversion coverage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T09:00:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a155bf801af4e8ba80e5ed6ae15b6c09ae710123",
+      "parents": [
+        "f4433cf3122ef75738d95709b41a8fbd51d66e0d"
+      ],
+      "stats": {
+        "additions": 34,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16848\n+16849",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16848'\r\n+'2.4.16849'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 1,
+          "patch": "@@ -4990,13 +4990,23 @@ function TestAddFloatStr(const str: RawUtf8): RawUtf8;\n \r\n procedure TTestCoreBase.NumericalConversions;\r\n \r\n+  procedure CheckGetExtendedBits(const text: RawUtf8; expected: QWord);\r\n+  var\r\n+    d: double;\r\n+    err: integer;\r\n+  begin\r\n+    d := GetExtended(pointer(text), err);\r\n+    CheckEqual(err, 0, text);\r\n+    CheckUtf8(PQWord(@d)^ = expected, text);\r\n+  end;\r\n+\r\n   procedure CheckDoubleToShort(v: double; const expected: ShortString);\r\n   var\r\n     a: ShortString;\r\n     d: double;\r\n     err: integer;\r\n   begin\r\n-    ExtendedToShort(@a, v, DOUBLE_PRECISION);\r\n+    ExtendedToShort(@a, v, DOUBLE_PRECISION); // = 15\r\n     if expected = '1E-19' then // may return '9.9999999999999998E-20' as double\r\n       Check(a <> '0', '1E-19') // just validate that it is not trimmed to '0'\r\n     else\r\n@@ -5012,6 +5022,14 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckSame(v, d);\r\n   end;\r\n \r\n+  procedure CheckDoubleToShortBits(bits: QWord; const expected: ShortString);\r\n+  var\r\n+    d: double;\r\n+  begin\r\n+    PUInt64(@d)^ := bits;\r\n+    CheckDoubleToShort(d, expected);\r\n+  end;\r\n+\r\n   procedure CheckDoubleToShortSame(v: double);\r\n   var\r\n     s: string;\r\n@@ -5529,6 +5547,19 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(12.345678901234);\r\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n+  {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n+  CheckGetExtendedBits('4.9406564584124654E-324', $0000000000000001);\r\n+  CheckGetExtendedBits('2.2250738585072009E-308', $000FFFFFFFFFFFFF);\r\n+  CheckGetExtendedBits('2.2250738585072014E-308', $0010000000000000);\r\n+  CheckGetExtendedBits('1.7976931348623157E308', $7FEFFFFFFFFFFFFF);\r\n+  CheckGetExtendedBits('1E308', $7FE1CCF385EBC8A0);\r\n+  CheckDoubleToShortBits($4D6E62C4E38FF876, '1.0000000000000005E65');\r\n+  CheckDoubleToShortBits(QWord($CD6E62C4E38FF876), '-1.0000000000000005E65');\r\n+  CheckDoubleToShortBits($0000000000000001, '4.9406564584124654E-324');\r\n+  CheckDoubleToShortBits($000FFFFFFFFFFFFF, '2.2250738585072009E-308');\r\n+  CheckDoubleToShortBits($0010000000000000, '2.2250738585072014E-308');\r\n+  CheckDoubleToShortBits($7FEFFFFFFFFFFFFF, '1.7976931348623157E308');\r\n+  {$endif WIN32DELPHI}\r\n   CheckEqual(TextToVariantNumberType('1'), varInt64);\r\n   CheckEqual(TextToVariantNumberType('10'), varInt64);\r\n   CheckEqual(TextToVariantNumberType('01'), varString);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f4433cf3122ef75738d95709b41a8fbd51d66e0d",
+      "short_sha": "f4433cf3",
+      "subject": "core: fixed DoubleToAscii()",
+      "body": "- the \"sticky bit\" issue on CPU64\n- and add some new optimizations",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T08:58:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f4433cf3122ef75738d95709b41a8fbd51d66e0d",
+      "parents": [
+        "56bb70cd1a4914f061fa99c08736a300dcb92e4e"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 24,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 22,
+          "patch": "@@ -8098,12 +8098,8 @@ procedure d2a_return_exponential(str: PAnsiChar; minus: boolean;\n     n_digits_have := n_digits_req;\r\n   if n_digits_have > 0 then\r\n   begin\r\n-    // Dot\r\n-    if n_digits_req > 1 then\r\n-    begin\r\n-      p^ := '.';\r\n-      inc(p);\r\n-    end;\r\n+    p^ := '.';\r\n+    inc(p);\r\n     repeat\r\n       inc(digits);\r\n       p^ := AnsiChar(digits^ + ord('0'));\r\n@@ -8157,23 +8153,18 @@ procedure d2a_return_special(str: PAnsiChar; sign: integer;\n \r\n // Calculates the exp10 of a factor required to bring the binary exponent\r\n // of the original number into selected [ alpha .. gamma ] range:\r\n-// result := ceiling[ ( alpha - e ) * log10(2) ]\r\n-function d2a_k_comp(e, alpha{, gamma}: integer): integer;\r\n+// result := ceiling[ ( alpha - e ) * log10(2) ] with fixed-point integer arithmetic\r\n+function d2a_k_comp(e, alpha: integer): integer; {$ifdef HASINLINE}inline;{$endif}\r\n var\r\n-  dexp: double;\r\n-const\r\n-  D_LOG10_2: double = 0.301029995663981195213738894724493027; // log10(2)\r\n-var\r\n-  x, n: integer;\r\n+  x: integer;\r\n begin\r\n   x := alpha - e;\r\n-  dexp := x * D_LOG10_2;\r\n-  // ceil( dexp )\r\n-  n := trunc(dexp);\r\n   if x > 0 then\r\n-    if dexp <> n then\r\n-      inc(n); // round-up\r\n-  result := n;\r\n+    result := ((x * 78913) shr 18) + 1\r\n+  else if x < 0 then\r\n+    result := -(((-x) * 78913) shr 18)\r\n+  else\r\n+    result := 0;\r\n end;\r\n \r\n procedure DoubleToAscii(min_width, frac_digits: integer; const v: double;\r\n@@ -8345,16 +8336,14 @@ procedure DoubleToAscii(min_width, frac_digits: integer; const v: double;\n       end;\r\n       {$endif CPU32}\r\n     until true;\r\n-  {$ifdef CPU32}\r\n   // Append \"sticky\" digit if any\r\n-  if (f <> 0) and\r\n+  if ({$ifdef CPU32} f {$else} fl {$endif} <> 0) and\r\n      (n_digits_have >= n_digits_need + 1) then\r\n   begin\r\n     // single \"<>0\" digit is enough\r\n     n_digits_have := n_digits_need + 2;\r\n     buf[n_digits_need + 1] := 1;\r\n   end;\r\n-  {$endif CPU32}\r\n   // Round to n_digits_need using \"roundTiesToEven\"\r\n   if n_digits_have > n_digits_need then\r\n     inc(dot_pos, d2a_round_digits(buf, n_digits_have, n_digits_need));\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16847\n+16848",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16847'\r\n+'2.4.16848'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "56bb70cd1a4914f061fa99c08736a300dcb92e4e",
+      "short_sha": "56bb70cd",
+      "subject": "core: fixed GetExtended() on huge/tiny exponents",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T08:58:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/56bb70cd1a4914f061fa99c08736a300dcb92e4e",
+      "parents": [
+        "511fe9320ea360cf10b14163b9fec5146e7ceca8"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 2,
+          "patch": "@@ -6845,13 +6845,23 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   else if frac < -31 then\r\n   begin\r\n     if frac <= -324 then\r\n-      goto o;\r\n+    begin\r\n+      if frac < -342 then\r\n+        goto o;\r\n+      // avoid creating a subnormal 10^frac before applying d64\r\n+      result := d64 * POW10[50]; // 1E-160\r\n+      inc(frac, 160);\r\n+      frac := -frac;\r\n+      result := result *\r\n+        (POW10[(frac and not 31) shr 5 + 45] / POW10[frac and 31]);\r\n+      goto x;\r\n+    end;\r\n     frac := -frac;\r\n     result := POW10[(frac and not 31) shr 5 + 45] / POW10[frac and 31];\r\n   end\r\n   else\r\n   begin // frac >= 32\r\n-    if frac >= 308 then\r\n+    if frac > 308 then\r\n     begin\r\n o:    result := d64;\r\n       err := 1;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16846\n+16847",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16846'\r\n+'2.4.16847'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "511fe9320ea360cf10b14163b9fec5146e7ceca8",
+      "short_sha": "511fe932",
+      "subject": "tests: enhanced floating point conversion vectors",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T07:41:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/511fe9320ea360cf10b14163b9fec5146e7ceca8",
+      "parents": [
+        "37212dc425d8edc4ce395e9f1b10ac3646409b74"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16845\n+16846",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16845'\r\n+'2.4.16846'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 6,
+          "patch": "@@ -4990,16 +4990,22 @@ function TestAddFloatStr(const str: RawUtf8): RawUtf8;\n \r\n procedure TTestCoreBase.NumericalConversions;\r\n \r\n-  procedure CheckDoubleToShort(v: double; const expected: RawUtf8);\r\n+  procedure CheckDoubleToShort(v: double; const expected: ShortString);\r\n   var\r\n     a: ShortString;\r\n     d: double;\r\n     err: integer;\r\n   begin\r\n     ExtendedToShort(@a, v, DOUBLE_PRECISION);\r\n-    CheckEqual(ShortStringToUtf8(a), expected, 'ExtendedToShort');\r\n+    if expected = '1E-19' then // may return '9.9999999999999998E-20' as double\r\n+      Check(a <> '0', '1E-19') // just validate that it is not trimmed to '0'\r\n+    else\r\n+      CheckEqualShort(a, expected, 'ExtendedToShort');\r\n     DoubleToShort(@a, v);\r\n-    CheckEqual(ShortStringToUtf8(a), expected, 'DoubleToShort');\r\n+    if expected = '1E-19' then\r\n+      Check(a <> '0', '1E-19')\r\n+    else\r\n+      CheckEqualShort(a, expected, 'DoubleToShort');\r\n     a[ord(a[0]) + 1] := #0;\r\n     d := GetExtended(@a[1], err);\r\n     CheckEqual(err, 0);\r\n@@ -5435,8 +5441,19 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShort(0.01, '0.01');\r\n   CheckDoubleToShort(0.001, '0.001');\r\n   CheckDoubleToShort(0.0001, '0.0001');\r\n-  CheckDoubleToShort(0.0000000000000000001,\r\n-    {$ifdef TSYNEXTENDED80} '1E-19' {$else} '9.9999999999999998E-20' {$endif});\r\n+  CheckDoubleToShort(0.0000000000000000001, '1E-19'); // double <> extended\r\n+  CheckDoubleToShort(0.0000000000000000002, '2E-19'); // would exactly convert\r\n+  CheckDoubleToShort(-0.0000000000000000002, '-2E-19');\r\n+  CheckDoubleToShort(0.00000000000000000015, '1.5E-19');\r\n+  CheckDoubleToShort(-0.00000000000000000015, '-1.5E-19');\r\n+  CheckDoubleToShort(0.0000000000000002, '2E-16');\r\n+  CheckDoubleToShort(-0.0000000000000002, '-2E-16');\r\n+  CheckDoubleToShort(0.000000000002, '2E-12');\r\n+  CheckDoubleToShort(-0.000000000002, '-2E-12');\r\n+  CheckDoubleToShort(2e19, '2E19');\r\n+  CheckDoubleToShort(-2e19, '-2E19');\r\n+  CheckDoubleToShort(1.5e19, '1.5E19');\r\n+  CheckDoubleToShort(-1.5e19, '-1.5E19');\r\n   CheckDoubleToShort(-0.1, '-0.1');\r\n   CheckDoubleToShort(-0.01, '-0.01');\r\n   CheckDoubleToShort(-0.001, '-0.001');\r\n@@ -8699,7 +8716,7 @@ procedure TTestCoreBase.TimeZonesSlow(Context: TObject);\n   CheckTimeSpan(-High(Int64),   '-10675199.02:48:05.477');\r\n   Check(TextToTimeSpan('0.06:18:55', ts));\r\n   CheckEqual(ts, 227350000000);\r\n-  Check(TextToTimeSpan(' 0.00:00:00.001', ts));\r\n+  Check(TextToTimeSpan(' 0.00:00:00.001 ', ts));\r\n   CheckEqual(ts, 10000);\r\n   Check(TextToTimeSpan('000.23:59:59.99999999', ts));\r\n   CheckEqual(ts, 863999990000);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "37212dc425d8edc4ce395e9f1b10ac3646409b74",
+      "short_sha": "37212dc4",
+      "subject": "core: fixed DoubleToAscii() correctness of scientific notation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-12T07:40:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/37212dc425d8edc4ce395e9f1b10ac3646409b74",
+      "parents": [
+        "a2908ede06eecbc62d2b1335c97a6a91a9ad02df"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 6,
+          "patch": "@@ -8083,17 +8083,17 @@ procedure d2a_return_exponential(str: PAnsiChar; minus: boolean;\n   else\r\n     p^ := '0';\r\n   inc(p);\r\n-  // Dot\r\n-  if n_digits_req > 1 then\r\n-  begin\r\n-    p^ := '.';\r\n-    inc(p);\r\n-  end;\r\n   // Fraction significant digits\r\n   if n_digits_req < n_digits_have then\r\n     n_digits_have := n_digits_req;\r\n   if n_digits_have > 0 then\r\n   begin\r\n+    // Dot\r\n+    if n_digits_req > 1 then\r\n+    begin\r\n+      p^ := '.';\r\n+      inc(p);\r\n+    end;\r\n     repeat\r\n       inc(digits);\r\n       p^ := AnsiChar(digits^ + ord('0'));\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16844\n+16845",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16844'\r\n+'2.4.16845'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
