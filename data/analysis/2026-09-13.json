@@ -1,0 +1,437 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-13",
+  "edition_title": {
+    "en": "Decimal parsing reaches exact IEEE rounding after a zero regression",
+    "fr": "Le parsing décimal atteint l’arrondi IEEE exact après une régression sur zéro",
+    "zh": "十进制解析在修复零值回归后实现精确 IEEE 舍入",
+    "ru": "Десятичный parser получил точное IEEE-округление после регрессии нуля"
+  },
+  "intro": {
+    "en": "This edition continues the numeric conversion stabilization with production-visible correctness fixes in both directions. DoubleToAscii now handles scientific notation and 64-bit sticky-bit rounding correctly, while GetExtended accepts boundary exponents and rounds common decimal fractions to the nearest IEEE double. GetNumericVariantFromJson also restores numeric handling for 0.0, so backends that exchange JSON numbers or persist floating-point text should take the completed series.",
+    "fr": "Cette édition poursuit la stabilisation des conversions numériques avec des corrections de précision visibles en production dans les deux sens. DoubleToAscii gère maintenant correctement la notation scientifique et l’arrondi du sticky bit sur 64 bits, tandis que GetExtended accepte les exposants limites et arrondit les fractions décimales courantes vers le double IEEE le plus proche. GetNumericVariantFromJson rétablit aussi le traitement numérique de 0.0 ; les backends qui échangent des nombres JSON ou persistent des flottants en texte doivent donc prendre la série complète.",
+    "zh": "本期继续稳定数值双向转换，并修复会影响生产结果的正确性问题。DoubleToAscii 现可正确处理科学计数法与 64-bit sticky bit 舍入，GetExtended 则接受边界 exponent，并把常见十进制小数舍入到最近的 IEEE double。GetNumericVariantFromJson 也恢复了对 0.0 的数值处理，因此交换 JSON number 或以文本持久化浮点值的 backend 应采用完整变更序列。",
+    "ru": "Этот выпуск продолжает стабилизацию числовых преобразований и исправляет заметные в production ошибки в обоих направлениях. DoubleToAscii теперь корректно обрабатывает научную нотацию и округление sticky bit на 64-bit, а GetExtended принимает граничные exponent и округляет обычные десятичные дроби до ближайшего IEEE double. GetNumericVariantFromJson также восстанавливает числовую обработку 0.0, поэтому backend, обменивающимся JSON numbers или сохраняющим floating-point значения как текст, следует взять всю серию."
+  },
+  "tldr": {
+    "en": [
+      "Land on commit c9eff241 at build 2.4.16851; it includes the final decimal-rounding merge after the version number was last incremented.",
+      "GetNumericVariantFromJson again parses 0.0 and all-zero fractional forms as numeric zero instead of failing the numeric conversion.",
+      "GetExtended and GetNumericVariantFromJson now return the nearest IEEE double for common fractions such as 1.2 instead of a one-ULP-high value.",
+      "DoubleToAscii fixes scientific-notation punctuation and applies sticky-bit rounding on CPU64, improving exact floating-point text round trips.",
+      "The non-WIN32DELPHI GetExtended path now handles minimum subnormal and maximum finite double boundaries without premature failure."
+    ],
+    "fr": [
+      "Passez au commit c9eff241 de la build 2.4.16851 ; il inclut le merge final sur l’arrondi décimal après la dernière incrémentation de version.",
+      "GetNumericVariantFromJson analyse de nouveau 0.0 et les formes fractionnaires entièrement nulles comme un zéro numérique au lieu d’échouer la conversion.",
+      "GetExtended et GetNumericVariantFromJson renvoient maintenant le double IEEE le plus proche pour des fractions courantes comme 1.2, au lieu d’une valeur supérieure d’un ULP.",
+      "DoubleToAscii corrige la ponctuation de la notation scientifique et applique l’arrondi sticky bit sur CPU64, améliorant les allers-retours exacts entre flottants et texte.",
+      "Le chemin GetExtended hors WIN32DELPHI traite maintenant les limites du plus petit subnormal et du plus grand double fini sans échec prématuré."
+    ],
+    "zh": [
+      "应采用 build 2.4.16851 的 commit c9eff241；它包含版本号最后一次递增后合入的最终十进制舍入修复。",
+      "GetNumericVariantFromJson 再次把 0.0 及小数部分全为零的形式解析为数值零，不再导致数值转换失败。",
+      "GetExtended 与 GetNumericVariantFromJson 现在会把 1.2 等常见小数转换为最近的 IEEE double，而不是高出一个 ULP 的值。",
+      "DoubleToAscii 修复科学计数法的标点生成，并在 CPU64 上应用 sticky bit 舍入，从而改善浮点值与文本的精确往返转换。",
+      "非 WIN32DELPHI 的 GetExtended 路径现在可处理最小 subnormal 与最大有限 double 边界，不再过早失败。"
+    ],
+    "ru": [
+      "Переходите на commit c9eff241 в build 2.4.16851: он включает финальный merge десятичного округления после последнего увеличения номера версии.",
+      "GetNumericVariantFromJson снова разбирает 0.0 и дробные формы из одних нулей как числовой ноль вместо отказа числового преобразования.",
+      "GetExtended и GetNumericVariantFromJson теперь возвращают ближайший IEEE double для обычных дробей вроде 1.2, а не значение на один ULP выше.",
+      "DoubleToAscii исправляет пунктуацию научной нотации и применяет округление sticky bit на CPU64, улучшая точное преобразование floating-point значений в текст и обратно.",
+      "Путь GetExtended вне WIN32DELPHI теперь обрабатывает границы минимального subnormal и максимального конечного double без преждевременной ошибки."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Take the final c9eff241 revision identified as build 2.4.16851, not merely an earlier commit carrying that build number. Avoid builds 2.4.16844 through 2.4.16850 because GetNumericVariantFromJson can reject 0.0 there, and the output/parser boundary work is still incomplete. After upgrading, rerun JSON numeric, scientific-notation and exact double round-trip tests on every Delphi and FPC target you ship.",
+    "fr": "Prenez la révision finale c9eff241 identifiée comme build 2.4.16851, pas seulement un commit antérieur portant ce numéro de build. Évitez les builds 2.4.16844 à 2.4.16850, où GetNumericVariantFromJson peut rejeter 0.0 et où le travail sur les limites de sortie et de parsing reste incomplet. Après mise à niveau, rejouez les tests de nombres JSON, de notation scientifique et d’aller-retour exact des doubles sur chaque cible Delphi et FPC livrée.",
+    "zh": "应采用标记为 build 2.4.16851 的最终 revision c9eff241，而不只是带有相同 build 号的较早 commit。应避开 build 2.4.16844 至 2.4.16850，因为其中 GetNumericVariantFromJson 可能拒绝 0.0，而且输出与 parser 的边界处理仍不完整。升级后，请在所有交付的 Delphi 与 FPC 目标上重跑 JSON 数值、科学计数法和 double 精确往返测试。",
+    "ru": "Берите финальную revision c9eff241, обозначенную как build 2.4.16851, а не просто более ранний commit с тем же номером build. Избегайте builds 2.4.16844–2.4.16850: там GetNumericVariantFromJson может отвергать 0.0, а работа над границами вывода и parser ещё не завершена. После обновления повторите тесты JSON numbers, научной нотации и точного round trip double на каждой поставляемой цели Delphi и FPC."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16844",
+        "to_build": "2.4.16850",
+        "why": "GetNumericVariantFromJson can reject 0.0 in this range, and the scientific-output and exponent-boundary fixes are only completed by the later commits."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "37212dc425d8edc4ce395e9f1b10ac3646409b74",
+          "511fe9320ea360cf10b14163b9fec5146e7ceca8",
+          "f4433cf3122ef75738d95709b41a8fbd51d66e0d",
+          "a155bf801af4e8ba80e5ed6ae15b6c09ae710123"
+        ],
+        "why": "Take both DoubleToAscii corrections together with their boundary and exact-bit regression vectors."
+      },
+      {
+        "shas": [
+          "56bb70cd1a4914f061fa99c08736a300dcb92e4e",
+          "8b5a85a4b473fca103625a543b1244579eac1835",
+          "5817814942072a7cb95823e9fabe25c01d25b064",
+          "aa165fe93782927ea6b30cc0dfdff648828b24f7"
+        ],
+        "why": "Apply the exponent, zero and nearest-IEEE parsing corrections as one completed parser sequence."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "The raw payload contains no superseded_by markers. The embedded consecutive diffs nevertheless show one explicit GetNumericVariantFromJson regression fix and several cumulative conversion fixes. Commit aa165fe9 and its merge do not increment mormot.commit-num.inc beyond 16851, so the full landing SHA matters.",
+    "fr": "Le payload brut ne contient aucun marqueur superseded_by. Les diffs consécutifs intégrés montrent néanmoins une correction explicite de régression dans GetNumericVariantFromJson et plusieurs corrections cumulatives de conversion. Le commit aa165fe9 et son merge n’incrémentent pas mormot.commit-num.inc au-delà de 16851 ; le SHA complet d’arrivée est donc important.",
+    "zh": "原始 payload 不含 superseded_by 标记，但内嵌的连续 diff 明确显示一次 GetNumericVariantFromJson 回归修复以及多项累积转换修复。commit aa165fe9 及其 merge 未把 mormot.commit-num.inc 递增到 16851 以上，因此完整 landing SHA 很重要。",
+    "ru": "В исходном payload нет отметок superseded_by. Однако встроенные последовательные diffs показывают явное исправление регрессии GetNumericVariantFromJson и несколько накопительных исправлений преобразований. Commit aa165fe9 и его merge не увеличивают mormot.commit-num.inc выше 16851, поэтому важен полный landing SHA."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Floating-point text conversion stabilization",
+        "fr": "Stabilisation des conversions texte et flottants",
+        "zh": "浮点值与文本转换的稳定化",
+        "ru": "Стабилизация преобразований floating-point и текста"
+      },
+      "summary": {
+        "en": "Eight non-merge commits repair scientific output, CPU64 tie-breaking, exponent boundaries, zero handling and nearest-IEEE decimal parsing. The accompanying vectors cover exact double bit patterns and round trips, with the final merge leaving the tree at build 2.4.16851.",
+        "fr": "Huit commits non-merge réparent la sortie scientifique, le départage des égalités sur CPU64, les limites d’exposant, la gestion du zéro et le parsing décimal vers le plus proche IEEE. Les vecteurs associés couvrent les motifs de bits exacts des doubles et les allers-retours, le merge final laissant l’arbre à la build 2.4.16851.",
+        "zh": "八个非 merge commit 修复科学计数法输出、CPU64 平局舍入、exponent 边界、零值处理以及最近 IEEE 的十进制解析。配套 vector 覆盖精确 double bit pattern 与往返转换，最终 merge 后源码树保持在 build 2.4.16851。",
+        "ru": "Восемь non-merge commits исправляют научный вывод, разрешение равенства при округлении на CPU64, границы exponent, обработку нуля и десятичный parsing до ближайшего IEEE. Сопутствующие vectors покрывают точные bit patterns double и round trips, а финальный merge оставляет дерево на build 2.4.16851."
+      },
+      "shas": [
+        "37212dc425d8edc4ce395e9f1b10ac3646409b74",
+        "511fe9320ea360cf10b14163b9fec5146e7ceca8",
+        "56bb70cd1a4914f061fa99c08736a300dcb92e4e",
+        "f4433cf3122ef75738d95709b41a8fbd51d66e0d",
+        "a155bf801af4e8ba80e5ed6ae15b6c09ae710123",
+        "8b5a85a4b473fca103625a543b1244579eac1835",
+        "5817814942072a7cb95823e9fabe25c01d25b064",
+        "aa165fe93782927ea6b30cc0dfdff648828b24f7"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "37212dc425d8edc4ce395e9f1b10ac3646409b74",
+      "headline": {
+        "en": "Scientific formatting no longer emits a misplaced decimal point",
+        "fr": "Le format scientifique n’émet plus de séparateur décimal mal placé",
+        "zh": "科学计数格式不再输出位置错误的小数点",
+        "ru": "Научный формат больше не ставит десятичную точку не на место"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "In mormot.core.text, d2a_return_exponential now decides whether to write the decimal point after limiting n_digits_have to n_digits_req. The separator is emitted with the fractional significant digits rather than before their final count is known.",
+        "fr": "Dans mormot.core.text, d2a_return_exponential décide maintenant d’écrire le séparateur décimal après avoir limité n_digits_have à n_digits_req. Le séparateur est émis avec les chiffres significatifs fractionnaires plutôt qu’avant de connaître leur nombre final.",
+        "zh": "在 mormot.core.text 中，d2a_return_exponential 现在会先把 n_digits_have 限制到 n_digits_req，再决定是否写入小数点。separator 与小数有效数字一起输出，而不是在最终位数确定前写入。",
+        "ru": "В mormot.core.text функция d2a_return_exponential теперь решает, выводить ли десятичную точку, после ограничения n_digits_have значением n_digits_req. Разделитель выводится вместе с дробными значащими цифрами, а не до определения их итогового количества."
+      },
+      "impact": {
+        "en": "Existing Delphi and FPC code keeps the same DoubleToAscii signature, but edge-case scientific strings can change to valid punctuation. Consumers comparing serialized floating-point text byte for byte should update expected values after taking the full series.",
+        "fr": "Le code Delphi et FPC existant conserve la même signature DoubleToAscii, mais certaines chaînes scientifiques limites peuvent changer pour adopter une ponctuation valide. Les consommateurs qui comparent le texte flottant octet par octet doivent mettre à jour les valeurs attendues après avoir pris la série complète.",
+        "zh": "现有 Delphi 与 FPC 代码继续使用相同的 DoubleToAscii signature，但边界科学计数字符串可能改为正确标点。若 consumer 按字节比较序列化浮点文本，应在采用完整变更序列后更新预期值。",
+        "ru": "Существующий код Delphi и FPC сохраняет ту же signature DoubleToAscii, но строки научной нотации в крайних случаях могут измениться и получить корректную пунктуацию. Consumers, сравнивающим сериализованный floating-point текст побайтно, следует обновить ожидаемые значения после всей серии."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Rerun golden-output tests that compare DoubleToAscii scientific notation exactly.",
+        "fr": "Rejouez les tests de sortie de référence qui comparent exactement la notation scientifique de DoubleToAscii.",
+        "zh": "重跑会精确比较 DoubleToAscii 科学计数法输出的 golden-output 测试。",
+        "ru": "Повторите golden-output тесты, точно сравнивающие научную нотацию DoubleToAscii."
+      },
+      "units": ["mormot.core.text"],
+      "api_changes": [
+        {
+          "symbol": "DoubleToAscii",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Scientific output places the decimal separator only when fractional significant digits are emitted.",
+            "fr": "La sortie scientifique place le séparateur décimal seulement si des chiffres significatifs fractionnaires sont émis.",
+            "zh": "科学计数输出仅在写入小数有效数字时添加小数点。",
+            "ru": "Научный вывод ставит десятичную точку только при наличии дробных значащих цифр."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "511fe9320ea360cf10b14163b9fec5146e7ceca8",
+      "headline": {
+        "en": "Conversion tests gain exact boundary vectors",
+        "fr": "Les tests de conversion gagnent des vecteurs de limites exactes",
+        "zh": "转换测试新增精确边界 vector",
+        "ru": "Тесты преобразования получили точные граничные vectors"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.core.base adds exact-bit assertions for minimum subnormal, maximum finite and other boundary doubles, plus positive and negative scientific-notation round trips. Its local output helper now compares ShortString values directly.",
+        "fr": "test.core.base ajoute des assertions bit à bit pour le plus petit subnormal, le plus grand double fini et d’autres limites, ainsi que des allers-retours en notation scientifique positifs et négatifs. Son helper local compare maintenant directement les valeurs ShortString.",
+        "zh": "test.core.base 为最小 subnormal、最大有限值及其他 double 边界新增精确 bit assertion，并覆盖正负科学计数法往返。其本地输出 helper 现在直接比较 ShortString 值。",
+        "ru": "test.core.base добавляет проверки точных bits для минимального subnormal, максимального конечного и других граничных double, а также положительные и отрицательные round trips научной нотации. Локальный helper вывода теперь напрямую сравнивает значения ShortString."
+      },
+      "impact": {
+        "en": "No application code or public API changes. The tests make later parser and formatter boundary corrections observable on Delphi and FPC, while exact GetExtended bit checks remain excluded for WIN32DELPHI.",
+        "fr": "Aucun changement de code applicatif ni d’API publique. Les tests rendent observables les corrections ultérieures de limites du parser et du formateur sous Delphi et FPC, tandis que les contrôles bit à bit exacts de GetExtended restent exclus pour WIN32DELPHI.",
+        "zh": "应用代码与公开 API 均无变化。这些测试让后续 parser 与 formatter 边界修复可在 Delphi 和 FPC 上被检测，但 GetExtended 的精确 bit 检查仍排除 WIN32DELPHI。",
+        "ru": "Изменений прикладного кода и публичного API нет. Тесты делают последующие граничные исправления parser и formatter наблюдаемыми на Delphi и FPC, а точные проверки bits GetExtended по-прежнему исключены для WIN32DELPHI."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "56bb70cd1a4914f061fa99c08736a300dcb92e4e",
+      "headline": {
+        "en": "Extreme decimal exponents reach valid double boundaries",
+        "fr": "Les exposants décimaux extrêmes atteignent les limites valides des doubles",
+        "zh": "极端十进制 exponent 可到达有效 double 边界",
+        "ru": "Крайние десятичные exponent достигают допустимых границ double"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The non-WIN32DELPHI GetExtended implementation in mormot.core.text no longer rejects every frac value at or below -324. For the reachable -342 through -324 range it pre-scales d64 before applying the remaining negative power, and it permits frac 308 to pass through the existing overflow-safe scaling path.",
+        "fr": "L’implémentation GetExtended hors WIN32DELPHI dans mormot.core.text ne rejette plus toutes les valeurs frac inférieures ou égales à -324. Pour la plage atteignable de -342 à -324, elle pré-multiplie d64 avant d’appliquer la puissance négative restante et autorise frac 308 à suivre le chemin existant protégé contre l’overflow.",
+        "zh": "mormot.core.text 中非 WIN32DELPHI 的 GetExtended 实现不再拒绝所有小于等于 -324 的 frac。对于可表示的 -342 至 -324 范围，它先缩放 d64，再应用剩余负十次幂；同时允许 frac 308 进入现有的 overflow-safe 缩放路径。",
+        "ru": "Реализация GetExtended вне WIN32DELPHI в mormot.core.text больше не отвергает все значения frac не выше -324. Для достижимого диапазона от -342 до -324 она предварительно масштабирует d64 перед оставшейся отрицательной степенью и пропускает frac 308 через существующий защищённый от overflow путь масштабирования."
+      },
+      "impact": {
+        "en": "FPC and non-Win32 Delphi backends can now parse valid minimum-subnormal and maximum-finite decimal values instead of reporting an error or losing them prematurely. The Delphi Win32 x87 assembly implementation is not changed by this commit.",
+        "fr": "Les backends FPC et Delphi hors Win32 peuvent maintenant analyser des valeurs décimales valides aux limites du plus petit subnormal et du plus grand fini au lieu de signaler une erreur ou de les perdre prématurément. L’implémentation assembleur x87 de Delphi Win32 n’est pas modifiée par ce commit.",
+        "zh": "FPC 与非 Win32 Delphi backend 现在可解析有效的最小 subnormal 和最大有限十进制值，不再报错或过早丢失。此 commit 不修改 Delphi Win32 x87 assembly 实现。",
+        "ru": "Backend на FPC и Delphi вне Win32 теперь могут разбирать допустимые десятичные значения на границах минимального subnormal и максимального конечного числа вместо ошибки или преждевременной потери. Этот commit не меняет x87 assembly реализацию Delphi Win32."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Retest accepted and rejected exponent boundaries if input validation depends on GetExtended returning err.",
+        "fr": "Retestez les limites d’exposants acceptées et rejetées si la validation d’entrée dépend du retour err de GetExtended.",
+        "zh": "如果输入校验依赖 GetExtended 返回的 err，请重新测试 exponent 的接受与拒绝边界。",
+        "ru": "Повторно проверьте принимаемые и отклоняемые границы exponent, если валидация ввода зависит от err, возвращаемого GetExtended."
+      },
+      "units": ["mormot.core.text"],
+      "api_changes": [
+        {
+          "symbol": "GetExtended",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The Pascal path accepts valid extreme double exponents that were previously rejected prematurely.",
+            "fr": "Le chemin Pascal accepte des exposants extrêmes valides de double auparavant rejetés prématurément.",
+            "zh": "Pascal 路径现在接受此前被过早拒绝的有效 double 极端 exponent。",
+            "ru": "Путь Pascal принимает допустимые крайние exponent double, которые раньше отклонялись преждевременно."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f4433cf3122ef75738d95709b41a8fbd51d66e0d",
+      "headline": {
+        "en": "CPU64 formatting now keeps the sticky digit needed for correct rounding",
+        "fr": "Le formatage CPU64 conserve le chiffre sticky nécessaire à l’arrondi",
+        "zh": "CPU64 格式化现保留正确舍入所需的 sticky digit",
+        "ru": "Форматирование CPU64 сохраняет sticky digit для корректного округления"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "DoubleToAscii in mormot.core.text now appends a synthetic nonzero sticky digit on CPU64 as well as CPU32 when discarded bits remain beyond the requested precision. d2a_k_comp also replaces floating-point logarithm arithmetic with an inline fixed-point integer estimate, and exponential output writes a decimal point whenever retained fractional digits exist.",
+        "fr": "DoubleToAscii dans mormot.core.text ajoute maintenant un chiffre sticky synthétique non nul sur CPU64 comme sur CPU32 lorsque des bits supprimés subsistent au-delà de la précision demandée. d2a_k_comp remplace aussi le calcul logarithmique flottant par une estimation entière fixed-point inline, et la sortie exponentielle écrit un séparateur décimal dès que des chiffres fractionnaires conservés existent.",
+        "zh": "mormot.core.text 的 DoubleToAscii 现在与 CPU32 一样，会在 CPU64 上于请求精度之外仍有被丢弃 bit 时附加一个合成的非零 sticky digit。d2a_k_comp 还以 inline fixed-point 整数估算替代浮点对数运算；只要保留了小数位，指数输出就会写入小数点。",
+        "ru": "DoubleToAscii в mormot.core.text теперь добавляет синтетический ненулевой sticky digit на CPU64 так же, как на CPU32, когда за требуемой точностью остаются отброшенные bits. d2a_k_comp также заменяет floating-point вычисление логарифма на inline fixed-point целочисленную оценку, а экспоненциальный вывод ставит точку при наличии сохранённых дробных цифр."
+      },
+      "impact": {
+        "en": "Delphi 64-bit and FPC 64-bit builds can produce different final digits for tie-adjacent values, now following round-to-nearest-even with the discarded tail represented. Serialized floating-point strings become more reliable for exact parse-back; signatures do not change.",
+        "fr": "Les builds Delphi 64 bits et FPC 64 bits peuvent produire des derniers chiffres différents pour les valeurs proches d’une égalité, en suivant maintenant l’arrondi au pair le plus proche avec la partie supprimée représentée. Les chaînes flottantes sérialisées deviennent plus fiables pour une relecture exacte ; les signatures ne changent pas.",
+        "zh": "Delphi 64-bit 与 FPC 64-bit build 对接近舍入平局的值可能产生不同末位；现在会表示被丢弃的尾部，并按最近偶数舍入。序列化浮点字符串可更可靠地精确解析回原值，signature 不变。",
+        "ru": "Сборки Delphi 64-bit и FPC 64-bit могут выдавать другие последние цифры для значений около границы равного округления: теперь отброшенный хвост учитывается при round-to-nearest-even. Сериализованные floating-point строки надёжнее разбираются обратно без потерь; signatures не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade through the final c9eff241 revision and rerun exact floating-point serialization round trips on CPU64.",
+        "fr": "Mettez à niveau jusqu’à la révision finale c9eff241 et rejouez les allers-retours exacts de sérialisation flottante sur CPU64.",
+        "zh": "升级到最终 revision c9eff241，并在 CPU64 上重跑精确浮点序列化往返测试。",
+        "ru": "Обновитесь до финальной revision c9eff241 и повторите точные round trips floating-point сериализации на CPU64."
+      },
+      "units": ["mormot.core.text"],
+      "api_changes": [
+        {
+          "symbol": "DoubleToAscii",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "CPU64 rounding now accounts for discarded nonzero bits through a sticky digit.",
+            "fr": "L’arrondi CPU64 tient maintenant compte des bits non nuls supprimés grâce à un chiffre sticky.",
+            "zh": "CPU64 舍入现在通过 sticky digit 计入被丢弃的非零 bit。",
+            "ru": "Округление CPU64 теперь учитывает отброшенные ненулевые bits через sticky digit."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a155bf801af4e8ba80e5ed6ae15b6c09ae710123",
+      "headline": {
+        "en": "Round-trip coverage expands across signs, scales and exact bit patterns",
+        "fr": "La couverture aller-retour s’étend aux signes, échelles et motifs de bits exacts",
+        "zh": "往返测试扩展到符号、数量级与精确 bit pattern",
+        "ru": "Round-trip покрытие расширено на знаки, масштабы и точные bit patterns"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.core.base adds positive and negative DoubleToShort cases from 1.5E-19 through 2E19, exact QWord-to-double vectors and GetExtended checks for zero with very large positive or negative exponents. It also verifies a TimeSpan input with trailing whitespace.",
+        "fr": "test.core.base ajoute des cas DoubleToShort positifs et négatifs de 1.5E-19 à 2E19, des vecteurs exacts de QWord vers double et des contrôles GetExtended pour zéro avec de très grands exposants positifs ou négatifs. Il vérifie aussi une entrée TimeSpan avec un espace final.",
+        "zh": "test.core.base 新增从 1.5E-19 到 2E19 的正负 DoubleToShort 用例、精确 QWord-to-double vector，以及带极大正负 exponent 的零值 GetExtended 检查。它还验证末尾含空白的 TimeSpan 输入。",
+        "ru": "test.core.base добавляет положительные и отрицательные случаи DoubleToShort от 1.5E-19 до 2E19, точные vectors QWord-to-double и проверки GetExtended для нуля с очень большими положительными и отрицательными exponent. Также проверяется вход TimeSpan с конечным пробелом."
+      },
+      "impact": {
+        "en": "No application code or public API changes. The expanded suite locks in formatter/parser round trips across Delphi and FPC and documents that the exact-bit GetExtended boundary checks are not applied to WIN32DELPHI.",
+        "fr": "Aucun changement de code applicatif ni d’API publique. La suite étendue verrouille les allers-retours formateur/parser sous Delphi et FPC et documente que les contrôles exacts de limites GetExtended ne s’appliquent pas à WIN32DELPHI.",
+        "zh": "应用代码与公开 API 均无变化。扩展后的测试固定 Delphi 与 FPC 上的 formatter/parser 往返行为，并说明 GetExtended 的精确 bit 边界检查不用于 WIN32DELPHI。",
+        "ru": "Изменений прикладного кода и публичного API нет. Расширенный набор закрепляет round trips formatter/parser на Delphi и FPC и показывает, что точные граничные проверки GetExtended не применяются к WIN32DELPHI."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8b5a85a4b473fca103625a543b1244579eac1835",
+      "headline": {
+        "en": "Zero exponents take a safe fast path before scaling",
+        "fr": "Les exposants appliqués à zéro suivent un chemin rapide sûr avant mise à l’échelle",
+        "zh": "零值 exponent 在缩放前走安全 fast path",
+        "ru": "Нулевые значения с exponent идут по безопасному fast path до масштабирования"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The Pascal GetExtended path in mormot.core.text returns signed zero through the common sign epilogue before any exponent scaling when v64 is zero. The tiny-exponent calculation is also regrouped so d64, the 1E-160 factor and the remaining inverse power are multiplied in one expression.",
+        "fr": "Le chemin Pascal de GetExtended dans mormot.core.text renvoie un zéro signed via l’épilogue commun de signe avant toute mise à l’échelle d’exposant lorsque v64 vaut zéro. Le calcul des très petits exposants est aussi regroupé pour multiplier d64, le facteur 1E-160 et la puissance inverse restante dans une seule expression.",
+        "zh": "mormot.core.text 的 Pascal GetExtended 路径在 v64 为零时，会先通过公共符号尾处理返回 signed zero，不再执行 exponent 缩放。极小 exponent 计算也被重组，在同一表达式中相乘 d64、1E-160 因子与剩余 inverse power。",
+        "ru": "Путь Pascal GetExtended в mormot.core.text при v64 = 0 возвращает signed zero через общий финальный блок знака до масштабирования exponent. Вычисление малых exponent также перегруппировано: d64, множитель 1E-160 и оставшаяся обратная степень перемножаются в одном выражении."
+      },
+      "impact": {
+        "en": "FPC and non-Win32 Delphi backends accept 0E400 and 0E-400 without a range error and preserve negative zero. Existing source code needs no change; Delphi Win32 continues to use its separate assembly parser.",
+        "fr": "Les backends FPC et Delphi hors Win32 acceptent 0E400 et 0E-400 sans erreur de plage et préservent le zéro négatif. Le code source existant ne nécessite aucun changement ; Delphi Win32 continue d’utiliser son parser assembleur distinct.",
+        "zh": "FPC 与非 Win32 Delphi backend 可在无 range error 的情况下接受 0E400 和 0E-400，并保留负零。现有源码无需改动；Delphi Win32 继续使用独立 assembly parser。",
+        "ru": "Backend на FPC и Delphi вне Win32 принимают 0E400 и 0E-400 без range error и сохраняют отрицательный ноль. Изменения исходного кода не нужны; Delphi Win32 продолжает использовать отдельный assembly parser."
+      },
+      "action": "none",
+      "units": ["mormot.core.text"],
+      "api_changes": [
+        {
+          "symbol": "GetExtended",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Zero remains valid regardless of a very large exponent, with its sign preserved.",
+            "fr": "Zéro reste valide malgré un très grand exposant, avec conservation de son signe.",
+            "zh": "零值在 exponent 极大时仍有效，并保留符号。",
+            "ru": "Ноль остаётся допустимым при очень большом exponent, его знак сохраняется."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5817814942072a7cb95823e9fabe25c01d25b064",
+      "headline": {
+        "en": "JSON fractional zero is numeric again",
+        "fr": "Le zéro fractionnaire JSON redevient numérique",
+        "zh": "JSON 小数零再次按数值处理",
+        "ru": "Дробный ноль JSON снова обрабатывается как число"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "GetNumericVariantFromJson in mormot.core.variants no longer exits when it reaches a delimiter after one or more fractional zeros. It distinguishes a missing first digit after the decimal point from a completed all-zero fractional part, and new tests require 0.0 and 0.000000000 to return varInteger zero.",
+        "fr": "GetNumericVariantFromJson dans mormot.core.variants ne quitte plus lorsqu’il rencontre un délimiteur après un ou plusieurs zéros fractionnaires. La fonction distingue l’absence du premier chiffre après le séparateur décimal d’une partie fractionnaire entièrement nulle terminée, et de nouveaux tests exigent que 0.0 et 0.000000000 renvoient un zéro varInteger.",
+        "zh": "mormot.core.variants 的 GetNumericVariantFromJson 在一个或多个小数零后遇到 delimiter 时不再退出。它会区分小数点后缺少首位数字与已结束的全零小数部分；新增测试要求 0.0 和 0.000000000 返回 varInteger 零。",
+        "ru": "GetNumericVariantFromJson в mormot.core.variants больше не завершает разбор при встрече разделителя после одного или нескольких дробных нулей. Функция отличает отсутствие первой цифры после точки от завершённой дробной части из нулей, а новые тесты требуют, чтобы 0.0 и 0.000000000 возвращали ноль varInteger."
+      },
+      "impact": {
+        "en": "JSON numeric zero with a decimal point no longer fails this fast numeric parser or falls through to a nonnumeric representation in higher-level conversion paths. Delphi and FPC services receiving 0.0 regain the same normalized integer-zero result as other zero spellings.",
+        "fr": "Le zéro numérique JSON avec séparateur décimal n’échoue plus dans ce parser numérique rapide et ne retombe plus sur une représentation non numérique dans les chemins de conversion supérieurs. Les services Delphi et FPC recevant 0.0 retrouvent le même résultat normalisé en zéro entier que les autres écritures de zéro.",
+        "zh": "带小数点的 JSON 数值零不再使该快速数值 parser 失败，也不会在高层转换路径中回退为非数值表示。接收 0.0 的 Delphi 与 FPC 服务重新获得与其他零写法相同的规范化整数零结果。",
+        "ru": "Числовой ноль JSON с точкой больше не приводит к отказу быстрого числового parser и не переходит к нечисловому представлению в высокоуровневых путях преобразования. Сервисы Delphi и FPC, получающие 0.0, снова получают тот же нормализованный целочисленный ноль, что и для других записей нуля."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Move past builds 2.4.16844–2.4.16850 and test JSON fields that may contain 0.0 or zero with trailing fractional digits.",
+        "fr": "Dépassez les builds 2.4.16844–2.4.16850 et testez les champs JSON susceptibles de contenir 0.0 ou un zéro avec des chiffres fractionnaires finaux.",
+        "zh": "请越过 build 2.4.16844–2.4.16850，并测试可能包含 0.0 或带尾随小数位零值的 JSON 字段。",
+        "ru": "Перейдите дальше builds 2.4.16844–2.4.16850 и проверьте поля JSON, где возможны 0.0 или ноль с последующими дробными цифрами."
+      },
+      "units": ["mormot.core.variants"],
+      "api_changes": [
+        {
+          "symbol": "GetNumericVariantFromJson",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "All-zero fractional JSON forms again parse successfully and normalize to varInteger zero.",
+            "fr": "Les formes JSON à partie fractionnaire entièrement nulle sont de nouveau analysées et normalisées en zéro varInteger.",
+            "zh": "小数部分全为零的 JSON 形式再次成功解析，并规范化为 varInteger 零。",
+            "ru": "JSON-формы с дробной частью из нулей снова успешно разбираются и нормализуются в ноль varInteger."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "aa165fe93782927ea6b30cc0dfdff648828b24f7",
+      "headline": {
+        "en": "Common decimal fractions now round to the nearest IEEE double",
+        "fr": "Les fractions décimales courantes s’arrondissent au double IEEE le plus proche",
+        "zh": "常见十进制小数现舍入到最近的 IEEE double",
+        "ru": "Обычные десятичные дроби округляются до ближайшего IEEE double"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "GetExtended in mormot.core.text and GetNumericVariantFromJson in mormot.core.variants use Clinger’s fast path when the fractional exponent is -1 through -22 and the accumulated integer is within MAX_SAFE_JS_INTEGER. They divide by an exactly represented positive power of ten instead of multiplying by an inexact negative power; exact-bit tests cover values including 1.2, 0.1, 2.675 and small JSON doubles.",
+        "fr": "GetExtended dans mormot.core.text et GetNumericVariantFromJson dans mormot.core.variants utilisent le fast path de Clinger lorsque l’exposant fractionnaire va de -1 à -22 et que l’entier accumulé reste dans MAX_SAFE_JS_INTEGER. Ils divisent par une puissance de dix positive représentée exactement au lieu de multiplier par une puissance négative inexacte ; des tests bit à bit couvrent notamment 1.2, 0.1, 2.675 et de petits doubles JSON.",
+        "zh": "当小数 exponent 为 -1 至 -22 且累积整数不超过 MAX_SAFE_JS_INTEGER 时，mormot.core.text 的 GetExtended 与 mormot.core.variants 的 GetNumericVariantFromJson 使用 Clinger fast path。它们改为除以可精确表示的正十次幂，而不是乘以不精确的负十次幂；精确 bit 测试覆盖 1.2、0.1、2.675 及较小 JSON double。",
+        "ru": "GetExtended в mormot.core.text и GetNumericVariantFromJson в mormot.core.variants используют fast path Clinger для дробного exponent от -1 до -22, когда накопленное целое не превышает MAX_SAFE_JS_INTEGER. Они делят на точно представленную положительную степень десяти вместо умножения на неточную отрицательную степень; точные bit-тесты покрывают 1.2, 0.1, 2.675 и малые JSON double."
+      },
+      "impact": {
+        "en": "Parsed doubles for common decimal text can change by one ULP to the correctly rounded value; for example, 1.2 no longer becomes 1.2000000000000002 on the affected Pascal path. FPC and non-Win32 Delphi GetExtended callers benefit directly, while GetNumericVariantFromJson is corrected across Delphi and FPC backends.",
+        "fr": "Les doubles issus de textes décimaux courants peuvent changer d’un ULP vers la valeur correctement arrondie ; par exemple, 1.2 ne devient plus 1.2000000000000002 sur le chemin Pascal concerné. Les appelants GetExtended sous FPC et Delphi hors Win32 en bénéficient directement, tandis que GetNumericVariantFromJson est corrigé sur les backends Delphi et FPC.",
+        "zh": "常见十进制文本解析出的 double 可能变化一个 ULP，变为正确舍入值；例如在受影响的 Pascal 路径上，1.2 不再变成 1.2000000000000002。FPC 与非 Win32 Delphi 的 GetExtended 调用方直接受益，而 GetNumericVariantFromJson 在 Delphi 与 FPC backend 上均得到修复。",
+        "ru": "Double, полученные из обычного десятичного текста, могут измениться на один ULP до правильно округлённого значения; например, на затронутом пути Pascal число 1.2 больше не становится 1.2000000000000002. Вызовы GetExtended на FPC и Delphi вне Win32 получают исправление напрямую, а GetNumericVariantFromJson исправлен на backend Delphi и FPC."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the merged c9eff241 head and rerun exact numeric comparisons, hashes or persisted-value tests that depend on parsed double bits.",
+        "fr": "Prenez le head fusionné c9eff241 et rejouez les comparaisons numériques exactes, hashes ou tests de valeurs persistées qui dépendent des bits du double analysé.",
+        "zh": "采用已 merge 的 c9eff241 head，并重跑依赖解析后 double bit 的精确数值比较、hash 或持久化值测试。",
+        "ru": "Возьмите merged head c9eff241 и повторите точные числовые сравнения, hashes или тесты сохранённых значений, зависящие от bits разобранного double."
+      },
+      "units": ["mormot.core.text", "mormot.core.variants"],
+      "api_changes": [
+        {
+          "symbol": "GetExtended",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Common decimal fractions on the Pascal path now produce the nearest IEEE double.",
+            "fr": "Les fractions décimales courantes produisent maintenant le double IEEE le plus proche sur le chemin Pascal.",
+            "zh": "Pascal 路径上的常见十进制小数现在生成最近的 IEEE double。",
+            "ru": "Обычные десятичные дроби на пути Pascal теперь дают ближайший IEEE double."
+          }
+        },
+        {
+          "symbol": "GetNumericVariantFromJson",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Eligible JSON fractions now produce the nearest IEEE double rather than a one-ULP rounding error.",
+            "fr": "Les fractions JSON éligibles produisent maintenant le double IEEE le plus proche plutôt qu’une erreur d’arrondi d’un ULP.",
+            "zh": "符合条件的 JSON 小数现在生成最近的 IEEE double，不再产生一个 ULP 的舍入误差。",
+            "ru": "Подходящие дроби JSON теперь дают ближайший IEEE double вместо ошибки округления на один ULP."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
