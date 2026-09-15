@@ -1,0 +1,280 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-15",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-15T03:38:06Z",
+  "range": {
+    "since": "2026-09-13T08:37:34Z",
+    "until": "2026-09-15T03:38:06Z",
+    "head_sha": "c88c4ad7b25c49a2d12391c75de169204809f02d"
+  },
+  "version": {
+    "after": "2.4.16865",
+    "before": "2.4.16861"
+  },
+  "totals": {
+    "commits": 4,
+    "additions": 307,
+    "deletions": 204
+  },
+  "commits": [
+    {
+      "sha": "c88c4ad7b25c49a2d12391c75de169204809f02d",
+      "short_sha": "c88c4ad7",
+      "subject": "core: rewritten GetNumericVariantFromJson()",
+      "body": "- unrolled the first 8 digits parsing\n- optimized the main 64-bit and fractional loop\n- performance should be closer to #582 asm I hope",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-14T21:15:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c88c4ad7b25c49a2d12391c75de169204809f02d",
+      "parents": [
+        "e5746e2f2c4991c355cb35c526de84296b8c284f"
+      ],
+      "stats": {
+        "additions": 170,
+        "deletions": 93,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 168,
+          "deletions": 91,
+          "patch": "@@ -11514,88 +11514,170 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n end;\r\n \r\n const\r\n-  CURRENCY_FACTOR: array[-4 .. -1] of integer = (-1, -10, -100, -1000);\r\n-  CURRENCY_MAX_NEG: array[-4 .. -1] of Int64 = (\r\n-    -MAX_INT64, -MAX_INT64_DIV10, -MAX_INT64 div 100, -MAX_INT64 div 1000);\r\n+  CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n+  CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n+    MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n var\r\n   // logic below is similar to mormot.core.text.pas GetExtended()\r\n-  c: PtrUInt;\r\n-  remdigit: integer;\r\n-  frac, exp: PtrInt;\r\n-  flags: set of (fNeg, fNegExp, fValid);\r\n-  v64: Int64; // accumulated as negative (faster, and no UInt64 on Delphi 7)\r\n+  c, n, cnt: PtrUInt;\r\n+  frac: PtrInt;\r\n+  flags: set of (fNeg, fNegExp, fValidExp);\r\n+  v64: Int64;\r\n   d: double;\r\n   vd: TSynVarData absolute Value;\r\n begin\r\n-  // 1. parse input text as number into v64, frac, digit, exp\r\n+  // 1. parse input text as number into v64, frac, cnt\r\n   result := nil; // return nil to indicate parsing error\r\n   byte(flags) := 0;\r\n-  v64 := 0;\r\n-  frac := 0;\r\n   if Json = nil then\r\n     exit;\r\n   if Json^ = '-' then // note: '+xxx' is not valid Json so is not handled here\r\n   begin\r\n     inc(Json);\r\n     include(flags, fNeg);\r\n   end;\r\n-  c := PtrUInt(Json^) - ord('0');\r\n-  if c > 9 then\r\n-    exit;\r\n-  if (c = 0) and\r\n-     (Json[1] in ['0' .. '9']) then // '012' is not Json, but '0.x' and '0' are\r\n+  cnt := PtrUInt(Json^) - ord('0');\r\n+  if ((cnt = 0) and\r\n+      (Json[1] in ['0' .. '9'])) or // '012' is no valid Json, but '0.x' '0' are\r\n+     (cnt > 9) then\r\n     exit;\r\n-  remdigit := 19;    // max Int64 resolution\r\n-  repeat\r\n+  n := PtrUInt(Json) + 18;   // the first 18 digits can't overflow Int64\r\n+  inc(Json);\r\n+  c := PtrUInt(Json^) - ord('0'); // unroll first 8 digits parsing\r\n+  if c <= 9 then\r\n+  begin\r\n+    inc(Json);\r\n+    cnt := cnt * 10 + c; // very efficient, especially on CPU32\r\n+    c := PtrUInt(Json^) - ord('0');\r\n     if c <= 9 then\r\n     begin\r\n       inc(Json);\r\n-      dec(remdigit); // over-required digits are just ignored\r\n-      if (remdigit = 0) and // validate the 19th significant digit\r\n-         (v64 < -MAX_INT64_DIV10 + ord(c > 8)) then\r\n-        dec(remdigit);\r\n-      if remdigit >= 0 then\r\n+      cnt := cnt * 10 + c;\r\n+      c := PtrUInt(Json^) - ord('0');\r\n+      if c <= 9 then\r\n       begin\r\n-        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64\r\n-                   {$else} * 10 {$endif} - PtrInt(c); // accumulate as negative\r\n+        inc(Json);\r\n+        cnt := cnt * 10 + c;\r\n         c := PtrUInt(Json^) - ord('0');\r\n-        include(flags, fValid);\r\n-        dec(frac, ord(frac <> 0)); // digits after '.' (branchless)\r\n-        continue;\r\n+        if c <= 9 then\r\n+        begin\r\n+          inc(Json);\r\n+          cnt := cnt * 10 + c;\r\n+          c := PtrUInt(Json^) - ord('0');\r\n+          if c <= 9 then\r\n+          begin\r\n+            inc(Json);\r\n+            cnt := cnt * 10 + c;\r\n+            c := PtrUInt(Json^) - ord('0');\r\n+            if c <= 9 then\r\n+            begin\r\n+              inc(Json);\r\n+              cnt := cnt * 10 + c;\r\n+              c := PtrUInt(Json^) - ord('0');\r\n+              if c <= 9 then\r\n+              begin\r\n+                inc(Json);\r\n+                cnt := cnt * 10 + c;\r\n+              end;\r\n+            end;\r\n+          end;\r\n+        end;\r\n       end;\r\n-      c := PtrUInt(Json^) - ord('0');\r\n-      if frac >= 0 then\r\n-        inc(frac);   // frac>0 to handle #############00000\r\n-      continue;\r\n     end;\r\n-    inc(c, ord('0'));\r\n-    if c <> ord('.') then\r\n+  end;\r\n+  frac := 0;\r\n+  v64 := cnt;\r\n+  if c <= 9 then // 64-bit aware loop for 9 digits and up\r\n+  repeat\r\n+    c := PtrUInt(Json^) - ord('0');\r\n+    if c > 9 then\r\n       break;\r\n-    if frac <> 0 then\r\n-\n... [truncated, 7566 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16864\n+16865",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16864'\r\n+'2.4.16865'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e5746e2f2c4991c355cb35c526de84296b8c284f",
+      "short_sha": "e5746e2f",
+      "subject": "core: minor refactoring including new MIN_INT64 constant",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-14T15:04:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e5746e2f2c4991c355cb35c526de84296b8c284f",
+      "parents": [
+        "71129606a51069c4a91b712d161c3473c6528ade"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 4,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -4309,6 +4309,7 @@ procedure DynArrayHashTableAdjust16(P: PWordArray; deleted: cardinal; count: Ptr\n         case padding: cardinal of // access the most used TVarData value members\r\n           varInteger:  (VInteger:  integer);\r\n           varOleUInt:  (VCardinal: cardinal);\r\n+          varOleInt:   (VPtrInt:   PtrInt);\r\n           varDouble:   (VDouble:   double);\r\n           varCurrency: (VCurrency: currency);\r\n           varDate:     (VDate:     TDateTime);\r\n@@ -4879,6 +4880,8 @@ function RaiseStreamError(Caller: TObject; const Context: ShortString): PtrInt;\n   MAX_INT64 = high(Int64);\r\n   /// equals 922337203685477580\r\n   MAX_INT64_DIV10 = MAX_INT64 div 10;\r\n+  /// equals -9223372036854775808\r\n+  MIN_INT64 = low(Int64);\r\n   /// maximum number stored in a JavaScript-compatible Int53 value\r\n   MAX_SAFE_JS_INTEGER  = (Int64(1) shl 53) - 1;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -6775,7 +6775,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     exit;\r\n   end;\r\n   n := PtrUInt(P) + 18;   // the first 18 digits can't overflow Int64\r\n-  repeat\r\n+  repeat // Delphi has its own x87 asm -> no need to optimize first 8 digits\r\n     c := PtrUInt(P^) - ord('0');\r\n     if c > 9 then\r\n       break;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16863\n+16864",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16863'\r\n+'2.4.16864'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.storage.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2947,7 +2947,7 @@ function TRestStorageInMemory.FindMax(WhereField: integer;\n   v: Int64;\r\n begin\r\n   result := false;\r\n-  max := low(Int64);\r\n+  max := MIN_INT64;\r\n   if fCount = 0 then\r\n     exit;\r\n   if WhereField = 0 then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "ORM"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.text",
+        "mormot.orm.storage"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "71129606a51069c4a91b712d161c3473c6528ade",
+      "short_sha": "71129606",
+      "subject": "core: rewritten GetExtended() pascal",
+      "body": "- I guess we don't need overcomplex #582 code",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-14T09:47:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/71129606a51069c4a91b712d161c3473c6528ade",
+      "parents": [
+        "700177da8097717936ca0e948619723da0995452"
+      ],
+      "stats": {
+        "additions": 66,
+        "deletions": 33,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 48,
+          "deletions": 30,
+          "patch": "@@ -6733,7 +6733,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n var\r\n   c, n: PtrUInt;\r\n   frac: PtrInt;\r\n-  flags: set of (fNeg, fNegExp, fValid);\r\n+  flags: set of (fNeg, fNegExp, fValidExp);\r\n   v64: Int64; // allows 64-bit resolution for the digits (match 80-bit extended)\r\n label\r\n   z, e, o;\r\n@@ -6774,46 +6774,63 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     end;\r\n     exit;\r\n   end;\r\n-  n := 18; // v64=-9,223,372,036,854,775,808..+9,223,372,036,854,775,807\r\n+  n := PtrUInt(P) + 18;   // the first 18 digits can't overflow Int64\r\n   repeat\r\n     c := PtrUInt(P^) - ord('0');\r\n+    if c > 9 then\r\n+      break;\r\n+    inc(P);\r\n+    v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c);\r\n+    if PtrUInt(P) <> n then // very fast most common path\r\n+      continue;\r\n+    repeat // loop including Int64 overflow test (seldom used)\r\n+      c := PtrUInt(P^) - ord('0');\r\n+      if c > 9 then\r\n+        break;\r\n+      if v64 > MAX_INT64_DIV10 - ord(c > 7) then\r\n+        break;\r\n+      inc(P);\r\n+      v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c);\r\n+    until false;\r\n     if c <= 9 then\r\n-    begin\r\n-      if (n <> 0) or  // validate the 19th significant digit\r\n-         (v64 > MAX_INT64_DIV10 - ord(c > 7)) then\r\n-        dec(n);\r\n-      if PtrInt(n) >= 0 then // over-required digits are just ignored\r\n-      begin\r\n-        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + c;\r\n-        include(flags, fValid);\r\n-        dec(frac, ord(frac <> 0)); // digits after '.' (branchless)\r\n+      repeat // ignore-them-all path for >18/19 significant integer digits\r\n         inc(P);\r\n-        continue;\r\n-      end;\r\n-      inc(frac, ord(frac >= 0)); // handle #############00000\r\n-      inc(P);\r\n-      continue;\r\n-    end;\r\n-    if P^ <> '.' then\r\n-      break;\r\n+        inc(frac);\r\n+      until not (P^ in ['0' .. '9']);\r\n+    break;\r\n+  until false;\r\n+  if P^ = '.' then // fraction\r\n+  begin\r\n     inc(P);\r\n-    if frac <> 0 then\r\n-      goto e; // only one dot allowed\r\n-    dec(frac);\r\n+    if (frac <> 0) or // keep original GetExtended() behavior\r\n+       not (P^ in ['0' .. '9']) then\r\n+      goto e;\r\n     if v64 = 0 then // properly handle 0.00000000000000000123\r\n       while P^ = '0' do\r\n       begin\r\n         dec(frac);\r\n         inc(P);\r\n       end;\r\n-  until false;\r\n-  inc(frac, ord(frac < 0)); // adjust digits after '.'\r\n+    repeat\r\n+      c := PtrUInt(P^) - ord('0');\r\n+      if c > 9 then\r\n+       break;\r\n+      if (PtrUInt(P) < n) or\r\n+         (v64 <= MAX_INT64_DIV10 - ord(c > 7)) then\r\n+        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c)\r\n+      else\r\n+        break;\r\n+      inc(P);\r\n+      dec(frac);\r\n+    until false;\r\n+    while P^ in ['0' .. '9'] do\r\n+      inc(P);\r\n+    if P^ = '.' then\r\n+      goto e;\r\n+  end;\r\n   if P^ in ['E', 'e'] then\r\n   begin\r\n-    if not (fValid in flags) then\r\n-      goto e;\r\n     n := 0;\r\n-    exclude(flags, fValid);\r\n     inc(P);\r\n     if P^ = '+' then\r\n       inc(P)\r\n@@ -6827,18 +6844,19 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n       if c > 9 then\r\n         break;\r\n       n := (n * 10) + c;\r\n-      include(flags, fValid);\r\n       inc(P);\r\n       if n >= $fff000 then // huge constant, but still aarch64 friendly\r\n         goto e;\r\n+      include(flags, fValidExp); // at least one valid exponent digit\r\n     until false;\r\n     if fNegExp in flags then\r\n       dec(frac, n)\r\n     else\r\n       inc(frac, n);\r\n+    if not (fValidExp in flags) then\r\n+      goto e;\r\n   end;\r\n-  if (P^ <> #0) or\r\n-     not (fValid in flags) then\r\n+  if P^ <> #0 then\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n   if (frac = 0) or (v64 = 0) then // fast path for e.g. '123' or '0'/'0E400'\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16862\n+16863",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16862'\r\n+'2.4.16863'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 1,
+          "patch": "@@ -5604,6 +5604,10 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(12.345678901234);\r\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n+  CheckDoubleToShort(0.00123456789012345, '0.00123456789012');\r\n+  CheckDoubleToShort(-0.00123456789012345, '-0.00123456789012');\r\n+  CheckDoubleToShort(0.000123456789012345, '0.00012345678901');\r\n+  CheckDoubleToShort(-0.000123456789012345, '-0.00012345678901');\r\n   CheckDecimalRounding;\r\n   {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n   d := GetExtended('0e400', err);\r\n@@ -5614,12 +5618,21 @@ procedure TTestCoreBase.NumericalConversions;\n   Check(d = 0);\r\n   d := GetExtended('-0e400', err);\r\n   CheckEqual(err, 0);\r\n-  Check(PQWord(@d)^ = QWord($8000000000000000));\r\n+  Check(d = 0); // '-0' -> 0 with ECMAScript's number-to-string rules\r\n   CheckGetExtendedBits('4.9406564584124654E-324', $0000000000000001);\r\n   CheckGetExtendedBits('2.2250738585072009E-308', $000FFFFFFFFFFFFF);\r\n   CheckGetExtendedBits('2.2250738585072014E-308', $0010000000000000);\r\n   CheckGetExtendedBits('1.7976931348623157E308', $7FEFFFFFFFFFFFFF);\r\n   CheckGetExtendedBits('1E308', $7FE1CCF385EBC8A0);\r\n+  CheckGetExtendedBits('0.5000000000000000000', $3FE0000000000000);\r\n+  CheckGetExtendedBits('0.50000000000000000000', $3FE0000000000000);\r\n+  CheckGetExtendedBits('0.50000000000000000008', $3FE0000000000000);\r\n+  CheckGetExtendedBits('0.9223372036854775807', $3FED83C94FB6D2AC);\r\n+  {$ifndef CPUX86} // FPC x87 conversion may fail those\r\n+  CheckGetExtendedBits('0.123456789012345678', $3FBF9ADD3746F660);\r\n+  CheckGetExtendedBits('0.9223372036854775808', $3FED83C94FB6D2AD);\r\n+  CheckGetExtendedBits('0.9223372036854775809', $3FED83C94FB6D2AD);\r\n+  {$endif CPUX86}\r\n   CheckDoubleToShortBits($4D6E62C4E38FF876, '1.0000000000000005E65');\r\n   CheckDoubleToShortBits(QWord($CD6E62C4E38FF876), '-1.0000000000000005E65');\r\n   CheckDoubleToShortBits($0000000000000001, '4.9406564584124654E-324');\r\n@@ -5724,6 +5737,8 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckInvalidNumber('0..1');\r\n   CheckInvalidNumber('toto');\r\n   CheckInvalidNumber('e1');\r\n+  CheckInvalidNumber('-e1');\r\n+  CheckInvalidNumber('.e2');\r\n   CheckInvalidNumber('-.e2');\r\n   CheckInvalidNumber('1e');\r\n   CheckInvalidNumber('1e+');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "700177da8097717936ca0e948619723da0995452",
+      "short_sha": "700177da",
+      "subject": "core: slightly optimized GetExtended() code",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-14T08:21:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/700177da8097717936ca0e948619723da0995452",
+      "parents": [
+        "d3ed90704cadd5d76770103034d75f6249ea8b08"
+      ],
+      "stats": {
+        "additions": 64,
+        "deletions": 74,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 70,
+          "patch": "@@ -6731,12 +6731,12 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   InvScale: double = 7.458340731200207e-155; // 2^-512\r\n   MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n var\r\n-  remdigit, frac, exp: PtrInt;\r\n+  c, n: PtrUInt;\r\n+  frac: PtrInt;\r\n   flags: set of (fNeg, fNegExp, fValid);\r\n   v64: Int64; // allows 64-bit resolution for the digits (match 80-bit extended)\r\n-  d64: TSynExtended;\r\n label\r\n-  z, e, x, o;\r\n+  z, e, o;\r\n begin\r\n   byte(flags) := 0;\r\n   v64 := 0;\r\n@@ -6757,36 +6757,34 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   end;\r\n   if P^ > '9' then\r\n   begin\r\n-    if (P[1] = #0) or\r\n-       (P[2] = #0) then\r\n-      goto z;\r\n-    case PCardinal(P)^ and $00dfdfdf of\r\n-      ord('N') + ord('A') shl 8 + ord('N') shl 16:\r\n-        result := NaN;\r\n-      ord('I') + ord('N') shl 8 + ord('F') shl 16:\r\n-        if fNeg in flags then\r\n-          result := NegInfinity\r\n-        else\r\n-          result := Infinity;\r\n+    c := PtrUInt(PWord(P)^) and $dfdf; // at least 1 char + #0\r\n+    if (c = ord('N') + ord('A') shl 8) and\r\n+       (P[2] in ['N', 'n']) then\r\n+      result := Nan\r\n+    else if (c = ord('I') + ord('N') shl 8) and\r\n+            (P[2] in ['F', 'f']) then\r\n+      if fNeg in flags then\r\n+        result := NegInfinity\r\n+      else\r\n+        result := Infinity\r\n     else\r\n-      begin\r\n-z:      err := 1; // fast error path for non-number input\r\n-        result := 0;\r\n-      end;\r\n+    begin\r\n+z:    err := 1; // fast error path for non-number input\r\n+      result := 0;\r\n     end;\r\n     exit;\r\n   end;\r\n-  remdigit := 18; // v64=-9,223,372,036,854,775,808..+9,223,372,036,854,775,807\r\n+  n := 18; // v64=-9,223,372,036,854,775,808..+9,223,372,036,854,775,807\r\n   repeat\r\n-    exp := ord(P^) - ord('0');\r\n-    if PtrUInt(exp) <= 9 then\r\n+    c := PtrUInt(P^) - ord('0');\r\n+    if c <= 9 then\r\n     begin\r\n-      if (remdigit <> 0) or  // validate the 19th significant digit\r\n-         (v64 > MAX_INT64_DIV10 - ord(exp > 7)) then\r\n-        dec(remdigit);\r\n-      if remdigit >= 0 then // over-required digits are just ignored\r\n+      if (n <> 0) or  // validate the 19th significant digit\r\n+         (v64 > MAX_INT64_DIV10 - ord(c > 7)) then\r\n+        dec(n);\r\n+      if PtrInt(n) >= 0 then // over-required digits are just ignored\r\n       begin\r\n-        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + exp;\r\n+        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + c;\r\n         include(flags, fValid);\r\n         dec(frac, ord(frac <> 0)); // digits after '.' (branchless)\r\n         inc(P);\r\n@@ -6814,7 +6812,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   begin\r\n     if not (fValid in flags) then\r\n       goto e;\r\n-    exp := 0;\r\n+    n := 0;\r\n     exclude(flags, fValid);\r\n     inc(P);\r\n     if P^ = '+' then\r\n@@ -6825,77 +6823,68 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n       include(flags, fNegExp);\r\n     end;\r\n     repeat\r\n-      remdigit := PtrInt(P^) - ord('0');\r\n-      if PtrUInt(remdigit) > 9 then\r\n+      c := PtrUInt(P^) - ord('0');\r\n+      if c > 9 then\r\n         break;\r\n-      exp := (exp * 10) + remdigit;\r\n+      n := (n * 10) + c;\r\n       include(flags, fValid);\r\n       inc(P);\r\n-      if exp >= $fff000 then // huge constant, but still aarch64 friendly\r\n+      if n >= $fff000 then // huge constant, but still aarch64 friendly\r\n         goto e;\r\n     until false;\r\n     if fNegExp in flags then\r\n-      dec(frac, exp)\r\n+      dec(frac, n)\r\n     else\r\n-      inc(frac, exp);\r\n+      inc(frac, n);\r\n   end;\r\n   if (P^ <> #0) or\r\n      not (fValid in flags) then\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n-  if v64 = 0 then\r\n+  if (frac = 0) or (v64 = 0) then // fast path for e.g. '123' or '0'/'0E400'\r\n   begin\r\n-    result := 0; // fast path for e.g. '0' or '0E400'\r\n-    goto x;\r\n+    if fNeg in flags then\r\n+      v64 := \n... [truncated, 2538 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -11666,8 +11666,9 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n      (frac >= -22) and\r\n      (v64 >= -MAX_SAFE_JS_INTEGER) then // v64 is negative here\r\n   begin\r\n-    // Clinger's fast path: v64 and 10^-frac are both exact doubles, so a single\r\n-    // IEEE division is correctly rounded - see GetExtended() in mormot.core.text\r\n+    // Clinger's fast path: d64 and 10^-frac are both exact doubles, so a single\r\n+    // IEEE division is correctly rounded - whereas POW10[frac] * d64 is not,\r\n+    // since 1E-1..1E-22 are inexact (e.g. '1.2' returned 1.2000000000000002)\r\n     d := v64;\r\n     d := d / PPow10(exp)[-frac];\r\n   end\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16861\n+16862",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16861'\r\n+'2.4.16862'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
