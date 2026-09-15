@@ -1,0 +1,265 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-15",
+  "edition_title": {
+    "en": "Pascal numeric parsers are rewritten around faster integer paths",
+    "fr": "Les parseurs numériques Pascal sont réécrits autour de chemins entiers plus rapides",
+    "zh": "Pascal 数值解析器围绕更快的整数路径完成重写",
+    "ru": "Числовые парсеры Pascal переписаны вокруг более быстрых целочисленных путей"
+  },
+  "intro": {
+    "en": "The Pascal implementations behind GetExtended and GetNumericVariantFromJson now keep common integer and short-decimal inputs on tighter loops, while preserving guarded handling for long mantissas, exponents and Int64 limits. The GetExtended tests also make zero-sign normalization and several 18–20 digit fractions explicit. There is no signature migration, but applications that depend on exact numeric variant types or floating-point edge cases should validate against build 2.4.16865.",
+    "fr": "Les implémentations Pascal derrière GetExtended et GetNumericVariantFromJson maintiennent désormais les entiers courants et les décimaux courts dans des boucles plus resserrées, tout en conservant des contrôles pour les longues mantisses, les exposants et les limites Int64. Les tests GetExtended rendent aussi explicites la normalisation du signe de zéro et plusieurs fractions de 18 à 20 chiffres. Aucune migration de signature n’est requise, mais les applications dépendant du type numérique exact des variants ou de cas limites flottants doivent valider la build 2.4.16865.",
+    "zh": "GetExtended 与 GetNumericVariantFromJson 背后的 Pascal 实现现在让常见整数和短小数走更紧凑的循环，同时继续保护长尾数、指数与 Int64 边界。GetExtended 测试还明确了零符号归一化以及若干 18–20 位小数的结果。公开 signature 无需迁移，但依赖精确 numeric variant type 或浮点边界行为的应用应针对 build 2.4.16865 做验证。",
+    "ru": "Pascal-реализации GetExtended и GetNumericVariantFromJson теперь проводят обычные целые числа и короткие десятичные значения через более компактные циклы, сохраняя проверки длинных мантисс, экспонент и границ Int64. Тесты GetExtended также явно фиксируют нормализацию знака нуля и несколько дробей длиной 18–20 цифр. Миграция signature не требуется, но приложениям, зависящим от точного типа numeric variant или граничного поведения floating point, следует проверить build 2.4.16865."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.16865 and regression-test numeric conversion code that depends on exact variant types or boundary rounding.",
+      "The non-Win32 Pascal GetExtended path was streamlined twice, with separate fast loops for the first 18 digits, overflow-aware continuation, fractions and exponents.",
+      "GetExtended now intentionally normalizes -0 and -0e400 to numeric zero on its Pascal path, following the behavior recorded by the new tests.",
+      "GetNumericVariantFromJson unrolls its first digits and rewrites Int64, Currency and Double selection without changing its public signature.",
+      "mormot.core.base adds the public MIN_INT64 constant and the TSynVarData.VPtrInt overlay member."
+    ],
+    "fr": [
+      "Passez à la build 2.4.16865 et retestez les conversions numériques qui dépendent du type variant exact ou de l’arrondi aux limites.",
+      "Le chemin Pascal hors Win32 de GetExtended a été simplifié deux fois, avec des boucles distinctes pour les 18 premiers chiffres, la suite contrôlée contre les débordements, les fractions et les exposants.",
+      "GetExtended normalise maintenant volontairement -0 et -0e400 en zéro numérique sur son chemin Pascal, conformément au comportement fixé par les nouveaux tests.",
+      "GetNumericVariantFromJson déroule ses premiers chiffres et réécrit la sélection Int64, Currency et Double sans modifier sa signature publique.",
+      "mormot.core.base ajoute la constante publique MIN_INT64 et le membre overlay TSynVarData.VPtrInt."
+    ],
+    "zh": [
+      "应采用 build 2.4.16865，并回归测试依赖精确 variant type 或边界舍入的数值转换代码。",
+      "非 Win32 的 Pascal GetExtended 路径经过两次精简，为前 18 位数字、带溢出检查的后续数字、小数与指数分别设置快速循环。",
+      "GetExtended 的 Pascal 路径现在会按新增测试明确规定的行为，把 -0 与 -0e400 归一化为数值零。",
+      "GetNumericVariantFromJson 展开起始数字，并重写 Int64、Currency 与 Double 的选择逻辑，公开 signature 不变。",
+      "mormot.core.base 新增公开常量 MIN_INT64 与 TSynVarData.VPtrInt overlay member。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.16865 и проведите regression tests числовых преобразований, зависящих от точного variant type или граничного округления.",
+      "Pascal-путь GetExtended вне Win32 был дважды упрощён: отдельные быстрые циклы обрабатывают первые 18 цифр, продолжение с проверкой overflow, дроби и экспоненты.",
+      "Pascal-путь GetExtended теперь намеренно нормализует -0 и -0e400 в числовой ноль, как зафиксировано новыми тестами.",
+      "GetNumericVariantFromJson разворачивает первые цифры и переписывает выбор Int64, Currency и Double без изменения публичной signature.",
+      "mormot.core.base добавляет публичную константу MIN_INT64 и overlay member TSynVarData.VPtrInt."
+    ]
+  },
+  "risk_level": "worth-a-look",
+  "themes": [
+    {
+      "title": {
+        "en": "Numeric parsing fast paths",
+        "fr": "Chemins rapides du parsing numérique",
+        "zh": "数值解析快速路径",
+        "ru": "Быстрые пути числового parsing"
+      },
+      "summary": {
+        "en": "GetExtended and GetNumericVariantFromJson now accumulate common digits with fewer branches, then move to overflow-aware Int64 and fractional paths. The sequence preserves explicit handling for tiny and huge exponents, invalid syntax, Currency scaling and the signed Int64 minimum, while adding tests for precision boundaries and zero normalization.",
+        "fr": "GetExtended et GetNumericVariantFromJson accumulent maintenant les chiffres courants avec moins de branches, puis passent à des chemins Int64 et fractionnaires protégés contre les débordements. La séquence conserve le traitement explicite des exposants minuscules ou énormes, de la syntaxe invalide, de l’échelle Currency et du minimum Int64 signé, tout en ajoutant des tests sur les limites de précision et la normalisation de zéro.",
+        "zh": "GetExtended 与 GetNumericVariantFromJson 现在用更少分支累积常见数字，再进入带溢出检查的 Int64 与小数路径。该序列继续明确处理极小或极大指数、无效语法、Currency 缩放和有符号 Int64 最小值，并增加精度边界与零归一化测试。",
+        "ru": "GetExtended и GetNumericVariantFromJson теперь накапливают обычные цифры с меньшим числом ветвлений, а затем переходят к защищённым от overflow путям Int64 и дробей. Последовательность сохраняет явную обработку очень малых и больших экспонент, неверного синтаксиса, масштабирования Currency и минимального signed Int64, добавляя тесты границ точности и нормализации нуля."
+      },
+      "shas": [
+        "700177da8097717936ca0e948619723da0995452",
+        "71129606a51069c4a91b712d161c3473c6528ade",
+        "e5746e2f2c4991c355cb35c526de84296b8c284f",
+        "c88c4ad7b25c49a2d12391c75de169204809f02d"
+      ]
+    }
+  ],
+  "upgrade_advice": {
+    "en": "Take build 2.4.16865 as the complete parser sequence. No broken intermediate range is identified in the raw payload, but the four commits are tightly coupled: the final JSON parser uses MIN_INT64 introduced immediately before it. Re-run tests for -0, Int64 extrema, long decimal mantissas, Currency values with up to four fractional digits, scientific notation and invalid JSON numbers on every Delphi and FPC backend you ship.",
+    "fr": "Prenez la build 2.4.16865 comme séquence complète des parseurs. Le payload brut n’identifie aucune plage intermédiaire cassée, mais les quatre commits sont étroitement liés : le parseur JSON final utilise MIN_INT64 ajouté juste avant. Relancez les tests pour -0, les extrêmes Int64, les longues mantisses décimales, les valeurs Currency jusqu’à quatre décimales, la notation scientifique et les nombres JSON invalides sur chaque backend Delphi et FPC livré.",
+    "zh": "请把 build 2.4.16865 作为完整解析器序列采用。原始 payload 未标记损坏的中间区间，但四个 commit 紧密关联：最终 JSON parser 使用了紧接着之前新增的 MIN_INT64。请在所有交付的 Delphi 与 FPC backend 上重新测试 -0、Int64 极值、长小数尾数、最多四位小数的 Currency 值、科学计数法和无效 JSON 数字。",
+    "ru": "Берите build 2.4.16865 как полную последовательность изменений парсеров. Исходный payload не отмечает сломанный промежуточный диапазон, но четыре commits тесно связаны: финальный JSON parser использует MIN_INT64, добавленный непосредственно перед ним. Повторите тесты -0, границ Int64, длинных десятичных мантисс, Currency с четырьмя дробными знаками, scientific notation и некорректных JSON numbers на всех поставляемых backend Delphi и FPC."
+  },
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "700177da8097717936ca0e948619723da0995452",
+          "71129606a51069c4a91b712d161c3473c6528ade",
+          "e5746e2f2c4991c355cb35c526de84296b8c284f",
+          "c88c4ad7b25c49a2d12391c75de169204809f02d"
+        ],
+        "why": "Apply both GetExtended changes, the shared MIN_INT64 support and the final JSON numeric parser rewrite together."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "The raw payload has no superseded_by markers and contains no deprecation notice. The GetExtended rewrite affects the Pascal implementation used outside WIN32DELPHI; Delphi Win32 retains its separate x87 assembly implementation. Performance claims come from code structure and the commit intent, not from benchmark data in the payload.",
+    "fr": "Le payload brut ne contient aucun marqueur superseded_by ni avis de dépréciation. La réécriture de GetExtended concerne l’implémentation Pascal utilisée hors WIN32DELPHI ; Delphi Win32 conserve son implémentation assembleur x87 distincte. Les affirmations de performance reposent sur la structure du code et l’intention des commits, non sur des benchmarks présents dans le payload.",
+    "zh": "原始 payload 不含 superseded_by 标记，也没有 deprecation notice。GetExtended 重写影响 WIN32DELPHI 之外使用的 Pascal 实现；Delphi Win32 仍保留独立的 x87 assembly 实现。性能判断来自代码结构与 commit 意图，而非 payload 中的 benchmark 数据。",
+    "ru": "В исходном payload нет отметок superseded_by и уведомлений о deprecation. Переписывание GetExtended затрагивает Pascal-реализацию вне WIN32DELPHI; Delphi Win32 сохраняет отдельную x87 assembly-реализацию. Выводы о производительности основаны на структуре кода и цели commits, а не на benchmark data в payload."
+  },
+  "entries": [
+    {
+      "sha": "700177da8097717936ca0e948619723da0995452",
+      "headline": {
+        "en": "GetExtended removes work from common integer and decimal paths",
+        "fr": "GetExtended réduit le travail des chemins courants entiers et décimaux",
+        "zh": "GetExtended 减少常见整数与小数路径的工作量",
+        "ru": "GetExtended сокращает работу на обычных целых и десятичных путях"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The non-WIN32DELPHI GetExtended parser replaces several signed counters and temporary floating-point values with PtrUInt digit handling, returns integers and zero directly, and folds power-of-ten scaling into fewer operations. Its NAN/INF probe now reads a two-byte prefix before checking the third character. The same commit documents why the JSON numeric parser divides by exact powers for short negative exponents.",
+        "fr": "Le parseur GetExtended hors WIN32DELPHI remplace plusieurs compteurs signés et valeurs flottantes temporaires par un traitement des chiffres en PtrUInt, renvoie directement les entiers et zéro, et regroupe la mise à l’échelle par puissances de dix en moins d’opérations. Son contrôle NAN/INF lit maintenant un préfixe de deux octets avant de vérifier le troisième caractère. Le même commit documente pourquoi le parseur numérique JSON divise par des puissances exactes pour les exposants négatifs courts.",
+        "zh": "非 WIN32DELPHI 的 GetExtended parser 以 PtrUInt 数字处理替代多个有符号计数器与临时浮点值，直接返回整数与零，并用更少操作完成十次幂缩放。NAN/INF 探测现在先读取两字节前缀，再检查第三个字符。同一 commit 还说明 JSON 数值 parser 为何在短负指数下除以精确幂。",
+        "ru": "Parser GetExtended вне WIN32DELPHI заменяет несколько signed counters и временных floating-point значений обработкой цифр через PtrUInt, напрямую возвращает целые числа и ноль и выполняет масштабирование степенями десяти меньшим числом операций. Проверка NAN/INF теперь читает двухбайтовый префикс перед третьим символом. Тот же commit поясняет деление JSON numeric parser на точные степени при коротких отрицательных экспонентах."
+      },
+      "impact": {
+        "en": "FPC and non-Win32 Delphi builds use the streamlined Pascal path; Delphi Win32 continues to use its x87 assembly implementation. The public signatures remain unchanged. The direct zero path normalizes negative zero, a behavior made explicit by the next commit’s tests.",
+        "fr": "Les builds FPC et Delphi hors Win32 utilisent le chemin Pascal simplifié ; Delphi Win32 continue d’utiliser son implémentation assembleur x87. Les signatures publiques restent inchangées. Le chemin direct de zéro normalise le zéro négatif, comportement rendu explicite par les tests du commit suivant.",
+        "zh": "FPC 与非 Win32 Delphi build 使用精简后的 Pascal 路径；Delphi Win32 继续使用 x87 assembly 实现。公开 signature 不变。直接零路径会归一化负零，下一 commit 的测试明确记录了这一行为。",
+        "ru": "Builds FPC и Delphi вне Win32 используют упрощённый Pascal-путь; Delphi Win32 продолжает применять x87 assembly-реализацию. Публичные signatures не изменены. Прямой путь нуля нормализует отрицательный ноль, что явно закреплено тестами следующего commit."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Include signed zero and representative exponent boundaries in parser regression tests before upgrading.",
+        "fr": "Incluez le zéro signé et des limites d’exposant représentatives dans les tests de régression du parseur avant la mise à niveau.",
+        "zh": "升级前请在 parser 回归测试中加入有符号零与代表性的指数边界。",
+        "ru": "Перед обновлением включите signed zero и характерные границы экспонент в regression tests парсера."
+      },
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "api_changes": [
+        {
+          "symbol": "GetExtended",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The Pascal path normalizes -0 and zero with an exponent to numeric zero; signatures are unchanged.",
+            "fr": "Le chemin Pascal normalise -0 et zéro avec exposant en zéro numérique ; les signatures ne changent pas.",
+            "zh": "Pascal 路径把 -0 与带指数的零归一化为数值零；signature 不变。",
+            "ru": "Pascal-путь нормализует -0 и ноль с экспонентой в числовой ноль; signatures не изменены."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "71129606a51069c4a91b712d161c3473c6528ade",
+      "headline": {
+        "en": "GetExtended splits fast digits from overflow-aware parsing",
+        "fr": "GetExtended sépare les chiffres rapides du parsing protégé contre les débordements",
+        "zh": "GetExtended 将快速数字与溢出感知解析分离",
+        "ru": "GetExtended отделяет быстрые цифры от parsing с контролем overflow"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The Pascal GetExtended implementation is rewritten again: the first 18 integer digits are accumulated without overflow checks, later digits use a guarded loop, excess significant digits are skipped while their decimal position is retained, and fractional and exponent syntax have dedicated validation. Tests add long fractional boundary cases, invalid -e1 and .e2 inputs, and the expected normalization of -0e400.",
+        "fr": "L’implémentation Pascal de GetExtended est de nouveau réécrite : les 18 premiers chiffres entiers sont accumulés sans contrôle de débordement, les suivants utilisent une boucle protégée, les chiffres significatifs excédentaires sont ignorés tout en conservant leur position décimale, et la syntaxe des fractions et exposants dispose de validations dédiées. Les tests ajoutent de longues fractions aux limites, les entrées invalides -e1 et .e2, ainsi que la normalisation attendue de -0e400.",
+        "zh": "Pascal GetExtended 实现再次重写：前 18 位整数数字无需溢出检查即可累积，后续数字进入保护循环，多余有效数字在保留十进制位置的同时被跳过，小数与指数语法则各自验证。测试新增长小数边界、无效输入 -e1 与 .e2，以及 -0e400 的预期归一化。",
+        "ru": "Pascal-реализация GetExtended переписана ещё раз: первые 18 целых цифр накапливаются без проверки overflow, последующие проходят защищённый цикл, лишние значащие цифры пропускаются с сохранением десятичной позиции, а синтаксис дроби и экспоненты проверяется отдельно. Тесты добавляют длинные граничные дроби, неверные -e1 и .e2 и ожидаемую нормализацию -0e400."
+      },
+      "impact": {
+        "en": "This is the final GetExtended implementation in the edition and it broadens regression coverage around 18–20 significant digits. It affects FPC and non-Win32 Delphi parsing performance and edge results; Delphi Win32 keeps its assembly path. No caller source change is required.",
+        "fr": "Il s’agit de l’implémentation GetExtended finale de l’édition, avec une couverture de régression élargie autour de 18 à 20 chiffres significatifs. Elle affecte les performances et résultats limites du parsing FPC et Delphi hors Win32 ; Delphi Win32 conserve son chemin assembleur. Aucun changement de source appelante n’est requis.",
+        "zh": "这是本期最终的 GetExtended 实现，并扩大了对 18–20 位有效数字的回归覆盖。它会影响 FPC 与非 Win32 Delphi 的解析性能和边界结果；Delphi Win32 保留 assembly 路径。调用方无需修改源码。",
+        "ru": "Это финальная реализация GetExtended в выпуске; regression coverage расширено для 18–20 значащих цифр. Изменяются производительность и граничные результаты parsing на FPC и Delphi вне Win32; Delphi Win32 сохраняет assembly-путь. Изменения исходного кода вызывающей стороны не нужны."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Re-run exact-bit conversion tests for long mantissas, subnormals and exponent limits on non-Win32 targets.",
+        "fr": "Relancez les tests de conversion bit à bit pour les longues mantisses, les subnormaux et les limites d’exposant sur les cibles hors Win32.",
+        "zh": "在非 Win32 target 上重新运行长尾数、subnormal 与指数边界的精确位转换测试。",
+        "ru": "Повторите tests точного битового преобразования длинных мантисс, subnormal и границ экспонент на целях вне Win32."
+      },
+      "units": [
+        "mormot.core.text"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e5746e2f2c4991c355cb35c526de84296b8c284f",
+      "headline": {
+        "en": "MIN_INT64 and a pointer-sized variant overlay become public",
+        "fr": "MIN_INT64 et un overlay variant de taille pointeur deviennent publics",
+        "zh": "MIN_INT64 与指针大小的 variant overlay 成为公开成员",
+        "ru": "MIN_INT64 и pointer-sized overlay variant стали публичными"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.base adds MIN_INT64 beside MAX_INT64 and adds VPtrInt under the varOleInt arm of TSynVarData. TRestStorageInMemory.FindMax uses the named constant instead of low(Int64), and a GetExtended comment clarifies why its Pascal loop is not unrolled like the JSON parser.",
+        "fr": "mormot.core.base ajoute MIN_INT64 à côté de MAX_INT64 et VPtrInt dans la branche varOleInt de TSynVarData. TRestStorageInMemory.FindMax utilise la constante nommée au lieu de low(Int64), et un commentaire GetExtended explique pourquoi sa boucle Pascal n’est pas déroulée comme celle du parseur JSON.",
+        "zh": "mormot.core.base 在 MAX_INT64 旁新增 MIN_INT64，并在 TSynVarData 的 varOleInt 分支加入 VPtrInt。TRestStorageInMemory.FindMax 改用命名常量而非 low(Int64)，GetExtended 注释则说明其 Pascal 循环为何不像 JSON parser 那样展开。",
+        "ru": "mormot.core.base добавляет MIN_INT64 рядом с MAX_INT64 и VPtrInt в ветку varOleInt структуры TSynVarData. TRestStorageInMemory.FindMax использует именованную константу вместо low(Int64), а комментарий GetExtended объясняет, почему его Pascal-цикл не развёрнут как JSON parser."
+      },
+      "impact": {
+        "en": "Existing ORM behavior is unchanged. Library and application code can now use a named signed 64-bit minimum and can clear or access the pointer-sized integer storage of TSynVarData directly. The additions compile according to PtrInt width on Delphi and FPC.",
+        "fr": "Le comportement ORM existant ne change pas. Le code de bibliothèque et d’application peut désormais utiliser un minimum signé 64 bits nommé et effacer ou accéder directement au stockage entier de taille pointeur de TSynVarData. Les ajouts suivent la largeur PtrInt sous Delphi et FPC.",
+        "zh": "现有 ORM 行为不变。库与应用代码现在可以使用命名的有符号 64 位最小值，并直接清零或访问 TSynVarData 的指针大小整数存储。这些新增项会按 Delphi 与 FPC 的 PtrInt 宽度编译。",
+        "ru": "Существующее поведение ORM не изменено. Код библиотеки и приложений теперь может использовать именованный минимум signed 64-bit и напрямую очищать или читать pointer-sized integer storage TSynVarData. Добавления компилируются согласно ширине PtrInt на Delphi и FPC."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.text",
+        "mormot.orm.storage"
+      ],
+      "api_changes": [
+        {
+          "symbol": "MIN_INT64",
+          "change": "added",
+          "note": {
+            "en": "Public constant equal to low(Int64).",
+            "fr": "Constante publique égale à low(Int64).",
+            "zh": "等于 low(Int64) 的公开常量。",
+            "ru": "Публичная константа, равная low(Int64)."
+          }
+        },
+        {
+          "symbol": "TSynVarData.VPtrInt",
+          "change": "added",
+          "note": {
+            "en": "Pointer-sized integer view added to the varOleInt overlay arm.",
+            "fr": "Vue entière de taille pointeur ajoutée à la branche overlay varOleInt.",
+            "zh": "在 varOleInt overlay 分支新增指针大小整数视图。",
+            "ru": "В overlay-ветку varOleInt добавлено pointer-sized integer представление."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c88c4ad7b25c49a2d12391c75de169204809f02d",
+      "headline": {
+        "en": "JSON numeric variants get an unrolled common-digit parser",
+        "fr": "Les variants numériques JSON reçoivent un parseur déroulé des chiffres courants",
+        "zh": "JSON 数值 variant 获得展开的常见数字解析器",
+        "ru": "JSON numeric variants получили развёрнутый parser обычных цифр"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "GetNumericVariantFromJson now unrolls its initial digit accumulation, processes later digits in paired and overflow-aware loops, handles MIN_INT64 with an explicit sentinel, and separates fraction and exponent validation. The result phase was rewritten around positive magnitude values for varInteger, varInt64, varCurrency and varDouble, including pointer-sized zero initialization through TSynVarData.VPtrInt.",
+        "fr": "GetNumericVariantFromJson déroule maintenant l’accumulation initiale des chiffres, traite les suivants par paires et dans des boucles contrôlées contre les débordements, gère MIN_INT64 avec une sentinelle explicite et sépare la validation des fractions et exposants. La phase de résultat est réécrite autour de magnitudes positives pour varInteger, varInt64, varCurrency et varDouble, y compris l’initialisation de zéro de taille pointeur via TSynVarData.VPtrInt.",
+        "zh": "GetNumericVariantFromJson 现在展开起始数字累积，后续数字以成对和带溢出检查的循环处理，用显式 sentinel 处理 MIN_INT64，并分离小数与指数验证。结果阶段围绕正数幅值重写，覆盖 varInteger、varInt64、varCurrency 与 varDouble，并通过 TSynVarData.VPtrInt 进行指针大小的零初始化。",
+        "ru": "GetNumericVariantFromJson теперь разворачивает начальное накопление цифр, обрабатывает последующие цифры парами и в циклах с проверкой overflow, использует явный sentinel для MIN_INT64 и отдельно проверяет дробь и экспоненту. Формирование результата переписано вокруг положительной magnitude для varInteger, varInt64, varCurrency и varDouble, включая pointer-sized инициализацию нуля через TSynVarData.VPtrInt."
+      },
+      "impact": {
+        "en": "All Delphi and FPC callers of the public function use the new Pascal implementation. The signature and accepted JSON grammar are unchanged in the diff, but the code deciding exact integer, Currency or Double storage has been substantially replaced; consumers that inspect TVarData.VType should regression-test representative boundaries. No benchmark result is included in the payload.",
+        "fr": "Tous les appelants Delphi et FPC de la fonction publique utilisent la nouvelle implémentation Pascal. La signature et la grammaire JSON acceptée ne changent pas dans le diff, mais le code choisissant le stockage exact integer, Currency ou Double a été largement remplacé ; les consommateurs inspectant TVarData.VType doivent retester des limites représentatives. Le payload ne contient aucun résultat de benchmark.",
+        "zh": "公开函数的所有 Delphi 与 FPC 调用方都会使用新的 Pascal 实现。diff 中 signature 与接受的 JSON grammar 不变，但决定精确 integer、Currency 或 Double 存储的代码已大幅替换；检查 TVarData.VType 的 consumer 应回归测试代表性边界。payload 未包含 benchmark 结果。",
+        "ru": "Все Delphi- и FPC-вызовы публичной функции используют новую Pascal-реализацию. Signature и принимаемая JSON grammar в diff не изменены, однако код выбора точного хранения integer, Currency или Double существенно заменён; consumers, проверяющим TVarData.VType, следует провести regression tests характерных границ. Benchmark results в payload отсутствуют."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Test the returned VType and value around 32-bit, Int64 and Currency limits, plus long mantissas and signed exponent forms.",
+        "fr": "Testez le VType et la valeur renvoyés autour des limites 32 bits, Int64 et Currency, ainsi que les longues mantisses et les formes d’exposant signées.",
+        "zh": "请测试 32 位、Int64 与 Currency 边界附近返回的 VType 和数值，以及长尾数和带符号指数形式。",
+        "ru": "Проверьте возвращаемые VType и значение на границах 32-bit, Int64 и Currency, а также для длинных мантисс и экспонент со знаком."
+      },
+      "units": [
+        "mormot.core.variants"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
