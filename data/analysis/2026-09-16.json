@@ -1,0 +1,367 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-16",
+  "edition_title": {
+    "en": "SSSE3 numeric parsing lands across Delphi and FPC, with boundary fixes",
+    "fr": "Le parsing numérique SSSE3 arrive sous Delphi et FPC, avec des corrections de limites",
+    "zh": "SSSE3 数值解析登陆 Delphi 与 FPC，并修复边界问题",
+    "ru": "SSSE3-парсинг чисел появился в Delphi и FPC вместе с исправлениями границ"
+  },
+  "intro": {
+    "en": "The main change is a shared x86-64 assembly path for GetExtended and GetNumericVariantFromJson on SSSE3-capable Delphi and FPC targets, backed by scalar fallbacks and a larger regression matrix. Follow-ups repair MIN_INT64-with-fraction parsing and FP80 consistency. macOS version reporting also gains Golden Gate support, but its first kernel mapping is corrected later in the same edition, so production users should land on build 2.4.16897 rather than an intermediate build.",
+    "fr": "Le changement principal est un chemin assembleur x86-64 partagé pour GetExtended et GetNumericVariantFromJson sur les cibles Delphi et FPC compatibles SSSE3, avec des fallbacks scalaires et une matrice de régression élargie. Des corrections ultérieures réparent le parsing de MIN_INT64 avec fraction et la cohérence FP80. Le reporting de version macOS prend aussi en charge Golden Gate, mais sa première correspondance de kernel est corrigée plus tard dans cette même édition ; les utilisateurs en production doivent donc viser la build 2.4.16897 plutôt qu’une build intermédiaire.",
+    "zh": "主要变化是为支持 SSSE3 的 Delphi 与 FPC target 提供共享的 x86-64 assembly 路径，用于 GetExtended 和 GetNumericVariantFromJson，并配有 scalar fallback 与更大的回归矩阵。后续 commit 修复带小数的 MIN_INT64 解析与 FP80 一致性。macOS 版本报告也新增 Golden Gate 支持，但最初的 kernel 映射在本期稍后才修正，因此生产环境应落在 build 2.4.16897，而不是中间 build。",
+    "ru": "Главное изменение — общий x86-64 assembly-путь для GetExtended и GetNumericVariantFromJson на целях Delphi и FPC с SSSE3, со scalar fallback и расширенной матрицей regression tests. Последующие commits исправляют parsing MIN_INT64 с дробью и согласованность FP80. В отчёт о версии macOS добавлен Golden Gate, но первая версия сопоставления kernel исправлена позднее в том же выпуске, поэтому production следует переходить на build 2.4.16897, а не на промежуточную build."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.16897; the numeric assembly series receives MIN_INT64 and FP80 fixes before the final head.",
+      "GetExtended and GetNumericVariantFromJson now use SSSE3 assembly on supported Delphi Win64 and FPC Win64/Linux x86-64 targets.",
+      "Build 2.4.16888 fixes parsing of -9223372036854775808.0 in both Pascal and x86-64 assembly paths.",
+      "The dedicated FP80 path preserves 64-bit mantissa precision and build 2.4.16891 makes out-of-range signed results consistent.",
+      "MacKernel and Golden Gate metadata are public additions; builds 2.4.16892–2.4.16895 use an incorrect Darwin mapping fixed in 16896.",
+      "GetInteger and GetCardinal now consume two digits per loop without changing their public signatures."
+    ],
+    "fr": [
+      "Passez à la build 2.4.16897 ; la série assembleur numérique reçoit des corrections MIN_INT64 et FP80 avant le head final.",
+      "GetExtended et GetNumericVariantFromJson utilisent désormais l’assembleur SSSE3 sur les cibles Delphi Win64 et FPC Win64/Linux x86-64 compatibles.",
+      "La build 2.4.16888 corrige le parsing de -9223372036854775808.0 dans les chemins Pascal et assembleur x86-64.",
+      "Le chemin FP80 dédié conserve la précision de mantisse 64 bits et la build 2.4.16891 harmonise les résultats signés hors plage.",
+      "MacKernel et les métadonnées Golden Gate sont des ajouts publics ; les builds 2.4.16892–2.4.16895 utilisent une correspondance Darwin incorrecte corrigée en 16896.",
+      "GetInteger et GetCardinal consomment maintenant deux chiffres par boucle sans changer leurs signatures publiques."
+    ],
+    "zh": [
+      "应采用 build 2.4.16897；数值 assembly 系列在最终 head 前获得 MIN_INT64 与 FP80 修复。",
+      "GetExtended 与 GetNumericVariantFromJson 现在会在支持的 Delphi Win64 和 FPC Win64/Linux x86-64 target 上使用 SSSE3 assembly。",
+      "Build 2.4.16888 修复 Pascal 与 x86-64 assembly 路径对 -9223372036854775808.0 的解析。",
+      "专用 FP80 路径保留 64 位尾数精度，build 2.4.16891 使超范围有符号结果保持一致。",
+      "MacKernel 与 Golden Gate 元数据是公开新增项；build 2.4.16892–2.4.16895 使用错误的 Darwin 映射，已在 16896 修复。",
+      "GetInteger 与 GetCardinal 现在每轮处理两位数字，公开 signature 不变。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.16897; до финального head серия numeric assembly получает исправления MIN_INT64 и FP80.",
+      "GetExtended и GetNumericVariantFromJson теперь используют SSSE3 assembly на поддерживаемых целях Delphi Win64 и FPC Win64/Linux x86-64.",
+      "Build 2.4.16888 исправляет parsing -9223372036854775808.0 в путях Pascal и x86-64 assembly.",
+      "Отдельный путь FP80 сохраняет 64-битную точность мантиссы, а build 2.4.16891 согласует signed результаты вне диапазона.",
+      "MacKernel и metadata Golden Gate — публичные добавления; builds 2.4.16892–2.4.16895 используют неверное сопоставление Darwin, исправленное в 16896.",
+      "GetInteger и GetCardinal теперь обрабатывают две цифры за цикл без изменения публичных signatures."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "Cross-compiler x86-64 numeric parsing",
+        "fr": "Parsing numérique x86-64 multi-compilateur",
+        "zh": "跨编译器 x86-64 数值解析",
+        "ru": "Кросс-компиляторный x86-64 parsing чисел"
+      },
+      "summary": {
+        "en": "The merged series adds SSSE3 digit reduction for GetExtended and GetNumericVariantFromJson, extends it from Delphi Win64 to FPC Windows and Linux ABIs, retains scalar assembly for unsupported or uncommon inputs, then moves the implementation into a shared include. Later commits correct MIN_INT64 fractions, FP80 precision and signed overflow behavior.",
+        "fr": "La série fusionnée ajoute la réduction SSSE3 des chiffres pour GetExtended et GetNumericVariantFromJson, l’étend de Delphi Win64 aux ABI FPC Windows et Linux, conserve un assembleur scalaire pour les entrées non prises en charge ou rares, puis déplace l’implémentation dans un include partagé. Les commits suivants corrigent les fractions MIN_INT64, la précision FP80 et le comportement signé hors plage.",
+        "zh": "合并的系列为 GetExtended 与 GetNumericVariantFromJson 新增 SSSE3 数字归约，将其从 Delphi Win64 扩展到 FPC Windows 和 Linux ABI，对不支持或少见输入保留 scalar assembly，随后把实现移入共享 include。后续 commit 修复 MIN_INT64 小数、FP80 精度与有符号溢出行为。",
+        "ru": "Объединённая серия добавляет SSSE3 reduction цифр для GetExtended и GetNumericVariantFromJson, расширяет её с Delphi Win64 на ABI FPC Windows и Linux, сохраняет scalar assembly для неподдерживаемых и редких входов, затем переносит реализацию в общий include. Последующие commits исправляют дроби MIN_INT64, точность FP80 и signed поведение вне диапазона."
+      },
+      "shas": [
+        "b9ba681ebcb1b599aa70d8e4a43287f7df466f7a",
+        "564172607f8eea6a7fadabf2058cd9b847371c42",
+        "9d219b996dced37da5f9064fde2343d4b965afc8",
+        "af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+        "a91f18f16edbd9b563aac0cfceeba31453113caf",
+        "af3188936266824b525dbccf01d60410d806be11",
+        "73b032079e4638d4b2856e4b973e40624cd787f6",
+        "b082ba107f13689bea788d5a6916c709c3501200",
+        "2201a7b9c20590f26242164c44eead102ff0384f",
+        "e86c5f33f2982c2c4f8a0257b8d4b883ba986d89",
+        "dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda",
+        "4fb42e122c40c1a8481ca16e02433a70c0c2f75b",
+        "92faab04255ece3ad68a5a61b8aa16da36d00e71",
+        "102fa3d99708d839948eef595d1d02d2e8fdbb45"
+      ]
+    },
+    {
+      "title": {
+        "en": "macOS kernel and marketing-version mapping",
+        "fr": "Correspondance entre kernel macOS et version marketing",
+        "zh": "macOS kernel 与市场版本映射",
+        "ru": "Сопоставление kernel macOS с marketing version"
+      },
+      "summary": {
+        "en": "mormot.core.os adds Golden Gate metadata and MacKernel so Darwin kernel releases can be mapped to the marketing-version arrays. Tests expose an inverted first implementation, and build 16896 corrects the skipped Darwin 26 adjustment.",
+        "fr": "mormot.core.os ajoute les métadonnées Golden Gate et MacKernel afin de mapper les versions du kernel Darwin vers les tableaux de versions marketing. Les tests révèlent une première implémentation inversée, et la build 16896 corrige l’ajustement lié à Darwin 26 absent.",
+        "zh": "mormot.core.os 新增 Golden Gate 元数据与 MacKernel，用于把 Darwin kernel release 映射到市场版本数组。测试暴露最初实现方向相反的问题，build 16896 修正了跳过 Darwin 26 的调整。",
+        "ru": "mormot.core.os добавляет metadata Golden Gate и MacKernel для сопоставления Darwin kernel release с массивами marketing version. Тесты выявляют обратную логику первой реализации, а build 16896 исправляет учёт пропущенного Darwin 26."
+      },
+      "shas": [
+        "3e5e799caed70467008d07b3430f7b45e2231c3e",
+        "870336b81f405eb0267124b2afcc23a15c6be900",
+        "944abc0cb1478a4ca1c8b837e44390e166192608"
+      ]
+    }
+  ],
+  "upgrade_advice": {
+    "en": "Use build 2.4.16897 as one unit. Do not stop on 2.4.16866–2.4.16890: the merged numeric assembly and Pascal/FP80 paths receive boundary and consistency corrections through 16891. macOS deployments should also skip 2.4.16892–2.4.16895 because the first MacKernel adjustment maps newer Darwin releases incorrectly until 16896. Re-run JSON numeric-type, Currency, Int64-minimum, long-mantissa, signed overflow and FP80 tests on each Delphi/FPC backend you ship.",
+    "fr": "Utilisez la build 2.4.16897 comme un ensemble. Ne vous arrêtez pas sur 2.4.16866–2.4.16890 : l’assembleur numérique fusionné et les chemins Pascal/FP80 reçoivent des corrections de limites et de cohérence jusqu’à 16891. Les déploiements macOS doivent aussi éviter 2.4.16892–2.4.16895, car le premier ajustement MacKernel mappe incorrectement les versions Darwin récentes jusqu’à 16896. Relancez les tests de type numérique JSON, Currency, minimum Int64, longues mantisses, débordement signé et FP80 sur chaque backend Delphi/FPC livré.",
+    "zh": "请把 build 2.4.16897 作为一个整体采用。不要停在 2.4.16866–2.4.16890：合并后的数值 assembly 与 Pascal/FP80 路径直到 16891 仍有边界和一致性修复。macOS 部署还应避开 2.4.16892–2.4.16895，因为最初的 MacKernel 调整会错误映射较新的 Darwin release，直到 16896 才修复。请在每个交付的 Delphi/FPC backend 上重新运行 JSON 数值类型、Currency、Int64 最小值、长尾数、有符号溢出与 FP80 测试。",
+    "ru": "Берите build 2.4.16897 целиком. Не останавливайтесь на 2.4.16866–2.4.16890: объединённые numeric assembly и пути Pascal/FP80 получают исправления границ и согласованности вплоть до 16891. Для macOS также следует пропустить 2.4.16892–2.4.16895, поскольку первая корректировка MacKernel неверно сопоставляет новые Darwin releases до исправления в 16896. Повторите тесты JSON numeric type, Currency, минимума Int64, длинных мантисс, signed overflow и FP80 на каждом поставляемом backend Delphi/FPC."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16866",
+        "to_build": "2.4.16890",
+        "why": "The merged numeric parser series receives a MIN_INT64 fractional fix in 16888 and its final FP80 signed-range consistency fix in 16891."
+      },
+      {
+        "from_build": "2.4.16892",
+        "to_build": "2.4.16895",
+        "why": "The initial MacKernel offset moves newer Darwin releases in the wrong direction; build 16896 corrects the mapping."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "b9ba681ebcb1b599aa70d8e4a43287f7df466f7a",
+          "564172607f8eea6a7fadabf2058cd9b847371c42",
+          "9d219b996dced37da5f9064fde2343d4b965afc8",
+          "af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+          "a91f18f16edbd9b563aac0cfceeba31453113caf",
+          "af3188936266824b525dbccf01d60410d806be11",
+          "73b032079e4638d4b2856e4b973e40624cd787f6",
+          "b082ba107f13689bea788d5a6916c709c3501200",
+          "2201a7b9c20590f26242164c44eead102ff0384f",
+          "e86c5f33f2982c2c4f8a0257b8d4b883ba986d89",
+          "dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda",
+          "4fb42e122c40c1a8481ca16e02433a70c0c2f75b",
+          "92faab04255ece3ad68a5a61b8aa16da36d00e71",
+          "102fa3d99708d839948eef595d1d02d2e8fdbb45"
+        ],
+        "why": "Take the x86-64 parser, its compiler integration, boundary fixes, FP80 corrections and final short-integer optimization together."
+      },
+      {
+        "shas": [
+          "3e5e799caed70467008d07b3430f7b45e2231c3e",
+          "870336b81f405eb0267124b2afcc23a15c6be900",
+          "944abc0cb1478a4ca1c8b837e44390e166192608"
+        ],
+        "why": "Apply the macOS metadata, regression coverage and corrected Darwin mapping as one sequence."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "The raw payload has no superseded_by markers and contains no deprecation notice. Its three merge commits require no entries; all 21 listed non-merge commits are covered. The avoid ranges follow explicit later fixes in the embedded diffs and build sequence. Performance improvements are structurally confirmed, but no comparative benchmark numbers are present in the payload.",
+    "fr": "Le payload brut ne contient aucun marqueur superseded_by ni avis de dépréciation. Ses trois commits de merge ne nécessitent pas d’entrée ; les 21 commits non-merge listés sont couverts. Les plages à éviter suivent les corrections ultérieures explicites des diffs intégrés et de la séquence de builds. Les améliorations de performance sont confirmées par la structure, mais le payload ne contient aucun benchmark comparatif chiffré.",
+    "zh": "原始 payload 不含 superseded_by 标记，也没有 deprecation notice。三个 merge commit 无需 entry；列出的 21 个 non-merge commit 已全部覆盖。应避开的区间依据嵌入 diff 与 build 序列中明确的后续修复。性能改进可从结构确认，但 payload 不含对比 benchmark 数字。",
+    "ru": "В исходном payload нет отметок superseded_by и уведомлений о deprecation. Три merge commits не требуют entries; покрыты все 21 перечисленных non-merge commits. Диапазоны исключения основаны на явных последующих исправлениях во встроенных diffs и последовательности builds. Улучшения производительности подтверждаются структурой, но сравнительных benchmark numbers в payload нет."
+  },
+  "entries": [
+    {
+      "sha": "b9ba681ebcb1b599aa70d8e4a43287f7df466f7a",
+      "headline": {"en": "Portable numeric parsing rejects empty values and preserves boundary decimals", "fr": "Le parsing numérique portable rejette les valeurs vides et préserve les décimales limites", "zh": "可移植数值解析拒绝空值并保留边界小数", "ru": "Переносимый numeric parsing отклоняет пустые значения и сохраняет граничные дроби"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "GetExtended rejects a sign or spaces without digits and trims harmless trailing decimal zeros before Clinger conversion; GetNumericVariantFromJson corrects zero, MIN_INT64, Currency-minimum and fractional-boundary handling.", "fr": "GetExtended rejette un signe ou des espaces sans chiffre et supprime les zéros décimaux finaux neutres avant la conversion de Clinger ; GetNumericVariantFromJson corrige la gestion de zéro, MIN_INT64, du minimum Currency et des limites fractionnaires.", "zh": "GetExtended 拒绝只有符号或空格而没有数字的输入，并在 Clinger 转换前去除无害的末尾小数零；GetNumericVariantFromJson 修正零、MIN_INT64、Currency 最小值与小数边界处理。", "ru": "GetExtended отклоняет знак или пробелы без цифр и удаляет безвредные конечные десятичные нули перед преобразованием Clinger; GetNumericVariantFromJson исправляет обработку нуля, MIN_INT64, минимума Currency и границ дроби."},
+      "impact": {"en": "Delphi and FPC portable paths no longer accept empty numeric text or lose exactness on padded decimals, and JSON numeric variants retain the intended type and value at signed boundaries.", "fr": "Les chemins portables Delphi et FPC n’acceptent plus un texte numérique vide et ne perdent plus en exactitude sur les décimales complétées ; les variants numériques JSON conservent le type et la valeur attendus aux limites signées.", "zh": "Delphi 与 FPC 可移植路径不再接受空数值文本，也不会在补零小数上失去精度；JSON numeric variant 在有符号边界保留预期类型和值。", "ru": "Переносимые пути Delphi и FPC больше не принимают пустой числовой текст и не теряют точность на дробях с конечными нулями; JSON numeric variants сохраняют ожидаемые тип и значение на signed границах."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Take the complete 2.4.16897 sequence and test empty input, padded decimals, minimum Currency and negative Int64 fractions.", "fr": "Prenez la séquence complète 2.4.16897 et testez les entrées vides, les décimales complétées, le minimum Currency et les fractions Int64 négatives.", "zh": "采用完整的 2.4.16897 序列，并测试空输入、补零小数、Currency 最小值与负 Int64 小数。", "ru": "Берите полную последовательность 2.4.16897 и проверьте пустой ввод, дроби с нулями, минимум Currency и отрицательные дроби Int64."},
+      "units": ["mormot.core.text", "mormot.core.variants"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "564172607f8eea6a7fadabf2058cd9b847371c42",
+      "headline": {"en": "Delphi Win64 gets an SSSE3 fast path for common numbers", "fr": "Delphi Win64 reçoit un chemin rapide SSSE3 pour les nombres courants", "zh": "Delphi Win64 获得常见数值的 SSSE3 快速路径", "ru": "Delphi Win64 получил быстрый SSSE3-путь для обычных чисел"},
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {"en": "GetExtended and GetNumericVariantFromJson gain Delphi Win64 assembly that reduces up to 15 digits with SSSE3, checks 4 KiB page boundaries and falls back to Pascal for long or uncommon grammar.", "fr": "GetExtended et GetNumericVariantFromJson reçoivent un assembleur Delphi Win64 qui réduit jusqu’à 15 chiffres avec SSSE3, vérifie les limites de page de 4 Kio et revient au Pascal pour les grammaires longues ou rares.", "zh": "GetExtended 与 GetNumericVariantFromJson 新增 Delphi Win64 assembly，用 SSSE3 归约最多 15 位数字，检查 4 KiB page 边界，并对长输入或少见语法回退到 Pascal。", "ru": "GetExtended и GetNumericVariantFromJson получают Delphi Win64 assembly, который сворачивает до 15 цифр через SSSE3, проверяет границы страниц 4 КиБ и переходит на Pascal для длинной или редкой grammar."},
+      "impact": {"en": "Supported Delphi Win64 CPUs can parse common integers, fractions and short exponents with fewer scalar operations while preserving the public signatures and Pascal fallback.", "fr": "Les CPU Delphi Win64 compatibles peuvent analyser les entiers, fractions et exposants courts courants avec moins d’opérations scalaires, tout en conservant les signatures publiques et le fallback Pascal.", "zh": "支持的 Delphi Win64 CPU 能以更少 scalar 操作解析常见整数、小数与短指数，同时保留公开 signature 和 Pascal fallback。", "ru": "Поддерживаемые CPU Delphi Win64 могут разбирать обычные целые, дроби и короткие экспоненты с меньшим числом scalar операций, сохраняя публичные signatures и Pascal fallback."},
+      "action": "review",
+      "action_detail": {"en": "Benchmark and regression-test the final build on the oldest SSSE3-capable Win64 CPU you support.", "fr": "Mesurez et retestez la build finale sur le plus ancien CPU Win64 compatible SSSE3 que vous prenez en charge.", "zh": "请在所支持的最旧 SSSE3 Win64 CPU 上 benchmark 并回归测试最终 build。", "ru": "Проведите benchmark и regression tests финальной build на самом старом поддерживаемом Win64 CPU с SSSE3."},
+      "units": ["mormot.core.text", "mormot.core.variants"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9d219b996dced37da5f9064fde2343d4b965afc8",
+      "headline": {"en": "FPC Win64 and Linux join the SSSE3 parser path", "fr": "FPC Win64 et Linux rejoignent le chemin de parsing SSSE3", "zh": "FPC Win64 与 Linux 加入 SSSE3 解析路径", "ru": "FPC Win64 и Linux подключены к SSSE3-пути парсера"},
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {"en": "The x86-64 parser adapts its argument handling and alignment syntax for FPC and the System V ABI, and adds safe assembly handling for signed NaN/Inf plus incomplete prefixes.", "fr": "Le parseur x86-64 adapte le passage des arguments et la syntaxe d’alignement à FPC et à l’ABI System V, et ajoute un traitement assembleur sûr des NaN/Inf signés et des préfixes incomplets.", "zh": "x86-64 parser 为 FPC 与 System V ABI 调整参数传递和对齐语法，并新增对有符号 NaN/Inf 与不完整前缀的安全 assembly 处理。", "ru": "x86-64 parser адаптирует передачу аргументов и синтаксис выравнивания для FPC и ABI System V, добавляя безопасную assembly-обработку signed NaN/Inf и неполных префиксов."},
+      "impact": {"en": "FPC x86-64 builds on Windows and Linux can use the same SSSE3 acceleration without changing callers; non-SSSE3 and unusual inputs still use equivalent fallback behavior.", "fr": "Les builds FPC x86-64 sous Windows et Linux peuvent utiliser la même accélération SSSE3 sans modifier les appelants ; les entrées sans SSSE3 ou inhabituelles gardent un comportement de fallback équivalent.", "zh": "Windows 与 Linux 上的 FPC x86-64 build 可在不修改调用方的情况下使用相同 SSSE3 加速；无 SSSE3 或少见输入仍采用等价 fallback。", "ru": "Builds FPC x86-64 на Windows и Linux могут использовать то же ускорение SSSE3 без изменения вызывающего кода; CPU без SSSE3 и необычный ввод сохраняют эквивалентный fallback."},
+      "action": "review",
+      "action_detail": {"en": "Run the numeric conversion suite on both FPC Win64 and Linux x86-64 before deployment.", "fr": "Exécutez la suite de conversions numériques sous FPC Win64 et Linux x86-64 avant déploiement.", "zh": "部署前请在 FPC Win64 与 Linux x86-64 上运行数值转换测试套件。", "ru": "Перед развёртыванием запустите suite числовых преобразований на FPC Win64 и Linux x86-64."},
+      "units": ["mormot.core.text", "mormot.core.variants"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+      "headline": {"en": "Long and uncommon numeric inputs stay inside assembly", "fr": "Les entrées numériques longues et rares restent dans l’assembleur", "zh": "长数值与少见输入继续留在 assembly 内", "ru": "Длинный и редкий числовой ввод остаётся внутри assembly"},
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {"en": "The x86-64 implementation adds scalar assembly continuation for long mantissas, exponents and CPUs without SSSE3, and shares one explicitly aligned NumericSimdData table between both parsers.", "fr": "L’implémentation x86-64 ajoute une continuation assembleur scalaire pour les longues mantisses, les exposants et les CPU sans SSSE3, et partage une table NumericSimdData explicitement alignée entre les deux parseurs.", "zh": "x86-64 实现为长尾数、指数与无 SSSE3 CPU 新增 scalar assembly 延续路径，并让两个 parser 共享一个显式对齐的 NumericSimdData 表。", "ru": "x86-64 реализация добавляет scalar assembly-продолжение для длинных мантисс, экспонент и CPU без SSSE3 и использует одну явно выровненную таблицу NumericSimdData для обоих парсеров."},
+      "impact": {"en": "More x86-64 inputs avoid a Pascal transition while retaining JSON cursor, error, Currency and rounding semantics. NumericSimdData becomes a published test hook under ASMX64.", "fr": "Davantage d’entrées x86-64 évitent une transition vers Pascal tout en conservant le curseur JSON, les erreurs, Currency et la sémantique d’arrondi. NumericSimdData devient un point de test publié sous ASMX64.", "zh": "更多 x86-64 输入无需切换到 Pascal，同时保留 JSON cursor、错误、Currency 与舍入语义。NumericSimdData 在 ASMX64 下成为公开测试 hook。", "ru": "Больше x86-64 входов избегают перехода в Pascal, сохраняя JSON cursor, ошибки, Currency и правила округления. NumericSimdData становится опубликованным test hook под ASMX64."},
+      "action": "review",
+      "action_detail": {"en": "Use the final build because later commits refactor and fix this new assembly path.", "fr": "Utilisez la build finale, car des commits ultérieurs refactorisent et corrigent ce nouveau chemin assembleur.", "zh": "请使用最终 build，因为后续 commit 会重构并修复这条新 assembly 路径。", "ru": "Используйте финальную build, поскольку последующие commits рефакторят и исправляют новый assembly-путь."},
+      "units": ["mormot.core.text", "mormot.core.variants"],
+      "api_changes": [{"symbol": "NumericSimdData", "change": "added", "note": {"en": "Published only under ASMX64 as the aligned storage entry point used by parser tests.", "fr": "Publié uniquement sous ASMX64 comme point d’entrée du stockage aligné utilisé par les tests du parseur.", "zh": "仅在 ASMX64 下公开，作为 parser 测试使用的对齐存储入口。", "ru": "Публикуется только под ASMX64 как точка входа выровненного storage для тестов парсера."}}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "81fff99fd3e6facefcf49ad66aff42016d970c11",
+      "headline": {"en": "Numeric conversion tests add rounding and signed-boundary cases", "fr": "Les tests de conversion numérique ajoutent des cas d’arrondi et de limites signées", "zh": "数值转换测试新增舍入与有符号边界用例", "ru": "Тесты числовых преобразований добавляют округление и signed границы"},
+      "category": "tests", "severity": "low",
+      "what_changed": {"en": "TTestCoreBase.NumericalConversions adds exact-bit checks for decimal rounding, negative values and boundary inputs after the parser merge.", "fr": "TTestCoreBase.NumericalConversions ajoute des vérifications bit à bit pour l’arrondi décimal, les valeurs négatives et les entrées limites après le merge du parseur.", "zh": "TTestCoreBase.NumericalConversions 在 parser 合并后新增十进制舍入、负值与边界输入的精确位检查。", "ru": "TTestCoreBase.NumericalConversions добавляет точные битовые проверки десятичного округления, отрицательных значений и граничного ввода после merge парсера."},
+      "impact": {"en": "No application code or public API changes; the expanded suite makes parser regressions visible across compiler backends.", "fr": "Aucun changement de code applicatif ni d’API publique ; la suite élargie rend visibles les régressions du parseur selon les compilateurs.", "zh": "应用代码与公开 API 无变化；扩展后的套件可暴露不同编译器 backend 的 parser 回归。", "ru": "Изменений прикладного кода и публичного API нет; расширенная suite выявляет регрессии парсера на разных compiler backend."},
+      "action": "none", "units": [], "confidence": "confirmed"
+    },
+    {
+      "sha": "a91f18f16edbd9b563aac0cfceeba31453113caf",
+      "headline": {"en": "FP80 parsing gets a dedicated precision path", "fr": "Le parsing FP80 reçoit un chemin de précision dédié", "zh": "FP80 解析获得专用精度路径", "ru": "FP80 parsing получил отдельный путь точности"},
+      "category": "fix", "severity": "high",
+      "what_changed": {"en": "Under TSYNEXTENDED80, GetExtended scales with the full 64-bit mantissa instead of binary64-specific trimming, while GetNumericVariantFromJson uses FP80-aware exact-division and range rules before returning a Double variant.", "fr": "Sous TSYNEXTENDED80, GetExtended applique l’échelle avec la mantisse complète de 64 bits au lieu du trimming propre au binary64, tandis que GetNumericVariantFromJson utilise des règles de division exacte et de plage adaptées à FP80 avant de renvoyer un variant Double.", "zh": "在 TSYNEXTENDED80 下，GetExtended 使用完整 64 位尾数缩放，而不是 binary64 专用裁剪；GetNumericVariantFromJson 在返回 Double variant 前采用 FP80 感知的精确除法与范围规则。", "ru": "Под TSYNEXTENDED80 GetExtended масштабирует с полной 64-битной мантиссой вместо binary64 trimming, а GetNumericVariantFromJson применяет FP80-aware правила точного деления и диапазона перед возвратом variant Double."},
+      "impact": {"en": "FPC and other TSynExtended=FP80 targets avoid binary64 assumptions that can change low bits on long mantissas; binary64 targets retain their existing specialized path.", "fr": "Les cibles FPC et autres où TSynExtended=FP80 évitent les hypothèses binary64 pouvant modifier les bits faibles des longues mantisses ; les cibles binary64 conservent leur chemin spécialisé.", "zh": "FPC 及其他 TSynExtended=FP80 target 避免会改变长尾数低位的 binary64 假设；binary64 target 保留现有专用路径。", "ru": "FPC и другие цели с TSynExtended=FP80 избегают предположений binary64, способных менять младшие биты длинных мантисс; цели binary64 сохраняют специализированный путь."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade through build 2.4.16891 and compare exact FP80 results for long mantissas and extreme exponents.", "fr": "Mettez à niveau jusqu’à la build 2.4.16891 et comparez les résultats FP80 exacts pour les longues mantisses et les exposants extrêmes.", "zh": "请至少升级到 build 2.4.16891，并比较长尾数与极端指数的精确 FP80 结果。", "ru": "Обновитесь как минимум до build 2.4.16891 и сравните точные результаты FP80 для длинных мантисс и крайних экспонент."},
+      "units": ["mormot.core.text", "mormot.core.variants"], "confidence": "confirmed"
+    },
+    {
+      "sha": "af3188936266824b525dbccf01d60410d806be11",
+      "headline": {"en": "Pascal floating-point scaling removes redundant work", "fr": "La mise à l’échelle flottante Pascal supprime du travail redondant", "zh": "Pascal 浮点缩放移除冗余工作", "ru": "Pascal-масштабирование floating point устраняет лишнюю работу"},
+      "category": "performance", "severity": "medium",
+      "what_changed": {"en": "GetExtended simplifies exponent validation, power-of-ten indexing and Clinger-path tests, and replaces repeated FP80 scaling loops with two compact power tables.", "fr": "GetExtended simplifie la validation des exposants, l’indexation des puissances de dix et les tests du chemin de Clinger, et remplace les boucles répétées d’échelle FP80 par deux tables compactes de puissances.", "zh": "GetExtended 简化指数验证、十次幂索引与 Clinger 路径判断，并用两个紧凑幂表替代重复 FP80 缩放循环。", "ru": "GetExtended упрощает проверку экспоненты, индексацию степеней десяти и условия пути Clinger, заменяя повторные циклы масштабирования FP80 двумя компактными таблицами степеней."},
+      "impact": {"en": "Portable Delphi/FPC parsing performs fewer branches and index operations; public signatures and accepted syntax are unchanged.", "fr": "Le parsing portable Delphi/FPC exécute moins de branches et d’opérations d’index ; les signatures publiques et la syntaxe acceptée ne changent pas.", "zh": "Delphi/FPC 可移植解析减少分支与索引操作；公开 signature 和接受语法不变。", "ru": "Переносимый parsing Delphi/FPC выполняет меньше ветвлений и операций индексации; публичные signatures и принимаемый синтаксис не изменены."},
+      "action": "none", "units": ["mormot.core.text"], "confidence": "confirmed"
+    },
+    {
+      "sha": "73b032079e4638d4b2856e4b973e40624cd787f6",
+      "headline": {"en": "X64CpuFeatures exposes SSSE3 availability", "fr": "X64CpuFeatures expose la disponibilité de SSSE3", "zh": "X64CpuFeatures 公开 SSSE3 可用性", "ru": "X64CpuFeatures теперь показывает доступность SSSE3"},
+      "category": "feature", "severity": "medium",
+      "what_changed": {"en": "The public TX64CpuFeatures set gains cpuSSSE3 before cpuAVX, and initialization includes it when both cfSSE3 and cfSSSE3 are present.", "fr": "L’ensemble public TX64CpuFeatures reçoit cpuSSSE3 avant cpuAVX, et l’initialisation l’inclut lorsque cfSSE3 et cfSSSE3 sont tous deux présents.", "zh": "公开 TX64CpuFeatures set 在 cpuAVX 前新增 cpuSSSE3，初始化会在 cfSSE3 与 cfSSSE3 同时存在时加入该标志。", "ru": "Публичный set TX64CpuFeatures получает cpuSSSE3 перед cpuAVX, а инициализация включает его при наличии одновременно cfSSE3 и cfSSSE3."},
+      "impact": {"en": "Code can dispatch specifically on SSSE3, but adding the first enum member shifts the ordinal and bit positions of cpuAVX, cpuAVX2 and cpuHaswell in raw persisted masks.", "fr": "Le code peut sélectionner spécifiquement SSSE3, mais l’ajout du premier membre d’énumération décale les ordinaux et positions de bits de cpuAVX, cpuAVX2 et cpuHaswell dans les masques bruts persistés.", "zh": "代码可专门按 SSSE3 分派，但在首位新增 enum member 会改变原始持久化 mask 中 cpuAVX、cpuAVX2 与 cpuHaswell 的 ordinal 和 bit position。", "ru": "Код может отдельно выбирать SSSE3, но добавление первого enum member сдвигает ordinal и bit positions cpuAVX, cpuAVX2 и cpuHaswell в сохранённых raw masks."},
+      "action": "review",
+      "action_detail": {"en": "Search for persisted Ord(TX64CpuFeature) values or serialized TX64CpuFeatures bitmasks before upgrading.", "fr": "Recherchez les valeurs Ord(TX64CpuFeature) persistées ou les bitmasks TX64CpuFeatures sérialisés avant la mise à niveau.", "zh": "升级前请搜索持久化的 Ord(TX64CpuFeature) 值或序列化的 TX64CpuFeatures bitmask。", "ru": "Перед обновлением найдите сохранённые Ord(TX64CpuFeature) или сериализованные bitmasks TX64CpuFeatures."},
+      "units": ["mormot.core.base"],
+      "api_changes": [{"symbol": "TX64CpuFeature.cpuSSSE3", "change": "added", "note": {"en": "Added as the first TX64CpuFeatures bit before cpuAVX.", "fr": "Ajouté comme premier bit TX64CpuFeatures avant cpuAVX.", "zh": "作为 TX64CpuFeatures 的首个 bit 加在 cpuAVX 之前。", "ru": "Добавлен первым bit TX64CpuFeatures перед cpuAVX."}}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b082ba107f13689bea788d5a6916c709c3501200",
+      "headline": {"en": "GetExtended assembly is reorganized for FPC integration", "fr": "L’assembleur GetExtended est réorganisé pour l’intégration FPC", "zh": "GetExtended assembly 为 FPC 集成而重组", "ru": "Assembly GetExtended реорганизован для интеграции FPC"},
+      "category": "refactor", "severity": "low",
+      "what_changed": {"en": "The x86-64 GetExtended assembly is mechanically reorganized around shared labels, constants and compiler directives without an intended functional change.", "fr": "L’assembleur x86-64 de GetExtended est réorganisé mécaniquement autour de labels, constantes et directives de compilateur partagés, sans changement fonctionnel prévu.", "zh": "x86-64 GetExtended assembly 围绕共享 label、常量和编译器指令进行机械重组，不打算改变功能。", "ru": "x86-64 assembly GetExtended механически реорганизован вокруг общих labels, констант и директив компилятора без предполагаемого функционального изменения."},
+      "impact": {"en": "No application API or behavior change is claimed; the move prepares one implementation for Delphi and FPC.", "fr": "Aucun changement d’API applicative ni de comportement n’est annoncé ; la réorganisation prépare une implémentation commune à Delphi et FPC.", "zh": "未声明应用 API 或行为变化；此次移动为 Delphi 与 FPC 的共同实现做准备。", "ru": "Изменений API приложения или поведения не заявлено; перенос готовит общую реализацию для Delphi и FPC."},
+      "action": "none", "units": ["mormot.core.text"], "confidence": "confirmed"
+    },
+    {
+      "sha": "2201a7b9c20590f26242164c44eead102ff0384f",
+      "headline": {"en": "JSON numeric assembly is reorganized for FPC", "fr": "L’assembleur numérique JSON est réorganisé pour FPC", "zh": "JSON 数值 assembly 为 FPC 重组", "ru": "JSON numeric assembly реорганизован для FPC"},
+      "category": "refactor", "severity": "low",
+      "what_changed": {"en": "GetNumericVariantFromJson assembly is rearranged for cleaner compiler integration, with no intended change to cursor, VType, value or error behavior.", "fr": "L’assembleur GetNumericVariantFromJson est réorganisé pour une intégration compilateur plus propre, sans changement prévu du curseur, de VType, de la valeur ou des erreurs.", "zh": "GetNumericVariantFromJson assembly 为更清晰的编译器集成而重排，不打算改变 cursor、VType、数值或错误行为。", "ru": "Assembly GetNumericVariantFromJson перестроен для более чистой интеграции компилятора без предполагаемого изменения cursor, VType, значения или ошибок."},
+      "impact": {"en": "Application code sees no public API change; this is internal layout work before the implementation is moved to a shared include.", "fr": "Le code applicatif ne voit aucun changement d’API publique ; il s’agit d’un travail interne avant le déplacement de l’implémentation vers un include partagé.", "zh": "应用代码看不到公开 API 变化；这是把实现移入共享 include 前的内部布局工作。", "ru": "Прикладной код не видит изменений публичного API; это внутренняя компоновка перед переносом реализации в общий include."},
+      "action": "none", "units": ["mormot.core.text", "mormot.core.variants"], "confidence": "confirmed"
+    },
+    {
+      "sha": "e86c5f33f2982c2c4f8a0257b8d4b883ba986d89",
+      "headline": {"en": "Both x86-64 numeric parsers move to one shared include", "fr": "Les deux parseurs numériques x86-64 passent dans un include partagé", "zh": "两个 x86-64 数值 parser 移入同一共享 include", "ru": "Оба x86-64 numeric parser перенесены в общий include"},
+      "category": "refactor", "severity": "low",
+      "what_changed": {"en": "The assembly bodies and constants leave mormot.core.text and mormot.core.variants for mormot.core.base.asmx64.inc, while the Pascal implementations remain in their original units.", "fr": "Les corps assembleur et constantes quittent mormot.core.text et mormot.core.variants pour mormot.core.base.asmx64.inc, tandis que les implémentations Pascal restent dans leurs unités d’origine.", "zh": "assembly 主体与常量从 mormot.core.text 和 mormot.core.variants 移入 mormot.core.base.asmx64.inc，而 Pascal 实现保留在原 unit。", "ru": "Assembly-тела и константы перенесены из mormot.core.text и mormot.core.variants в mormot.core.base.asmx64.inc, а Pascal-реализации остаются в исходных units."},
+      "impact": {"en": "No caller change; the consolidation removes duplicated integration code and centralizes later fixes for Delphi and FPC x86-64.", "fr": "Aucun changement pour les appelants ; la consolidation supprime le code d’intégration dupliqué et centralise les corrections ultérieures pour Delphi et FPC x86-64.", "zh": "调用方无需修改；整合消除重复集成代码，并集中 Delphi 与 FPC x86-64 的后续修复。", "ru": "Изменений для вызывающего кода нет; консолидация устраняет дублирование интеграции и централизует последующие исправления Delphi и FPC x86-64."},
+      "action": "none", "units": ["mormot.core.base", "mormot.core.base.asmx64", "mormot.core.text", "mormot.core.variants"], "confidence": "confirmed"
+    },
+    {
+      "sha": "dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda",
+      "headline": {"en": "MIN_INT64 with a fractional suffix parses correctly", "fr": "MIN_INT64 avec un suffixe fractionnaire est correctement analysé", "zh": "带小数后缀的 MIN_INT64 可正确解析", "ru": "MIN_INT64 с дробным суффиксом разбирается правильно"},
+      "category": "fix", "severity": "high",
+      "what_changed": {"en": "Both Pascal and x86-64 GetNumericVariantFromJson stop accumulating fractional digits once the MIN_INT64 sentinel is set, and the regression suite adds -9223372036854775808.0.", "fr": "Les chemins Pascal et x86-64 de GetNumericVariantFromJson cessent d’accumuler les chiffres fractionnaires lorsque la sentinelle MIN_INT64 est définie, et la suite de régression ajoute -9223372036854775808.0.", "zh": "Pascal 与 x86-64 的 GetNumericVariantFromJson 在设置 MIN_INT64 sentinel 后停止累积小数位，回归套件新增 -9223372036854775808.0。", "ru": "Пути Pascal и x86-64 GetNumericVariantFromJson прекращают накапливать дробные цифры после установки sentinel MIN_INT64; в regression suite добавлено -9223372036854775808.0."},
+      "impact": {"en": "JSON containing the signed 64-bit minimum followed by .0 no longer corrupts the mantissa path or returns the wrong Double value on Delphi or FPC.", "fr": "Un JSON contenant le minimum signé 64 bits suivi de .0 ne corrompt plus le chemin de mantisse et ne renvoie plus une mauvaise valeur Double sous Delphi ou FPC.", "zh": "包含有符号 64 位最小值并带 .0 的 JSON 不再破坏尾数路径，也不会在 Delphi 或 FPC 上返回错误 Double。", "ru": "JSON со signed 64-bit минимумом и .0 больше не повреждает путь мантиссы и не возвращает неверный Double на Delphi или FPC."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Do not stop before build 2.4.16888 if external JSON may contain Int64-minimum decimal forms.", "fr": "Ne vous arrêtez pas avant la build 2.4.16888 si le JSON externe peut contenir des formes décimales du minimum Int64.", "zh": "若外部 JSON 可能包含 Int64 最小值的小数形式，请不要停在 build 2.4.16888 之前。", "ru": "Не останавливайтесь до build 2.4.16888, если внешний JSON может содержать десятичные формы минимума Int64."},
+      "units": ["mormot.core.base.asmx64", "mormot.core.variants"], "confidence": "confirmed"
+    },
+    {
+      "sha": "4fb42e122c40c1a8481ca16e02433a70c0c2f75b",
+      "headline": {"en": "Numeric regressions now distinguish FP80 from binary64", "fr": "Les régressions numériques distinguent désormais FP80 de binary64", "zh": "数值回归现在区分 FP80 与 binary64", "ru": "Числовые regression tests теперь различают FP80 и binary64"},
+      "category": "tests", "severity": "low",
+      "what_changed": {"en": "TTestCoreBase.NumericalConversions is reorganized and expanded with backend-specific exact-bit checks for TSynExtended, JSON variants, Currency and long decimal inputs.", "fr": "TTestCoreBase.NumericalConversions est réorganisé et enrichi de contrôles bit à bit propres aux backends pour TSynExtended, les variants JSON, Currency et les longues entrées décimales.", "zh": "TTestCoreBase.NumericalConversions 被重组并扩展，加入针对 TSynExtended、JSON variant、Currency 与长小数输入的 backend 专用精确位检查。", "ru": "TTestCoreBase.NumericalConversions реорганизован и расширен backend-specific точными битовыми проверками TSynExtended, JSON variants, Currency и длинных десятичных входов."},
+      "impact": {"en": "No application API change; backend-specific precision differences are now tested explicitly instead of sharing binary64 expectations.", "fr": "Aucun changement d’API applicative ; les différences de précision propres aux backends sont maintenant testées explicitement au lieu de partager les attentes binary64.", "zh": "应用 API 无变化；不同 backend 的精度差异现在被显式测试，而不再共用 binary64 预期。", "ru": "Изменений API приложения нет; различия точности backend теперь проверяются явно вместо общих ожиданий binary64."},
+      "action": "none", "units": [], "confidence": "confirmed"
+    },
+    {
+      "sha": "d1bf63562ec07702795cd48b4601409eb2723fc4",
+      "headline": {"en": "GetInteger and GetCardinal consume digit pairs", "fr": "GetInteger et GetCardinal consomment les chiffres par paires", "zh": "GetInteger 与 GetCardinal 成对处理数字", "ru": "GetInteger и GetCardinal обрабатывают цифры парами"},
+      "category": "performance", "severity": "medium",
+      "what_changed": {"en": "The portable GetInteger and GetCardinal loops now parse two digits per iteration when available, falling back to one final digit without changing sign or termination rules.", "fr": "Les boucles portables GetInteger et GetCardinal analysent maintenant deux chiffres par itération lorsqu’ils sont disponibles, puis un dernier chiffre si nécessaire, sans changer les règles de signe ou de terminaison.", "zh": "可移植 GetInteger 与 GetCardinal 循环现在在可用时每轮解析两位数字，最后可回退处理一位，符号与终止规则不变。", "ru": "Переносимые циклы GetInteger и GetCardinal теперь разбирают по две цифры за итерацию и при необходимости одну последнюю, не меняя правила знака и завершения."},
+      "impact": {"en": "Delphi and FPC JSON and text helpers that call these routines do fewer loop iterations; signatures and documented results are unchanged.", "fr": "Les helpers JSON et texte Delphi/FPC qui appellent ces routines exécutent moins d’itérations ; les signatures et résultats documentés ne changent pas.", "zh": "调用这些 routine 的 Delphi/FPC JSON 与文本 helper 减少循环次数；signature 与文档结果不变。", "ru": "JSON- и text helpers Delphi/FPC, вызывающие эти routines, выполняют меньше итераций; signatures и документированные результаты не изменены."},
+      "action": "none", "units": ["mormot.core.base"], "confidence": "confirmed"
+    },
+    {
+      "sha": "92faab04255ece3ad68a5a61b8aa16da36d00e71",
+      "headline": {"en": "FP80 range errors preserve the parsed sign", "fr": "Les erreurs de plage FP80 préservent le signe analysé", "zh": "FP80 范围错误保留已解析符号", "ru": "Ошибки диапазона FP80 сохраняют разобранный знак"},
+      "category": "fix", "severity": "medium",
+      "what_changed": {"en": "When the dedicated FP80 GetExtended path rejects an exponent magnitude at or above 5120, it now applies fNeg to the partial result before returning the error.", "fr": "Lorsque le chemin FP80 dédié de GetExtended rejette une magnitude d’exposant supérieure ou égale à 5120, il applique maintenant fNeg au résultat partiel avant de renvoyer l’erreur.", "zh": "专用 FP80 GetExtended 路径拒绝绝对值大于等于 5120 的指数时，现在会在返回错误前把 fNeg 应用于部分结果。", "ru": "Когда отдельный FP80-путь GetExtended отклоняет модуль экспоненты 5120 или больше, он теперь применяет fNeg к частичному результату перед возвратом ошибки."},
+      "impact": {"en": "FP80 and binary64 paths now agree on the sign of the partial value returned with an out-of-range error; this mainly affects diagnostic or permissive callers that inspect the value despite err=1.", "fr": "Les chemins FP80 et binary64 s’accordent maintenant sur le signe de la valeur partielle renvoyée avec une erreur hors plage ; cela concerne surtout les appelants permissifs ou de diagnostic qui inspectent la valeur malgré err=1.", "zh": "FP80 与 binary64 路径现在对超范围错误返回的部分值符号保持一致；主要影响在 err=1 时仍检查数值的诊断或宽松调用方。", "ru": "Пути FP80 и binary64 теперь согласованы по знаку частичного значения при ошибке диапазона; это главным образом влияет на диагностические или permissive callers, читающие значение при err=1."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade to build 2.4.16891 or later if callers inspect partial FP80 results on parse errors.", "fr": "Passez à la build 2.4.16891 ou ultérieure si les appelants inspectent les résultats FP80 partiels en cas d’erreur de parsing.", "zh": "若调用方会在解析错误时检查部分 FP80 结果，请升级到 build 2.4.16891 或更高。", "ru": "Обновитесь до build 2.4.16891 или новее, если вызывающий код проверяет частичные результаты FP80 при ошибках parsing."},
+      "units": ["mormot.core.text"], "confidence": "confirmed"
+    },
+    {
+      "sha": "3e5e799caed70467008d07b3430f7b45e2231c3e",
+      "headline": {"en": "macOS Golden Gate reporting is added behind MacKernel", "fr": "Le reporting macOS Golden Gate est ajouté derrière MacKernel", "zh": "通过 MacKernel 新增 macOS Golden Gate 报告", "ru": "Отчёт о macOS Golden Gate добавлен через MacKernel"},
+      "category": "feature", "severity": "medium",
+      "what_changed": {"en": "MACOS_NUM and MACOS_NAME extend through Golden Gate and a new public MacKernel function centralizes mapping from Darwin utsrelease[2] to those arrays for OSVersionName and OSVersionShort.", "fr": "MACOS_NUM et MACOS_NAME sont étendus jusqu’à Golden Gate, et une nouvelle fonction publique MacKernel centralise la correspondance de Darwin utsrelease[2] vers ces tableaux pour OSVersionName et OSVersionShort.", "zh": "MACOS_NUM 与 MACOS_NAME 扩展到 Golden Gate，并新增公开 MacKernel function，集中把 Darwin utsrelease[2] 映射到这些数组，供 OSVersionName 与 OSVersionShort 使用。", "ru": "MACOS_NUM и MACOS_NAME расширены до Golden Gate, а новая публичная функция MacKernel централизует сопоставление Darwin utsrelease[2] с этими массивами для OSVersionName и OSVersionShort."},
+      "impact": {"en": "macOS services and monitoring can report Golden Gate by marketing name, but this first mapping is wrong for newer Darwin values and must be paired with build 16896.", "fr": "Les services et outils de monitoring macOS peuvent afficher Golden Gate par son nom marketing, mais cette première correspondance est incorrecte pour les nouvelles valeurs Darwin et doit être associée à la build 16896.", "zh": "macOS 服务与监控可按市场名称报告 Golden Gate，但最初映射对较新的 Darwin 值有误，必须与 build 16896 一起采用。", "ru": "Сервисы и monitoring macOS могут показывать Golden Gate по marketing name, но первая версия сопоставления неверна для новых значений Darwin и должна использоваться вместе с build 16896."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Do not deploy this change without the MacKernel correction in build 2.4.16896.", "fr": "Ne déployez pas ce changement sans la correction MacKernel de la build 2.4.16896.", "zh": "不要在缺少 build 2.4.16896 MacKernel 修复的情况下部署此变更。", "ru": "Не развёртывайте это изменение без исправления MacKernel из build 2.4.16896."},
+      "units": ["mormot.core.os", "mormot.core.os.posix"],
+      "api_changes": [
+        {"symbol": "MacKernel", "change": "added", "note": {"en": "Public helper mapping TOperatingSystemVersion.utsrelease[2] to a MACOS_NAME index.", "fr": "Helper public mappant TOperatingSystemVersion.utsrelease[2] vers un index MACOS_NAME.", "zh": "把 TOperatingSystemVersion.utsrelease[2] 映射到 MACOS_NAME 索引的公开 helper。", "ru": "Публичный helper сопоставления TOperatingSystemVersion.utsrelease[2] с индексом MACOS_NAME."}},
+        {"symbol": "MACOS_NUM", "change": "behaviour-changed", "note": {"en": "Upper bound extends to 27 and adds macOS 28 after Golden Gate.", "fr": "La borne supérieure passe à 27 et ajoute macOS 28 après Golden Gate.", "zh": "上界扩展到 27，并在 Golden Gate 后加入 macOS 28。", "ru": "Верхняя граница расширена до 27, после Golden Gate добавлен macOS 28."}},
+        {"symbol": "MACOS_NAME", "change": "behaviour-changed", "note": {"en": "Upper bound extends to 27 with Golden Gate and a later Next fallback.", "fr": "La borne supérieure passe à 27 avec Golden Gate puis un fallback Next.", "zh": "上界扩展到 27，加入 Golden Gate 以及后续 Next fallback。", "ru": "Верхняя граница расширена до 27 с Golden Gate и последующим fallback Next."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9bffea668e5f43c3853f9b3035d04734b58202b4",
+      "headline": {"en": "BSD builds avoid TThreadID zero-conversion warnings", "fr": "Les builds BSD évitent les avertissements de conversion de zéro vers TThreadID", "zh": "BSD build 避免零转换为 TThreadID 的警告", "ru": "Builds BSD избегают предупреждений преобразования нуля в TThreadID"},
+      "category": "compat", "severity": "low",
+      "what_changed": {"en": "TMultiLightLock.Init, Done and UnLock cast zero explicitly to TThreadID when clearing ThreadID.", "fr": "TMultiLightLock.Init, Done et UnLock convertissent explicitement zéro en TThreadID lors de la remise à zéro de ThreadID.", "zh": "TMultiLightLock.Init、Done 与 UnLock 在清除 ThreadID 时显式把零转换为 TThreadID。", "ru": "TMultiLightLock.Init, Done и UnLock явно приводят ноль к TThreadID при очистке ThreadID."},
+      "impact": {"en": "BSD/FPC compilation is quieter; generated locking behavior and public APIs are unchanged.", "fr": "La compilation BSD/FPC est plus propre ; le comportement de verrouillage généré et les API publiques ne changent pas.", "zh": "BSD/FPC 编译警告减少；生成的锁行为与公开 API 不变。", "ru": "Компиляция BSD/FPC становится чище; сгенерированное поведение блокировки и публичные API не изменены."},
+      "action": "none", "units": ["mormot.core.os"], "confidence": "confirmed"
+    },
+    {
+      "sha": "8924ade86f5127ded3b68c916e1e181e0980711d",
+      "headline": {"en": "Digit-pair loops are simplified without semantic changes", "fr": "Les boucles par paires de chiffres sont simplifiées sans changement sémantique", "zh": "成对数字循环在不改变语义的情况下简化", "ru": "Циклы пар цифр упрощены без изменения семантики"},
+      "category": "refactor", "severity": "low",
+      "what_changed": {"en": "GetInteger and GetCardinal replace nested else blocks with continue and a shared final single-digit path.", "fr": "GetInteger et GetCardinal remplacent les blocs else imbriqués par continue et un chemin partagé pour le dernier chiffre unique.", "zh": "GetInteger 与 GetCardinal 用 continue 和共享的最后单数字路径替代嵌套 else block。", "ru": "GetInteger и GetCardinal заменяют вложенные блоки else на continue и общий путь последней одиночной цифры."},
+      "impact": {"en": "No functional, API or backend behavior change; this only shortens the rewritten loops.", "fr": "Aucun changement fonctionnel, d’API ou de comportement backend ; cela raccourcit seulement les boucles réécrites.", "zh": "无功能、API 或 backend 行为变化；仅缩短重写后的循环。", "ru": "Функциональных изменений, изменений API или backend behavior нет; сокращены только переписанные циклы."},
+      "action": "none", "units": ["mormot.core.base"], "confidence": "confirmed"
+    },
+    {
+      "sha": "870336b81f405eb0267124b2afcc23a15c6be900",
+      "headline": {"en": "macOS kernel-to-name boundaries gain direct tests", "fr": "Les limites kernel-vers-nom macOS reçoivent des tests directs", "zh": "macOS kernel 到名称的边界新增直接测试", "ru": "Границы kernel-to-name macOS получили прямые тесты"},
+      "category": "tests", "severity": "low",
+      "what_changed": {"en": "TTestCoreBase tests MacKernel around lower bounds, Darwin 24–25, the skipped 26 slot and future values.", "fr": "TTestCoreBase teste MacKernel autour des bornes basses, de Darwin 24–25, du slot 26 absent et des valeurs futures.", "zh": "TTestCoreBase 测试 MacKernel 的下界、Darwin 24–25、跳过的 26 slot 与未来值。", "ru": "TTestCoreBase проверяет MacKernel на нижних границах, Darwin 24–25, пропущенном slot 26 и будущих значениях."},
+      "impact": {"en": "No application code change; the tests expose that the initial offset logic maps newer Darwin releases incorrectly.", "fr": "Aucun changement de code applicatif ; les tests révèlent que la logique initiale d’offset mappe mal les nouvelles versions Darwin.", "zh": "应用代码无变化；测试暴露最初 offset 逻辑错误映射较新 Darwin release。", "ru": "Изменений прикладного кода нет; тесты выявляют неверное сопоставление новых Darwin releases первой логикой offset."},
+      "action": "none", "units": [], "confidence": "confirmed"
+    },
+    {
+      "sha": "944abc0cb1478a4ca1c8b837e44390e166192608",
+      "headline": {"en": "MacKernel now skips Darwin 26 in the correct direction", "fr": "MacKernel ignore désormais Darwin 26 dans le bon sens", "zh": "MacKernel 现在以正确方向跳过 Darwin 26", "ru": "MacKernel теперь правильно пропускает Darwin 26"},
+      "category": "fix", "severity": "high",
+      "what_changed": {"en": "MacKernel changes the adjustment from incrementing values above 25 to decrementing values above 26, and tests assert the resulting MACOS_NUM and MACOS_NAME values through future fallbacks.", "fr": "MacKernel remplace l’incrément des valeurs supérieures à 25 par un décrément des valeurs supérieures à 26, et les tests vérifient les valeurs MACOS_NUM et MACOS_NAME obtenues jusqu’aux fallbacks futurs.", "zh": "MacKernel 把“对大于 25 的值递增”改为“对大于 26 的值递减”，测试验证所得 MACOS_NUM 与 MACOS_NAME，直到未来 fallback。", "ru": "MacKernel заменяет увеличение значений выше 25 на уменьшение значений выше 26; тесты проверяют итоговые MACOS_NUM и MACOS_NAME вплоть до будущих fallback."},
+      "impact": {"en": "macOS 26, 27 and 28 reporting no longer indexes the marketing-version arrays incorrectly. This affects OSVersionName, OSVersionShort and monitoring output on macOS.", "fr": "Le reporting de macOS 26, 27 et 28 n’indexe plus incorrectement les tableaux de versions marketing. Cela affecte OSVersionName, OSVersionShort et les sorties de monitoring sous macOS.", "zh": "macOS 26、27 与 28 的报告不再错误索引市场版本数组。这会影响 macOS 上的 OSVersionName、OSVersionShort 与监控输出。", "ru": "Отчёт о macOS 26, 27 и 28 больше не использует неверные индексы массивов marketing version. Это влияет на OSVersionName, OSVersionShort и monitoring output на macOS."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Use build 2.4.16896 or later for macOS version reporting.", "fr": "Utilisez la build 2.4.16896 ou ultérieure pour le reporting de version macOS.", "zh": "macOS 版本报告请使用 build 2.4.16896 或更高。", "ru": "Для отчёта о версии macOS используйте build 2.4.16896 или новее."},
+      "units": ["mormot.core.os"],
+      "api_changes": [{"symbol": "MacKernel", "change": "behaviour-changed", "note": {"en": "Darwin releases above 26 now map by decrementing one skipped kernel slot.", "fr": "Les versions Darwin supérieures à 26 sont maintenant mappées en décrémentant le slot kernel absent.", "zh": "高于 26 的 Darwin release 现在通过减去一个被跳过的 kernel slot 映射。", "ru": "Darwin releases выше 26 теперь сопоставляются с вычитанием одного пропущенного kernel slot."}}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "102fa3d99708d839948eef595d1d02d2e8fdbb45",
+      "headline": {"en": "One- and two-digit integers bypass general SIMD reduction", "fr": "Les entiers d’un ou deux chiffres contournent la réduction SIMD générale", "zh": "一位与两位整数绕过通用 SIMD 归约", "ru": "Одно- и двузначные целые обходят общий SIMD reduction"},
+      "category": "performance", "severity": "medium",
+      "what_changed": {"en": "The shared x86-64 assembly reuses precomputed xmm0 digits for one- and two-digit GetExtended and GetNumericVariantFromJson integer results, with dedicated signed and varInteger stores.", "fr": "L’assembleur x86-64 partagé réutilise les chiffres déjà calculés dans xmm0 pour les résultats entiers d’un ou deux chiffres de GetExtended et GetNumericVariantFromJson, avec des stockages dédiés pour le signe et varInteger.", "zh": "共享 x86-64 assembly 为 GetExtended 与 GetNumericVariantFromJson 的一位和两位整数结果复用 xmm0 中已计算的数字，并使用专用有符号与 varInteger 存储。", "ru": "Общий x86-64 assembly повторно использует уже вычисленные цифры в xmm0 для одно- и двузначных целых результатов GetExtended и GetNumericVariantFromJson с отдельным signed и varInteger storage."},
+      "impact": {"en": "Very short numeric tokens take fewer shuffle and multiply instructions on the x86-64 assembly path; tests confirm exact varInteger values and end pointers.", "fr": "Les tokens numériques très courts utilisent moins d’instructions de shuffle et de multiplication sur le chemin assembleur x86-64 ; les tests confirment les valeurs varInteger exactes et les pointeurs de fin.", "zh": "很短的数值 token 在 x86-64 assembly 路径上使用更少 shuffle 与乘法指令；测试确认精确 varInteger 值与结束 pointer。", "ru": "Очень короткие numeric tokens используют меньше shuffle и multiply instructions на x86-64 assembly-пути; тесты подтверждают точные значения varInteger и end pointers."},
+      "action": "none", "units": ["mormot.core.base.asmx64"], "confidence": "confirmed"
+    }
+  ]
+}
