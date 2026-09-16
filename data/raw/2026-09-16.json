@@ -1,0 +1,1406 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-16",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-16T03:38:32Z",
+  "range": {
+    "since": "2026-09-14T21:15:05Z",
+    "until": "2026-09-16T03:38:32Z",
+    "head_sha": "102fa3d99708d839948eef595d1d02d2e8fdbb45"
+  },
+  "version": {
+    "after": "2.4.16897",
+    "before": "2.4.16865"
+  },
+  "totals": {
+    "commits": 24,
+    "additions": 6602,
+    "deletions": 2528
+  },
+  "commits": [
+    {
+      "sha": "102fa3d99708d839948eef595d1d02d2e8fdbb45",
+      "short_sha": "102fa3d9",
+      "subject": "core: optimized #582 asm for 1 and 2 digits",
+      "body": "- we have the pre-computed value in xmm0 and can make a fast path for 'x' and 'xx' integers",
+      "author": "Arnaud",
+      "date": "2026-09-15T23:23:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/102fa3d99708d839948eef595d1d02d2e8fdbb45",
+      "parents": [
+        "944abc0cb1478a4ca1c8b837e44390e166192608"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 7,
+          "patch": "@@ -887,7 +887,9 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         mov     dword ptr [rdx], 1       // err := 1 on any other byte (quote/comma)\r\n @integerGo:\r\n         cmp     r8d, 1\r\n-        je      @singleInteger\r\n+        je      @one\r\n+        cmp     r8d, 2\r\n+        je      @two\r\n         mov     r10d, r8d                // p\r\n         shl     r8d, 4\r\n         lea     r9, [rip + NumericSimdData + NUMERIC_CTRLINT]\r\n@@ -902,12 +904,16 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         test    r11d, r11d               // <= 8 digits sit in lanes 0..7: value = H\r\n         jnz     @negativeInteger\r\n         ret\r\n-@singleInteger:\r\n-        movzx   eax, byte ptr [rcx]\r\n-        sub     eax, 48\r\n-        cvtsi2sd xmm0, eax\r\n-        test    r11d, r11d\r\n-        jnz     @negativeInteger\r\n+@two:   pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n+        movd    eax, xmm0\r\n+        movzx   eax, ax\r\n+        jmp     @int\r\n+@one:   movd    eax, xmm0\r\n+        movzx   eax, al\r\n+@int:   test    r11d, r11d\r\n+        jz      @intPos\r\n+        neg     eax\r\n+@intPos:cvtsi2sd xmm0, eax\r\n         ret\r\n @wideInteger:\r\n         movhlps xmm1, xmm0\r\n@@ -1441,6 +1447,10 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         or      r9d, 32\r\n         cmp     r9d, 'e'\r\n         je      @integerExponent    // any other byte ends the number\r\n+        cmp     r8d, 1\r\n+        je      @one\r\n+        cmp     r8d, 2\r\n+        je      @two\r\n         mov     r10d, r8d           // p\r\n         lea     rax, [rip + NumericSimdData + NUMERIC_JSONINT]\r\n         movdqu  xmm3, [rax + r8]\r\n@@ -1469,6 +1479,19 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         mov     dword ptr [rdx], r10d\r\n         mov     rax, r8\r\n         ret                      // branchless for integers\r\n+@two:   pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n+        movd    eax, xmm0\r\n+        movzx   eax, ax\r\n+        jmp     @int\r\n+@one:   movd    eax, xmm0\r\n+        movzx   eax, al\r\n+@int:   test    r11d, 1\r\n+        jz      @intPos\r\n+        neg     eax\r\n+@intPos:mov     dword ptr [rdx + 8], eax\r\n+        mov     dword ptr [rdx], varInteger\r\n+        lea     rax, [rcx + r8]\r\n+        ret\r\n @fraction:\r\n         lea     r9d, [rax - 1]\r\n         and     eax, r9d         // clear the dot bit\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16896\n+16897",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16896'\r\n+'2.4.16897'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 2,
+          "patch": "@@ -5083,9 +5083,12 @@ procedure TTestCoreBase.NumericalConversions;\n     v: variant;\r\n   begin\r\n     TVarData(v).VType := varEmpty;\r\n-    CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), false) <> nil, text);\r\n+    CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), false)^ = #0, text);\r\n     CheckEqual(TVarData(v).VType, kind, text);\r\n-    CheckEqual(TVarData(v).VInt64, expected, text);\r\n+    if kind = varInteger then\r\n+      CheckEqual(TVarData(v).VInteger, expected, text)\r\n+    else\r\n+      CheckEqual(TVarData(v).VInt64, expected, text);\r\n   end;\r\n \r\n   procedure CheckJsonDoubleBits(const text: RawUtf8; expected: QWord);\r\n@@ -5560,6 +5563,8 @@ procedure TTestCoreBase.NumericalConversions;\n   Check(IsAnsiCompatible('teste'));\r\n   CheckDoubleToShort(0, '0');\r\n   CheckDoubleToShort(1, '1');\r\n+  CheckDoubleToShort(10, '10');\r\n+  CheckDoubleToShort(101, '101');\r\n   CheckDoubleToShort(-1, '-1');\r\n   CheckDoubleToShort(0.1, '0.1');\r\n   CheckDoubleToShort(0.01, '0.01');\r\n@@ -5753,6 +5758,10 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckJsonExact('0', varInteger, 0);\r\n   CheckJsonExact('0.0', varInteger, 0);\r\n   CheckJsonExact('0.000000000', varInteger, 0);\r\n+  CheckJsonExact('1', varInteger, 1);\r\n+  CheckJsonExact('-1', varInteger, -1);\r\n+  CheckJsonExact('12', varInteger, 12);\r\n+  CheckJsonExact('-12', varInteger, -12);\r\n   CheckJsonExact('123', varInteger, 123);\r\n   CheckJsonExact('-123', varInteger, -123);\r\n   CheckJsonExact('1.23', varCurrency, 12300);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base.asmx64"
+      ],
+      "pr": 582,
+      "is_merge": false
+    },
+    {
+      "sha": "944abc0cb1478a4ca1c8b837e44390e166192608",
+      "short_sha": "944abc0c",
+      "subject": "core: fixed MacKernel() logic",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T18:17:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/944abc0cb1478a4ca1c8b837e44390e166192608",
+      "parents": [
+        "870336b81f405eb0267124b2afcc23a15c6be900"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 10,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -6761,8 +6761,8 @@ function WinOsBuild(const osv: TOperatingSystemVersion; sep: AnsiChar): TShort7;\n function MacKernel(const osv: TOperatingSystemVersion): PtrUInt;\r\n begin\r\n   result := osv.utsrelease[2]; // e.g. macOS 15  -> Darwin 24\r\n-  if result > 25 then\r\n-    inc(result); // Darwin 26 is skipped in the sequence\r\n+  if result > 26 then\r\n+    dec(result); // Darwin 26 is skipped in the MACOS_NAME[] sequence\r\n   result := MinPtrUInt(high(MACOS_NAME), MaxPtrUInt(low(MACOS_NAME), result));\r\n end; // 'Tiger' or 'Next' as lower/higher fallback\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16895\n+16896",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16895'\r\n+'2.4.16896'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 6,
+          "patch": "@@ -11373,17 +11373,20 @@ procedure TTestCoreBase.Debugging;\n   // validate OSX kernel number to Apple Corp marketing \"logic\"\r\n   osv.os := osOSX;\r\n   osv.utsrelease[2] := 7;\r\n-  CheckEqual(MacKernel(osv), 8);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '10.4');\r\n   osv.utsrelease[2] := 8;\r\n-  CheckEqual(MacKernel(osv), 8);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '10.4');\r\n   osv.utsrelease[2] := 24;\r\n-  CheckEqual(MacKernel(osv), 24);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '15');\r\n   osv.utsrelease[2] := 25;\r\n-  CheckEqual(MacKernel(osv), 25);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '26');\r\n   osv.utsrelease[2] := 27;\r\n-  CheckEqual(MacKernel(osv), 27);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '27');\r\n   osv.utsrelease[2] := 28;\r\n-  CheckEqual(MacKernel(osv), 27);\r\n+  CheckEqualShort(MACOS_NUM[MacKernel(osv)], '28');\r\n+  CheckEqualShort(MACOS_NAME[MacKernel(osv)], 'Next');\r\n+  osv.utsrelease[2] := 29;\r\n+  CheckEqualShort(MACOS_NAME[MacKernel(osv)], 'Next');\r\n   // validate Syslog messages formatting\r\n   msg := ' test  ';\r\n   dst := @tmp;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "870336b81f405eb0267124b2afcc23a15c6be900",
+      "short_sha": "870336b8",
+      "subject": "test: cover OSX kernel number to Apple Corp marketing \"logic\"",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T18:03:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/870336b81f405eb0267124b2afcc23a15c6be900",
+      "parents": [
+        "8924ade86f5127ded3b68c916e1e181e0980711d"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16894\n+16895",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16894'\r\n+'2.4.16895'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 0,
+          "patch": "@@ -11370,6 +11370,20 @@ procedure TTestCoreBase.Debugging;\n     for os2 := low(os) to high(os) do\r\n       Check((OS_INITIAL[os2] = OS_INITIAL[os]) = (os2 = os), 'OS_INITIAL');\r\n   end;\r\n+  // validate OSX kernel number to Apple Corp marketing \"logic\"\r\n+  osv.os := osOSX;\r\n+  osv.utsrelease[2] := 7;\r\n+  CheckEqual(MacKernel(osv), 8);\r\n+  osv.utsrelease[2] := 8;\r\n+  CheckEqual(MacKernel(osv), 8);\r\n+  osv.utsrelease[2] := 24;\r\n+  CheckEqual(MacKernel(osv), 24);\r\n+  osv.utsrelease[2] := 25;\r\n+  CheckEqual(MacKernel(osv), 25);\r\n+  osv.utsrelease[2] := 27;\r\n+  CheckEqual(MacKernel(osv), 27);\r\n+  osv.utsrelease[2] := 28;\r\n+  CheckEqual(MacKernel(osv), 27);\r\n   // validate Syslog messages formatting\r\n   msg := ' test  ';\r\n   dst := @tmp;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8924ade86f5127ded3b68c916e1e181e0980711d",
+      "short_sha": "8924ade8",
+      "subject": "core: minor GetInteger/GetCardinal refactoring",
+      "body": "- with no functional change",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T18:01:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8924ade86f5127ded3b68c916e1e181e0980711d",
+      "parents": [
+        "9bffea668e5f43c3853f9b3035d04734b58202b4"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 12,
+          "patch": "@@ -6273,7 +6273,7 @@ function GetInteger(P: PUtf8Char): PtrInt;\n     exit;\r\n   inc(P);\r\n   result := c;\r\n-  repeat // handle two digits per iteration (used by JL_Byte/Word/Integer/Int64)\r\n+  repeat // two digits per iteration (used by JL_Byte/SmallInt/Integer/Int64)\r\n     c := cardinal(byte(P[0]))  - ord('0');\r\n     if c > 9 then\r\n       break;\r\n@@ -6283,12 +6283,10 @@ function GetInteger(P: PUtf8Char): PtrInt;\n       inc(d, c * 10);\r\n       result := result * 100 + PtrInt(d);\r\n       inc(P, 2);\r\n-    end\r\n-    else\r\n-    begin\r\n-      result := result * 10 + PtrInt(c);\r\n-      break;\r\n+      continue;\r\n     end;\r\n+    result := result * 10 + PtrInt(c);\r\n+    break;\r\n   until false;\r\n   if minus then\r\n     result := -result;\r\n@@ -6541,7 +6539,7 @@ function GetCardinal(P: PUtf8Char): PtrUInt;\n     exit;\r\n   inc(P);\r\n   result := c;\r\n-  repeat // handle two digits per iteration (used by JL_Byte/Word/Cardinal/QWord)\r\n+  repeat // two digits per iteration (used by JL_Byte/Word/Cardinal/QWord)\r\n     c := cardinal(byte(P[0]))  - ord('0');\r\n     if c > 9 then\r\n       break;\r\n@@ -6551,12 +6549,10 @@ function GetCardinal(P: PUtf8Char): PtrUInt;\n       inc(d, c * 10);\r\n       result := result * 100 + d;\r\n       inc(P, 2);\r\n-    end\r\n-    else\r\n-    begin\r\n-      result := result * 10 + c;\r\n-      break;\r\n+      continue;\r\n     end;\r\n+    result := result * 10 + c;\r\n+    break;\r\n   until false;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16893\n+16894",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16893'\r\n+'2.4.16894'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9bffea668e5f43c3853f9b3035d04734b58202b4",
+      "short_sha": "9bffea66",
+      "subject": "core: fixed compilation warning on BSD",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T18:01:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9bffea668e5f43c3853f9b3035d04734b58202b4",
+      "parents": [
+        "3e5e799caed70467008d07b3430f7b45e2231c3e"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -11402,13 +11402,13 @@ procedure TCachedValue.Cache(Call: TCachedValueCall; CallParam: pointer;\n procedure TMultiLightLock.Init;\r\n begin\r\n   Flags := 0;\r\n-  ThreadID := 0;\r\n+  ThreadID := TThreadID(0);\r\n end;\r\n \r\n procedure TMultiLightLock.Done;\r\n begin\r\n   Flags := MaxInt;\r\n-  ThreadID := 0; // invalid combination to let TryLock fail\r\n+  ThreadID := TThreadID(0); // invalid combination to let TryLock fail\r\n end;\r\n \r\n procedure TMultiLightLock.Lock;\r\n@@ -11420,7 +11420,7 @@ procedure TMultiLightLock.Lock;\n procedure TMultiLightLock.UnLock;\r\n begin\r\n   if Flags = 1 then\r\n-    ThreadID := 0; // paranoid\r\n+    ThreadID := TThreadID(0); // paranoid\r\n   LockedDec32(@Flags);\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16892\n+16893",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16892'\r\n+'2.4.16893'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3e5e799caed70467008d07b3430f7b45e2231c3e",
+      "short_sha": "3e5e799c",
+      "subject": "core: properly detect MacOS Golden Gate",
+      "body": "- and introducing MacKernel() wrapper function since the marketing doesn't align with the kernel itself",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T18:00:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3e5e799caed70467008d07b3430f7b45e2231c3e",
+      "parents": [
+        "92faab04255ece3ad68a5a61b8aa16da36d00e71"
+      ],
+      "stats": {
+        "additions": 33,
+        "deletions": 21,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 9,
+          "patch": "@@ -487,18 +487,18 @@   EOSException = class(ExceptionWithProps);\n \r\n const\r\n   /// OSVersion32.utsrelease[2] indexed MacOS versions, as number\r\n-  MACOS_NUM: array[8 .. 26] of TShort7 = (\r\n+  MACOS_NUM: array[8 .. 27] of TShort7 = (\r\n     '10.4',  '10.5',  '10.6',  '10.7',  '10.8',  '10.9',  '10.10', '10.11',\r\n     '10.12', '10.13', '10.14', '10.15', '11',    '12',    '13',    '14',\r\n-    '15',    '26',    '27'); // MacOS 27 expected in 2026, ARM-only\r\n+    '15',    '26',    '27',    '28');\r\n \r\n   /// OSVersion32.utsrelease[2] indexed MacOS versions, as plain text\r\n   // - see https://en.wikipedia.org/wiki/MacOS_version_history#Releases\r\n-  MACOS_NAME: array[8 .. 26] of TShort15 = (\r\n+  MACOS_NAME: array[8 .. 27] of TShort15 = (\r\n     'Tiger', 'Leopard', 'Snow Leopard', 'Lion', 'Mountain Lion', 'Mavericks',\r\n     'Yosemite', 'El Capitan', 'Sierra', 'High Sierra', 'Mojave', 'Catalina',\r\n     'Big Sur', 'Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe',\r\n-    'Next'); // expected in 2026, ARM-only\r\n+    'Golden Gate', 'Next');\r\n \r\n   /// the recognized Windows versions, as plain text\r\n   // - defined even outside OSWINDOWS to allow process e.g. from monitoring tools\r\n@@ -840,6 +840,9 @@ function MatchOS(os: TOperatingSystem): boolean;\n /// recognize the Linux distribution for a given Operating System\r\n function LinuxDistribution(os: TOperatingSystem): TLinuxDistribution;\r\n \r\n+/// convert the raw utsrelease[2] Kernel number into human MACOS_NAME[] index\r\n+function MacKernel(const osv: TOperatingSystemVersion): PtrUInt;\r\n+\r\n /// return the best known ERROR_* system error message constant texts\r\n // - without the 'ERROR_' prefix, but in a cross-platform way\r\n // - as used by WinApiErrorString() and some low-level Windows API wrappers\r\n@@ -6755,7 +6758,17 @@ function WinOsBuild(const osv: TOperatingSystemVersion; sep: AnsiChar): TShort7;\n   AppendOsBuild(osv, @result, sep);\r\n end;\r\n \r\n+function MacKernel(const osv: TOperatingSystemVersion): PtrUInt;\r\n+begin\r\n+  result := osv.utsrelease[2]; // e.g. macOS 15  -> Darwin 24\r\n+  if result > 25 then\r\n+    inc(result); // Darwin 26 is skipped in the sequence\r\n+  result := MinPtrUInt(high(MACOS_NAME), MaxPtrUInt(low(MACOS_NAME), result));\r\n+end; // 'Tiger' or 'Next' as lower/higher fallback\r\n+\r\n procedure AppendOsv(const osv: TOperatingSystemVersion; var dest: TShort47);\r\n+var\r\n+  kern: PtrUInt;\r\n begin\r\n   case osv.os of\r\n     osWindows:\r\n@@ -6766,12 +6779,12 @@ procedure AppendOsv(const osv: TOperatingSystemVersion; var dest: TShort47);\n         exit;\r\n       end;\r\n     osOSX: // guess end-user MacOS Name from Darwin version number\r\n-      if osv.utsrelease[2] in [low(MACOS_NAME) .. high(MACOS_NAME)] then\r\n       begin\r\n+        kern := MacKernel(osv); // e.g. macOS 15  -> Darwin 24\r\n         AppendShort('macOS ', dest);\r\n-        AppendShort(MACOS_NUM[osv.utsrelease[2]], dest);\r\n+        AppendShort(MACOS_NUM[kern], dest);\r\n         AppendShortChar(' ', @dest);\r\n-        AppendShort(MACOS_NAME[osv.utsrelease[2]], dest);\r\n+        AppendShort(MACOS_NAME[kern], dest);\r\n         exit;\r\n       end;\r\n   end;\r\n@@ -6800,8 +6813,7 @@ function OsvToShort(const osv: TOperatingSystemVersion): PShortString;\n     osWindows:\r\n       result := @WINDOWS_NAME[osv.win];\r\n     osOSX:\r\n-      if osv.utsrelease[2] in [low(MACOS_NAME) .. high(MACOS_NAME)] then\r\n-        result := @MACOS_NAME[osv.utsrelease[2]];\r\n+      result := @MACOS_NAME[MacKernel(osv)];\r\n   end;\r\n   if (result = nil) or\r\n      (result^[0] = #0) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 10,
+          "patch": "@@ -6092,7 +6092,9 @@ var\n   {$ifndef NODIRECTTHREADMANAGER}\r\n   tm: TThreadManager;\r\n   {$endif NODIRECTTHREADMANAGER}\r\n-  {$ifndef OSDARWIN}\r\n+  {$ifdef OSDARWIN}\r\n+  kern: PtrUInt;\r\n+  {$else}\r\n   tpfail: integer;\r\n   tp: array[0 .. 1{$ifdef OSLINUX} + 2{$endif}] of TTimeSpec;\r\n   {$endif OSDARWIN}\r\n@@ -6342,15 +6344,13 @@ begin\n   {$ifdef OSDARWIN}\r\n   temp1 := 'macOS ';\r\n   modname := fpsysctlbynamestr('kern.osproductversion', temp2); // '15.7.3'\r\n-  if OSVersion32.utsrelease[2] in [low(MACOS_NUM) .. high(MACOS_NUM)] then\r\n-  begin\r\n-    if modname = nil then // '15' number from kernel revision\r\n-      AppendShort(MACOS_NUM[OSVersion32.utsrelease[2]], temp1)\r\n-    else                  // '15.7.3'\r\n-      AppendShortBuffer(pointer(modname), StrLen(modname), high(temp1), @temp1);\r\n-    AppendShortCharSafe(' ', temp1);\r\n-    AppendShort(MACOS_NAME[OSVersion32.utsrelease[2]], temp1);\r\n-  end;\r\n+  kern := MacKernel(OSVersion32);\r\n+  if modname = nil then // '15' main number from kernel revision\r\n+    AppendShort(MACOS_NUM[kern], temp1)\r\n+  else                  // '15.7.3'\r\n+    AppendShortBuffer(pointer(modname), StrLen(modname), high(temp1), @temp1);\r\n+  AppendShortCharSafe(' ', temp1);\r\n+  AppendShort(MACOS_NAME[kern], temp1);\r\n   ShortStringToAnsi7String(temp1, OSVersionShort); // 'macOS 15.7.3 Sequoia'\r\n   OSVersionText := Join([OSVersionShort, ' (', OSVersionText, ')']);\r\n   mach_timebase_info(mach_timeinfo);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16891\n+16892",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16891'\r\n+'2.4.16892'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "92faab04255ece3ad68a5a61b8aa16da36d00e71",
+      "short_sha": "92faab04",
+      "subject": "core: ensure GetExtended() FP80 is consistent",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T14:43:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/92faab04255ece3ad68a5a61b8aa16da36d00e71",
+      "parents": [
+        "d1bf63562ec07702795cd48b4601409eb2723fc4"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -6735,7 +6735,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   v64: Int64; // 64-bit resolution for the digits\r\n label\r\n   z, e, o;\r\n-{$ifdef TSYNEXTENDED80} // faster FP80 = extended path\r\n+{$ifdef TSYNEXTENDED80} // dedicated FP80 = extended path\r\n const\r\n   Pow10Tab1: array[0 .. 14] of TSynExtended = (\r\n     1E32, 1E64, 1E96, 1E128, 1E160, 1E192, 1E224, 1E256, 1E288, 1E320,\r\n@@ -6905,6 +6905,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if frac >= 5120 then\r\n     begin\r\n o:    err := 1;\r\n+      if fNeg in flags then\r\n+        result := -result; // same result than the binary64 branch\r\n       exit;\r\n     end;\r\n     c := frac and 31;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16890\n+16891",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16890'\r\n+'2.4.16891'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d1bf63562ec07702795cd48b4601409eb2723fc4",
+      "short_sha": "d1bf6356",
+      "subject": "core: rewritten GetInteger/GetCardinal",
+      "body": "- SIMD would be premature optimization here\n- but a dual digits iteration loop is a good candidate, even for i386",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T14:41:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d1bf63562ec07702795cd48b4601409eb2723fc4",
+      "parents": [
+        "4fb42e122c40c1a8481ca16e02433a70c0c2f75b"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 13,
+          "patch": "@@ -6236,8 +6236,8 @@ constructor TInterfacedPersistent.Create;\n \r\n function GetInteger(P: PUtf8Char): PtrInt;\r\n var\r\n-  c: byte;\r\n-  minus: boolean;\r\n+  c, d: cardinal; // good enough even on i386\r\n+  minus: boolean; // better than * PtrInt 1/-1\r\n begin\r\n   result := 0;\r\n   if P = nil then\r\n@@ -6271,14 +6271,24 @@ function GetInteger(P: PUtf8Char): PtrInt;\n   dec(c, 48);\r\n   if c > 9 then\r\n     exit;\r\n+  inc(P);\r\n   result := c;\r\n-  repeat\r\n-    inc(P);\r\n-    c := byte(P^);\r\n-    dec(c, 48);\r\n+  repeat // handle two digits per iteration (used by JL_Byte/Word/Integer/Int64)\r\n+    c := cardinal(byte(P[0]))  - ord('0');\r\n     if c > 9 then\r\n       break;\r\n-    result := result * 10 + PtrInt(c);\r\n+    d := cardinal(byte(P[1])) - ord('0');\r\n+    if d <= 9 then\r\n+    begin\r\n+      inc(d, c * 10);\r\n+      result := result * 100 + PtrInt(d);\r\n+      inc(P, 2);\r\n+    end\r\n+    else\r\n+    begin\r\n+      result := result * 10 + PtrInt(c);\r\n+      break;\r\n+    end;\r\n   until false;\r\n   if minus then\r\n     result := -result;\r\n@@ -6512,7 +6522,7 @@ function GetCardinalDef(P: PUtf8Char; Default: PtrUInt): PtrUInt;\n \r\n function GetCardinal(P: PUtf8Char): PtrUInt;\r\n var\r\n-  c: byte;\r\n+  c, d: cardinal; // good enough even on i386\r\n begin\r\n   result := 0;\r\n   if P = nil then\r\n@@ -6529,14 +6539,24 @@ function GetCardinal(P: PUtf8Char): PtrUInt;\n   dec(c, 48);\r\n   if c > 9 then\r\n     exit;\r\n+  inc(P);\r\n   result := c;\r\n-  repeat\r\n-    inc(P);\r\n-    c := byte(P^);\r\n-    dec(c, 48);\r\n+  repeat // handle two digits per iteration (used by JL_Byte/Word/Cardinal/QWord)\r\n+    c := cardinal(byte(P[0]))  - ord('0');\r\n     if c > 9 then\r\n       break;\r\n-    result := result * 10 + PtrUInt(c);\r\n+    d := cardinal(byte(P[1])) - ord('0');\r\n+    if d <= 9 then\r\n+    begin\r\n+      inc(d, c * 10);\r\n+      result := result * 100 + d;\r\n+      inc(P, 2);\r\n+    end\r\n+    else\r\n+    begin\r\n+      result := result * 10 + c;\r\n+      break;\r\n+    end;\r\n   until false;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16889\n+16890",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16889'\r\n+'2.4.16890'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4fb42e122c40c1a8481ca16e02433a70c0c2f75b",
+      "short_sha": "4fb42e12",
+      "subject": "tests: enhanced TTestCoreBase.NumericalConversions",
+      "body": "- after x64 asm refactoring of PR #582\n- specific tests for TSynExtended = extended FP80 path",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T13:27:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4fb42e122c40c1a8481ca16e02433a70c0c2f75b",
+      "parents": [
+        "dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda"
+      ],
+      "stats": {
+        "additions": 110,
+        "deletions": 66,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16888\n+16889",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16888'\r\n+'2.4.16889'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 108,
+          "deletions": 64,
+          "patch": "@@ -4989,6 +4989,8 @@ function TestAddFloatStr(const str: RawUtf8): RawUtf8;\n end;\r\n \r\n procedure TTestCoreBase.NumericalConversions;\r\n+var\r\n+  HasFP80: boolean;\r\n \r\n   procedure CheckGetExtendedBits(const text: RawUtf8; expected: QWord);\r\n   var\r\n@@ -5098,9 +5100,11 @@ procedure TTestCoreBase.NumericalConversions;\n \r\n   procedure CheckDecimalRounding;\r\n   var\r\n-    i, err, bad: integer;\r\n-    s: RawUtf8;\r\n+    i, err, len: integer;\r\n+    p: PUtf8Char;\r\n     d, d0: double;\r\n+    v: array[1 .. 20000] of TShort23;\r\n+    Timer: TPrecisionTimer;\r\n   begin\r\n     // decimal text should be parsed as the nearest IEEE double: digits*POW10[-n]\r\n     // was not, since 1E-1..1E-22 are inexact - e.g. '1.2' = 1.2000000000000002\r\n@@ -5122,17 +5126,60 @@ procedure TTestCoreBase.NumericalConversions;\n     CheckGetExtendedBits('0.0003', $3F33A92A30553261);\r\n     CheckGetExtendedBits('0.00003', $3EFF75104D551D69);\r\n     // 'x.y' and 'x.y0' are the same number, so should return the same double\r\n-    bad := 0;\r\n-    for i := 1 to 20000 do\r\n+    FillCharFast(v, SizeOf(v), 0);\r\n+    len := 0;\r\n+    for i := 1 to high(v) do // pre-compute all values\r\n     begin\r\n-      s := FormatUtf8('%.%', [i div 10, i mod 10]);\r\n-      d := GetExtended(pointer(s), err);\r\n-      s := s + '0';\r\n-      d0 := GetExtended(pointer(s), err);\r\n-      if PQWord(@d)^ <> PQWord(@d0)^ then\r\n-        inc(bad);\r\n+      case i and 7 of\r\n+        0:\r\n+          FormatShort('%.%', [\r\n+            i div 10,\r\n+            i mod 10], v[i]);               // ~3-6 chars\r\n+        1:\r\n+          FormatShort('123%.%', [\r\n+            i mod 10000,\r\n+            i mod 10], v[i]);               // ~6-10 chars\r\n+        2:\r\n+          FormatShort('123456%.%', [\r\n+            i mod 100000,\r\n+            i mod 100], v[i]);              // ~10-14 chars\r\n+        3:\r\n+          FormatShort('123456789%.%', [\r\n+            i mod 100000,\r\n+            i mod 1000], v[i]);             // ~14-18 chars\r\n+        4:\r\n+          FormatShort('123456789012%.%', [\r\n+            i mod 10000,\r\n+            i mod 1000], v[i]);             // ~17-21 chars\r\n+        5:\r\n+          FormatShort('0.00000000000%', [\r\n+            i mod 10], v[i]);               // long small fraction\r\n+        6:\r\n+          FormatShort('12.3456789000%', [\r\n+            i mod 100], v[i]);              // padded fraction\r\n+        7:\r\n+          FormatShort('123456789012345.%', [\r\n+            i mod 10], v[i]);               // 17 significant digits\r\n+      end;\r\n+      inc(len, length(v[i]) * 3 + 2);\r\n     end;\r\n-    CheckEqual(bad, 0, 'x.y = x.y0');\r\n+    Timer.Start;\r\n+    for i := 1 to high(v) do\r\n+    begin\r\n+      p := @v[i];\r\n+      d := GetExtended(p + 1, err);\r\n+      CheckEqual(err, 0, 'p');\r\n+      p[ord(p^) + 1] := '0'; // s := s + '0' with no allocation\r\n+      d0 := GetExtended(p + 1, err);\r\n+      CheckEqual(err, 0, 'p0');\r\n+      Check(PQWord(@d)^ = PQWord(@d0)^, 'd=d0 bits');\r\n+      p[2] := '2';\r\n+      p[ord(p^) + 1] := '1'; // e.g. '0.00' -> '0201'\r\n+      d := GetExtended(p + 1, err);\r\n+      Check(PInt64(@d)^ <> 0);\r\n+\r\n+    end;\r\n+    NotifyTestSpeed('GetExtended', length(v) * 3, len, @Timer);\r\n     // GetNumericVariantFromJson() had the same issue for varDouble values\r\n     // (with both SSE2 and x87 FPU, since its local d variable is a double)\r\n     CheckJsonDoubleBits('0.00003', $3EFF75104D551D69);\r\n@@ -5144,19 +5191,15 @@ procedure TTestCoreBase.NumericalConversions;\n   procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r\n   var\r\n     v: variant;\r\n-    {$ifndef TSYNEXTENDED80}\r\n     d: double;\r\n     err: integer;\r\n-    {$endif TSYNEXTENDED80}\r\n   begin\r\n     CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), true) = nil, text);\r\n-    {$ifndef TSYNEXTENDED80} // FP80\r\n-    if not extendedToo then\r\n+    if HasFP80 or not extendedToo then\r\n       exit;\r\n     d := GetExtended(pointer(text), err);\r\n     CheckNotEqual(err, 0, text);\r\n     CheckUtf8(not IsInfinite(d) and no\n... [truncated, 6596 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda",
+      "short_sha": "dfe52ae7",
+      "subject": "core: fixed GetNumericVariantFromJson('-9223372036854775808.0') parsing",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T13:26:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dfe52ae70f9c95c8620ef0cd507ff61bb6fc5dda",
+      "parents": [
+        "e86c5f33f2982c2c4f8a0257b8d4b883ba986d89"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 10,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -1673,7 +1673,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         jne     @scalarSkipInteger\r\n         test    r11b, 1\r\n         jz      @scalarSkipInteger\r\n-        mov     r9, $8000000000000000    // magnitude 2^63, already negative\r\n+        mov     r9, MIN_INT64        // magnitude 2^63, already negative\r\n         inc     rcx\r\n         movzx   eax, byte ptr [rcx]\r\n         sub     eax, 48\r\n@@ -1710,6 +1710,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         sub     eax, 48\r\n         cmp     eax, 9\r\n         ja      @scalarFractionEnd\r\n+        test    r9, r9\r\n+        js      @scalarDiscardFraction // MIN_INT64 sentivel\r\n         cmp     r9, r8\r\n         jg      @scalarDiscardFraction\r\n         jl      @scalarKeepFraction\r\n@@ -1719,7 +1721,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         jne     @scalarDiscardFraction\r\n         test    r11b, 1\r\n         jz      @scalarDiscardFraction\r\n-        mov     r9, $8000000000000000\r\n+        mov     r9, MIN_INT64\r\n         inc     rcx\r\n         dec     r10\r\n         movzx   eax, byte ptr [rcx]\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -11646,7 +11646,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       end;\r\n     repeat\r\n       c := PtrUInt(Json^) - ord('0');\r\n-      if c > 9 then\r\n+      if (c > 9) or\r\n+         (v64 < 0) then // MIN_INT64 sentinel\r\n        break;\r\n       if (PtrUInt(Json) >= n) and\r\n          (v64 > MAX_INT64_DIV10 - ord(c > 7)) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16887\n+16888",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16887'\r\n+'2.4.16888'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -5772,11 +5772,11 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckJsonDoubleBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n   CheckJsonDoubleBits('228518839.20000000', $41AB3DD76E666666);\r\n   CheckJsonDoubleBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n-  // The dot/first fractional digit can straddle the 16-byte SIMD window.\n-  {$ifdef ASMX64}\n-  Check(PtrUInt(@NumericSimdData) and 15 = 0);\n-  {$endif ASMX64}\n-  CheckJsonExact('100000000000000.000', varCurrency, 1000000000000000000);\n+  // The dot/first fractional digit can straddle the 16-byte SIMD window.\r\n+  {$ifdef ASMX64}\r\n+  Check(PtrUInt(@NumericSimdData) and 15 = 0);\r\n+  {$endif ASMX64}\r\n+  CheckJsonExact('100000000000000.000', varCurrency, 1000000000000000000);\r\n   CheckJsonExact('100000000000000.0001', varCurrency, 1000000000000000001);\r\n   CheckJsonExact('1234567890123456', varInt64, 1234567890123456);\r\n   CheckJsonDoubleBits('1.25e0004', $40C86A0000000000);\r\n@@ -5797,6 +5797,7 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckJsonDoubleBits('-922337203685477580.8', QWord($C3A999999999999A));\r\n   CheckJsonDoubleBits('-92233720368547758.08', QWord($C3747AE147AE147B));\r\n   CheckJsonDoubleBits('-9223372036854775.808', QWord($C340624DD2F1A9FC));\r\n+  CheckJsonDoubleBits('-9223372036854775808.0', QWord($C3E0000000000000));\r\n   s := '0.' + RawUtf8(StringOfChar('0', 324));\r\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n   CheckEqual(TVarData(vj).VType, varInteger);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base.asmx64",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e86c5f33f2982c2c4f8a0257b8d4b883ba986d89",
+      "short_sha": "e86c5f33",
+      "subject": "core: moved #582 x86_64 asm to mormot.core.base.asmx64.inc",
+      "body": "- GetExtended() pascal version in mormot.core.text.pas\n- GetNumericVariantFromJson() pascal version in mormot.core.variants.pas",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T12:55:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e86c5f33f2982c2c4f8a0257b8d4b883ba986d89",
+      "parents": [
+        "2201a7b9c20590f26242164c44eead102ff0384f"
+      ],
+      "stats": {
+        "additions": 1217,
+        "deletions": 1203,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 1196,
+          "deletions": 0,
+          "patch": "@@ -715,6 +715,1202 @@ function StrUInt32(P: PAnsiChar; val: PtrUInt): PAnsiChar;\n         mov     rax, P\r\n end;\r\n \r\n+\r\n+{$ifdef FPC}\r\n+{$codealign proc=16} // paranoid: Delphi uses 16-bytes alignment on x86-64\r\n+procedure NumericSimdData; assembler; nostackframe;\r\n+asm\r\n+  ret       // do-nothing procedure\r\n+  align 16\r\n+{$else}\r\n+{$codealign 16} // paranoid: FPC uses already 16-bytes alignment on x86-64\r\n+procedure NumericSimdData;\r\n+asm\r\n+  .noframe\r\n+  ret       // do-nothing procedure\r\n+  .align 16\r\n+{$endif FPC}\r\n+  // NUMERIC_BIAS        = 16\r\n+  db $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46\r\n+  // NUMERIC_THRESHOLD   = 32\r\n+  db $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75\r\n+  // NUMERIC_ASCII0      = 48\r\n+  db $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30\r\n+  // NUMERIC_TEN         = 64\r\n+  db $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01\r\n+  // NUMERIC_HUNDRED     = 80\r\n+  db $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00\r\n+  // NUMERIC_TENTHOUSAND = 96\r\n+  db $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00\r\n+  // NUMERIC_E8          = 112\r\n+  db $00, $00, $00, $00, $84, $d7, $97, $41, $00, $00, $00, $00, $00, $00, $00, $00\r\n+  // NUMERIC_SIGN        = 128\r\n+  db $00, $00, $00, $00, $00, $00, $00, $80, $00, $00, $00, $00, $00, $00, $00, $00\r\n+  // NUMERIC_CTRLINT     = 144\r\n+  db $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $80, $80, $80, $80, $00, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $80, $80, $80, $00, $01, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $80, $80, $00, $01, $02, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $80, $00, $01, $02, $03, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $00, $01, $02, $03, $04, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $00, $01, $02, $03, $04, $05, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $00, $01, $02, $03, $04, $05, $06, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $80, $80, $80, $80, $80, $80, $80, $80\r\n+  db $80, $80, $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08\r\n+  db $80, $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09\r\n+  db $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a\r\n+  db $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b\r\n+  db $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c\r\n+  db $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d\r\n+  db $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e\r\n+  // NUMERIC_CTRLDOT     = 400\r\n+  db $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $08, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0b, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0c, $0d, $0e, $0f, $80\r\n+  db $00, $01, $02, $03, $04, $05, $06, $07, $08, $09,\n... [truncated, 42698 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 6,
+          "patch": "@@ -1521,12 +1521,8 @@ function GetInt64(P: PUtf8Char; var err: integer): Int64; overload;\n // was successful (same as the standard val function)\r\n function GetQWord(P: PUtf8Char; var err: integer): QWord;\r\n \r\n-{$ifdef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n-/// get the extended floating point value stored in P^\r\n-// - set the err content to the index of any faulty character, 0 if conversion\r\n-// was successful (same as the standard val function)\r\n-// - this optimized function is consistent on all platforms/compilers and return\r\n-// the decoded value even if err is not 0 (e.g. if P^ is not #0 ended)\r\n+{$ifdef WIN32DELPHI}\r\n+/// Delphi specific x86/x87 asm - pascal version in mormot.core.text.pas\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n {$endif WIN32DELPHI}\r\n \r\n@@ -3129,6 +3125,13 @@ function BSRqword(const q: Qword): cardinal;\n   // identify Intel/AMD AVX2+BMI support at Haswell level\r\n   CPUAVX2HASWELL = [cfAVX2, cfSSE42, cfBMI1, cfBMI2, cfCLMUL];\r\n \r\n+/// x86_64 asm with SSSE3 SIMD process - pascal version in mormot.core.text.pas\r\n+function GetExtended(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n+\r\n+/// x86_64 asm with SSSE3 SIMD process - pascal version in mormot.core.variants.pas\r\n+function GetNumericVariantFromJson(Json: PUtf8Char;\r\n+  var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n+\r\n {$ifdef ASMX64AVX1}\r\n /// simdjson asm as used by mormot.core.unicode on Haswell for FPC IsValidUtf8()\r\n function IsValidUtf8Avx2(source: PUtf8Char; sourcelen: PtrInt):  boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 661,
+          "patch": "@@ -1429,13 +1429,15 @@ procedure UInt32DigitsToUtf8(Value, Digits: PtrUInt; var result: RawUtf8);\n /// fast RawUtf8 version of 64-bit IntToStr(), with proper QWord support\r\n procedure UInt64ToUtf8(Value: QWord; var result: RawUtf8);\r\n \r\n-{$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n+{$ifndef WIN32DELPHI}  { Delphi x87 asm in mormot.core.base.asmx86.inc }\r\n+{$ifndef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n /// get the extended floating point value stored in P^\r\n // - set the err content to the index of any faulty character, 0 if conversion\r\n // was successful (same as the standard val function)\r\n // - this optimized function is consistent on all platforms/compilers and return\r\n // the decoded value even if err is not 0 (e.g. if P^ is not #0 ended)\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n+{$endif ASMX64NOTPIC}\r\n {$endif WIN32DELPHI}\r\n \r\n /// get the extended floating point value stored in P^\r\n@@ -1453,7 +1455,7 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n   TFloatNan = (\r\n     fnNumber, fnNan, fnInf, fnNegInf);\r\n \r\n-  TPow10 = array[-31..55] of TSynExtended;\r\n+  TPow10 = array[-31 .. 55] of TSynExtended;\r\n   PPow10 = ^TPow10;\r\n \r\n const\r\n@@ -1481,25 +1483,6 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n     1E160, 1E192, 1E224, 1E256, 1E288, 1E320, 1E-0,{45} 1E-32, 1E-64,\r\n     1E-96, 1E-128, 1E-160, 1E-192, 1E-224, 1E-256, 1E-288, 1E-320);\r\n \r\n-{$ifdef ASMX64NOTPIC}\r\n-const\r\n-  NUMERIC_BIAS        = 16;\r\n-  NUMERIC_THRESHOLD   = 32;\r\n-  NUMERIC_ASCII0      = 48;\r\n-  NUMERIC_TEN         = 64;\r\n-  NUMERIC_HUNDRED     = 80;\r\n-  NUMERIC_TENTHOUSAND = 96;\r\n-  NUMERIC_E8          = 112;\r\n-  NUMERIC_SIGN        = 128;\r\n-  NUMERIC_CTRLINT     = 144;\r\n-  NUMERIC_CTRLDOT     = 400;\r\n-  NUMERIC_MASK        = 656;\r\n-  NUMERIC_JSONINT     = 928;\r\n-\r\n-// shared, 16-byte aligned SSSE3 data fake procedure - use with NUMERIC_* const\r\n-procedure NumericSimdData;\r\n-{$endif ASMX64NOTPIC}\r\n-\r\n var\r\n   /// best possible precision when rendering a \"single\" kind of float\r\n   // - can be used as parameter for ExtendedToShort/ExtendedToStr\r\n@@ -6742,644 +6725,8 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n     result := 0;\r\n end;\r\n \r\n-{$ifndef WIN32DELPHI}  // Delphi has its own x86/x87 asm version\r\n-\r\n-{$ifdef ASMX64NOTPIC} // SIMD x64 asm version\r\n-{$ifdef FPC}\r\n-  {$codealign proc=16} // paranoid: Delphi uses 16-bytes alignment on x86-64\r\n-  {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }\r\n-  {$WARN 7121 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits]\" }\r\n-  {$WARN 7122 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]\" }\r\n-\r\n-procedure NumericSimdData; assembler; nostackframe;\r\n-asm\r\n-  ret       // do-nothing procedure\r\n-  align 16\r\n-{$else}\r\n-  {$codealign 16} // paranoid: FPC uses already 16-bytes alignment on x86-64\r\n-\r\n-procedure NumericSimdData;\r\n-asm\r\n-  .noframe\r\n-  ret       // do-nothing procedure\r\n-  .align 16\r\n-{$endif FPC}\r\n-  db $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46\r\n-  db $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75\r\n-  db $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30\r\n-  db $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01\r\n-  db $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00\r\n-  db $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00\r\n-  db $00, $00, $00, $00, $84, $d7, $97, $41, $00, $00, $00, $00, $00, $00, $00, $00\r\n-  db $00, $00, $00, $00, $00, $00, $00, $80, $00, $00, $00, $00, $00, $00, $00, $00\r\n-  db $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80\r\n-  db $80, $80, $80, $80, $80, $80, $80, $00, $80, $80, $80, $80, $80, $80\n... [truncated, 26020 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 534,
+          "patch": "@@ -3102,6 +3102,7 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n // - warning: supplied JSON is expected to be not nil\r\n function TextToVariantNumberTypeNoDouble(Json: PUtf8Char): cardinal;\r\n \r\n+{$ifndef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n /// low-level function to parse a variant from an unescaped JSON number\r\n // - returns the position after the number, and set Value to a variant of type\r\n // varInteger/varInt64/varCurrency (or varDouble if AllowVarDouble is true)\r\n@@ -3112,6 +3113,7 @@ function TextToVariantNumberTypeNoDouble(Json: PUtf8Char): cardinal;\n // parse null/false/true values\r\n function GetNumericVariantFromJson(Json: PUtf8Char;\r\n   var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n+{$endif ASMX64NOTPIC}\r\n \r\n /// convert some UTF-8 into a variant, detecting JSON numbers or constants\r\n // - first try GetVariantFromNotStringJson() then fallback to RawUtf8ToVariant()\r\n@@ -11513,540 +11515,7 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   end;\r\n end;\r\n \r\n-{$ifdef ASMX64NOTPIC}\r\n-\r\n-{$ifdef FPC}\r\n-  {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }\r\n-  {$WARN 7121 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits]\" }\r\n-  {$WARN 7122 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]\" }\r\n-{$endif FPC}\r\n-\r\n-const\r\n-  CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n-  CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n-    MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n-\r\n-// SSSE3 digit reduction from MoonBot's JS4 scanner - see GetExtended asm\r\n-function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n-  AllowVarDouble: boolean): PUtf8Char;\r\n-{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n-        {$ifdef ABISYSVX64}\r\n-        movzx   r11d, dl         // move AllowDouble in r11d flags\r\n-        mov     rcx, rdi\r\n-        mov     rax, rdi\r\n-        mov     rdx, rsi\r\n-        test    rdi, rdi\r\n-        {$else}\r\n-        movzx   r11d, r8b        // move AllowDouble in r11d flags\r\n-        mov     rax, rcx\r\n-        test    rcx, rcx\r\n-        {$endif ABISYSVX64}\r\n-        jz      @nil\r\n-        add     r11d, r11d       // bit 1\n... [truncated, 17729 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 25 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 39 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": 582,
+      "is_merge": false
+    },
+    {
+      "sha": "2201a7b9c20590f26242164c44eead102ff0384f",
+      "short_sha": "2201a7b9",
+      "subject": "core: refactored GetNumericVariantFromJson() x64 asm",
+      "body": "- no functional change, just better FPC integration",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T11:36:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2201a7b9c20590f26242164c44eead102ff0384f",
+      "parents": [
+        "b082ba107f13689bea788d5a6916c709c3501200"
+      ],
+      "stats": {
+        "additions": 348,
+        "deletions": 364,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 10,
+          "patch": "@@ -1469,7 +1469,7 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n   JSON_NAN: array[TFloatNan] of TShort15 = (\r\n     '0', '\"NaN\"', '\"Infinity\"', '\"-Infinity\"');\r\n \r\n-  /// most common 10 ^ exponent constants, ending with values for HugePower10*()\r\n+  /// most common 10 ^ exponent constants, ending with values for huge exponents\r\n   POW10: TPow10 = (\r\n     1E-31, 1E-30, 1E-29, 1E-28, 1E-27, 1E-26, 1E-25, 1E-24, 1E-23, 1E-22,\r\n     1E-21, 1E-20, 1E-19, 1E-18, 1E-17, 1E-16, 1E-15, 1E-14, 1E-13, 1E-12,\r\n@@ -6750,7 +6750,6 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n   {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }\r\n   {$WARN 7121 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits]\" }\r\n   {$WARN 7122 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]\" }\r\n-  {$WARN 7123 off : Check \"$1: offset of memory operand is negative \"$2 byte\" }\r\n \r\n procedure NumericSimdData; assembler; nostackframe;\r\n asm\r\n@@ -6857,15 +6856,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n @positive:\r\n         mov     eax, ecx\r\n         and     eax, 4095\r\n-        cmp     eax, 4079\r\n-        ja      @fallback       // 17 bytes must stay inside the page (16 read + terminator)\r\n+        cmp     eax, 4079       // 16 read + terminator\r\n+        ja      @fallback       // 17 bytes must stay inside the page\r\n         movdqu  xmm0, [rcx]\r\n         movdqa  xmm1, xmm0\r\n         paddb   xmm1, [rip + NumericSimdData + NUMERIC_BIAS]\r\n         pcmpgtb xmm1, [rip + NumericSimdData + NUMERIC_THRESHOLD] // digit lanes\r\n         pmovmskb eax, xmm1\r\n         not     eax             // non-digit lanes; bits 16..31 are sentinels\r\n-        db      $f3             // TZCNT, or BSF without BMI1: same result for nonzero input\r\n+        db      $f3             // TZCNT, or BSF without BMI1: identical if <> 0\r\n         bsf     r8d, eax        // p: first non-digit = integer digit count\r\n         test    r8d, r8d\r\n         jz      @fallback       // NaN/Inf or uncommon grammar\r\n@@ -6875,13 +6874,13 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         movzx   r9d, byte ptr [rcx + r8] // byte after the integer digits: dot or terminator\r\n         cmp     r9d, '.'\r\n         je      @fraction\r\n-        mov     dword ptr [rdx], 0\r\n+        mov     dword ptr [rdx], 0       // set err := 0\r\n         test    r9d, r9d\r\n         jz      @integerGo               // NUL: complete number\r\n         or      r9d, 32\r\n         cmp     r9d, 'e'\r\n         je      @integerExponent         // exponent: parsed here, no restart\r\n-        mov     dword ptr [rdx], 1       // any other byte (quote, comma...): partial value, err = 1\r\n+        mov     dword ptr [rdx], 1       // err := 1 on any other byte (quote/comma)\r\n @integerGo:\r\n         cmp     r8d, 1\r\n         je      @singleInteger\r\n@@ -6923,11 +6922,11 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n @fraction:\r\n         lea     r9d, [rax - 1]\r\n         and     eax, r9d                 // clear the dot bit\r\n-        db      $f3\r\n-        bsf     r9d, eax                 // n: second non-digit, 16 = none inside the window (never above: bits 16..31 are set)\r\n+        db      $f3                      // TZCNT, or BSF without BMI1\r\n+        bsf     r9d, eax // n: second non-digit, 16 = none inside the window (never above: bits 16..31 are set)\r\n         lea     r10d, [r8 + 1]\r\n         cmp     r9d, r10d\r\n-        je      @fractionBoundary         // the first fraction digit may be at byte 16\r\n+        je      @fractionBoundary        // the first fraction digit may be at byte 16\r\n         movzx   eax, byte ptr [rcx + r9] // terminator of the fraction (byte 16 is readable)\r\n         mov     dword ptr [rdx], 0\r\n         test    eax, eax\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 337,
+          "deletions": 352,
+          "patch": "@@ -11513,384 +11513,103 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   end;\r\n end;\r\n \r\n+{$ifdef ASMX64NOTPIC}\r\n+\r\n+{$ifdef FPC}\r\n+  {$WARN 7119 off : Exported/global symbols should be accessed via the GOT }\r\n+  {$WARN 7121 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits]\" }\r\n+  {$WARN 7122 off : Check size of memory operand \"$1: memory-operand-size is $2 bits, but expected [$3 bits + $4 byte offset]\" }\r\n+{$endif FPC}\r\n+\r\n const\r\n   CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n-{$ifdef ASMX64}\r\n-function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\r\n-  AllowVarDouble: boolean): PUtf8Char;\r\n-{$else}\r\n-function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n-  AllowVarDouble: boolean): PUtf8Char;\r\n-{$endif ASMX64}\r\n-\r\n-var\r\n-  // logic below is similar to mormot.core.text.pas GetExtended()\r\n-  c, n, cnt: PtrUInt;\r\n-  frac: PtrInt;\r\n-  flags: set of (fNeg, fNegExp, fValidExp);\r\n-  v64 {$ifndef TSYNEXTENDED80}, q64{$endif}: Int64;\r\n-  d: double;\r\n-  vd: TSynVarData absolute Value;\r\n-begin\r\n-  // 1. parse input text as number into v64, frac, cnt\r\n-  result := nil; // return nil to indicate parsing error\r\n-  byte(flags) := 0;\r\n-  if Json = nil then\r\n-    exit;\r\n-  if Json^ = '-' then // note: '+xxx' is not valid Json so is not handled here\r\n-  begin\r\n-    inc(Json);\r\n-    include(flags, fNeg);\r\n-  end;\r\n-  cnt := PtrUInt(Json^) - ord('0');\r\n-  if ((cnt = 0) and\r\n-      (Json[1] in ['0' .. '9'])) or // '012' is no valid Json, but '0.x' '0' are\r\n-     (cnt > 9) then\r\n-    exit;\r\n-  n := PtrUInt(Json) + 18;   // the first 18 digits can't overflow Int64\r\n-  inc(Json);\r\n-  c := PtrUInt(Json^) - ord('0'); // unroll first 8 digits parsing\r\n-  if c <= 9 then\r\n-  begin\r\n-    inc(Json);\r\n-    cnt := cnt * 10 + c; // very efficient, especially on CPU32\r\n-    c := PtrUInt(Json^) - ord('0');\r\n-    if c <= 9 then\r\n-    begin\r\n-      inc(Json);\r\n-      cnt := cnt * 10 + c;\r\n-      c := PtrUInt(Json^) - ord('0');\r\n-      if c <= 9 then\r\n-      begin\r\n-        inc(Json);\r\n-        cnt := cnt * 10 + c;\r\n-        c := PtrUInt(Json^) - ord('0');\r\n-        if c <= 9 then\r\n-        begin\r\n-          inc(Json);\r\n-          cnt := cnt * 10 + c;\r\n-          c := PtrUInt(Json^) - ord('0');\r\n-          if c <= 9 then\r\n-          begin\r\n-            inc(Json);\r\n-            cnt := cnt * 10 + c;\r\n-            c := PtrUInt(Json^) - ord('0');\r\n-            if c <= 9 then\r\n-            begin\r\n-              inc(Json);\r\n-              cnt := cnt * 10 + c;\r\n-              c := PtrUInt(Json^) - ord('0');\r\n-              if c <= 9 then\r\n-              begin\r\n-                inc(Json);\r\n-                cnt := cnt * 10 + c;\r\n-              end;\r\n-            end;\r\n-          end;\r\n-        end;\r\n-      end;\r\n-    end;\r\n-  end;\r\n-  frac := 0;\r\n-  v64 := cnt;\r\n-  if c <= 9 then // 64-bit aware loop for 9 digits and up\r\n-  repeat\r\n-    c := PtrUInt(Json^) - ord('0');\r\n-    if c > 9 then\r\n-      break;\r\n-    inc(Json);\r\n-    cnt := PtrUInt(Json^) - ord('0'); // pre-load digits by pair\r\n-    v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + Int64(c);\r\n-    if cnt > 9 then\r\n-      break;\r\n-    inc(Json); // we know that PtrUInt(Json) <> n this it is an odd digit index\r\n-    v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + Int64(cnt);\r\n-    if PtrUInt(Json) <> n then // five maximum 2-digit Int64 iterations\r\n-      continue;\r\n-    repeat // loop including Int64 overflow test for 18-19 digits\r\n-      c := PtrUInt(Json^) - ord('0');\r\n-      if c > 9 then\r\n-        break;\r\n-      if v64 > MAX_INT64_DIV10 - ord(c > 7) then\r\n-      begin\r\n-        if (v64 <> MAX_INT64_DIV10) or\r\n-           (c <> 8) or\r\n-           not (fNeg in flags) then\r\n-          break;\r\n-        inc(Json);\r\n... [truncated, 28053 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16885\n+16886",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16885'\r\n+'2.4.16886'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b082ba107f13689bea788d5a6916c709c3501200",
+      "short_sha": "b082ba10",
+      "subject": "core: refactored #582 x64 asm",
+      "body": "- no functional change\n- just better integration to FPC",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T09:43:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b082ba107f13689bea788d5a6916c709c3501200",
+      "parents": [
+        "73b032079e4638d4b2856e4b973e40624cd787f6"
+      ],
+      "stats": {
+        "additions": 380,
+        "deletions": 381,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 378,
+          "deletions": 379,
+          "patch": "@@ -1481,23 +1481,24 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n     1E160, 1E192, 1E224, 1E256, 1E288, 1E320, 1E-0,{45} 1E-32, 1E-64,\r\n     1E-96, 1E-128, 1E-160, 1E-192, 1E-224, 1E-256, 1E-288, 1E-320);\r\n \r\n-{$ifdef ASMX64}\r\n+{$ifdef ASMX64NOTPIC}\r\n const\r\n-  NUMERIC_BIAS = 16;\r\n-  NUMERIC_THRESHOLD = 32;\r\n-  NUMERIC_ASCII0 = 48;\r\n-  NUMERIC_TEN = 64;\r\n-  NUMERIC_HUNDRED = 80;\r\n+  NUMERIC_BIAS        = 16;\r\n+  NUMERIC_THRESHOLD   = 32;\r\n+  NUMERIC_ASCII0      = 48;\r\n+  NUMERIC_TEN         = 64;\r\n+  NUMERIC_HUNDRED     = 80;\r\n   NUMERIC_TENTHOUSAND = 96;\r\n-  NUMERIC_E8 = 112;\r\n-  NUMERIC_SIGN = 128;\r\n-  NUMERIC_CTRLINT = 144;\r\n-  NUMERIC_CTRLDOT = 400;\r\n-  NUMERIC_MASK = 656;\r\n-  NUMERIC_JSONINT = 928;\r\n-// shared, 16-byte aligned SSSE3 data fake procedure - published only for testing\r\n+  NUMERIC_E8          = 112;\r\n+  NUMERIC_SIGN        = 128;\r\n+  NUMERIC_CTRLINT     = 144;\r\n+  NUMERIC_CTRLDOT     = 400;\r\n+  NUMERIC_MASK        = 656;\r\n+  NUMERIC_JSONINT     = 928;\r\n+\r\n+// shared, 16-byte aligned SSSE3 data fake procedure - use with NUMERIC_* const\r\n procedure NumericSimdData;\r\n-{$endif ASMX64}\r\n+{$endif ASMX64NOTPIC}\r\n \r\n var\r\n   /// best possible precision when rendering a \"single\" kind of float\r\n@@ -6741,336 +6742,91 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n     result := 0;\r\n end;\r\n \r\n-{$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n+{$ifndef WIN32DELPHI}  // Delphi has its own x86/x87 asm version\r\n \r\n-{$ifdef ASMX64}\r\n-function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n-{$else}\r\n-function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n-{$endif ASMX64}\r\n-var\r\n-  c, n: PtrUInt;\r\n-  frac: PtrInt;\r\n-  flags: set of (fNeg, fNegExp);\r\n-  v64: Int64; // 64-bit resolution for the digits\r\n-label\r\n-  z, e, o;\r\n-{$ifdef TSYNEXTENDED80}\r\n-const\r\n-  Pow10Tab1: array[0 .. 14] of TSynExtended = (\r\n-    1E32, 1E64, 1E96, 1E128, 1E160, 1E192, 1E224, 1E256, 1E288, 1E320,\r\n-    1E352, 1E384, 1E416, 1E448, 1E480);\r\n-  Pow10Tab2: array[0 .. 8] of TSynExtended = (\r\n-    1E512, 1E1024, 1E1536, 1E2048, 1E2560, 1E3072, 1E3584, 1E4096, 1E4608);\r\n-{$else}\r\n-var\r\n-  q64: Int64;\r\n-const\r\n-  Scale: double = 1.3407807929942597e154; // 2^512\r\n-  InvScale: double = 7.458340731200207e-155; // 2^-512\r\n-  MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n-{$endif TSYNEXTENDED80}\r\n-begin\r\n-  byte(flags) := 0;\r\n-  v64 := 0;\r\n-  frac := 0;\r\n-  if P = nil then\r\n-    goto z; // will return 0 but err=1\r\n-  err := frac; // =0 for success\r\n-  if P^ = ' ' then\r\n-    repeat\r\n-      inc(P);\r\n-    until P^ <> ' '; // trailing spaces\r\n-  if P^ = '+' then\r\n-    inc(P)\r\n-  else if P^ = '-' then\r\n-  begin\r\n-    inc(P);\r\n-    include(flags, fNeg);\r\n-  end;\r\n-  if P^ = #0 then\r\n-    goto z; // a sign or spaces alone contain no number\r\n-  if P^ > '9' then\r\n-  begin\r\n-    c := PtrUInt(PWord(P)^) and $dfdf; // at least 1 char + #0\r\n-    if (c = ord('N') + ord('A') shl 8) and\r\n-       (P[2] in ['N', 'n']) then\r\n-      result := Nan\r\n-    else if (c = ord('I') + ord('N') shl 8) and\r\n-            (P[2] in ['F', 'f']) then\r\n-      if fNeg in flags then\r\n-        result := NegInfinity\r\n-      else\r\n-        result := Infinity\r\n-    else\r\n-    begin\r\n-z:    err := 1; // fast error path for non-number input\r\n-      result := 0;\r\n-    end;\r\n-    exit;\r\n-  end;\r\n-  n := PtrUInt(P) + 18;   // the first 18 digits can't overflow Int64\r\n-  repeat // Delphi has its own x87 asm -> no need to optimize first 8 digits\r\n-    c := PtrUInt(P^) - ord('0');\r\n-    if c > 9 then\r\n-      break;\r\n-    inc(P);\r\n-    v64 := v64 * 10 + PtrInt(c);\r\n-    if PtrUInt(P) <> n then // very fast most common path\r\n-      continue;\r\n-    repeat // loop including Int64 overflow test (seldom used)\r\n-      c := PtrUInt(P^) - ord('0');\r\n-      if c > 9 then\r\n-        break;\r\n-      if v64 > MAX_INT64_DIV10 - ord(c > 7) then\r\n-        break;\r\n-      inc(P);\r\n-      v64 := v64 * 10 + PtrInt(c);\r\n-    until fal\n... [truncated, 33865 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16884\n+16885",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16884'\r\n+'2.4.16885'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": 582,
+      "is_merge": false
+    },
+    {
+      "sha": "73b032079e4638d4b2856e4b973e40624cd787f6",
+      "short_sha": "73b03207",
+      "subject": "core: new cpuSSSE3 flag in X64CpuFeatures",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T09:42:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/73b032079e4638d4b2856e4b973e40624cd787f6",
+      "parents": [
+        "af3188936266824b525dbccf01d60410d806be11"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -3118,7 +3118,7 @@ function BSRqword(const q: Qword): cardinal;\n   // as expected e.g. by IsValidUtf8Avx2/Base64EncodeAvx2 dedicated asm\r\n   // - won't include ERMSB flag because it is not propagated within some VMs\r\n   TX64CpuFeatures = set of (\r\n-    cpuAVX, cpuAVX2, cpuHaswell);\r\n+    cpuSSSE3, cpuAVX, cpuAVX2, cpuHaswell);\r\n \r\n var\r\n   /// internal flags used by FillCharFast - easier from asm that CpuFeatures\r\n@@ -10962,6 +10962,9 @@ procedure TestCpuFeatures;\n     end;\r\n   {$ifdef ASMX64NOTPIC}\r\n   // note: cfERMS has no cpuid within some VMs -> ignore and assume present\r\n+  if (cfSSE3 in CpuFeatures) and\r\n+     (cfSSSE3 in CpuFeatures) then\r\n+    include(X64CpuFeatures, cpuSSSE3);\r\n   if cfAVX in CpuFeatures then\r\n   begin\r\n     include(X64CpuFeatures, cpuAVX);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16883\n+16884",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16883'\r\n+'2.4.16884'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "af3188936266824b525dbccf01d60410d806be11",
+      "short_sha": "af318893",
+      "subject": "core: optimized GetExtended() pascal code",
+      "body": "- (frac and not 31) shr 5 was redundant\n- better FP80/extended/x87 power of 10 code\n- better double/x64/aarch64 power of 10 code: replace MAX_SAFE_JS_INTEGER comparison by a shift, collapse Clinger exp comparison\n- ideas taken from the #582 x64 asm :)",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T09:39:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/af3188936266824b525dbccf01d60410d806be11",
+      "parents": [
+        "a91f18f16edbd9b563aac0cfceeba31453113caf"
+      ],
+      "stats": {
+        "additions": 74,
+        "deletions": 57,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 72,
+          "deletions": 55,
+          "patch": "@@ -1495,8 +1495,7 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n   NUMERIC_CTRLDOT = 400;\r\n   NUMERIC_MASK = 656;\r\n   NUMERIC_JSONINT = 928;\r\n-// Shared, 16-byte aligned SSSE3 data starts 16 bytes after this entry point.\r\n-// An assembler container avoids Delphi's 8-byte alignment of typed constants.\r\n+// shared, 16-byte aligned SSSE3 data fake procedure - published only for testing\r\n procedure NumericSimdData;\r\n {$endif ASMX64}\r\n \r\n@@ -6752,19 +6751,24 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n var\r\n   c, n: PtrUInt;\r\n   frac: PtrInt;\r\n-  flags: set of (fNeg, fNegExp, fValidExp);\r\n+  flags: set of (fNeg, fNegExp);\r\n   v64: Int64; // 64-bit resolution for the digits\r\n label\r\n-  z, e;\r\n-{$ifndef TSYNEXTENDED80}\r\n+  z, e, o;\r\n+{$ifdef TSYNEXTENDED80}\r\n+const\r\n+  Pow10Tab1: array[0 .. 14] of TSynExtended = (\r\n+    1E32, 1E64, 1E96, 1E128, 1E160, 1E192, 1E224, 1E256, 1E288, 1E320,\r\n+    1E352, 1E384, 1E416, 1E448, 1E480);\r\n+  Pow10Tab2: array[0 .. 8] of TSynExtended = (\r\n+    1E512, 1E1024, 1E1536, 1E2048, 1E2560, 1E3072, 1E3584, 1E4096, 1E4608);\r\n+{$else}\r\n var\r\n   q64: Int64;\r\n const\r\n   Scale: double = 1.3407807929942597e154; // 2^512\r\n   InvScale: double = 7.458340731200207e-155; // 2^-512\r\n   MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n-label\r\n-  o;\r\n {$endif TSYNEXTENDED80}\r\n begin\r\n   byte(flags) := 0;\r\n@@ -6811,7 +6815,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     if c > 9 then\r\n       break;\r\n     inc(P);\r\n-    v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c);\r\n+    v64 := v64 * 10 + PtrInt(c);\r\n     if PtrUInt(P) <> n then // very fast most common path\r\n       continue;\r\n     repeat // loop including Int64 overflow test (seldom used)\r\n@@ -6821,7 +6825,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n       if v64 > MAX_INT64_DIV10 - ord(c > 7) then\r\n         break;\r\n       inc(P);\r\n-      v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c);\r\n+      v64 := v64 * 10 + PtrInt(c);\r\n     until false;\r\n     if c <= 9 then\r\n       repeat // ignore-them-all path for >18/19 significant integer digits\r\n@@ -6848,7 +6852,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n        break;\r\n       if (PtrUInt(P) < n) or\r\n          (v64 <= MAX_INT64_DIV10 - ord(c > 7)) then\r\n-        v64 := v64 {$ifdef HASSLOWMUL64} shl 3 + v64 + v64 {$else} * 10 {$endif} + PtrInt(c)\r\n+        v64 := v64 * 10 + PtrInt(c)\r\n       else\r\n         break;\r\n       inc(P);\r\n@@ -6861,7 +6865,6 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   end;\r\n   if P^ in ['E', 'e'] then\r\n   begin\r\n-    n := 0;\r\n     inc(P);\r\n     if P^ = '+' then\r\n       inc(P)\r\n@@ -6870,22 +6873,22 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n       inc(P);\r\n       include(flags, fNegExp);\r\n     end;\r\n+    n := PtrUInt(P^) - ord('0');\r\n+    if n > 9 then\r\n+      goto e;\r\n     repeat\r\n+      inc(P);\r\n       c := PtrUInt(P^) - ord('0');\r\n       if c > 9 then\r\n         break;\r\n       n := (n * 10) + c;\r\n-      inc(P);\r\n       if n >= $fff000 then // huge constant, but still aarch64 friendly\r\n         goto e;\r\n-      include(flags, fValidExp); // at least one valid exponent digit\r\n     until false;\r\n     if fNegExp in flags then\r\n       dec(frac, n)\r\n     else\r\n       inc(frac, n);\r\n-    if not (fValidExp in flags) then\r\n-      goto e;\r\n   end;\r\n   if P^ <> #0 then\r\n e:  err := 1; // return the (partial) value even if not ended with #0\r\n@@ -6897,34 +6900,50 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     exit;\r\n   end;\r\n   {$ifdef TSYNEXTENDED80}\r\n-  result := v64; // specific path for FP80 with full 64-bit mantissa precision\r\n-  if (frac > 5120) or (frac < -5120) then // paranoid check\r\n+  result := v64; // fast FP80 path with full 64-bit mantissa precision\r\n+  if frac > 0 then\r\n   begin\r\n-    \n... [truncated, 3969 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16882\n+16883",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16882'\r\n+'2.4.16883'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a91f18f16edbd9b563aac0cfceeba31453113caf",
+      "short_sha": "a91f18f1",
+      "subject": "core: proper FP80 version of GetExtended() and GetNumericVariantFromJson()",
+      "body": "- specific {$ifdef TSYNEXTENDED80} code since TSynExtended = extended features a 64-bit mantissa, we don't need any binary64 precision tweaks\n- especially needed after #582",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T07:52:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a91f18f16edbd9b563aac0cfceeba31453113caf",
+      "parents": [
+        "ed4abff3dbf05048dd8c4cd8032ba463fe6524d0"
+      ],
+      "stats": {
+        "additions": 67,
+        "deletions": 25,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 13,
+          "patch": "@@ -6748,19 +6748,24 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n {$else}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n-{$ifend}\r\n-\r\n-const\r\n-  Scale: double = 1.3407807929942597e154; // 2^512\r\n-  InvScale: double = 7.458340731200207e-155; // 2^-512\r\n-  MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n+{$endif ASMX64}\r\n var\r\n   c, n: PtrUInt;\r\n   frac: PtrInt;\r\n   flags: set of (fNeg, fNegExp, fValidExp);\r\n-  v64: Int64; // allows 64-bit resolution for the digits (match 80-bit extended)\r\n+  v64: Int64; // 64-bit resolution for the digits\r\n label\r\n-  z, e, o;\r\n+  z, e;\r\n+{$ifndef TSYNEXTENDED80}\r\n+var\r\n+  q64: Int64;\r\n+const\r\n+  Scale: double = 1.3407807929942597e154; // 2^512\r\n+  InvScale: double = 7.458340731200207e-155; // 2^-512\r\n+  MaxScaled: double = 1.3407807929942596e154; // MaxDouble * 2^-512\r\n+label\r\n+  o;\r\n+{$endif TSYNEXTENDED80}\r\n begin\r\n   byte(flags) := 0;\r\n   v64 := 0;\r\n@@ -6891,13 +6896,40 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := v64;\r\n     exit;\r\n   end;\r\n-  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  {$ifdef TSYNEXTENDED80}\r\n+  result := v64; // specific path for FP80 with full 64-bit mantissa precision\r\n+  if (frac > 5120) or (frac < -5120) then // paranoid check\r\n+  begin\r\n+    err := 1;\r\n+    exit;\r\n+  end;\r\n+  while frac > 320 do\r\n+  begin\r\n+    result := result * POW10[44]; // 1E320\r\n+    dec(frac, 320);\r\n+  end;\r\n+  while frac < -320 do\r\n+  begin\r\n+    result := result * POW10[55]; // 1E-320\r\n+    inc(frac, 320);\r\n+  end;\r\n+  if PtrUInt(frac) + 31 <= 62 then // -31 .. +31\r\n+    result := result * POW10[frac]\r\n+  else if frac > 0 then\r\n+    result := result * POW10[(frac and not 31) shr 5 + 34] * POW10[frac and 31]\r\n+  else\r\n+  begin\r\n+    frac := -frac;\r\n+    result := result * POW10[(frac and not 31) shr 5 + 45] / POW10[frac and 31];\r\n+  end;\r\n+  {$else} // more cases for proper binary64 precision\r\n   while (frac < 0) and\r\n-        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+        ((frac < -22) or (v64 > MAX_SAFE_JS_INTEGER)) do // reduce ending 000000\r\n   begin\r\n-    if v64 mod 10 <> 0 then\r\n+    q64 := v64 div 10; // fast shr/mul by reciprocal on FPC\r\n+    if q64 *10 <> v64 then\r\n       break;\r\n-    v64 := v64 div 10;\r\n+    v64 := q64; // adjust the CLinger's path for exact precision\r\n     inc(frac);\r\n   end;\r\n   result := v64;\r\n@@ -6937,6 +6969,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   end\r\n   else // frac >= 32\r\n     result := (POW10[(frac and not 31) shr 5 + 34] * POW10[frac and 31]) * result;\r\n+  {$endif TSYNEXTENDED80}\r\n   if fNeg in flags then\r\n     result := -result;\r\n end;\r\n@@ -6947,7 +6980,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   {$codealign proc=16}\r\n {$else}\r\n   {$codealign 16}\r\n-{$endif}\r\n+{$endif FPC}\r\n procedure NumericSimdData;\r\n {$ifdef FPC} assembler; nostackframe; {$endif}\r\n asm\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 10,
+          "patch": "@@ -11524,14 +11524,14 @@ function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\n {$else}\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n-{$ifend}\r\n+{$endif ASMX64}\r\n \r\n var\r\n   // logic below is similar to mormot.core.text.pas GetExtended()\r\n   c, n, cnt: PtrUInt;\r\n   frac: PtrInt;\r\n   flags: set of (fNeg, fNegExp, fValidExp);\r\n-  v64: Int64;\r\n+  v64 {$ifndef TSYNEXTENDED80}, q64{$endif}: Int64;\r\n   d: double;\r\n   vd: TSynVarData absolute Value;\r\n begin\r\n@@ -11709,7 +11709,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     else\r\n       inc(frac, n);\r\n   end;\r\n-  // 2. now v64, frac, cnt, exp contain a number parsed from Json\r\n+  // 2. render v64, frac, cnt number definition into a proper variant value\r\n   if v64 = 0 then\r\n   begin // zero is independent of the number of fractional zeros or exponent\r\n     vd.VType := varInteger;\r\n@@ -11747,21 +11747,30 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       result := Json;\r\n       exit;\r\n     end;\r\n-  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  if not AllowVarDouble then\r\n+    exit;\r\n+  {$ifdef TSYNEXTENDED80} // FP80 has no 53-bit mantissa limitation\r\n+  if (frac <= -324) or // 5.0 x 10^-324 .. 1.7 x 10^308\r\n+     (frac >= PtrInt(cnt) + 290) then\r\n+    exit; // we can't convert into a double\r\n+  if (frac < 0) and\r\n+     (frac >= -27) then // FP80 has full 64-bit mantissa so no 53-bit limitation\r\n+  {$else}\r\n   while (frac < 0) and\r\n-        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+        ((frac < -22) or (v64 > MAX_SAFE_JS_INTEGER)) do // reduce ending 000000\r\n   begin\r\n-    if v64 mod 10 <> 0 then\r\n+    q64 := v64 div 10; // fast shr/mul by reciprocal on FPC 64-bit\r\n+    if q64 *10 <> v64 then\r\n       break;\r\n-    v64 := v64 div 10;\r\n+    v64 := q64; // adjust the Clinger's path for proper binary64 precision\r\n     inc(frac);\r\n   end;\r\n-  if not AllowVarDouble or\r\n-     (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n+  if frac <= -324 then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r\n   if (frac < 0) and\r\n      (frac >= -22) and\r\n      (v64 <= MAX_SAFE_JS_INTEGER) then\r\n+  {$endif TSYNEXTENDED80}\r\n     // Clinger's fast path: d64 and 10^-frac are both exact doubles, so a single\r\n     // IEEE division is correctly rounded - whereas POW10[frac] * d64 is not,\r\n     // since 1E-1..1E-22 are inexact (e.g. '1.2' returned 1.2000000000000002)\r\n@@ -12330,7 +12339,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         ret\r\n \r\n end;\r\n-{$ifend}\r\n+{$endif ASMX64}\r\n \r\n procedure UniqueVariant(Interning: TRawUtf8Interning; var aResult: variant;\r\n   aText: PUtf8Char; aTextLen: PtrInt; aAllowVarDouble: boolean);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16866\n+16882",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16866'\r\n+'2.4.16882'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ed4abff3dbf05048dd8c4cd8032ba463fe6524d0",
+      "short_sha": "ed4abff3",
+      "subject": "Merge remote-tracking branch 'refs/remotes/origin/master'",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T06:28:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ed4abff3dbf05048dd8c4cd8032ba463fe6524d0",
+      "parents": [
+        "81fff99fd3e6facefcf49ad66aff42016d970c11",
+        "0da8a1398b209ee89041cfa13f33dec2891dc4da"
+      ],
+      "stats": {
+        "additions": 1301,
+        "deletions": 9,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 671,
+          "deletions": 0,
+          "patch": "@@ -1481,6 +1481,25 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n     1E160, 1E192, 1E224, 1E256, 1E288, 1E320, 1E-0,{45} 1E-32, 1E-64,\r\n     1E-96, 1E-128, 1E-160, 1E-192, 1E-224, 1E-256, 1E-288, 1E-320);\r\n \r\n+{$ifdef ASMX64}\r\n+const\r\n+  NUMERIC_BIAS = 16;\r\n+  NUMERIC_THRESHOLD = 32;\r\n+  NUMERIC_ASCII0 = 48;\r\n+  NUMERIC_TEN = 64;\r\n+  NUMERIC_HUNDRED = 80;\r\n+  NUMERIC_TENTHOUSAND = 96;\r\n+  NUMERIC_E8 = 112;\r\n+  NUMERIC_SIGN = 128;\r\n+  NUMERIC_CTRLINT = 144;\r\n+  NUMERIC_CTRLDOT = 400;\r\n+  NUMERIC_MASK = 656;\r\n+  NUMERIC_JSONINT = 928;\r\n+// Shared, 16-byte aligned SSSE3 data starts 16 bytes after this entry point.\r\n+// An assembler container avoids Delphi's 8-byte alignment of typed constants.\r\n+procedure NumericSimdData;\r\n+{$endif ASMX64}\r\n+\r\n var\r\n   /// best possible precision when rendering a \"single\" kind of float\r\n   // - can be used as parameter for ExtendedToShort/ExtendedToStr\r\n@@ -6725,7 +6744,12 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n \r\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n+{$ifdef ASMX64}\r\n+function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$else}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$ifend}\r\n+\r\n const\r\n   Scale: double = 1.3407807929942597e154; // 2^512\r\n   InvScale: double = 7.458340731200207e-155; // 2^-512\r\n@@ -6755,6 +6779,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     inc(P);\r\n     include(flags, fNeg);\r\n   end;\r\n+  if P^ = #0 then\r\n+    goto z; // a sign or spaces alone contain no number\r\n   if P^ > '9' then\r\n   begin\r\n     c := PtrUInt(PWord(P)^) and $dfdf; // at least 1 char + #0\r\n@@ -6865,6 +6891,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := v64;\r\n     exit;\r\n   end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   result := v64;\r\n   if (frac < 0) and\r\n      (frac >= -22) and\r\n@@ -6906,6 +6941,642 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := -result;\r\n end;\r\n \r\n+{$ifdef ASMX64}\r\n+{$ifdef FPC}\r\n+  {$push}\r\n+  {$codealign proc=16}\r\n+{$else}\r\n+  {$codealign 16}\r\n+{$endif}\r\n+procedure NumericSimdData;\r\n+{$ifdef FPC} assembler; nostackframe; {$endif}\r\n+asm\r\n+        {$ifndef FPC} .noframe {$endif}\r\n+        ret\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n+        db $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46\r\n+        db $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75\r\n+        db $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30\r\n+        db $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01\r\n+        db $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00\r\n+        db $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00\r\n+        db $00, $00, $00, $00, $84, $d7, $97, $41, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $00, $00, $00, $00, $00, $00, $00, $80, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $80, $00, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $00, $01, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $00, $01, $02, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $00, $01, $02, $03, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $00, $01, $02, $03, $04, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $00, $01, $02, $03, $04, $05, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $00, $\n... [truncated, 25513 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 569,
+          "deletions": 9,
+          "patch": "@@ -11518,8 +11518,14 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n+{$ifdef ASMX64}\r\n+function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$else}\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n+{$ifend}\r\n+\r\n var\r\n   // logic below is similar to mormot.core.text.pas GetExtended()\r\n   c, n, cnt: PtrUInt;\r\n@@ -11654,6 +11660,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n            not (fNeg in flags) then\r\n           break;\r\n         inc(Json);\r\n+        dec(frac); // the boundary digit also belongs to the fraction\r\n         v64 := MIN_INT64; // sentinel = magnitude 2^63, already negative\r\n         c := PtrUInt(Json^) - ord('0');\r\n         break;\r\n@@ -11703,15 +11710,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       inc(frac, n);\r\n   end;\r\n   // 2. now v64, frac, cnt, exp contain a number parsed from Json\r\n+  if v64 = 0 then\r\n+  begin // zero is independent of the number of fractional zeros or exponent\r\n+    vd.VType := varInteger;\r\n+    vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n+    result := Json; // returns the first char after the parsed number\r\n+    exit;\r\n+  end;\r\n   if PtrInt(cnt) >= 0 then\r\n-    if v64 = 0 then\r\n-    begin\r\n-      vd.VType := varInteger;\r\n-      vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n-      result := Json; // returns the first char after the parsed number\r\n-      exit;\r\n-    end\r\n-    else if frac = 0 then\r\n+    if frac = 0 then\r\n     begin\r\n       if cnt <= 9 then\r\n         vd.VType := varInt64\r\n@@ -11726,7 +11733,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     end\r\n     else if (frac < 0) and\r\n             (frac >= -4) and\r\n-            (v64 <= CURRENCY_MAX[frac]) then\r\n+            (v64 <= CURRENCY_MAX[frac]) and\r\n+            ((v64 >= 0) or (frac = -4)) then\r\n     begin // currency as ###.0123\r\n       if v64 > 0 then // MIN_INT64 final value may have been set above\r\n       begin\r\n@@ -11739,6 +11747,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       result := Json;\r\n       exit;\r\n     end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   if not AllowVarDouble or\r\n      (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r\n@@ -11772,6 +11789,549 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n   result := Json;\r\n end;\r\n \r\n+{$ifdef ASMX64}\r\n+const\r\n+  NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n+  NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n+\r\n+// SSSE3 digit reduction, adapted from MoonBot's JS4 scanner.\r\n+// Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n+// locate the dot/terminator; PSHUFB and PMADDUBSW/PMADDWD combine exact\r\n+// integer groups. Small positional tables contain byte controls, not powers.\r\n+// The scalar ASM path handles other CPUs and uncommon grammar. Long inputs\r\n+// continue from the end of this window, retaining the parsed integer prefix.\r\n+// REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n+function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n+        {$ifdef ABISYSVX64}\r\n+        mov     r8d, edx\r\n+        mov     rcx, rdi\r\n+        mov     rdx, rsi\r\n+        {$endif ABISYSVX64}\r\n+        test    rcx, rcx\r\n+        jz      @nil\r\n+        test    byte \n... [truncated, 18131 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 0,
+          "patch": "@@ -5744,6 +5744,67 @@ procedure TTestCoreBase.NumericalConversions;\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n   s := '9223372036854775.8';\r\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n+  CheckInvalidNumber('');\r\n+  CheckInvalidNumber(' ');\r\n+  CheckInvalidNumber('+');\r\n+  CheckInvalidNumber('-');\r\n+  CheckInvalidNumber('  +');\r\n+  CheckInvalidNumber('  -');\r\n+  {$ifndef WIN32DELPHI}\r\n+  d := mormot.core.text.NaN;\r\n+  CheckGetExtendedBits('-nAn', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  +NaNtail', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  -NaN', PQWord(@d)^);\r\n+  CheckGetExtendedBits('+iNf', $7FF0000000000000);\r\n+  CheckGetExtendedBits('  -INfinity', QWord($FFF0000000000000));\r\n+  CheckInvalidNumber('N');\r\n+  CheckInvalidNumber('Na');\r\n+  CheckInvalidNumber('I');\r\n+  CheckInvalidNumber('In');\r\n+  CheckInvalidNumber('- NaN');\r\n+  CheckGetExtendedBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckGetExtendedBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckGetExtendedBits('228518839.2', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  {$endif WIN32DELPHI}\r\n+  CheckJsonDoubleBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckJsonDoubleBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckJsonDoubleBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckJsonDoubleBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  // The dot/first fractional digit can straddle the 16-byte SIMD window.\n+  {$ifdef ASMX64}\n+  Check(PtrUInt(@NumericSimdData) and 15 = 0);\n+  {$endif ASMX64}\n+  CheckJsonExact('100000000000000.000', varCurrency, 1000000000000000000);\n+  CheckJsonExact('100000000000000.0001', varCurrency, 1000000000000000001);\r\n+  CheckJsonExact('1234567890123456', varInt64, 1234567890123456);\r\n+  CheckJsonDoubleBits('1.25e0004', $40C86A0000000000);\r\n+  {$ifndef WIN32DELPHI}\r\n+  CheckGetExtendedBits('100000000000000.000', $42D6BCC41E900000);\r\n+  CheckGetExtendedBits('1234567890123456', $43118B54F22AEB00);\r\n+  CheckGetExtendedBits('1.25e0004', $40C86A0000000000);\r\n+  s := '228518839.20000000' + '\",\"next\":1';\r\n+  d := GetExtended(pointer(s), err);\r\n+  CheckEqual(err, 1);\r\n+  CheckUtf8(PQWord(@d)^ = $41AB3DD76E666666, s);\r\n+  {$endif WIN32DELPHI}\r\n+  s := '100000000000000.0001,\"next\":1';\r\n+  P := GetNumericVariantFromJson(pointer(s), TVarData(vj), false);\r\n+  Check(P = PUtf8Char(pointer(s)) + 20);\r\n+  CheckEqual(TVarData(vj).VType, varCurrency);\r\n+  CheckEqual(TVarData(vj).VInt64, 1000000000000000001);\r\n+  CheckJsonDoubleBits('-922337203685477580.8', QWord($C3A999999999999A));\r\n+  CheckJsonDoubleBits('-92233720368547758.08', QWord($C3747AE147AE147B));\r\n+  CheckJsonDoubleBits('-9223372036854775.808', QWord($C340624DD2F1A9FC));\r\n+  s := '0.' + RawUtf8(StringOfChar('0', 324));\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n+  s := '-0e-400';\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n   CheckInvalidNumber('1.2.3');\r\n   CheckInvalidNumber('0..1');\r\n   CheckInvalidNumber('toto');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "81fff99fd3e6facefcf49ad66aff42016d970c11",
+      "short_sha": "81fff99f",
+      "subject": "tests: some tests",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-15T06:28:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/81fff99fd3e6facefcf49ad66aff42016d970c11",
+      "parents": [
+        "c88c4ad7b25c49a2d12391c75de169204809f02d"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16865\n+16866",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16865'\r\n+'2.4.16866'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 3,
+          "patch": "@@ -5080,6 +5080,7 @@ procedure TTestCoreBase.NumericalConversions;\n   var\r\n     v: variant;\r\n   begin\r\n+    TVarData(v).VType := varEmpty;\r\n     CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), false) <> nil, text);\r\n     CheckEqual(TVarData(v).VType, kind, text);\r\n     CheckEqual(TVarData(v).VInt64, expected, text);\r\n@@ -5091,7 +5092,8 @@ procedure TTestCoreBase.NumericalConversions;\n   begin\r\n     CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), true) <> nil, text);\r\n     CheckEqual(TVarData(v).VType, varDouble, text);\r\n-    CheckUtf8(PQWord(@TVarData(v).VDouble)^ = expected, text);\r\n+    CheckUtf8(PQWord(@TVarData(v).VDouble)^ = expected,\r\n+      'CheckJsonDoubleBits %=%', [PQWord(@TVarData(v).VDouble)^, expected]);\r\n   end;\r\n \r\n   procedure CheckDecimalRounding;\r\n@@ -5604,12 +5606,11 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckDoubleToShortSame(12.345678901234);\r\n   CheckDoubleToShortSame(123.45678901234);\r\n   CheckDoubleToShortSame(1234.5678901234);\r\n+  {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n   CheckDoubleToShort(0.00123456789012345, '0.00123456789012');\r\n   CheckDoubleToShort(-0.00123456789012345, '-0.00123456789012');\r\n   CheckDoubleToShort(0.000123456789012345, '0.00012345678901');\r\n   CheckDoubleToShort(-0.000123456789012345, '-0.00012345678901');\r\n-  CheckDecimalRounding;\r\n-  {$ifndef WIN32DELPHI} // fails when converted to FP80 in x87 asm\r\n   d := GetExtended('0e400', err);\r\n   CheckEqual(err, 0);\r\n   Check(d = 0);\r\n@@ -5706,7 +5707,17 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckJsonExact('0', varInteger, 0);\r\n   CheckJsonExact('0.0', varInteger, 0);\r\n   CheckJsonExact('0.000000000', varInteger, 0);\r\n+  CheckJsonExact('123', varInteger, 123);\r\n   CheckJsonExact('-123', varInteger, -123);\r\n+  CheckJsonExact('1.23', varCurrency, 12300);\r\n+  CheckJsonExact('-1.23', varCurrency, -12300);\r\n+  CheckJsonExact('1234', varInteger, 1234);\r\n+  CheckJsonExact('12345', varInteger, 12345);\r\n+  CheckJsonExact('123456', varInteger, 123456);\r\n+  CheckJsonExact('1234567', varInteger, 1234567);\r\n+  CheckJsonExact('12345678', varInteger, 12345678);\r\n+  CheckJsonExact('123456789', varInteger, 123456789);\r\n+  CheckJsonExact('1234567890', varInt64, 1234567890);\r\n   CheckJsonExact('9223372036854775807',   varInt64,    High(Int64));\r\n   CheckJsonExact('-9223372036854775808',  varInt64,    Low(Int64));\r\n   CheckJsonExact('922337203685477.5807',  varCurrency, High(Int64));\r\n@@ -5749,6 +5760,7 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckInvalidNumber('+1', false);\r\n   CheckInvalidNumber('1e400');\r\n   CheckInvalidNumber('1e-400');\r\n+  CheckDecimalRounding;\r\n   s := '0.0000000000000000001';\r\n   d := GetExtended(pointer(s), err);\r\n   CheckEqual(err, 0);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0da8a1398b209ee89041cfa13f33dec2891dc4da",
+      "short_sha": "0da8a139",
+      "subject": "Merge pull request #582 from Moonbot-Tech/codex/win64-numeric-asm",
+      "body": "core: faster number parsing with x64 SSE3",
+      "author": "ab",
+      "date": "2026-09-15T06:25:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0da8a1398b209ee89041cfa13f33dec2891dc4da",
+      "parents": [
+        "c88c4ad7b25c49a2d12391c75de169204809f02d",
+        "ba60784df21e2112518c6fab1b811505bbadd781"
+      ],
+      "stats": {
+        "additions": 1301,
+        "deletions": 9,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 671,
+          "deletions": 0,
+          "patch": "@@ -1481,6 +1481,25 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n     1E160, 1E192, 1E224, 1E256, 1E288, 1E320, 1E-0,{45} 1E-32, 1E-64,\r\n     1E-96, 1E-128, 1E-160, 1E-192, 1E-224, 1E-256, 1E-288, 1E-320);\r\n \r\n+{$ifdef ASMX64}\r\n+const\r\n+  NUMERIC_BIAS = 16;\r\n+  NUMERIC_THRESHOLD = 32;\r\n+  NUMERIC_ASCII0 = 48;\r\n+  NUMERIC_TEN = 64;\r\n+  NUMERIC_HUNDRED = 80;\r\n+  NUMERIC_TENTHOUSAND = 96;\r\n+  NUMERIC_E8 = 112;\r\n+  NUMERIC_SIGN = 128;\r\n+  NUMERIC_CTRLINT = 144;\r\n+  NUMERIC_CTRLDOT = 400;\r\n+  NUMERIC_MASK = 656;\r\n+  NUMERIC_JSONINT = 928;\r\n+// Shared, 16-byte aligned SSSE3 data starts 16 bytes after this entry point.\r\n+// An assembler container avoids Delphi's 8-byte alignment of typed constants.\r\n+procedure NumericSimdData;\r\n+{$endif ASMX64}\r\n+\r\n var\r\n   /// best possible precision when rendering a \"single\" kind of float\r\n   // - can be used as parameter for ExtendedToShort/ExtendedToStr\r\n@@ -6725,7 +6744,12 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n \r\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n+{$ifdef ASMX64}\r\n+function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$else}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$ifend}\r\n+\r\n const\r\n   Scale: double = 1.3407807929942597e154; // 2^512\r\n   InvScale: double = 7.458340731200207e-155; // 2^-512\r\n@@ -6755,6 +6779,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     inc(P);\r\n     include(flags, fNeg);\r\n   end;\r\n+  if P^ = #0 then\r\n+    goto z; // a sign or spaces alone contain no number\r\n   if P^ > '9' then\r\n   begin\r\n     c := PtrUInt(PWord(P)^) and $dfdf; // at least 1 char + #0\r\n@@ -6865,6 +6891,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := v64;\r\n     exit;\r\n   end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   result := v64;\r\n   if (frac < 0) and\r\n      (frac >= -22) and\r\n@@ -6906,6 +6941,642 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := -result;\r\n end;\r\n \r\n+{$ifdef ASMX64}\r\n+{$ifdef FPC}\r\n+  {$push}\r\n+  {$codealign proc=16}\r\n+{$else}\r\n+  {$codealign 16}\r\n+{$endif}\r\n+procedure NumericSimdData;\r\n+{$ifdef FPC} assembler; nostackframe; {$endif}\r\n+asm\r\n+        {$ifndef FPC} .noframe {$endif}\r\n+        ret\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n+        db $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46\r\n+        db $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75\r\n+        db $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30\r\n+        db $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01\r\n+        db $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00\r\n+        db $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00\r\n+        db $00, $00, $00, $00, $84, $d7, $97, $41, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $00, $00, $00, $00, $00, $00, $00, $80, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $80, $00, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $00, $01, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $00, $01, $02, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $00, $01, $02, $03, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $00, $01, $02, $03, $04, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $00, $01, $02, $03, $04, $05, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $00, $\n... [truncated, 25513 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 569,
+          "deletions": 9,
+          "patch": "@@ -11518,8 +11518,14 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n+{$ifdef ASMX64}\r\n+function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$else}\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n+{$ifend}\r\n+\r\n var\r\n   // logic below is similar to mormot.core.text.pas GetExtended()\r\n   c, n, cnt: PtrUInt;\r\n@@ -11654,6 +11660,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n            not (fNeg in flags) then\r\n           break;\r\n         inc(Json);\r\n+        dec(frac); // the boundary digit also belongs to the fraction\r\n         v64 := MIN_INT64; // sentinel = magnitude 2^63, already negative\r\n         c := PtrUInt(Json^) - ord('0');\r\n         break;\r\n@@ -11703,15 +11710,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       inc(frac, n);\r\n   end;\r\n   // 2. now v64, frac, cnt, exp contain a number parsed from Json\r\n+  if v64 = 0 then\r\n+  begin // zero is independent of the number of fractional zeros or exponent\r\n+    vd.VType := varInteger;\r\n+    vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n+    result := Json; // returns the first char after the parsed number\r\n+    exit;\r\n+  end;\r\n   if PtrInt(cnt) >= 0 then\r\n-    if v64 = 0 then\r\n-    begin\r\n-      vd.VType := varInteger;\r\n-      vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n-      result := Json; // returns the first char after the parsed number\r\n-      exit;\r\n-    end\r\n-    else if frac = 0 then\r\n+    if frac = 0 then\r\n     begin\r\n       if cnt <= 9 then\r\n         vd.VType := varInt64\r\n@@ -11726,7 +11733,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     end\r\n     else if (frac < 0) and\r\n             (frac >= -4) and\r\n-            (v64 <= CURRENCY_MAX[frac]) then\r\n+            (v64 <= CURRENCY_MAX[frac]) and\r\n+            ((v64 >= 0) or (frac = -4)) then\r\n     begin // currency as ###.0123\r\n       if v64 > 0 then // MIN_INT64 final value may have been set above\r\n       begin\r\n@@ -11739,6 +11747,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       result := Json;\r\n       exit;\r\n     end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   if not AllowVarDouble or\r\n      (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r\n@@ -11772,6 +11789,549 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n   result := Json;\r\n end;\r\n \r\n+{$ifdef ASMX64}\r\n+const\r\n+  NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n+  NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n+\r\n+// SSSE3 digit reduction, adapted from MoonBot's JS4 scanner.\r\n+// Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n+// locate the dot/terminator; PSHUFB and PMADDUBSW/PMADDWD combine exact\r\n+// integer groups. Small positional tables contain byte controls, not powers.\r\n+// The scalar ASM path handles other CPUs and uncommon grammar. Long inputs\r\n+// continue from the end of this window, retaining the parsed integer prefix.\r\n+// REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n+function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n+        {$ifdef ABISYSVX64}\r\n+        mov     r8d, edx\r\n+        mov     rcx, rdi\r\n+        mov     rdx, rsi\r\n+        {$endif ABISYSVX64}\r\n+        test    rcx, rcx\r\n+        jz      @nil\r\n+        test    byte \n... [truncated, 18131 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 0,
+          "patch": "@@ -5733,6 +5733,67 @@ procedure TTestCoreBase.NumericalConversions;\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n   s := '9223372036854775.8';\r\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n+  CheckInvalidNumber('');\r\n+  CheckInvalidNumber(' ');\r\n+  CheckInvalidNumber('+');\r\n+  CheckInvalidNumber('-');\r\n+  CheckInvalidNumber('  +');\r\n+  CheckInvalidNumber('  -');\r\n+  {$ifndef WIN32DELPHI}\r\n+  d := mormot.core.text.NaN;\r\n+  CheckGetExtendedBits('-nAn', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  +NaNtail', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  -NaN', PQWord(@d)^);\r\n+  CheckGetExtendedBits('+iNf', $7FF0000000000000);\r\n+  CheckGetExtendedBits('  -INfinity', QWord($FFF0000000000000));\r\n+  CheckInvalidNumber('N');\r\n+  CheckInvalidNumber('Na');\r\n+  CheckInvalidNumber('I');\r\n+  CheckInvalidNumber('In');\r\n+  CheckInvalidNumber('- NaN');\r\n+  CheckGetExtendedBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckGetExtendedBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckGetExtendedBits('228518839.2', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  {$endif WIN32DELPHI}\r\n+  CheckJsonDoubleBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckJsonDoubleBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckJsonDoubleBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckJsonDoubleBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  // The dot/first fractional digit can straddle the 16-byte SIMD window.\n+  {$ifdef ASMX64}\n+  Check(PtrUInt(@NumericSimdData) and 15 = 0);\n+  {$endif ASMX64}\n+  CheckJsonExact('100000000000000.000', varCurrency, 1000000000000000000);\n+  CheckJsonExact('100000000000000.0001', varCurrency, 1000000000000000001);\r\n+  CheckJsonExact('1234567890123456', varInt64, 1234567890123456);\r\n+  CheckJsonDoubleBits('1.25e0004', $40C86A0000000000);\r\n+  {$ifndef WIN32DELPHI}\r\n+  CheckGetExtendedBits('100000000000000.000', $42D6BCC41E900000);\r\n+  CheckGetExtendedBits('1234567890123456', $43118B54F22AEB00);\r\n+  CheckGetExtendedBits('1.25e0004', $40C86A0000000000);\r\n+  s := '228518839.20000000' + '\",\"next\":1';\r\n+  d := GetExtended(pointer(s), err);\r\n+  CheckEqual(err, 1);\r\n+  CheckUtf8(PQWord(@d)^ = $41AB3DD76E666666, s);\r\n+  {$endif WIN32DELPHI}\r\n+  s := '100000000000000.0001,\"next\":1';\r\n+  P := GetNumericVariantFromJson(pointer(s), TVarData(vj), false);\r\n+  Check(P = PUtf8Char(pointer(s)) + 20);\r\n+  CheckEqual(TVarData(vj).VType, varCurrency);\r\n+  CheckEqual(TVarData(vj).VInt64, 1000000000000000001);\r\n+  CheckJsonDoubleBits('-922337203685477580.8', QWord($C3A999999999999A));\r\n+  CheckJsonDoubleBits('-92233720368547758.08', QWord($C3747AE147AE147B));\r\n+  CheckJsonDoubleBits('-9223372036854775.808', QWord($C340624DD2F1A9FC));\r\n+  s := '0.' + RawUtf8(StringOfChar('0', 324));\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n+  s := '-0e-400';\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n   CheckInvalidNumber('1.2.3');\r\n   CheckInvalidNumber('0..1');\r\n   CheckInvalidNumber('toto');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": 582,
+      "is_merge": true
+    },
+    {
+      "sha": "ba60784df21e2112518c6fab1b811505bbadd781",
+      "short_sha": "ba60784d",
+      "subject": "Merge the revised SSSE3 implementation into the existing numeric PR history",
+      "body": "The previous Eisel-Lemire implementation is superseded by the tested SSSE3\nand scalar ASM implementation based on upstream c88c4ad. Keep that source\ntree, including the upstream Pascal rewrites, and retain the old PR ancestry\nso the existing pull request can be updated without rewriting its history.",
+      "author": "Mike",
+      "date": "2026-09-15T02:55:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ba60784df21e2112518c6fab1b811505bbadd781",
+      "parents": [
+        "af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+        "c8e595744ac0d4931c9422cab6dccc3e9d4c357a"
+      ],
+      "stats": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "files": [],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Other"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+      "short_sha": "af7922d5",
+      "subject": "core: keep numeric parsing in ASM and share aligned SSSE3 data",
+      "body": "Continue long mantissas and exponents from the SIMD prefix and handle\nuncommon grammar and CPUs without SSSE3 in scalar ASM. Preserve the Pascal\nreference's rounding, errors, JSON cursor and Integer/Int64/Currency rules.\n\nShare 944 bytes of SIMD constants between both parsers, with explicit\n16-byte alignment independent of Delphi's typed-constant layout. Add\nregressions for alignment, the 16-byte boundary, long exponents and suffixes.\n\nValidated Delphi 12.2 Win64 and FPC 3.2.2 Win64/Linux, Release and Debug:\nupstream core tests, four rounding modes, independent decimal checks,\nmemory boundaries, FPU/ABI, scalar dispatch and exchange JSON parsing.",
+      "author": "Mike",
+      "date": "2026-09-15T02:54:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/af7922d596fd39e4766231cd8cfd6b7102dca3fe",
+      "parents": [
+        "9d219b996dced37da5f9064fde2343d4b965afc8"
+      ],
+      "stats": {
+        "additions": 831,
+        "deletions": 280,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 441,
+          "deletions": 157,
+          "patch": "@@ -1481,6 +1481,25 @@ function ToDouble(const text: RawUtf8; out value: double): boolean;\n     1E160, 1E192, 1E224, 1E256, 1E288, 1E320, 1E-0,{45} 1E-32, 1E-64,\r\n     1E-96, 1E-128, 1E-160, 1E-192, 1E-224, 1E-256, 1E-288, 1E-320);\r\n \r\n+{$ifdef ASMX64}\r\n+const\r\n+  NUMERIC_BIAS = 16;\r\n+  NUMERIC_THRESHOLD = 32;\r\n+  NUMERIC_ASCII0 = 48;\r\n+  NUMERIC_TEN = 64;\r\n+  NUMERIC_HUNDRED = 80;\r\n+  NUMERIC_TENTHOUSAND = 96;\r\n+  NUMERIC_E8 = 112;\r\n+  NUMERIC_SIGN = 128;\r\n+  NUMERIC_CTRLINT = 144;\r\n+  NUMERIC_CTRLDOT = 400;\r\n+  NUMERIC_MASK = 656;\r\n+  NUMERIC_JSONINT = 928;\r\n+// Shared, 16-byte aligned SSSE3 data starts 16 bytes after this entry point.\r\n+// An assembler container avoids Delphi's 8-byte alignment of typed constants.\r\n+procedure NumericSimdData;\r\n+{$endif ASMX64}\r\n+\r\n var\r\n   /// best possible precision when rendering a \"single\" kind of float\r\n   // - can be used as parameter for ExtendedToShort/ExtendedToStr\r\n@@ -6922,6 +6941,82 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := -result;\r\n end;\r\n \r\n+{$ifdef ASMX64}\r\n+{$ifdef FPC}\r\n+  {$push}\r\n+  {$codealign proc=16}\r\n+{$else}\r\n+  {$codealign 16}\r\n+{$endif}\r\n+procedure NumericSimdData;\r\n+{$ifdef FPC} assembler; nostackframe; {$endif}\r\n+asm\r\n+        {$ifndef FPC} .noframe {$endif}\r\n+        ret\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n+        db $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46, $46\r\n+        db $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75, $75\r\n+        db $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30, $30\r\n+        db $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01, $0a, $01\r\n+        db $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00, $64, $00, $01, $00\r\n+        db $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00, $10, $27, $01, $00\r\n+        db $00, $00, $00, $00, $84, $d7, $97, $41, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $00, $00, $00, $00, $00, $00, $00, $80, $00, $00, $00, $00, $00, $00, $00, $00\r\n+        db $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $80, $00, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $00, $01, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $00, $01, $02, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $00, $01, $02, $03, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $00, $01, $02, $03, $04, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $00, $01, $02, $03, $04, $05, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $00, $01, $02, $03, $04, $05, $06, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $00, $01, $02, $03, $04, $05, $06, $07, $80, $80, $80, $80, $80, $80, $80, $80\r\n+        db $80, $80, $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08\r\n+        db $80, $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09\r\n+        db $80, $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a\r\n+        db $80, $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b\r\n+        db $80, $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c\r\n+        db $80, $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d\r\n+        db $80, $00, $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e\r\n+        db $01, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+        db $00, $02, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+        db $00, $01, $03, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+        db $00, $01, $02, $04, $05, $06, $07, $08, $09, $0a, $0b, $0c, $0d, $0e, $0f, $80\r\n+        db $00, $01, $02, $03, $05, $06, $07, $08, $09, $0a, $0\n... [truncated, 30939 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 368,
+          "deletions": 123,
+          "patch": "@@ -11798,23 +11798,21 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n // Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n // locate the dot/terminator; PSHUFB and PMADDUBSW/PMADDWD combine exact\r\n // integer groups. Small positional tables contain byte controls, not powers.\r\n-// Other CPUs, long inputs and uncommon grammar use the Pascal implementation.\r\n+// The scalar ASM path handles other CPUs and uncommon grammar. Long inputs\r\n+// continue from the end of this window, retaining the parsed integer prefix.\r\n // REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n-        test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n-        je      GetNumericVariantFromJsonPascal       // CPU without SSSE3: arguments untouched\r\n         {$ifdef ABISYSVX64}\r\n-        test    rdi, rdi\r\n-        jz      GetNumericVariantFromJsonPascal\r\n         mov     r8d, edx\r\n         mov     rcx, rdi\r\n         mov     rdx, rsi\r\n-        {$else}\r\n-        test    rcx, rcx\r\n-        jz      GetNumericVariantFromJsonPascal       // nil pointer: the scalar answers nil\r\n         {$endif ABISYSVX64}\r\n+        test    rcx, rcx\r\n+        jz      @nil\r\n+        test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n+        je      @scalarStart\r\n         movzx   r11d, r8b\r\n         add     r11d, r11d               // bit 1: AllowDouble\r\n         cmp     byte ptr [rcx], '-'\r\n@@ -11828,41 +11826,37 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         ja      @fallback               // 17 bytes must stay inside the page\r\n         movdqu  xmm0, [rcx]\r\n         movdqa  xmm1, xmm0\r\n-        paddb   xmm1, [rip + @jbias]\r\n-        pcmpgtb xmm1, [rip + @jthreshold] // digit lanes\r\n+        paddb   xmm1, [rip + NumericSimdData + NUMERIC_BIAS]\r\n+        pcmpgtb xmm1, [rip + NumericSimdData + NUMERIC_THRESHOLD] // digit lanes\r\n         pmovmskb eax, xmm1\r\n         not     eax                      // non-digit lanes; bits 16..31 are sentinels\r\n         db      $f3\r\n         bsf     r8d, eax                 // p: integer digit count\r\n         test    r8d, r8d\r\n         jz      @nil                     // no leading digit: not a JSON number\r\n         cmp     r8d, 15\r\n-        ja      @fallback                // 16+ digits: scalar\r\n-        movzx   r9d, byte ptr [rcx]\r\n-        sub     r9d, 48                  // 0 iff the first digit is '0'\r\n-        lea     r10d, [r8 - 1]           // 0 iff a single integer digit\r\n-        test    r9d, r9d\r\n-        setz    r9b\r\n-        test    r10d, r10d\r\n-        setnz   r10b\r\n-        and     r9b, r10b\r\n-        jnz     @nil                     // JSON forbids a leading zero before another digit\r\n-        psubb   xmm0, [rip + @jascii0]\r\n+        ja      @longInteger\r\n+        cmp     byte ptr [rcx], '0'\r\n+        jne     @leadingDigit\r\n+        cmp     r8d, 1\r\n+        jne     @nil                     // JSON forbids a leading zero before another digit\r\n+@leadingDigit:\r\n+        psubb   xmm0, [rip + NumericSimdData + NUMERIC_ASCII0]\r\n         movzx   r9d, byte ptr [rcx + r8] // byte after the integer digits\r\n         cmp     r9d, '.'\r\n         je      @fraction\r\n         or      r9d, 32\r\n         cmp     r9d, 'e'\r\n-        je      @fallback\r\n+        je      @integerExponent\r\n                                          // any other byte ends the number\r\n         mov     r10d, r8d                // p\r\n-        shl     r8d, 4\r\n-        lea     rax, [rip + @jctrlInt]\r\n-        pshufb  xmm0, [rax + r8]         // digits right-aligned in all 16 lanes\r\n-        pmaddubsw xmm0, [rip + @jten]\r\n-        pmaddwd xmm0, [rip + @jhundred]\r\n+        lea     rax, [rip + NumericSimdData + NUMERIC_JSONINT]\n... [truncated, 19848 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 0,
+          "patch": "@@ -5761,6 +5761,28 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckJsonDoubleBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n   CheckJsonDoubleBits('228518839.20000000', $41AB3DD76E666666);\r\n   CheckJsonDoubleBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  // The dot/first fractional digit can straddle the 16-byte SIMD window.\n+  {$ifdef ASMX64}\n+  Check(PtrUInt(@NumericSimdData) and 15 = 0);\n+  {$endif ASMX64}\n+  CheckJsonExact('100000000000000.000', varCurrency, 1000000000000000000);\n+  CheckJsonExact('100000000000000.0001', varCurrency, 1000000000000000001);\r\n+  CheckJsonExact('1234567890123456', varInt64, 1234567890123456);\r\n+  CheckJsonDoubleBits('1.25e0004', $40C86A0000000000);\r\n+  {$ifndef WIN32DELPHI}\r\n+  CheckGetExtendedBits('100000000000000.000', $42D6BCC41E900000);\r\n+  CheckGetExtendedBits('1234567890123456', $43118B54F22AEB00);\r\n+  CheckGetExtendedBits('1.25e0004', $40C86A0000000000);\r\n+  s := '228518839.20000000' + '\",\"next\":1';\r\n+  d := GetExtended(pointer(s), err);\r\n+  CheckEqual(err, 1);\r\n+  CheckUtf8(PQWord(@d)^ = $41AB3DD76E666666, s);\r\n+  {$endif WIN32DELPHI}\r\n+  s := '100000000000000.0001,\"next\":1';\r\n+  P := GetNumericVariantFromJson(pointer(s), TVarData(vj), false);\r\n+  Check(P = PUtf8Char(pointer(s)) + 20);\r\n+  CheckEqual(TVarData(vj).VType, varCurrency);\r\n+  CheckEqual(TVarData(vj).VInt64, 1000000000000000001);\r\n   CheckJsonDoubleBits('-922337203685477580.8', QWord($C3A999999999999A));\r\n   CheckJsonDoubleBits('-92233720368547758.08', QWord($C3747AE147AE147B));\r\n   CheckJsonDoubleBits('-9223372036854775.808', QWord($C340624DD2F1A9FC));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9d219b996dced37da5f9064fde2343d4b965afc8",
+      "short_sha": "9d219b99",
+      "subject": "core: support SSSE3 number parsing on FPC Win64 and Linux",
+      "body": "Share the scanner across Windows and System V x86_64 ABIs, preserving the original arguments for Pascal fallback. Handle NaN/Inf in the cold ASM path with safe prefix reads and matching scalar semantics. Add regression cases for signed special values and incomplete prefixes.",
+      "author": "Mike",
+      "date": "2026-09-15T00:53:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9d219b996dced37da5f9064fde2343d4b965afc8",
+      "parents": [
+        "564172607f8eea6a7fadabf2058cd9b847371c42"
+      ],
+      "stats": {
+        "additions": 100,
+        "deletions": 26,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 65,
+          "deletions": 13,
+          "patch": "@@ -6725,7 +6725,7 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n \r\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n-{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+{$ifdef ASMX64}\r\n function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n {$else}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n@@ -6922,10 +6922,12 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := -result;\r\n end;\r\n \r\n-{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+{$ifdef ASMX64}\r\n const\r\n   NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n   NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n+  NUMERIC_NAN: double = NaN;\r\n+  NUMERIC_INFINITY: double = Infinity;\r\n \r\n // SSSE3 digit reduction, adapted from MoonBot's JS4 scanner.\r\n // Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n@@ -6934,7 +6936,11 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n // Other CPUs, long inputs and uncommon grammar use the Pascal implementation.\r\n // REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n-asm .noframe\r\n+{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n+        {$ifdef ABISYSVX64}\r\n+        mov     rcx, rdi\r\n+        mov     rdx, rsi\r\n+        {$endif ABISYSVX64}\r\n         test    rcx, rcx\r\n         jz      GetExtendedPascal        // nil: the scalar answers\r\n         test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n@@ -6958,7 +6964,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         db      $f3                      // TZCNT, or BSF without BMI1: same result for nonzero input\r\n         bsf     r8d, eax                 // p: first non-digit = integer digit count\r\n         test    r8d, r8d\r\n-        jz      @fallback                // no leading digit\r\n+        jz      @special                 // NaN/Inf or uncommon grammar\r\n         cmp     r8d, 15\r\n         ja      @fallback                // 16+ digits\r\n         psubb   xmm0, [rip + @ascii0]\r\n@@ -7155,36 +7161,82 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         test    r11d, r11d\r\n         jnz     @negativeInteger\r\n         ret\r\n+@special:                               // cold path; preserve rcx/r11 for fallback\r\n+        mov     r9, rcx\r\n+        mov     r10d, r11d\r\n+        test    r11d, r11d\r\n+        jnz     @specialWord             // a leading '-' was already consumed\r\n+@specialSpaces:\r\n+        cmp     byte ptr [r9], ' '\r\n+        jne     @specialSign\r\n+        inc     r9\r\n+        jmp     @specialSpaces\r\n+@specialSign:\r\n+        cmp     byte ptr [r9], '+'\r\n+        je      @specialSkipSign\r\n+        cmp     byte ptr [r9], '-'\r\n+        jne     @specialWord\r\n+        inc     r10d\r\n+@specialSkipSign:\r\n+        inc     r9\r\n+@specialWord:\r\n+        cmp     byte ptr [r9], 0\r\n+        je      @fallback\r\n+        movzx   eax, word ptr [r9]       // a nonzero first byte guarantees char + NUL\r\n+        and     eax, $dfdf\r\n+        cmp     eax, $414e               // NA\r\n+        je      @specialNaN\r\n+        cmp     eax, $4e49               // IN\r\n+        jne     @fallback\r\n+        movzx   eax, byte ptr [r9 + 2]   // both preceding bytes are nonzero\r\n+        and     eax, $df\r\n+        cmp     eax, 'F'\r\n+        jne     @fallback\r\n+        movsd   xmm0, qword ptr [rip + NUMERIC_INFINITY]\r\n+        mov     dword ptr [rdx], 0\r\n+        test    r10d, r10d\r\n+        jz      @specialDone\r\n+        xorpd   xmm0, [rip + @sign]\r\n+@specialDone:\r\n+        ret\r\n+@specialNaN:\r\n+        movzx   eax, byte ptr [r9 + 2]\r\n+        and     eax, $df\r\n+        cmp     eax, 'N'\r\n+        jne     @fallback\r\n+        movsd   xmm0, qword ptr [rip + NUMERIC_NAN] // Pascal ignores the NaN sign and suffix\r\n+        mov     dword ptr [rdx], 0\r\n+        ret\r\n @exponentFallback:\r\n         mo\n... [truncated, 1703 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 13,
+          "patch": "@@ -11518,7 +11518,7 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n-{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+{$ifdef ASMX64}\r\n function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n {$else}\r\n@@ -11789,7 +11789,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n   result := Json;\r\n end;\r\n \r\n-{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+{$ifdef ASMX64}\r\n const\r\n   NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n   NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n@@ -11802,11 +11802,19 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n // REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n-asm .noframe\r\n+{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n         je      GetNumericVariantFromJsonPascal       // CPU without SSSE3: arguments untouched\r\n+        {$ifdef ABISYSVX64}\r\n+        test    rdi, rdi\r\n+        jz      GetNumericVariantFromJsonPascal\r\n+        mov     r8d, edx\r\n+        mov     rcx, rdi\r\n+        mov     rdx, rsi\r\n+        {$else}\r\n         test    rcx, rcx\r\n         jz      GetNumericVariantFromJsonPascal       // nil pointer: the scalar answers nil\r\n+        {$endif ABISYSVX64}\r\n         movzx   r11d, r8b\r\n         add     r11d, r11d               // bit 1: AllowDouble\r\n         cmp     byte ptr [rcx], '-'\r\n@@ -11996,29 +12004,32 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         shr     r8d, 1\r\n         and     r11d, 1\r\n         sub     rcx, r11\r\n+        {$ifdef ABISYSVX64}\r\n+        mov     edx, r8d                 // rdi/rsi still hold the original pointer arguments\r\n+        {$endif ABISYSVX64}\r\n         jmp     GetNumericVariantFromJsonPascal\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jbias:\r\n         db $46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46,$46\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jthreshold:\r\n         db $75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75,$75\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jascii0:\r\n         db $30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30,$30\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jten:\r\n         db $0a,$01,$0a,$01,$0a,$01,$0a,$01,$0a,$01,$0a,$01,$0a,$01,$0a,$01\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jhundred:\r\n         db $64,$00,$01,$00,$64,$00,$01,$00,$64,$00,$01,$00,$64,$00,$01,$00\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jtenThousand:\r\n         db $10,$27,$01,$00,$10,$27,$01,$00,$10,$27,$01,$00,$10,$27,$01,$00\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @je8:\r\n         dq $4197d78400000000, 0\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @jctrlInt: // row p (1..15): p digits right-aligned in all 16 lanes (lane 15 = last digit)\r\n         db $80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80\r\n         db $80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$00\r\n@@ -12036,7 +12047,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         db $80,$80,$80,$00,$01,$02,$03,$04,$05,$06,$07,$08,$09,$0a,$0b,$0c\r\n         db $80,$80,$00,$01,$02,$03,$04,$05,$06,$07,$08,$09,$0a,$0b,$0c,$0d\r\n         db $80,$00,$01,$02,$03,$04,$05,$06,$07,$08,$09,$0a,$0b,$0c,$0d,$0e\r\n-        .align 16\r\n+        {$ifdef FPC} align 16 {$else} .\n... [truncated, 880 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 0,
+          "patch": "@@ -5740,6 +5740,17 @@ procedure TTestCoreBase.NumericalConversions;\n   CheckInvalidNumber('  +');\r\n   CheckInvalidNumber('  -');\r\n   {$ifndef WIN32DELPHI}\r\n+  d := mormot.core.text.NaN;\r\n+  CheckGetExtendedBits('-nAn', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  +NaNtail', PQWord(@d)^);\r\n+  CheckGetExtendedBits('  -NaN', PQWord(@d)^);\r\n+  CheckGetExtendedBits('+iNf', $7FF0000000000000);\r\n+  CheckGetExtendedBits('  -INfinity', QWord($FFF0000000000000));\r\n+  CheckInvalidNumber('N');\r\n+  CheckInvalidNumber('Na');\r\n+  CheckInvalidNumber('I');\r\n+  CheckInvalidNumber('In');\r\n+  CheckInvalidNumber('- NaN');\r\n   CheckGetExtendedBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n   CheckGetExtendedBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n   CheckGetExtendedBits('228518839.2', $41AB3DD76E666666);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "564172607f8eea6a7fadabf2058cd9b847371c42",
+      "short_sha": "56417260",
+      "subject": "core: accelerate Delphi Win64 number parsing with SSSE3",
+      "body": "Reduce short digit sequences in parallel while preserving JSON result types,\nexact Currency payloads, cursors, errors and Pascal rounding order. Reuse POW10\nand compact byte-shuffle masks instead of the Eisel-Lemire power table.\nKeep Pascal for other compilers, CPUs, page boundaries and uncommon inputs.",
+      "author": "Mike",
+      "date": "2026-09-14T23:40:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/564172607f8eea6a7fadabf2058cd9b847371c42",
+      "parents": [
+        "b9ba681ebcb1b599aa70d8e4a43287f7df466f7a"
+      ],
+      "stats": {
+        "additions": 617,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 324,
+          "deletions": 0,
+          "patch": "@@ -6725,7 +6725,12 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n \r\n {$ifndef WIN32DELPHI} // Delphi has its own x86/x87 asm version\r\n \r\n+{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+function GetExtendedPascal(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$else}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$ifend}\r\n+\r\n const\r\n   Scale: double = 1.3407807929942597e154; // 2^512\r\n   InvScale: double = 7.458340731200207e-155; // 2^-512\r\n@@ -6917,6 +6922,325 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := -result;\r\n end;\r\n \r\n+{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+const\r\n+  NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n+  NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n+\r\n+// SSSE3 digit reduction, adapted from MoonBot's JS4 scanner.\r\n+// Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n+// locate the dot/terminator; PSHUFB and PMADDUBSW/PMADDWD combine exact\r\n+// integer groups. Small positional tables contain byte controls, not powers.\r\n+// Other CPUs, long inputs and uncommon grammar use the Pascal implementation.\r\n+// REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n+function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+asm .noframe\r\n+        test    rcx, rcx\r\n+        jz      GetExtendedPascal        // nil: the scalar answers\r\n+        test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n+        je      GetExtendedPascal        // CPU without SSSE3: arguments untouched (r11 is not set yet)\r\n+        xor     r11d, r11d\r\n+        cmp     byte ptr [rcx], '-'\r\n+        jne     @positive\r\n+        inc     rcx\r\n+        inc     r11d\r\n+@positive:\r\n+        mov     eax, ecx\r\n+        and     eax, 4095\r\n+        cmp     eax, 4079\r\n+        ja      @fallback               // 17 bytes must stay inside the page (16 read + terminator)\r\n+        movdqu  xmm0, [rcx]\r\n+        movdqa  xmm1, xmm0\r\n+        paddb   xmm1, [rip + @bias]\r\n+        pcmpgtb xmm1, [rip + @threshold] // digit lanes\r\n+        pmovmskb eax, xmm1\r\n+        not     eax                      // non-digit lanes; bits 16..31 are sentinels\r\n+        db      $f3                      // TZCNT, or BSF without BMI1: same result for nonzero input\r\n+        bsf     r8d, eax                 // p: first non-digit = integer digit count\r\n+        test    r8d, r8d\r\n+        jz      @fallback                // no leading digit\r\n+        cmp     r8d, 15\r\n+        ja      @fallback                // 16+ digits\r\n+        psubb   xmm0, [rip + @ascii0]\r\n+        movzx   r9d, byte ptr [rcx + r8] // byte after the integer digits: dot or terminator\r\n+        cmp     r9d, '.'\r\n+        je      @fraction\r\n+        mov     dword ptr [rdx], 0\r\n+        test    r9d, r9d\r\n+        jz      @integerGo               // NUL: complete number\r\n+        or      r9d, 32\r\n+        cmp     r9d, 'e'\r\n+        je      @integerExponent         // exponent: parsed here, no restart\r\n+        mov     dword ptr [rdx], 1       // any other byte (quote, comma...): partial value, err = 1\r\n+@integerGo:\r\n+        mov     r10d, r8d                // p\r\n+        shl     r8d, 4\r\n+        lea     r9, [rip + @ctrlInt]\r\n+        pshufb  xmm0, [r9 + r8]          // integer: right-aligned, other lanes zero\r\n+        pmaddubsw xmm0, [rip + @ten]\r\n+        pmaddwd xmm0, [rip + @hundred]\r\n+        packssdw xmm0, xmm0\r\n+        pmaddwd xmm0, [rip + @tenThousand] // dwords: H = lanes 0..7, L = lanes 8..15\r\n+        cvtdq2pd xmm0, xmm0              // lo = H, hi = L, both exact\r\n+        cmp     r10d, 8\r\n+        ja      @wideInteger\r\n+        test    r11d, r11d               // <= 8 digits sit in lanes 0..7: value = H\r\n+        jnz     @negativeInteger\r\n+        ret\r\n+@wideInteger:\r\n+        movhlps xmm1, xmm0\r\n+        mulsd   xmm0, [rip + @e8]        // H * 10^8 exact\r\n+        addsd   xmm0, xmm1               // M exact (< 10^15 < 2^53)\r\n+        test \n... [truncated, 11872 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 293,
+          "deletions": 0,
+          "patch": "@@ -11518,8 +11518,14 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n+{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+function GetNumericVariantFromJsonPascal(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$else}\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n+{$ifend}\r\n+\r\n var\r\n   // logic below is similar to mormot.core.text.pas GetExtended()\r\n   c, n, cnt: PtrUInt;\r\n@@ -11783,6 +11789,293 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n   result := Json;\r\n end;\r\n \r\n+{$if defined(WIN64DELPHI) and defined(ASMX64)}\r\n+const\r\n+  NUMERIC_SSSE3_BYTE = ord(cfSSSE3) shr 3;\r\n+  NUMERIC_SSSE3_MASK = 1 shl (ord(cfSSSE3) and 7);\r\n+\r\n+// SSSE3 digit reduction, adapted from MoonBot's JS4 scanner.\r\n+// Read 16 bytes only when P..P+16 stay within one 4 KiB page. Digit masks\r\n+// locate the dot/terminator; PSHUFB and PMADDUBSW/PMADDWD combine exact\r\n+// integer groups. Small positional tables contain byte controls, not powers.\r\n+// Other CPUs, long inputs and uncommon grammar use the Pascal implementation.\r\n+// REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n+function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+asm .noframe\r\n+        test    byte ptr [rip + CpuFeatures + NUMERIC_SSSE3_BYTE], NUMERIC_SSSE3_MASK\r\n+        je      GetNumericVariantFromJsonPascal       // CPU without SSSE3: arguments untouched\r\n+        test    rcx, rcx\r\n+        jz      GetNumericVariantFromJsonPascal       // nil pointer: the scalar answers nil\r\n+        movzx   r11d, r8b\r\n+        add     r11d, r11d               // bit 1: AllowDouble\r\n+        cmp     byte ptr [rcx], '-'\r\n+        jne     @positive\r\n+        inc     rcx\r\n+        or      r11d, 1                  // bit 0: negative\r\n+@positive:\r\n+        mov     eax, ecx\r\n+        and     eax, 4095\r\n+        cmp     eax, 4079\r\n+        ja      @fallback               // 17 bytes must stay inside the page\r\n+        movdqu  xmm0, [rcx]\r\n+        movdqa  xmm1, xmm0\r\n+        paddb   xmm1, [rip + @jbias]\r\n+        pcmpgtb xmm1, [rip + @jthreshold] // digit lanes\r\n+        pmovmskb eax, xmm1\r\n+        not     eax                      // non-digit lanes; bits 16..31 are sentinels\r\n+        db      $f3\r\n+        bsf     r8d, eax                 // p: integer digit count\r\n+        test    r8d, r8d\r\n+        jz      @nil                     // no leading digit: not a JSON number\r\n+        cmp     r8d, 15\r\n+        ja      @fallback                // 16+ digits: scalar\r\n+        movzx   r9d, byte ptr [rcx]\r\n+        sub     r9d, 48                  // 0 iff the first digit is '0'\r\n+        lea     r10d, [r8 - 1]           // 0 iff a single integer digit\r\n+        test    r9d, r9d\r\n+        setz    r9b\r\n+        test    r10d, r10d\r\n+        setnz   r10b\r\n+        and     r9b, r10b\r\n+        jnz     @nil                     // JSON forbids a leading zero before another digit\r\n+        psubb   xmm0, [rip + @jascii0]\r\n+        movzx   r9d, byte ptr [rcx + r8] // byte after the integer digits\r\n+        cmp     r9d, '.'\r\n+        je      @fraction\r\n+        or      r9d, 32\r\n+        cmp     r9d, 'e'\r\n+        je      @fallback\r\n+                                         // any other byte ends the number\r\n+        mov     r10d, r8d                // p\r\n+        shl     r8d, 4\r\n+        lea     rax, [rip + @jctrlInt]\r\n+        pshufb  xmm0, [rax + r8]         // digits right-aligned in all 16 lanes\r\n+        pmaddubsw xmm0, [rip + @jten]\r\n+        pmaddwd xmm0, [rip + @jhundred]\r\n+        packssdw xmm0, xmm0\r\n+        pmaddwd xmm0, [rip + @jtenThousand]\r\n+        movq    rax, xmm0                // low dword: lanes 0..7 (H), high dword: lanes 8..15 (L)\r\n+        mov    \n... [truncated, 10086 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b9ba681ebcb1b599aa70d8e4a43287f7df466f7a",
+      "short_sha": "b9ba681e",
+      "subject": "core: fix empty numbers, padded decimals and negative fraction boundaries",
+      "body": "Reject input without digits and remove trailing zeros that prevent exact\nClinger operands. Count the boundary fractional digit at magnitude 2^63,\npreserve the minimum Currency value, and recognize zero before range checks.\nAdd independent bit-exact regressions to NumericalConversions.",
+      "author": "Mike",
+      "date": "2026-09-14T23:39:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b9ba681ebcb1b599aa70d8e4a43287f7df466f7a",
+      "parents": [
+        "c88c4ad7b25c49a2d12391c75de169204809f02d"
+      ],
+      "stats": {
+        "additions": 59,
+        "deletions": 9,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 0,
+          "patch": "@@ -6755,6 +6755,8 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     inc(P);\r\n     include(flags, fNeg);\r\n   end;\r\n+  if P^ = #0 then\r\n+    goto z; // a sign or spaces alone contain no number\r\n   if P^ > '9' then\r\n   begin\r\n     c := PtrUInt(PWord(P)^) and $dfdf; // at least 1 char + #0\r\n@@ -6865,6 +6867,15 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n     result := v64;\r\n     exit;\r\n   end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   result := v64;\r\n   if (frac < 0) and\r\n      (frac >= -22) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 9,
+          "patch": "@@ -11654,6 +11654,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n            not (fNeg in flags) then\r\n           break;\r\n         inc(Json);\r\n+        dec(frac); // the boundary digit also belongs to the fraction\r\n         v64 := MIN_INT64; // sentinel = magnitude 2^63, already negative\r\n         c := PtrUInt(Json^) - ord('0');\r\n         break;\r\n@@ -11703,15 +11704,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       inc(frac, n);\r\n   end;\r\n   // 2. now v64, frac, cnt, exp contain a number parsed from Json\r\n+  if v64 = 0 then\r\n+  begin // zero is independent of the number of fractional zeros or exponent\r\n+    vd.VType := varInteger;\r\n+    vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n+    result := Json; // returns the first char after the parsed number\r\n+    exit;\r\n+  end;\r\n   if PtrInt(cnt) >= 0 then\r\n-    if v64 = 0 then\r\n-    begin\r\n-      vd.VType := varInteger;\r\n-      vd.VPtrInt := {$ifdef CPU64} v64 {$else} 0 {$endif};\r\n-      result := Json; // returns the first char after the parsed number\r\n-      exit;\r\n-    end\r\n-    else if frac = 0 then\r\n+    if frac = 0 then\r\n     begin\r\n       if cnt <= 9 then\r\n         vd.VType := varInt64\r\n@@ -11726,7 +11727,8 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n     end\r\n     else if (frac < 0) and\r\n             (frac >= -4) and\r\n-            (v64 <= CURRENCY_MAX[frac]) then\r\n+            (v64 <= CURRENCY_MAX[frac]) and\r\n+            ((v64 >= 0) or (frac = -4)) then\r\n     begin // currency as ###.0123\r\n       if v64 > 0 then // MIN_INT64 final value may have been set above\r\n       begin\r\n@@ -11739,6 +11741,15 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n       result := Json;\r\n       exit;\r\n     end;\r\n+  // Remove padding that prevents exact Clinger operands (mantissa and power).\r\n+  while (frac < 0) and\r\n+        ((v64 > MAX_SAFE_JS_INTEGER) or (frac < -22)) do\r\n+  begin\r\n+    if v64 mod 10 <> 0 then\r\n+      break;\r\n+    v64 := v64 div 10;\r\n+    inc(frac);\r\n+  end;\r\n   if not AllowVarDouble or\r\n      (frac <= -324) then // 5.0 x 10^-324 .. 1.7 x 10^308\r\n     exit; // we can't convert into a double\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 0,
+          "patch": "@@ -5733,6 +5733,34 @@ procedure TTestCoreBase.NumericalConversions;\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n   s := '9223372036854775.8';\r\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n+  CheckInvalidNumber('');\r\n+  CheckInvalidNumber(' ');\r\n+  CheckInvalidNumber('+');\r\n+  CheckInvalidNumber('-');\r\n+  CheckInvalidNumber('  +');\r\n+  CheckInvalidNumber('  -');\r\n+  {$ifndef WIN32DELPHI}\r\n+  CheckGetExtendedBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckGetExtendedBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckGetExtendedBits('228518839.2', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckGetExtendedBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  {$endif WIN32DELPHI}\r\n+  CheckJsonDoubleBits('0.00000000000000000770000', $3C61C14719F3FABC);\r\n+  CheckJsonDoubleBits('0.000000007832000000000000', $3E40D1B00240A588);\r\n+  CheckJsonDoubleBits('228518839.20000000', $41AB3DD76E666666);\r\n+  CheckJsonDoubleBits('-228518839.20000000', QWord($C1AB3DD76E666666));\r\n+  CheckJsonDoubleBits('-922337203685477580.8', QWord($C3A999999999999A));\r\n+  CheckJsonDoubleBits('-92233720368547758.08', QWord($C3747AE147AE147B));\r\n+  CheckJsonDoubleBits('-9223372036854775.808', QWord($C340624DD2F1A9FC));\r\n+  s := '0.' + RawUtf8(StringOfChar('0', 324));\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n+  s := '-0e-400';\r\n+  Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = PUtf8Char(pointer(s)) + length(s));\r\n+  CheckEqual(TVarData(vj).VType, varInteger);\r\n+  CheckEqual(TVarData(vj).VInteger, 0);\r\n   CheckInvalidNumber('1.2.3');\r\n   CheckInvalidNumber('0..1');\r\n   CheckInvalidNumber('toto');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
