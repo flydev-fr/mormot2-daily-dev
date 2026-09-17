@@ -1,0 +1,1575 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-17",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-17T03:38:24Z",
+  "range": {
+    "since": "2026-09-15T23:23:35Z",
+    "until": "2026-09-17T03:38:24Z",
+    "head_sha": "cdb7dad52a6989d41ce8405a15d26928e0829ca2"
+  },
+  "version": {
+    "after": "2.4.16922",
+    "before": "2.4.16897"
+  },
+  "totals": {
+    "commits": 26,
+    "additions": 893,
+    "deletions": 326
+  },
+  "commits": [
+    {
+      "sha": "cdb7dad52a6989d41ce8405a15d26928e0829ca2",
+      "short_sha": "cdb7dad5",
+      "subject": "Merge pull request #589 from landrix/fix/synlog-init-deadlock",
+      "body": "core: fixed TSynLog deadlock when the log file can't be created",
+      "author": "ab",
+      "date": "2026-09-16T18:19:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cdb7dad52a6989d41ce8405a15d26928e0829ca2",
+      "parents": [
+        "7e0e8d16b7aafc1d3b7e9bafdd77cb32b18beae5",
+        "0165307dddf46bbb8af4e4308b3e6de4b8946946"
+      ],
+      "stats": {
+        "additions": 39,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -6269,8 +6269,12 @@ class procedure TSynLog.DebuggerNotify(Level: TSynLogLevel;\n end;\r\n \r\n procedure TSynLog.LogFileInit(nfo: PSynLogThreadInfo);\r\n+var\r\n+  bak: TSynLogThreadInfoFlags;\r\n begin\r\n   SynLogGlobalLock.Lock;\r\n+  bak := nfo^.Flags;\r\n+  include(nfo^.Flags, tiExceptionIgnore); // no exception log with fWriter = nil\r\n   try\r\n     fThreadInfo := nfo;\r\n     if logInitDone in fFlags then // paranoid thread safety\r\n@@ -6313,6 +6317,7 @@ procedure TSynLog.LogFileInit(nfo: PSynLogThreadInfo);\n     AddSysInfo;\r\n     fWriterEcho.AddEndOfLine(sllNewRun);\r\n   finally\r\n+    nfo^.Flags := bak;\r\n     SynLogGlobalLock.UnLock;\r\n   end;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 0,
+          "patch": "@@ -11342,8 +11342,41 @@ procedure TTestCoreBase.QuickSelect;\n   end;\r\n end;\r\n \r\n+type\r\n+  TSynLogInitProbe = class(TSynLog)\r\n+  protected\r\n+    procedure CreateLogWriter; override;\r\n+  end;\r\n+\r\n+var\r\n+  SynLogInitExceptionIgnore: boolean;\r\n+\r\n+procedure TSynLogInitProbe.CreateLogWriter;\r\n+begin\r\n+  SynLogInitExceptionIgnore := fFamily.ExceptionIgnoreCurrentThread;\r\n+  inherited CreateLogWriter;\r\n+end;\r\n+\r\n procedure TTestCoreBase.Debugging;\r\n \r\n+  procedure TestLogFileInit;\r\n+  var\r\n+    fam: TSynLogFamily;\r\n+  begin\r\n+    // if the log file creation raises (e.g. missing folder), the exception\r\n+    // should not be logged into this instance with fWriter = nil: it did leak\r\n+    // SynLogGlobalLock, so all other threads were blocked at their first log\r\n+    fam := TSynLogInitProbe.Family;\r\n+    fam.Level := [sllDebug];\r\n+    fam.NoFile := true;\r\n+    TSynLogInitProbe.Add.CloseLogFile; // force LogFileInit, e.g. with --loop\r\n+    Check(not fam.ExceptionIgnoreCurrentThread);\r\n+    SynLogInitExceptionIgnore := false;\r\n+    TSynLogInitProbe.Add.Log(sllDebug, 'init');\r\n+    Check(SynLogInitExceptionIgnore, 'no exception log in LogFileInit');\r\n+    Check(not fam.ExceptionIgnoreCurrentThread, 'flags restored');\r\n+  end;\r\n+\r\n   procedure TestLiveAppendedLines;\r\n   const\r\n     STAMPS: array[0..1] of RawUtf8 = ( // calendar and high resolution layouts\r\n@@ -11684,6 +11717,7 @@ procedure TTestCoreBase.Debugging;\n   Check(dst[len - 1] = '+', 'last+');\r\n   Check(dst[len] = #0, 'ending #0');\r\n   Check(dst[len + 1] = #1, 'buffer');\r\n+  TestLogFileInit;\r\n   // validate TSynLogFile\r\n   TestLiveAppendedLines;\r\n   TestZonedLayout;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": 589,
+      "is_merge": true
+    },
+    {
+      "sha": "0165307dddf46bbb8af4e4308b3e6de4b8946946",
+      "short_sha": "0165307d",
+      "subject": "core: fixed TSynLog deadlock when the log file can't be created",
+      "body": "With ptIdentifiedInOneFile and sllException in Level, a failing file creation\nin CreateLogWriter was intercepted by SynLogException, which logged into the\nsame instance with fWriter = nil: the AV in AddLogThreadName occurred before\nits try..finally, so SynLogGlobalLock was never released and all other threads\nwere blocked at their first log. LogFileInit now sets tiExceptionIgnore, as\nPerformRotation already does.",
+      "author": "Sven Harazim",
+      "date": "2026-09-16T17:37:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0165307dddf46bbb8af4e4308b3e6de4b8946946",
+      "parents": [
+        "7e0e8d16b7aafc1d3b7e9bafdd77cb32b18beae5"
+      ],
+      "stats": {
+        "additions": 39,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -6269,8 +6269,12 @@ class procedure TSynLog.DebuggerNotify(Level: TSynLogLevel;\n end;\r\n \r\n procedure TSynLog.LogFileInit(nfo: PSynLogThreadInfo);\r\n+var\r\n+  bak: TSynLogThreadInfoFlags;\r\n begin\r\n   SynLogGlobalLock.Lock;\r\n+  bak := nfo^.Flags;\r\n+  include(nfo^.Flags, tiExceptionIgnore); // no exception log with fWriter = nil\r\n   try\r\n     fThreadInfo := nfo;\r\n     if logInitDone in fFlags then // paranoid thread safety\r\n@@ -6313,6 +6317,7 @@ procedure TSynLog.LogFileInit(nfo: PSynLogThreadInfo);\n     AddSysInfo;\r\n     fWriterEcho.AddEndOfLine(sllNewRun);\r\n   finally\r\n+    nfo^.Flags := bak;\r\n     SynLogGlobalLock.UnLock;\r\n   end;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 0,
+          "patch": "@@ -11342,8 +11342,41 @@ procedure TTestCoreBase.QuickSelect;\n   end;\r\n end;\r\n \r\n+type\r\n+  TSynLogInitProbe = class(TSynLog)\r\n+  protected\r\n+    procedure CreateLogWriter; override;\r\n+  end;\r\n+\r\n+var\r\n+  SynLogInitExceptionIgnore: boolean;\r\n+\r\n+procedure TSynLogInitProbe.CreateLogWriter;\r\n+begin\r\n+  SynLogInitExceptionIgnore := fFamily.ExceptionIgnoreCurrentThread;\r\n+  inherited CreateLogWriter;\r\n+end;\r\n+\r\n procedure TTestCoreBase.Debugging;\r\n \r\n+  procedure TestLogFileInit;\r\n+  var\r\n+    fam: TSynLogFamily;\r\n+  begin\r\n+    // if the log file creation raises (e.g. missing folder), the exception\r\n+    // should not be logged into this instance with fWriter = nil: it did leak\r\n+    // SynLogGlobalLock, so all other threads were blocked at their first log\r\n+    fam := TSynLogInitProbe.Family;\r\n+    fam.Level := [sllDebug];\r\n+    fam.NoFile := true;\r\n+    TSynLogInitProbe.Add.CloseLogFile; // force LogFileInit, e.g. with --loop\r\n+    Check(not fam.ExceptionIgnoreCurrentThread);\r\n+    SynLogInitExceptionIgnore := false;\r\n+    TSynLogInitProbe.Add.Log(sllDebug, 'init');\r\n+    Check(SynLogInitExceptionIgnore, 'no exception log in LogFileInit');\r\n+    Check(not fam.ExceptionIgnoreCurrentThread, 'flags restored');\r\n+  end;\r\n+\r\n   procedure TestLiveAppendedLines;\r\n   const\r\n     STAMPS: array[0..1] of RawUtf8 = ( // calendar and high resolution layouts\r\n@@ -11684,6 +11717,7 @@ procedure TTestCoreBase.Debugging;\n   Check(dst[len - 1] = '+', 'last+');\r\n   Check(dst[len] = #0, 'ending #0');\r\n   Check(dst[len + 1] = #1, 'buffer');\r\n+  TestLogFileInit;\r\n   // validate TSynLogFile\r\n   TestLiveAppendedLines;\r\n   TestZonedLayout;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7e0e8d16b7aafc1d3b7e9bafdd77cb32b18beae5",
+      "short_sha": "7e0e8d16",
+      "subject": "core: ConsoleWaitForEnterKey() use our shutdown futex",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T15:08:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7e0e8d16b7aafc1d3b7e9bafdd77cb32b18beae5",
+      "parents": [
+        "9247be3c81828c710047624a896577f08564ba4e"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 18,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -6242,6 +6242,7 @@ function RunUntilSigTerminatedState: TServiceState;\n   // - on Linux you could even write:\r\n   // ! if Assigned(OsWaitOnValue) then\r\n   // !   OsWaitOnValue(@SynDaemonTerminated, 0, INFINITE); // clean futex wait\r\n+  // - so never assign directly this variable unless you call OsWakeAllOnValue()\r\n   SynDaemonTerminated: integer;\r\n {$else}\r\n /// compatibility function for Delphi POSIX - only SIGINT/SIGQUIT are tracked\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 16,
+          "patch": "@@ -2820,6 +2820,17 @@ begin\n   tmp.Store.Done;\r\n end;\r\n \r\n+procedure WaitForDaemonTermination;\r\n+begin\r\n+  if SynDaemonTerminated = 0 then\r\n+    {$ifdef FPC} // SynDaemonTerminated is a function on Delphi POSIX\r\n+    if Assigned(OsWaitOnValue) then\r\n+      OsWaitOnValue(@SynDaemonTerminated, 0, 1000) // e.g. from Linux futex\r\n+    else\r\n+    {$endif FPC}\r\n+      SleepHiRes(1000);\r\n+end;\r\n+\r\n procedure ConsoleWaitForEnterKey(doCheckSynchronize: boolean);\r\n var\r\n   c: AnsiChar;\r\n@@ -2841,25 +2852,23 @@ begin\n     begin\r\n       res := WaitReadPending(StdInputHandle, 10000);\r\n       if res < 0 then // HUP/ERR/NVAL -> wait to avoid 100% cpu burn\r\n-        if SynDaemonTerminated = 0 then\r\n-          SleepHiRes(1000);\r\n+        WaitForDaemonTermination;\r\n       if res <= 0 then\r\n         continue;\r\n     end;\r\n-    if SynDaemonTerminated = 0 then\r\n-      repeat\r\n-        c := #0;\r\n-        res := FpRead(StdInputHandle, @c, 1);\r\n-        if res <> 1 then\r\n-        begin // EOF/error e.g. under systemd /dev/null -> wait\r\n-          if (SynDaemonTerminated = 0) and\r\n-             not doCheckSynchronize then\r\n-            SleepHiRes(1000);\r\n-          break;\r\n-        end;\r\n-        if c in [#10, #13] then\r\n-          exit; // [Enter] key pressed\r\n-      until false;\r\n+    while SynDaemonTerminated = 0 do\r\n+    begin\r\n+      c := #0;\r\n+      res := FpRead(StdInputHandle, @c, 1);\r\n+      if res <> 1 then\r\n+      begin // EOF/error e.g. under systemd /dev/null -> always wait\r\n+        if not doCheckSynchronize then\r\n+          WaitForDaemonTermination;\r\n+        break;\r\n+      end;\r\n+      if c in [#10, #13] then\r\n+        exit; // [Enter] key pressed\r\n+    end;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16921\n+16922",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16921'\r\n+'2.4.16922'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9247be3c81828c710047624a896577f08564ba4e",
+      "short_sha": "9247be3c",
+      "subject": "core: RunUntilSigTerminated() use an INFINITE futex on Linux",
+      "body": "- as the most cleaned way to wakeup ASAP on termination, and consuming no resource at all in its main thread when run as a daemon",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T14:56:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9247be3c81828c710047624a896577f08564ba4e",
+      "parents": [
+        "45ff2b2354191867167b750474425c18be9f29b4"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 3,
+          "patch": "@@ -5255,10 +5255,15 @@ begin\n       onlog(sllNewRun, 'Start % /% %',\r\n         [servicename, TXT[dofork], Executable.Version.DetailedOrVoid], nil);\r\n     Start;\r\n-    while SynDaemonTerminated = 0 do\r\n-      if GetCurrentThreadID = MainThreadID then\r\n+    if GetCurrentThreadID = MainThreadID then\r\n+      while SynDaemonTerminated = 0 do\r\n         CheckSynchronize(100)\r\n-      else\r\n+    {$ifdef FPC} // SynDaemonTerminated is a function on Delphi POSIX\r\n+    else if Assigned(OsWaitOnValue) then // use clean futex on Linux to wait\r\n+      OsWaitOnValue(@SynDaemonTerminated, 0, INFINITE)\r\n+    {$endif FPC}\r\n+    else\r\n+      while SynDaemonTerminated = 0 do\r\n         SleepHiRes(100);\r\n   finally\r\n     if Assigned(onlog) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16920\n+16921",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16920'\r\n+'2.4.16921'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "45ff2b2354191867167b750474425c18be9f29b4",
+      "short_sha": "45ff2b23",
+      "subject": "core: fixed uninitialized flag in DoubleToAscii()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T14:56:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/45ff2b2354191867167b750474425c18be9f29b4",
+      "parents": [
+        "7000cacc06c9334c0ce69a01d0815574a396d79b"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -8392,6 +8392,7 @@ procedure DoubleToAscii(min_width, frac_digits: integer; const v: double;\n   n_digits_have := d2a_gen_digits_64(@buf, D.f shr (-D.e));\r\n   dot_pos := n_digits_have;\r\n   // Generate digits: fractional part\r\n+  fl := 0;\r\n   {$ifdef CPU32}\r\n   f := 0; // \"sticky\" digit\r\n   {$endif CPU32}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16919\n+16920",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16919'\r\n+'2.4.16920'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.text"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7000cacc06c9334c0ce69a01d0815574a396d79b",
+      "short_sha": "7000cacc",
+      "subject": "core: SynDaemonTerminated can be notified by Linux futex",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T14:53:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7000cacc06c9334c0ce69a01d0815574a396d79b",
+      "parents": [
+        "be7dfd60f1743735dd5a0df99344d93f1c1f4325"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -6239,6 +6239,9 @@ function RunUntilSigTerminatedState: TServiceState;\n var\r\n   /// once SynDaemonIntercept has been called, this global variable\r\n   // contains the SIGQUIT / SIGTERM / SIGINT received signal\r\n+  // - on Linux you could even write:\r\n+  // ! if Assigned(OsWaitOnValue) then\r\n+  // !   OsWaitOnValue(@SynDaemonTerminated, 0, INFINITE); // clean futex wait\r\n   SynDaemonTerminated: integer;\r\n {$else}\r\n /// compatibility function for Delphi POSIX - only SIGINT/SIGQUIT are tracked\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -4980,6 +4980,8 @@ begin\n       [text, Sig, si_code], nil);\r\n   end;\r\n   SynDaemonTerminated := Sig;\r\n+  if Assigned(OsWakeAllOnValue) then\r\n+    OsWakeAllOnValue(@SynDaemonTerminated); // wake e.g. all Linux futexes\r\n end;\r\n \r\n procedure SynDaemonIntercept(const onlog: TSynLogProc);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16918\n+16919",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16918'\r\n+'2.4.16919'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "be7dfd60f1743735dd5a0df99344d93f1c1f4325",
+      "short_sha": "be7dfd60",
+      "subject": "core: tuned ConsoleWaitForEnterKey() shutdown",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T14:16:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/be7dfd60f1743735dd5a0df99344d93f1c1f4325",
+      "parents": [
+        "c2f8bb0f56dee377692caac481828c7a4e774a63"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 16,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 13,
+          "patch": "@@ -2840,22 +2840,26 @@ begin\n     else\r\n     begin\r\n       res := WaitReadPending(StdInputHandle, 10000);\r\n-      if res < 0 then\r\n-        SleepHiRes(1000); // fppoll failed -> wait to burn 100% cpu\r\n+      if res < 0 then // HUP/ERR/NVAL -> wait to avoid 100% cpu burn\r\n+        if SynDaemonTerminated = 0 then\r\n+          SleepHiRes(1000);\r\n       if res <= 0 then\r\n         continue;\r\n     end;\r\n-    repeat\r\n-      c := #0;\r\n-      res := FpRead(StdInputHandle, @c, 1);\r\n-      if res <> 1 then\r\n-      begin\r\n-        SleepHiRes(1000); // EOF/error e.g. under systemd /dev/null -> wait\r\n-        break;\r\n-      end;\r\n-      if c in [#10, #13] then\r\n-        exit;\r\n-    until false;\r\n+    if SynDaemonTerminated = 0 then\r\n+      repeat\r\n+        c := #0;\r\n+        res := FpRead(StdInputHandle, @c, 1);\r\n+        if res <> 1 then\r\n+        begin // EOF/error e.g. under systemd /dev/null -> wait\r\n+          if (SynDaemonTerminated = 0) and\r\n+             not doCheckSynchronize then\r\n+            SleepHiRes(1000);\r\n+          break;\r\n+        end;\r\n+        if c in [#10, #13] then\r\n+          exit; // [Enter] key pressed\r\n+      until false;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -11642,7 +11642,7 @@ procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n   begin\n     opt := SSL_OP_CIPHER_SERVER_PREFERENCE;\n     if HasHWAes then\n-      opt := opt or SSL_OP_PRIORITIZE_CHACHA; // ignore CipherList/CipherSuites\n+      opt := opt or SSL_OP_PRIORITIZE_CHACHA; // favor weak client preference\n     SSL_CTX_set_options(fCtx, opt);\n   end;\n   v := TLS1_2_VERSION; // no SSL3 TLS1.0 TLS1.1",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16917\n+16918",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16917'\r\n+'2.4.16918'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "External libs"
+      ],
+      "units": [
+        "mormot.core.os.posix",
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c2f8bb0f56dee377692caac481828c7a4e774a63",
+      "short_sha": "c2f8bb0f",
+      "subject": "core: fixed ConsoleWaitForEnterKey() when run under systemd",
+      "body": "- in which case StdIn is /dev/null so it did burn 100% of CPU",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T14:00:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c2f8bb0f56dee377692caac481828c7a4e774a63",
+      "parents": [
+        "7eb6b9e56e73e2f3818a868a690077671e27800c"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4255,7 +4255,7 @@ function GetFileNameFromUrl(const Uri: RawUtf8): TFileName;\n {$else}\r\n \r\n /// internal function just wrapping fppoll(POLLIN or POLLPRI)\r\n-function WaitReadPending(fd, timeout: integer): boolean;\r\n+function WaitReadPending(fd, timeout: integer): integer;\r\n \r\n type\r\n   /// optional callback used by PosixFileNames()\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 8,
+          "patch": "@@ -2073,15 +2073,20 @@ begin\n             (PosixSymlink(Target, SymLink) = 0);\r\n end;\r\n \r\n-function WaitReadPending(fd, timeout: integer): boolean;\r\n+function WaitReadPending(fd, timeout: integer): integer;\r\n var\r\n   p: TPollFD; // select() limits process to 1024 sockets in POSIX -> use poll()\r\n   // https://moythreads.com/wordpress/2009/12/22/select-system-call-limitation\r\n begin\r\n   p.fd := fd;\r\n   p.events := POLLIN or POLLPRI;\r\n   p.revents := 0;\r\n-  result := FpPoll(@p, 1, timeout) > 0;\r\n+  result := FpPoll(@p, 1, timeout);\r\n+  if result > 0 then\r\n+    if p.revents and (POLLIN or POLLPRI) <> 0 then\r\n+      result := 1   // something is available\r\n+    else\r\n+      result := -1; // HUP/ERR/NVAL: not readable console input\r\n end;\r\n \r\n procedure ConsoleErrorWrite(const text: RawUtf8);\r\n@@ -2698,7 +2703,7 @@ end;\n \r\n function LinuxEventFDWait(fd: integer; ms: integer): boolean;\r\n begin\r\n-  result := WaitReadPending(fd, ms); // call FpPoll()\r\n+  result := WaitReadPending(fd, ms) > 0; // call FpPoll()\r\n end;\r\n {$else}\r\n function LinuxEventFD(nonblocking, semaphore: boolean): integer;\r\n@@ -2818,6 +2823,7 @@ end;\n procedure ConsoleWaitForEnterKey(doCheckSynchronize: boolean);\r\n var\r\n   c: AnsiChar;\r\n+  res: integer;\r\n begin\r\n   if GetCurrentThreadID = MainThreadID then\r\n     SynDaemonIntercept // intercept ^C and SIGQUIT - do nothing if already set\r\n@@ -2828,15 +2834,25 @@ begin\n     if doCheckSynchronize then\r\n     begin\r\n       CheckSynchronize(1000);\r\n-      if not WaitReadPending(StdInputHandle, 0) then\r\n+      if WaitReadPending(StdInputHandle, 0) <= 0 then\r\n         continue;\r\n     end\r\n-    else if not WaitReadPending(StdInputHandle, 10000) then\r\n-      continue;\r\n+    else\r\n+    begin\r\n+      res := WaitReadPending(StdInputHandle, 10000);\r\n+      if res < 0 then\r\n+        SleepHiRes(1000); // fppoll failed -> wait to burn 100% cpu\r\n+      if res <= 0 then\r\n+        continue;\r\n+    end;\r\n     repeat\r\n       c := #0;\r\n-      if FpRead(StdInputHandle, @c, 1) <> 1 then\r\n+      res := FpRead(StdInputHandle, @c, 1);\r\n+      if res <> 1 then\r\n+      begin\r\n+        SleepHiRes(1000); // EOF/error e.g. under systemd /dev/null -> wait\r\n         break;\r\n+      end;\r\n       if c in [#10, #13] then\r\n         exit;\r\n     until false;\r\n@@ -5483,7 +5499,7 @@ var\n     u: RawUtf8;\r\n   begin\r\n     result := false; // return false on pipe closed\r\n-    if WaitReadPending(fd, wait) then\r\n+    if WaitReadPending(fd, wait) > 0 then\r\n     begin\r\n       n := fpread(fd, @tmp, SizeOf(tmp));\r\n       if n <= 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16916\n+16917",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16916'\r\n+'2.4.16917'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7eb6b9e56e73e2f3818a868a690077671e27800c",
+      "short_sha": "7eb6b9e5",
+      "subject": "net: proper TLS 1.3 support",
+      "body": "- as reported by #584 but with more complete fix\n- introducing TNetTlsContext.CipherSuites for TLS 1.3 - with OpenSSL, SSL_CTX_set_ciphersuites() is properly called with this value, or our own default suites\n- HasHWAes preference is bypassed if the client ask explicitly for CHACHA",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T13:12:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7eb6b9e56e73e2f3818a868a690077671e27800c",
+      "parents": [
+        "02bcae4a360ee66614b2b1fecc4079fcbccde0a8"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 4,
+          "patch": "@@ -11338,6 +11338,7 @@ procedure TOpenSslNetTls.Check(const method: ShortString; res: integer);\n     EOpenSslNetTls.CheckFailed(self, method, fLastError, fSsl, res, fServerAddress);\n end;\n \n+// see https://www.ibm.com/support/knowledgecenter/SSB23S_1.1.0.2020/gtps7/s5sple2.html\n const\n   // list taken on 2026-05-01 from https://ssl-config.mozilla.org/\n   SAFE_CIPHERLIST: array[ {hwaes=} boolean ] of PUtf8Char = (\n@@ -11355,8 +11356,16 @@ procedure TOpenSslNetTls.Check(const method: ShortString; res: integer);\n     'ECDHE-RSA-AES256-GCM-SHA384:' +\n     'ECDHE-ECDSA-CHACHA20-POLY1305:' +\n     'ECDHE-RSA-CHACHA20-POLY1305');\n-\n-// see https://www.ibm.com/support/knowledgecenter/SSB23S_1.1.0.2020/gtps7/s5sple2.html\n+  // list specific to TLS 1.3\n+  SAFE_TLS13_CIPHERSUITES: array[ {hwaes=} boolean ] of PUtf8Char = (\n+    // without AES acceleration\n+    'TLS_CHACHA20_POLY1305_SHA256:' +\n+    'TLS_AES_128_GCM_SHA256:' +\n+    'TLS_AES_256_GCM_SHA384',\n+    // with AES acceleration\n+    'TLS_AES_128_GCM_SHA256:' +\n+    'TLS_AES_256_GCM_SHA384:' +\n+    'TLS_CHACHA20_POLY1305_SHA256');\n \n procedure TOpenSslNetTls.AfterConnection(Socket: TNetSocket;\n   var Context: TNetTlsContext; const ServerAddress: RawUtf8);\n@@ -11504,7 +11513,7 @@ procedure TOpenSslNetTls.AfterConnection(Socket: TNetSocket;\n \n procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n var\n-  v, mode, i: integer;\n+  v, mode, i, opt: integer;\n   cert: RawByteString;\n   x: PX509;\n   xa: PX509DynArray;\n@@ -11619,9 +11628,23 @@ procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n   else if Bind and (pk = nil) then\n     raise EOpenSslNetTls.Create('AfterBind: PrivateKey required');\n   if Context.CipherList = '' then\n-    Context.CipherList := SAFE_CIPHERLIST[HasHWAes];\n+    Context.CipherList := SAFE_CIPHERLIST[HasHWAes]; // our own default\n   Check('SetupCtx set_cipher_list',\n     SSL_CTX_set_cipher_list(fCtx, pointer(Context.CipherList)));\n+  if not Context.DisableTls13 then\n+  begin\n+    if Context.CipherSuites = '' then\n+      Context.CipherSuites := SAFE_TLS13_CIPHERSUITES[HasHWAes]; // our default\n+    Check('SetupCtx set_ciphersuites',\n+      SSL_CTX_set_ciphersuites(fCtx, pointer(Context.CipherSuites)));\n+  end;\n+  if Bind then\n+  begin\n+    opt := SSL_OP_CIPHER_SERVER_PREFERENCE;\n+    if HasHWAes then\n+      opt := opt or SSL_OP_PRIORITIZE_CHACHA; // ignore CipherList/CipherSuites\n+    SSL_CTX_set_options(fCtx, opt);\n+  end;\n   v := TLS1_2_VERSION; // no SSL3 TLS1.0 TLS1.1\n   if Context.AllowDeprecatedTls then\n     v := TLS1_VERSION; // allow TLS1.0 TLS1.1 but no SSL",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16915\n+16916",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16915'\r\n+'2.4.16916'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 1,
+          "patch": "@@ -1087,9 +1087,14 @@   TNetTlsContext = record\n     // especially on Windows\r\n     // - not used on SChannel client\r\n     CASystemStores: TSystemCertificateStores;\r\n-    /// input: preferred Cipher List\r\n+    /// input: preferred Cipher List - for TLS 1.3, use CipherSuites instead\r\n+    // - colon-separated names as accepted by SSL_CTX_set_cipher_list()\r\n     // - not used on SChannel\r\n     CipherList: RawUtf8;\r\n+    /// input: preferred TLS 1.3 Cipher Suites\r\n+    // - colon-separated names as accepted by SSL_CTX_set_ciphersuites()\r\n+    // - not used on SChannel\r\n+    CipherSuites: RawUtf8;\r\n     /// input: a CSV list of host names to be validated by AfterConnection\r\n     // - e.g. 'smtp.example.com,example.com'\r\n     // - not used on SChannel\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.openssl11",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "02bcae4a360ee66614b2b1fecc4079fcbccde0a8",
+      "short_sha": "02bcae4a",
+      "subject": "lib: SSL_CTX_set_ciphersuites() support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T13:11:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/02bcae4a360ee66614b2b1fecc4079fcbccde0a8",
+      "parents": [
+        "29b5fb26818134c14cdf95efed98c8286eda8a53"
+      ],
+      "stats": {
+        "additions": 53,
+        "deletions": 32,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 30,
+          "patch": "@@ -681,38 +681,40 @@ function OpenSslWinLocateEntry(const entries: TRawUtf8DynArray;\n   SSL_ERROR_WANT_ASYNC_JOB = 10;\n   SSL_ERROR_WANT_CLIENT_HELLO_CB = 11;\n \n-  SSL_OP_LEGACY_SERVER_CONNECT = $00000004;\n-  SSL_OP_TLSEXT_PADDING = $00000010;\n-  SSL_OP_SAFARI_ECDHE_ECDSA_BUG = $00000040;\n-  SSL_OP_ALLOW_NO_DHE_KEX = $00000400;\n-  SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS = $00000800;\n-  SSL_OP_NO_QUERY_MTU = $00001000;\n-  SSL_OP_COOKIE_EXCHANGE = $00002000;\n-  SSL_OP_NO_TICKET = $00004000;\n-  SSL_OP_CISCO_ANYCONNECT = $00008000;\n+  SSL_OP_LEGACY_SERVER_CONNECT                  = $00000004;\n+  SSL_OP_TLSEXT_PADDING                         = $00000010;\n+  SSL_OP_SAFARI_ECDHE_ECDSA_BUG                 = $00000040;\n+  SSL_OP_ALLOW_NO_DHE_KEX                       = $00000400;\n+  SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS            = $00000800;\n+  SSL_OP_NO_QUERY_MTU                           = $00001000;\n+  SSL_OP_COOKIE_EXCHANGE                        = $00002000;\n+  SSL_OP_NO_TICKET                              = $00004000;\n+  SSL_OP_CISCO_ANYCONNECT                       = $00008000;\n   SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION = $00010000;\n-  SSL_OP_NO_COMPRESSION = $00020000;\n-  SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION = $00040000;\n-  SSL_OP_NO_ENCRYPT_THEN_MAC = $00080000;\n-  SSL_OP_ENABLE_MIDDLEBOX_COMPAT = $00100000;\n-  SSL_OP_PRIORITIZE_CHACHA = $00200000;\n-  SSL_OP_CIPHER_SERVER_PREFERENCE = $00400000;\n-  SSL_OP_TLS_ROLLBACK_BUG = $00800000;\n-  SSL_OP_NO_ANTI_REPLAY = $01000000;\n-  SSL_OP_NO_SSLv3 = $02000000;\n-  SSL_OP_NO_TLSv1 = $04000000;\n-  SSL_OP_NO_TLSv1_2 = $08000000;\n-  SSL_OP_NO_TLSv1_1 = $10000000;\n-  SSL_OP_NO_TLSv1_3 = $20000000;\n-  SSL_OP_NO_DTLSv1 = $04000000;\n-  SSL_OP_NO_DTLSv1_2 = $08000000;\n+  SSL_OP_NO_COMPRESSION                         = $00020000;\n+  SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION      = $00040000;\n+  SSL_OP_NO_ENCRYPT_THEN_MAC                    = $00080000;\n+  SSL_OP_ENABLE_MIDDLEBOX_COMPAT                = $00100000;\n+  SSL_OP_PRIORITIZE_CHACHA                      = $00200000;\n+  SSL_OP_CIPHER_SERVER_PREFERENCE               = $00400000;\n+  SSL_OP_TLS_ROLLBACK_BUG                       = $00800000;\n+  SSL_OP_NO_ANTI_REPLAY                         = $01000000;\n+  SSL_OP_NO_SSLv3                               = $02000000;\n+  SSL_OP_NO_TLSv1                               = $04000000;\n+  SSL_OP_NO_TLSv1_2                             = $08000000;\n+  SSL_OP_NO_TLSv1_1                             = $10000000;\n+  SSL_OP_NO_TLSv1_3                             = $20000000;\n+  SSL_OP_NO_DTLSv1                              = SSL_OP_NO_TLSv1;\n+  SSL_OP_NO_DTLSv1_2                            = SSL_OP_NO_TLSv1_2;\n+  SSL_OP_NO_DTLSv1_3                            = SSL_OP_NO_TLSv1_3;\n   SSL_OP_NO_SSL_MASK = SSL_OP_NO_SSLv3 or\n                        SSL_OP_NO_TLSv1 or\n                        SSL_OP_NO_TLSv1_1 or\n                        SSL_OP_NO_TLSv1_2 or\n                        SSL_OP_NO_TLSv1_3;\n   SSL_OP_NO_DTLS_MASK = SSL_OP_NO_DTLSv1 or\n-                        SSL_OP_NO_DTLSv1_2;\n+                        SSL_OP_NO_DTLSv1_2 or\n+                        SSL_OP_NO_DTLSv1_3;\n   SSL_OP_NO_RENEGOTIATION = $40000000;\n   SSL_OP_CRYPTOPRO_TLSEXT_BUG = $80000000;\n   SSL_OP_ALL = SSL_OP_CRYPTOPRO_TLSEXT_BUG or\n@@ -2185,7 +2187,8 @@ procedure SSL_CTX_set_default_passwd_cb(ctx: PSSL_CTX; cb: Ppem_password_cb); cd\n procedure SSL_CTX_set_default_passwd_cb_userdata(ctx: PSSL_CTX; u: pointer); cdecl;\n function SSL_CTX_use_PrivateKey_file(ctx: PSSL_CTX; _file: PUtf8Char;\n    typ: integer): integer; cdecl;\n-function SSL_CTX_set_cipher_list(p1: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n+function SSL_CTX_set_cipher_list(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n+function SSL_CTX_set_ciphersuites(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n function SSL_set_fd(s: PSSL; fd: integer): integer; cdecl;\n function SSL_get_current_cipher(s: PSSL): PSSL_CIPHER; cdecl;\n function SSL_CIPHER_description(p1: PSSL_CIPHER;\n@@ -3\n... [truncated, 2889 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16914\n+16915",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16914'\r\n+'2.4.16915'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "29b5fb26818134c14cdf95efed98c8286eda8a53",
+      "short_sha": "29b5fb26",
+      "subject": "core: fixed TSynLogFile zone layout",
+      "body": "- proper fix of https://github.com/synopse/mORMot2/pull/587",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T12:22:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/29b5fb26818134c14cdf95efed98c8286eda8a53",
+      "parents": [
+        "d73cd49e1a90bad5917898af56bf23084fed1c67"
+      ],
+      "stats": {
+        "additions": 38,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -8051,7 +8051,7 @@ procedure TSynLogFile.ProcessOneLine(LineBeg, LineEnd: PUtf8Char);\n     begin\r\n       // YYYYMMDD HHMMSSXX[Z] is one/two chars bigger than Timestamp\r\n       fLineLevelOffset := 19;\r\n-      if LineBeg[fLineLevelOffset] = 'Z' then\r\n+      if LineBeg[fLineLevelOffset - 2] = 'Z' then\r\n         inc(fLineLevelOffset); // did have TSynLogFamily.ZonedTimestamp\r\n       fDayCurrent := PInt64(LineBeg)^;\r\n       AddInteger(fDayChangeIndex, fCount - 1);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16913\n+16914",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16913'\r\n+'2.4.16914'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 0,
+          "patch": "@@ -11464,6 +11464,40 @@ procedure TTestCoreBase.Debugging;\n     end;\r\n   end;\r\n \r\n+  procedure TestZonedLayout;\r\n+  const\r\n+    HEADER = 'C:\\mormot2tests.exe 1.0.0 (2025-02-13 16:41:00)'#13#10 +\r\n+      'Host=Test User=Test CPU=1 OS=0 Wow64=0 Freq=1000000'#13#10 +\r\n+      'TSynLog 2.0 2025-02-13T16:41:00'#13#10#13#10;\r\n+  var\r\n+    log: TSynLogFile;\r\n+    t, i: integer;\r\n+    input, source: RawUtf8;\r\n+  begin\r\n+    // Int18ToText() encodes a thread number as $20 + 6-bit chars, so thread 58\r\n+    // ends with 'Z' - which the ZonedTimestamp detection did read as its own\r\n+    // 'Z' marker, shifting fLineLevelOffset and loading the whole file empty\r\n+    for t := 0 to 1 do\r\n+    begin\r\n+      input := '20250213 16410200';\r\n+      if t <> 0 then\r\n+        Append(input, 'Z'); // TSynLogFamily.ZonedTimestamp layout\r\n+      Append(input, Int18ToChars3(58), ' info  Zoned payload');\r\n+      source := HEADER;\r\n+      for i := 1 to 4 do\r\n+        Append(source, input, #13#10);\r\n+      log := TSynLogFile.Create(pointer(source), length(source));\r\n+      try\r\n+        CheckEqual(log.Count, 4, 'zoned rows');\r\n+        CheckEqual(log.EventThread[0], 58);\r\n+        CheckEqual(log.EventText[0], ' Zoned payload');\r\n+        Check(log.EventLevel[0] = sllInfo);\r\n+      finally\r\n+        log.Free;\r\n+      end;\r\n+    end;\r\n+  end;\r\n+\r\n   procedure Test(const LOG: RawUtf8; ExpectedDate: TDateTime);\r\n   var\r\n     L: TSynLogFile;\r\n@@ -11652,6 +11686,7 @@ procedure TTestCoreBase.Debugging;\n   Check(dst[len + 1] = #1, 'buffer');\r\n   // validate TSynLogFile\r\n   TestLiveAppendedLines;\r\n+  TestZonedLayout;\r\n   Test('D:\\Dev\\lib\\SQLite3\\exe\\TestSQL3.exe 1.2.3.4 (2011-04-07 11:09:06)'#13#10 +\r\n     'Host=MyPC User=MySelf CPU=2*0-15-1027 OS=2.3=5.1.2600 Wow64=0 Freq=3579545 ' +\r\n     'Instance=D:\\Dev\\MyLibrary.dll'#13#10 +\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d73cd49e1a90bad5917898af56bf23084fed1c67",
+      "short_sha": "d73cd49e",
+      "subject": "core: refactored TSynLogFile/TMemoryMapText",
+      "body": "- after https://github.com/synopse/mORMot2/pull/586",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T12:14:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d73cd49e1a90bad5917898af56bf23084fed1c67",
+      "parents": [
+        "c8b26925ee793250a61334050754dcf357ea9305"
+      ],
+      "stats": {
+        "additions": 55,
+        "deletions": 35,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 16,
+          "patch": "@@ -2036,11 +2036,9 @@   TMemoryMapText = class(TSynPersistent)\n     /// retrieve the number of UTF-8 chars of the given line\r\n     // - warning: no range check is performed about supplied index\r\n     function LineSize(aIndex: integer): integer;\r\n-      {$ifdef HASINLINE}inline;{$endif}\r\n     /// check if there is at least a given number of UTF-8 chars in the given line\r\n     // - this is faster than LineSize(aIndex)<aMinimalCount for big lines\r\n     function LineSizeSmallerThan(aIndex, aMinimalCount: integer): boolean;\r\n-      {$ifdef HASINLINE}inline;{$endif}\r\n     /// returns TRUE if the supplied text is contained in the corresponding line\r\n     function LineContains(const aUpperSearch: RawUtf8; aIndex: integer): boolean; virtual;\r\n     /// retrieve a line content as UTF-8\r\n@@ -9206,46 +9204,63 @@ function TMemoryMapText.GetLineEnd(Line: PUtf8Char): PUtf8Char;\n end;\r\n \r\n function TMemoryMapText.GetLine(aIndex: integer): RawUtf8;\r\n+var\r\n+  p: PUtf8Char;\r\n begin\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) then\r\n     FastAssignNew(result)\r\n   else\r\n-    FastSetString(result, fLines[aIndex],\r\n-      GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex])));\r\n+  begin\r\n+    p := fLines[aIndex];\r\n+    FastSetString(result, p, GetLineSize(p, GetLineEnd(p)));\r\n+  end;\r\n end;\r\n \r\n function TMemoryMapText.GetString(aIndex: integer): string;\r\n+var\r\n+  p: PUtf8Char;\r\n begin\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) then\r\n     result := ''\r\n   else\r\n-    Utf8DecodeToString(fLines[aIndex],\r\n-      GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex])), result);\r\n+  begin\r\n+    p := fLines[aIndex];\r\n+    Utf8DecodeToString(p, GetLineSize(p, GetLineEnd(p)), result);\r\n+  end;\r\n end;\r\n \r\n function TMemoryMapText.LineContains(const aUpperSearch: RawUtf8;\r\n   aIndex: integer): boolean;\r\n+var\r\n+  p: PUtf8Char;\r\n begin\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) or\r\n      (aUpperSearch = '') then\r\n     result := false\r\n   else\r\n-    result := GetLineContains(fLines[aIndex], GetLineEnd(fLines[aIndex]),\r\n-      pointer(aUpperSearch));\r\n+  begin\r\n+    p := fLines[aIndex];\r\n+    result := GetLineContains(p, GetLineEnd(p), pointer(aUpperSearch));\r\n+  end;\r\n end;\r\n \r\n function TMemoryMapText.LineSize(aIndex: integer): integer;\r\n+var\r\n+  p: PUtf8Char;\r\n begin\r\n-  result := GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex]));\r\n+  p := fLines[aIndex];\r\n+  result := GetLineSize(p, GetLineEnd(p));\r\n end;\r\n \r\n function TMemoryMapText.LineSizeSmallerThan(aIndex, aMinimalCount: integer): boolean;\r\n+var\r\n+  p: PUtf8Char;\r\n begin\r\n-  result := GetLineSizeSmallerThan(fLines[aIndex], GetLineEnd(fLines[aIndex]),\r\n-    aMinimalCount);\r\n+  p := fLines[aIndex];\r\n+  result := GetLineSizeSmallerThan(p, GetLineEnd(p), aMinimalCount);\r\n end;\r\n \r\n procedure TMemoryMapText.ProcessOneLine(LineBeg, LineEnd: PUtf8Char);\r\n@@ -9306,11 +9321,10 @@ procedure TMemoryMapText.LoadFromMap(AverageLineLength: integer = 32);\n   if PCardinal(P)^ and $00ffffff = BOM_UTF8 then\r\n     inc(P, 3); // ignore any UTF-8 BOM (still appears on Windows)\r\n   ParseLines(P, fMapEnd, self);\r\n-  if fLinesMax > fCount + 16384 then\r\n-  begin\r\n-    ReallocMem(fLines, fCount * SizeOf(pointer)); // size down only if worth it\r\n-    fLinesMax := fCount;\r\n-  end;\r\n+  if fLinesMax <= fCount + 16384 then\r\n+    exit;\r\n+  ReallocMem(fLines, fCount * SizeOf(pointer)); // size down only if worth it\r\n+  fLinesMax := fCount;\r\n end;\r\n \r\n procedure TMemoryMapText.AddInMemoryLine(const aNewLine: RawUtf8);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 7,
+          "patch": "@@ -7493,6 +7493,8 @@ function TSynLogFile.EventCount(const aSet: TSynLogLevels): integer;\n \r\n function TSynLogFile.LineContains(const aUpperSearch: RawUtf8;\r\n   aIndex: integer): boolean;\r\n+var\r\n+  p: PUtf8Char;\r\n begin // overriden to take fLineTextOffset into account\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) or\r\n@@ -7501,8 +7503,10 @@ function TSynLogFile.LineContains(const aUpperSearch: RawUtf8;\n      (fLevels[aIndex] = sllNone) then // an unparsed row has no text at offset\r\n     result := false\r\n   else\r\n-    result := GetLineContains(PUtf8Char(fLines[aIndex]) + fLineTextOffset,\r\n-      GetLineEnd(fLines[aIndex]), pointer(aUpperSearch));\r\n+  begin\r\n+    p := fLines[aIndex];\r\n+    result := GetLineContains(p + fLineTextOffset, GetLineEnd(p), pointer(aUpperSearch));\r\n+  end;\r\n end;\r\n \r\n function TSynLogFile.EventDateTime(aIndex: integer): TDateTime;\r\n@@ -8215,19 +8219,20 @@ procedure TSynLogFile.GetDays(out Days: TDateTimeDynArray);\n \r\n function TSynLogFile.GetEventText(index: integer): RawUtf8;\r\n var\r\n-  L: cardinal;\r\n+  L: PtrInt;\r\n+  p: PUtf8Char;\r\n begin\r\n   if (self = nil) or\r\n      (cardinal(index) >= cardinal(fCount)) then\r\n     FastAssignNew(result)\r\n   else\r\n   begin\r\n-    L := GetLineSize(fLines[index], GetLineEnd(fLines[index]));\r\n-    if L <= fLineTextOffset then\r\n+    p := fLines[index];\r\n+    L := GetLineSize(p, GetLineEnd(p)) - fLineTextOffset;\r\n+    if L <= 0 then\r\n       FastAssignNew(result)\r\n     else\r\n-      FastSetString(result, PAnsiChar(fLines[index]) + fLineTextOffset,\r\n-        L - fLineTextOffset);\r\n+      FastSetString(result, p + fLineTextOffset, L);\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -9612,8 +9612,7 @@ function GetLineSizeSmallerThan(P, PEnd: PUtf8Char; aMinimalCount: integer): boo\n begin\r\n   result := false;\r\n   if P <> nil then\r\n-    if PEnd = nil then\r\n-      // an in-memory line is #0 ended, as GetLineSize/GetLineContains expect\r\n+    if PEnd = nil then // ending at #0\r\n       while not (P^ in [#0, #10, #13]) do\r\n       begin\r\n         if aMinimalCount = 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16910\n+16913",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16910'\r\n+'2.4.16913'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 8,
+          "patch": "@@ -11365,11 +11365,11 @@ procedure TTestCoreBase.Debugging;\n       begin\r\n         input := STAMPS[s];\r\n         if THREADS[t] <> 0 then\r\n-          input := input + Int18ToChars3(THREADS[t]);\r\n+          Append(input, Int18ToChars3(THREADS[t]));\r\n         input := input + ' info  Mapped payload';\r\n         source := HEADER;\r\n         for i := 1 to 4 do\r\n-          source := source + input + #13#10;\r\n+          Append(source, input, #13#10);\r\n         log := TSynLogFile.Create(pointer(source), length(source));\r\n         try\r\n           CheckEqual(log.Count, 4, 'mapped rows');\r\n@@ -11400,12 +11400,13 @@ procedure TTestCoreBase.Debugging;\n     begin\r\n       stamp := STAMPS[0];\r\n       if t <> 0 then\r\n-        stamp := stamp + Int18ToChars3(THREADS[2]);\r\n-      input := stamp + ' info  ' + RawUtf8OfChar('m', 1078);\r\n-      source := input + #13#10;\r\n-      while length(source) < n * (length(input) + 2) do\r\n-        source := source + source; // O(log n) instead of O(n2) concatenation\r\n-      SetLength(source, n * (length(input) + 2));\r\n+        Append(stamp, Int18ToChars3(THREADS[2]));\r\n+      Join([stamp, ' info  ', RawUtf8OfChar('m', 1078)], input);\r\n+      Join([input, #13#10], source);\r\n+      s := n * (length(input) + 2);\r\n+      while length(source) < s do\r\n+        source := source + source; // O(log n) instead of O(n2) concatenations\r\n+      SetLength(source, s);\r\n       source := HEADER + source;\r\n       log := TSynLogFile.Create(pointer(source), length(source));\r\n       try\r\n@@ -11462,6 +11463,7 @@ procedure TTestCoreBase.Debugging;\n       Free;\r\n     end;\r\n   end;\r\n+\r\n   procedure Test(const LOG: RawUtf8; ExpectedDate: TDateTime);\r\n   var\r\n     L: TSynLogFile;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.buffers",
+        "mormot.core.log",
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c8b26925ee793250a61334050754dcf357ea9305",
+      "short_sha": "c8b26925",
+      "subject": "Merge pull request #586 from landrix/fix/issue-344-remote-log-thread",
+      "body": "core: fix TMemoryMapText/TSynLogFile rows appended after loading",
+      "author": "ab",
+      "date": "2026-09-16T11:49:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c8b26925ee793250a61334050754dcf357ea9305",
+      "parents": [
+        "4c990d65574e20e87805106b525b446b5edf045d",
+        "d6aea9cc1faf183df34c862cbf6286a325b1e86d"
+      ],
+      "stats": {
+        "additions": 195,
+        "deletions": 18,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 6,
+          "patch": "@@ -1996,6 +1996,8 @@   TMemoryMapText = class(TSynPersistent)\n     fFileName: TFileName;\r\n     fAppendedLines: TRawUtf8DynArray;\r\n     fAppendedLinesCount: integer;\r\n+    function GetLineEnd(Line: PUtf8Char): PUtf8Char;\r\n+      {$ifdef HASINLINE}inline;{$endif}\r\n     function GetLine(aIndex: integer): RawUtf8;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetString(aIndex: integer): string;\r\n@@ -9194,13 +9196,23 @@ procedure TMemoryMapText.SaveToFile(FileName: TFileName; const Header: RawUtf8);\n   end;\r\n end;\r\n \r\n+function TMemoryMapText.GetLineEnd(Line: PUtf8Char): PUtf8Char;\r\n+begin // AddInMemoryLine() ensures an appended row never aliases fMap.Buffer\r\n+  if (PtrUInt(Line) >= PtrUInt(fMap.Buffer)) and\r\n+     (PtrUInt(Line) < PtrUInt(fMapEnd)) then\r\n+    result := fMapEnd\r\n+  else\r\n+    result := nil; // an AddInMemoryLine() entry is a standalone #0 string\r\n+end;\r\n+\r\n function TMemoryMapText.GetLine(aIndex: integer): RawUtf8;\r\n begin\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) then\r\n     FastAssignNew(result)\r\n   else\r\n-    FastSetString(result, fLines[aIndex], GetLineSize(fLines[aIndex], fMapEnd));\r\n+    FastSetString(result, fLines[aIndex],\r\n+      GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex])));\r\n end;\r\n \r\n function TMemoryMapText.GetString(aIndex: integer): string;\r\n@@ -9209,7 +9221,8 @@ function TMemoryMapText.GetString(aIndex: integer): string;\n      (cardinal(aIndex) >= cardinal(fCount)) then\r\n     result := ''\r\n   else\r\n-    Utf8DecodeToString(fLines[aIndex], GetLineSize(fLines[aIndex], fMapEnd), result);\r\n+    Utf8DecodeToString(fLines[aIndex],\r\n+      GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex])), result);\r\n end;\r\n \r\n function TMemoryMapText.LineContains(const aUpperSearch: RawUtf8;\r\n@@ -9220,17 +9233,19 @@ function TMemoryMapText.LineContains(const aUpperSearch: RawUtf8;\n      (aUpperSearch = '') then\r\n     result := false\r\n   else\r\n-    result := GetLineContains(fLines[aIndex], fMapEnd, pointer(aUpperSearch));\r\n+    result := GetLineContains(fLines[aIndex], GetLineEnd(fLines[aIndex]),\r\n+      pointer(aUpperSearch));\r\n end;\r\n \r\n function TMemoryMapText.LineSize(aIndex: integer): integer;\r\n begin\r\n-  result := GetLineSize(fLines[aIndex], fMapEnd);\r\n+  result := GetLineSize(fLines[aIndex], GetLineEnd(fLines[aIndex]));\r\n end;\r\n \r\n function TMemoryMapText.LineSizeSmallerThan(aIndex, aMinimalCount: integer): boolean;\r\n begin\r\n-  result := GetLineSizeSmallerThan(fLines[aIndex], fMapEnd, aMinimalCount);\r\n+  result := GetLineSizeSmallerThan(fLines[aIndex], GetLineEnd(fLines[aIndex]),\r\n+    aMinimalCount);\r\n end;\r\n \r\n procedure TMemoryMapText.ProcessOneLine(LineBeg, LineEnd: PUtf8Char);\r\n@@ -9292,16 +9307,30 @@ procedure TMemoryMapText.LoadFromMap(AverageLineLength: integer = 32);\n     inc(P, 3); // ignore any UTF-8 BOM (still appears on Windows)\r\n   ParseLines(P, fMapEnd, self);\r\n   if fLinesMax > fCount + 16384 then\r\n+  begin\r\n     ReallocMem(fLines, fCount * SizeOf(pointer)); // size down only if worth it\r\n+    fLinesMax := fCount;\r\n+  end;\r\n end;\r\n \r\n procedure TMemoryMapText.AddInMemoryLine(const aNewLine: RawUtf8);\r\n var\r\n   P: PUtf8Char;\r\n+  unaliased: RawUtf8;\r\n begin\r\n   if aNewLine = '' then\r\n     exit;\r\n-  AddRawUtf8(fAppendedLines, fAppendedLinesCount, aNewLine);\r\n+  P := pointer(aNewLine);\r\n+  if (PtrUInt(P) >= PtrUInt(fMap.Buffer)) and\r\n+     (PtrUInt(P) < PtrUInt(fMapEnd)) then\r\n+  begin\r\n+    // never share a reference into the memory mapped buffer, so that a line\r\n+    // pointer alone tells an appended row apart - see GetLineEnd()\r\n+    FastSetString(unaliased, P, length(aNewLine));\r\n+    AddRawUtf8(fAppendedLines, fAppendedLinesCount, unaliased);\r\n+  end\r\n+  else\r\n+    AddRawUtf8(fAppendedLines, fAppendedLinesCount, aNewLine);\r\n   P := pointer(fAppendedLines[fAppendedLinesCount - 1]);\r\n   ProcessOneLine(P, P + StrLen(P));\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 4,
+          "patch": "@@ -7496,11 +7496,13 @@ function TSynLogFile.LineContains(const aUpperSearch: RawUtf8;\n begin // overriden to take fLineTextOffset into account\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(fCount)) or\r\n-     (aUpperSearch = '') then\r\n+     (aUpperSearch = '') or\r\n+     (fLevels = nil) or\r\n+     (fLevels[aIndex] = sllNone) then // an unparsed row has no text at offset\r\n     result := false\r\n   else\r\n     result := GetLineContains(PUtf8Char(fLines[aIndex]) + fLineTextOffset,\r\n-      fMapEnd, pointer(aUpperSearch));\r\n+      GetLineEnd(fLines[aIndex]), pointer(aUpperSearch));\r\n end;\r\n \r\n function TSynLogFile.EventDateTime(aIndex: integer): TDateTime;\r\n@@ -7841,6 +7843,7 @@ procedure TSynLogFile.LoadFromMap(AverageLineLength: integer);\n       if fThreads <> nil then\r\n       begin\r\n         SetLength(fThreads, fCount);\r\n+        fThreadsCount := fCount; // so that AddInMemoryLine() can grow it back\r\n         SetLength(fThreadInfo, fThreadMax + 1);\r\n       end;\r\n     end;\r\n@@ -7891,7 +7894,14 @@ procedure TSynLogFile.AddInMemoryLine(const aNewLine: RawUtf8);\n     Utf8DecodeToString(P, StrLen(P), string(fFileName));\r\n   end\r\n   else\r\n+  begin\r\n+    if fLogProcStack = nil then\r\n+    begin // released by LoadFromMap(), but needed again by ProcessOneLine()\r\n+      SetLength(fLogProcStack, NextGrow(length(fThreadInfo)));\r\n+      SetLength(fLogProcStackCount, length(fLogProcStack));\r\n+    end;\r\n     inherited AddInMemoryLine(aNewLine);\r\n+  end;\r\n end;\r\n \r\n procedure TSynLogFile.LogProcSort(Order: TLogProcSortOrder);\r\n@@ -8103,7 +8113,15 @@ procedure TSynLogFile.ProcessOneLine(LineBeg, LineEnd: PUtf8Char);\n       begin\r\n         AddInteger(fLogProcStack[thread], fLogProcStackCount[thread], fLogProcNaturalCount);\r\n         if fLogProcNaturalCount >= length(fLogProcNatural) then\r\n+        begin\r\n           SetLength(fLogProcNatural, NextGrow(fLogProcNaturalCount));\r\n+          if (fLogProcCurrent <> nil) and\r\n+             not fLogProcIsMerged then\r\n+            fLogProcCurrent := pointer(fLogProcNatural); // realloc may move it\r\n+        end;\r\n+        // .Index is overwritten by CleanLevels() after an initial parsing,\r\n+        // but is needed as such for any AddInMemoryLine() appended row\r\n+        fLogProcNatural[fLogProcNaturalCount].Index := fCount - 1;\r\n         // fLogProcNatural[].### fields will be set later during parsing\r\n         inc(fLogProcNaturalCount);\r\n       end;\r\n@@ -8162,7 +8180,7 @@ function TSynLogFile.ThreadName(ThreadID, CurrentLogIndex: integer): RawUtf8;\n               break;\r\n             end;\r\n         end;\r\n-        FastSetString(result, found, GetLineSize(found, fMapEnd));\r\n+        FastSetString(result, found, GetLineSize(found, GetLineEnd(found)));\r\n         delete(result, 1, PosEx('=', result, 40)); // raw thread name\r\n       end;\r\n     end;\r\n@@ -8204,7 +8222,7 @@ function TSynLogFile.GetEventText(index: integer): RawUtf8;\n     FastAssignNew(result)\r\n   else\r\n   begin\r\n-    L := GetLineSize(fLines[index], fMapEnd);\r\n+    L := GetLineSize(fLines[index], GetLineEnd(fLines[index]));\r\n     if L <= fLineTextOffset then\r\n       FastAssignNew(result)\r\n     else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 8,
+          "patch": "@@ -2357,8 +2357,10 @@ function FindNameValuePointer(NameValuePairs: PUtf8Char; UpperName: PAnsiChar;\n function GetLineSize(P, PEnd: PUtf8Char): PtrUInt;\r\n   {$ifdef HASINLINE}inline;{$endif}\r\n \r\n-/// returns true if the line length from source array of chars is not less than\r\n-// the specified count\r\n+/// returns true if the line length from source array of chars is not bigger\r\n+// than the specified count\r\n+// - if PEnd = nil, end counting at either #0, #13 or #10, as GetLineSize() does\r\n+// - otherwise, end counting at either #13 or #10\r\n function GetLineSizeSmallerThan(P, PEnd: PUtf8Char; aMinimalCount: integer): boolean;\r\n \r\n {$ifndef PUREMORMOT2}\r\n@@ -9610,13 +9612,22 @@ function GetLineSizeSmallerThan(P, PEnd: PUtf8Char; aMinimalCount: integer): boo\n begin\r\n   result := false;\r\n   if P <> nil then\r\n-    while (P < PEnd) and\r\n-          (P^ <> #10) and\r\n-          (P^ <> #13) do\r\n-      if aMinimalCount = 0 then\r\n-        exit\r\n-      else\r\n+    if PEnd = nil then\r\n+      // an in-memory line is #0 ended, as GetLineSize/GetLineContains expect\r\n+      while not (P^ in [#0, #10, #13]) do\r\n       begin\r\n+        if aMinimalCount = 0 then\r\n+          exit;\r\n+        dec(aMinimalCount);\r\n+        inc(P);\r\n+      end\r\n+    else\r\n+      while (P < PEnd) and\r\n+            (P^ <> #10) and\r\n+            (P^ <> #13) do\r\n+      begin\r\n+        if aMinimalCount = 0 then\r\n+          exit;\r\n         dec(aMinimalCount);\r\n         inc(P);\r\n       end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 119,
+          "deletions": 0,
+          "patch": "@@ -11344,6 +11344,124 @@ procedure TTestCoreBase.QuickSelect;\n \r\n procedure TTestCoreBase.Debugging;\r\n \r\n+  procedure TestLiveAppendedLines;\r\n+  const\r\n+    STAMPS: array[0..1] of RawUtf8 = ( // calendar and high resolution layouts\r\n+      '20250213 16410200', '0000000000001234');\r\n+    THREADS: array[0..2] of integer = (0, 1, 4096);\r\n+    HEADER = 'C:\\mormot2tests.exe 1.0.0 (2025-02-13 16:41:00)'#13#10 +\r\n+      'Host=Test User=Test CPU=1 OS=0 Wow64=0 Freq=1000000'#13#10 +\r\n+      'TSynLog 2.0 2025-02-13T16:41:00'#13#10#13#10;\r\n+  var\r\n+    log: TSynLogFile;\r\n+    s, t, i, n: integer;\r\n+    stamp, input, source: RawUtf8;\r\n+  begin\r\n+    // AddInMemoryLine() rows are standalone #0 ended strings which don't belong\r\n+    // to the memory mapped buffer: fMapEnd is no valid line end for them, for\r\n+    // any layout - e.g. with or without ptIdentifiedInOneFile thread columns\r\n+    for s := low(STAMPS) to high(STAMPS) do\r\n+      for t := low(THREADS) to high(THREADS) do\r\n+      begin\r\n+        input := STAMPS[s];\r\n+        if THREADS[t] <> 0 then\r\n+          input := input + Int18ToChars3(THREADS[t]);\r\n+        input := input + ' info  Mapped payload';\r\n+        source := HEADER;\r\n+        for i := 1 to 4 do\r\n+          source := source + input + #13#10;\r\n+        log := TSynLogFile.Create(pointer(source), length(source));\r\n+        try\r\n+          CheckEqual(log.Count, 4, 'mapped rows');\r\n+          CheckEqual(log.EventText[0], ' Mapped payload');\r\n+          if THREADS[t] = 0 then\r\n+            Check(log.EventThread = nil)\r\n+          else\r\n+            CheckEqual(log.EventThread[0], THREADS[t]);\r\n+          log.AddInMemoryLine(input);\r\n+          CheckEqual(log.Count, 5, 'appended row');\r\n+          CheckEqual(log.Lines[4], input);\r\n+          CheckEqual(log.LineSize(4), length(input));\r\n+          Check(not log.LineSizeSmallerThan(4, length(input) - 1));\r\n+          Check(log.LineSizeSmallerThan(4, length(input)));\r\n+          CheckEqual(log.EventText[4], ' Mapped payload');\r\n+          Check(log.LineContains('PAYLOAD', 4));\r\n+          if THREADS[t] <> 0 then\r\n+            CheckEqual(log.EventThread[4], THREADS[t]);\r\n+        finally\r\n+          log.Free;\r\n+        end;\r\n+      end;\r\n+    // LoadFromMap() did size fLines[] and fThreads[] down without adjusting\r\n+    // their fLinesMax/fThreadsCount capacity, so the next AddInMemoryLine()\r\n+    // rows were stored past the reallocated buffers\r\n+    n := 1700; // long enough lines to trigger the down-sizing\r\n+    for t := 0 to 1 do\r\n+    begin\r\n+      stamp := STAMPS[0];\r\n+      if t <> 0 then\r\n+        stamp := stamp + Int18ToChars3(THREADS[2]);\r\n+      input := stamp + ' info  ' + RawUtf8OfChar('m', 1078);\r\n+      source := input + #13#10;\r\n+      while length(source) < n * (length(input) + 2) do\r\n+        source := source + source; // O(log n) instead of O(n2) concatenation\r\n+      SetLength(source, n * (length(input) + 2));\r\n+      source := HEADER + source;\r\n+      log := TSynLogFile.Create(pointer(source), length(source));\r\n+      try\r\n+        CheckEqual(log.Count, n, 'big mapped rows');\r\n+        for i := 1 to 100 do\r\n+          log.AddInMemoryLine(input); // did corrupt the heap before the fix\r\n+        CheckEqual(log.Count, n + 100);\r\n+        for i := n to log.Count - 1 do\r\n+        begin\r\n+          CheckEqual(log.LineSize(i), length(input));\r\n+          if t <> 0 then\r\n+            CheckEqual(log.EventThread[i], THREADS[2]);\r\n+        end;\r\n+        // a row shorter than fLineTextOffset\n... [truncated, 2587 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.buffers",
+        "mormot.core.log",
+        "mormot.core.unicode"
+      ],
+      "pr": 586,
+      "is_merge": true
+    },
+    {
+      "sha": "4c990d65574e20e87805106b525b446b5edf045d",
+      "short_sha": "4c990d65",
+      "subject": "net: fixed Accept-Encoding issue",
+      "body": "- as reported by https://synopse.info/forum/viewtopic.php?pid=45801",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T11:45:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4c990d65574e20e87805106b525b446b5edf045d",
+      "parents": [
+        "e1036ba54ce93636e028ba5517a439e820befccb"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16909\n+16910",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16909'\r\n+'2.4.16910'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -3640,6 +3640,8 @@ procedure THttpRequestContext.Reset;\n     FastAssignNew(UserAgent);\r\n   if Referer <> '' then\r\n     FastAssignNew(Referer);\r\n+  if AcceptEncoding <> '' then\r\n+    FastAssignNew(AcceptEncoding);\r\n   RangeOffset := 0;\r\n   FastAssignNew(Content);\r\n   RangeLength := -1;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e1036ba54ce93636e028ba5517a439e820befccb",
+      "short_sha": "e1036ba5",
+      "subject": "core: new FORCE_SSSE3_JSON conditional",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T11:45:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e1036ba54ce93636e028ba5517a439e820befccb",
+      "parents": [
+        "c54910c3cf974e308705664157b79e03e6c07b8e"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 16,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 14,
+          "patch": "@@ -19,19 +19,19 @@\n {$ifndef FPC_PICX64} // MoveFast/FillCharFast use non-PIC compatible @jmptab\r\n \r\n {\r\n- FillCharFast/MoveFast implementation notes:\r\n- - assume ERMSB is available (cpuid flag may not be propagated within VMs)\r\n- - use branchless sub-functions for smallest buffers, then SSE2 up to 255 bytes\r\n- - use \"rep movsb\" for 256..512K input (should work on all CPUs, even oldest)\r\n- - don't use backward \"std rep movsb\" since it is not involved by ERMBS (slow)\r\n- - use non-temporal SSE2 or AVX loop >= 512KB (to not pollute the CPU cache)\r\n- - will check X64CpuFeatures global to adjust the algorithm if cpuAVX is set\r\n- - our @jmptab trick is not PIC-compatible so we fallback to the RTL there\r\n- - regarding benchmark, run TTestLowLevelCommon.CustomRTL on x86_64\r\n-  -> FillCharFast/MoveFast seems faster, especially for small lengths (strings)\r\n-  -> Delphi RTL is slower than FPC's, and it does not support AVX assembly yet\r\n-  -> about the weird \"byte ptr [X64CpuFeatures wrt..gotpcrel]\" syntax, see\r\n-     http://www.tortall.net/projects/yasm/manual/html/objfmt-elf64.html\r\n+  FillCharFast/MoveFast implementation notes:\r\n+  - assume ERMSB is available (cpuid flag may not be propagated within VMs)\r\n+  - use branchless sub-functions for smallest buffers, then SSE2 up to 255 bytes\r\n+  - use \"rep movsb\" for 256..512K input (should work on all CPUs, even oldest)\r\n+  - don't use backward \"std rep movsb\" since it is not involved by ERMBS (slow)\r\n+  - use non-temporal SSE2 or AVX loop >= 512KB (to not pollute the CPU cache)\r\n+  - will check X64CpuFeatures global to adjust the algorithm if cpuAVX is set\r\n+  - our @jmptab trick is not PIC-compatible so we fallback to the RTL there\r\n+  - regarding benchmark, run TTestLowLevelCommon.CustomRTL on x86_64\r\n+   -> FillCharFast/MoveFast seems faster, especially for small lengths (strings)\r\n+   -> Delphi RTL is slower than FPC's, and it does not support AVX assembly yet\r\n+   -> about the weird \"byte ptr [X64CpuFeatures wrt..gotpcrel]\" syntax, see\r\n+      http://www.tortall.net/projects/yasm/manual/html/objfmt-elf64.html\r\n }\r\n \r\n const\r\n@@ -804,7 +804,7 @@ asm\n end;\r\n \r\n const\r\n-  // offsets for 16-byte aligned SSSE3 data fake NumericSimdData procedure\r\n+  // offsets for 16-byte aligned SSSE3 data fake in NumericSimdData proc above\r\n   NUMERIC_BIAS        = 16;\r\n   NUMERIC_THRESHOLD   = 32;\r\n   NUMERIC_ASCII0      = 48;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -3113,6 +3113,7 @@ function GetNumericVariantPas(Json: PUtf8Char;\n var\r\n   /// redirect to GetNumericVariantPas by default which seems the fastest\r\n   // - you may try GetNumericVariantSsse3() for SIMD process on longer numbers\r\n+  // e.g. by setting FORCE_SSSE3_JSON conditional at compilation time\r\n   GetNumericVariantStub: TGetNumericVariantFromJson = GetNumericVariantPas;\r\n {$endif ASMX64NOTPIC}\r\n \r\n@@ -14019,6 +14020,12 @@ procedure InitializeUnit;\n   except // paranoid to avoid fatal exception during process initialization\r\n   end;\r\n   {$endif FPC}\r\n+  {$ifdef FORCE_SSSE3_JSON}\r\n+  {$ifdef ASMX64NOTPIC}\r\n+  if cpuSSSE3 in X64CpuFeatures then\r\n+    GetNumericVariantStub := @GetNumericVariantSsse3;\r\n+  {$endif ASMX64NOTPIC}\r\n+  {$endif FORCE_SSSE3_JSON}\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16908\n+16909",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16908'\r\n+'2.4.16909'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c54910c3cf974e308705664157b79e03e6c07b8e",
+      "short_sha": "c54910c3",
+      "subject": "test: fixed number benchmark values generation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T11:26:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c54910c3cf974e308705664157b79e03e6c07b8e",
+      "parents": [
+        "66d7d51c1fd21bd222b360382ed8e2b4f656aaad"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 8,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.static.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 4,
+          "patch": "@@ -284,12 +284,13 @@ function pas_realloc(P: pointer; Size: PtrInt): pointer; cdecl;\n \r\n function pas_malloc_usable_size(P: pointer): PtrUInt; cdecl;\r\n  {$ifdef FPC} public name _PREFIX + 'pas_malloc_usable_size'; {$endif}\r\n-begin\r\n+begin // only used by mormot.lib.quickjs which accepts 0 as fallback if unknown\r\n   {$ifdef FPC}\r\n-  result := MemSize(P); // only available on FPC\r\n-  {$else}\r\n-  result := 0; // will reallocate each time - good enough with Delphi's FastMM4\r\n+  if P <> nil then\r\n+    result := MemSize(P) // only available on FPC\r\n+  else\r\n   {$endif FPC}\r\n+    result := 0; // caller should reallocate each time\r\n end;\r\n \r\n // see e.g. #define assert(x) in QuickJS cutils.h\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16907\n+16908",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16907'\r\n+'2.4.16908'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -5185,13 +5185,13 @@ procedure TTestCoreBase.NumericalConversions;\n       p := @v[i];\r\n       d := GetExtended(p + 1, err);\r\n       CheckEqual(err, 0, 'p');\r\n-      if i < 10 then           // don't append to exponent\r\n+      if not ((i and 15) in [10, 11]) then  // don't append to exponent\r\n         p[ord(p^) + 1] := '0'; // s := s + '0' with no allocation\r\n       d0 := GetExtended(p + 1, err);\r\n       CheckEqual(err, 0, 'p0');\r\n       if dot[i] <> 0 then\r\n       begin\r\n-        if i < 10 then\r\n+        if not ((i and 15) in [10, 11]) then\r\n           Check(PQWord(@d)^ = PQWord(@d0)^, 'd=d0 bits');\r\n         p[dot[i]] := '1'; // e.g. '0.00' -> '0201'\r\n       end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.static"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "66d7d51c1fd21bd222b360382ed8e2b4f656aaad",
+      "short_sha": "66d7d51c",
+      "subject": "lib: fixed pas_malloc() wrapper definition",
+      "body": "- should use PtrUInt / size_t everywhere for consistency",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T11:16:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/66d7d51c1fd21bd222b360382ed8e2b4f656aaad",
+      "parents": [
+        "37fa86b451304c15bacd34cf673cb4f0c40f0235"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 28,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "res/static/liblizard/lib/fse.h",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -46,10 +46,10 @@ extern \"C\" {\n \n #if !defined(pas_malloc)\n //AB\n-void *pas_malloc(int size);\n+void *pas_malloc(size_t size);\n void pas_free(void *ptr);\n-void *pas_realloc(void *ptr, int size);\n-int pas_malloc_usable_size(void *ptr); \n+void *pas_realloc(void *ptr, size_t size);\n+size_t pas_malloc_usable_size(void *ptr); \n #endif\n \n /*-*****************************************",
+          "patch_truncated": false
+        },
+        {
+          "path": "res/static/liblizard/lib/huf.h",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 6,
+          "patch": "@@ -38,17 +38,17 @@\n extern \"C\" {\n #endif\n \n+/* *** Dependencies *** */\n+#include <stddef.h>    /* size_t */\n+\n #if !defined(pas_malloc)\n //AB\n-void *pas_malloc(int size);\n+void *pas_malloc(size_t size);\n void pas_free(void *ptr);\n-void *pas_realloc(void *ptr, int size);\n-int pas_malloc_usable_size(void *ptr); \n+void *pas_realloc(void *ptr, size_t size);\n+size_t pas_malloc_usable_size(void *ptr); \n #endif\n \n-/* *** Dependencies *** */\n-#include <stddef.h>    /* size_t */\n-\n \n /*-*** PUBLIC_API : control library symbols visibility *** */\n #if defined(FSE_DLL_EXPORT) && (FSE_DLL_EXPORT==1) && defined(__GNUC__) && (__GNUC__ >= 4)",
+          "patch_truncated": false
+        },
+        {
+          "path": "res/static/liblizard/lib/lizard_common.h",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -43,7 +43,7 @@ extern \"C\" {\n /*-************************************\n *  Memory routines\n **************************************/\n-#include <stdlib.h>   /* pas_malloc, calloc, pas_free */\n+#include <stdlib.h>   /* malloc, calloc, free */\n #include <string.h>   /* memset, memcpy */\n #include <stdint.h>   /* intptr_t */\n #include \"mem.h\"\n@@ -123,10 +123,10 @@ extern \"C\" {\n #define LIZARD_STREAM_UNCOMPRESSED   5\n \n //AB\n-void *pas_malloc(int size);\n+void *pas_malloc(size_t size);\n void pas_free(void *ptr);\n-void *pas_realloc(void *ptr, int size);\n-int pas_malloc_usable_size(void *ptr); \n+void *pas_realloc(void *ptr, size_t size);\n+size_t pas_malloc_usable_size(void *ptr); \n \n typedef enum { Lizard_parser_fastSmall, Lizard_parser_fast, Lizard_parser_fastBig, Lizard_parser_noChain, Lizard_parser_hashChain, Lizard_parser_priceFast, Lizard_parser_lowestPrice, Lizard_parser_optimalPrice, Lizard_parser_optimalPriceBT } Lizard_parser_type;   /* from faster to stronger */ \n typedef enum { Lizard_coderwords_LZ4, Lizard_coderwords_LIZv1 } Lizard_decompress_type;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.quickjs.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 9,
+          "patch": "@@ -1764,28 +1764,28 @@ implementation\n // note: Delphi expects the dependencies to be in the very same unit\r\n //  -> we either implement them here, or asm jmp to mormot.lib.static code\r\n \r\n-function pas_malloc(size: cardinal): pointer; cdecl;\r\n-begin\r\n+function pas_malloc(size: PtrUInt): pointer; cdecl;\r\n+begin // defined as void *pas_malloc(size_t size); in cutils.h\r\n   if size = 0 then\r\n   begin\r\n     result := nil;\r\n     exit;\r\n   end;\r\n-  GetMem(result, size + 4);\r\n+  GetMem(result, size + 4);  // +4 on Delphi since we don't have FPC MemSize(P)\r\n   PInteger(result)^ := size; // put size as trailer for pas_malloc_usable_size()\r\n   inc(PInteger(result));\r\n end;\r\n \r\n procedure pas_free(P: pointer); cdecl;\r\n-begin\r\n+begin // void pas_free(void *ptr);\r\n   if P = nil then\r\n     exit;\r\n   dec(PInteger(P));\r\n   FreeMem(P);\r\n end;\r\n \r\n-function pas_realloc(P: pointer; Size: integer): pointer; cdecl;\r\n-begin\r\n+function pas_realloc(P: pointer; Size: PtrUInt): pointer; cdecl;\r\n+begin // void *pas_realloc(void *ptr, size_t size);\r\n   if (P = nil) or\r\n      (Size = 0) then\r\n   begin\r\n@@ -1800,14 +1800,14 @@ function pas_realloc(P: pointer; Size: integer): pointer; cdecl;\n   inc(PInteger(result));\r\n end;\r\n \r\n-function pas_malloc_usable_size(P: pointer): integer; cdecl;\r\n-begin\r\n+function pas_malloc_usable_size(P: pointer): PtrUInt; cdecl;\r\n+begin // size_t pas_malloc_usable_size(void *ptr);\r\n   if P = nil then\r\n     result := 0\r\n   else\r\n   begin\r\n     dec(PInteger(P));\r\n-    result := PInteger(P)^;\r\n+    result := PInteger(P)^; // we don't have FPC MemSize(P) on Delphi\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.static.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 4,
+          "patch": "@@ -254,16 +254,19 @@ implementation\n // QuickJS and lizard source e.g. was patched to call those heap functions\r\n // warning: we can't replace malloc/free/realloc and link libc/libpthread/libdl\r\n \r\n-function pas_malloc(size: cardinal): pointer; cdecl;\r\n+function pas_malloc(size: PtrInt): pointer; cdecl;\r\n  {$ifdef FPC} public name _PREFIX + 'pas_malloc'; {$endif}\r\n begin\r\n   GetMem(result, size);\r\n end;\r\n \r\n-function pas_calloc(n, size: PtrInt): pointer; cdecl;\r\n+function pas_calloc(n, size: PtrUInt): pointer; cdecl;\r\n  {$ifdef FPC} public name _PREFIX + 'pas_calloc'; {$endif}\r\n begin\r\n-  result := AllocMem(size * n);\r\n+  if (size <> 0) and (n > High(PtrUInt) div size) then\r\n+    result := nil   // refuse rather than wrap\r\n+  else\r\n+    result := AllocMem(size * n);\r\n end;\r\n \r\n procedure pas_free(P: pointer); cdecl;\r\n@@ -279,7 +282,7 @@ function pas_realloc(P: pointer; Size: PtrInt): pointer; cdecl;\n   result := P;\r\n end;\r\n \r\n-function pas_malloc_usable_size(P: pointer): integer; cdecl;\r\n+function pas_malloc_usable_size(P: pointer): PtrUInt; cdecl;\r\n  {$ifdef FPC} public name _PREFIX + 'pas_malloc_usable_size'; {$endif}\r\n begin\r\n   {$ifdef FPC}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16906\n+16907",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16906'\r\n+'2.4.16907'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs",
+        "Resources"
+      ],
+      "units": [
+        "mormot.lib.quickjs",
+        "mormot.lib.static"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "37fa86b451304c15bacd34cf673cb4f0c40f0235",
+      "short_sha": "37fa86b4",
+      "subject": "lib: fixed JS_SetMaxStackSize() definition",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T10:59:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/37fa86b451304c15bacd34cf673cb4f0c40f0235",
+      "parents": [
+        "86c736f815d1060476516e663aaf00347a3b2ae5"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.quickjs.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -947,7 +947,7 @@ procedure JS_SetMemoryLimit(rt: JSRuntime; limit: PtrUInt);\n procedure JS_SetGCThreshold(rt: JSRuntime; gc_threshold: PtrUInt);\r\n   cdecl; external {$ifdef QJSDLL}QJ{$endif};\r\n \r\n-procedure JS_SetMaxStackSize(ctx: JSContext; stack_size: PtrUInt);\r\n+procedure JS_SetMaxStackSize(rt: JSRuntime; stack_size: PtrUInt);\r\n   cdecl; external {$ifdef QJSDLL}QJ{$endif};\r\n \r\n function JS_NewRuntime2(const mf: PJSMallocFunctions;\r\n@@ -1461,7 +1461,6 @@ function JS_EnqueueJob(ctx: JSContext; job_func: PJSJobFunc; argc: integer;\n \r\n function JS_IsJobPending(rt: JSRuntime): JS_BOOL;\r\n    cdecl; external {$ifdef QJSDLL}QJ{$endif};\r\n-// TODO: Check pctx if the type is right.\r\n \r\n function JS_ExecutePendingJob(rt: JSRuntime; pctx: PJSContext): integer;\r\n    cdecl; external {$ifdef QJSDLL}QJ{$endif};\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16902\n+16906",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16902'\r\n+'2.4.16906'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.quickjs"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "86c736f815d1060476516e663aaf00347a3b2ae5",
+      "short_sha": "86c736f8",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T10:14:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/86c736f815d1060476516e663aaf00347a3b2ae5",
+      "parents": [
+        "6a27c07fc6c9f796711076561c293e68eb6b6398",
+        "b94373cb26204fc99ed11e9fe0d6480e26430b2e"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -7559,6 +7559,8 @@ function TLdapClient.SearchAllDocRaw(out Dest: TDocVariantData;\n       SetUnknownError('Stopped by SearchAllAbort');\r\n       result := false;\r\n       exclude(fFlags, fAborted);\r\n+      if fSearchRange <> nil then\r\n+        FreeAndNil(fSearchRange);\r\n     end\r\n     else if fSearchRange <> nil then\r\n       // additional requests to fill any \"paging attributes\" auto-range results\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "6a27c07fc6c9f796711076561c293e68eb6b6398",
+      "short_sha": "6a27c07f",
+      "subject": "core: fixed currency result in mormot.core.interfaces",
+      "body": "- as reported by https://synopse.info/forum/viewtopic.php?pid=45799#p45799\n- but fixed on FPCPOSIX by returning it into FP0 not XMM0 as proposed",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T10:13:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6a27c07fc6c9f796711076561c293e68eb6b6398",
+      "parents": [
+        "acc10bf52949563b19622369f9256afd5d38196f"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.interfaces.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 5,
+          "patch": "@@ -7012,8 +7012,6 @@ procedure CallMethod(var Args: TCallMethodArgs); assembler; nostackframe;\n    cmp   r2, imvDouble\r\n    beq   float_result\r\n    cmp   r2, imvDateTime\r\n-   beq   float_result\r\n-   cmp   r2, imvCurrency\r\n    bne   asmcall_end\r\n    // store double result in res64\r\n float_result:\r\n@@ -7096,8 +7094,6 @@ procedure CallMethod(var Args: TCallMethodArgs); assembler; nostackframe;\n    cmp  x15, imvDouble\r\n    b.eq float_result\r\n    cmp  x15, imvDateTime\r\n-   b.eq float_result\r\n-   cmp  x15, imvCurrency\r\n    b.ne asmcall_end\r\n    // store double result in res64\r\n float_result:\r\n@@ -7196,8 +7192,14 @@ procedure CallMethod(var Args: TCallMethodArgs); assembler;\n         mov     cl, [r12].TCallMethodArgs.resKind\r\n         cmp     cl, imvDouble\r\n         je      @d\r\n-        cmp     cl, imvDateTime // but imvCurrency is returned in rax\r\n+        cmp     cl, imvDateTime\r\n+        je      @d\r\n+        {$ifdef FPCPOSIX} // FPC x86-64 SysV store imvCurrency into x87 ST0\r\n+        cmp     cl, imvCurrency\r\n         jne     @e\r\n+        fistp   qword [r12].TCallMethodArgs.res64\r\n+        {$endif FPCPOSIX}\r\n+        jmp     @e\r\n @d:     movlpd  qword ptr [r12].TCallMethodArgs.res64, xmm0\r\n         // movlpd to ignore upper 64-bit of 128-bit xmm0 reg\r\n @e:     {$ifdef FPC}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16901\n+16902",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16901'\r\n+'2.4.16902'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.interfaces"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b94373cb26204fc99ed11e9fe0d6480e26430b2e",
+      "short_sha": "b94373cb",
+      "subject": "Merge pull request #585 from osvegn/patch-1",
+      "body": "net: fix exception when LDAP searchalldocraw is aborted",
+      "author": "ab",
+      "date": "2026-09-16T09:56:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b94373cb26204fc99ed11e9fe0d6480e26430b2e",
+      "parents": [
+        "acc10bf52949563b19622369f9256afd5d38196f",
+        "7fdb36cbc7ca33845ed6690e87ab5fc936aeef9d"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -7559,6 +7559,8 @@ function TLdapClient.SearchAllDocRaw(out Dest: TDocVariantData;\n       SetUnknownError('Stopped by SearchAllAbort');\r\n       result := false;\r\n       exclude(fFlags, fAborted);\r\n+      if fSearchRange <> nil then\r\n+        FreeAndNil(fSearchRange);\r\n     end\r\n     else if fSearchRange <> nil then\r\n       // additional requests to fill any \"paging attributes\" auto-range results\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": 585,
+      "is_merge": true
+    },
+    {
+      "sha": "acc10bf52949563b19622369f9256afd5d38196f",
+      "short_sha": "acc10bf5",
+      "subject": "core: define GetExtended/GetNumericVariantFromJson as stubs",
+      "body": "- could redirect at runtime to the new SSSE3 x64 asm\n- but GetNumericVariantFromJson() keeps the pascal path, which seems the fastest from regular JSON input",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T09:52:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/acc10bf52949563b19622369f9256afd5d38196f",
+      "parents": [
+        "3b77a2fe029daf8d22fe0bb11535cc9c64671e8d"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 21,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 8,
+          "patch": "@@ -839,7 +839,7 @@ const\n // The scalar ASM path handles other CPUs and uncommon grammar. Long inputs\r\n // continue from the end of this window, retaining the parsed integer prefix.\r\n // REP BSF is TZCNT when available; its nonzero operand also works with BSF.\r\n-function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+function GetExtendedSsse3(P: PUtf8Char; out err: integer): TSynExtended;\r\n {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         {$ifdef ABISYSVX64}\r\n         mov     rcx, rdi\r\n@@ -852,8 +852,6 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         {$endif ABISYSVX64}\r\n         jz      @scalarInvalid\r\n         and     eax, 4095\r\n-        test    byte ptr [rip + X64CpuFeatures], 1 shl cpuSSSE3\r\n-        jz      @scalarStart    // no supplementary SSE3 opcodes\r\n         cmp     eax, 4079       // 16 read + terminator\r\n         ja      @scalarStart    // 17 bytes must stay inside the page\r\n         xor     r11d, r11d\r\n@@ -1158,7 +1156,7 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         cvttsd2si r9, xmm0\r\n         movsxd  r10, eax\r\n         jmp     @scalarValue\r\n-@scalarStart:                 // byte scanner, also used without SSSE3\r\n+@scalarStart:                 // byte scanner fallback\r\n         xor     r9d, r9d\r\n         xor     r10d, r10d\r\n         xor     r11d, r11d\r\n@@ -1413,8 +1411,10 @@ const\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n     MAX_INT64, MAX_INT64_DIV10, MAX_INT64 div 100, MAX_INT64 div 1000);\r\n \r\n-// SSSE3 digit reduction from MoonBot's JS4 scanner - see GetExtended asm above\r\n-function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n+// SSSE3 digit reduction from MoonBot's JS4 scanner - see GetExtendedSsse3 above\r\n+// - from our tests on realistic JSON input, this SIMD version seems slower than\r\n+// mormot.core.text GetNumericVariantPas() but may be enabled for longer numbers\r\n+function GetNumericVariantSsse3(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         {$ifdef ABISYSVX64}\r\n@@ -1430,8 +1430,6 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         {$endif ABISYSVX64}\r\n         jz      @nil\r\n         add     r11d, r11d       // bit 1: AllowDouble\r\n-        test    byte ptr [rip + X64CpuFeatures], 1 shl cpuSSSE3\r\n-        jz      @scalarStart     // no supplementary SSE3 opcodes\r\n         and     eax, 4095\r\n         cmp     eax, 4079        // 16 read + terminator\r\n         ja      @scalarStart     // 17 bytes must stay inside the page\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -3126,10 +3126,10 @@ function BSRqword(const q: Qword): cardinal;\n   CPUAVX2HASWELL = [cfAVX2, cfSSE42, cfBMI1, cfBMI2, cfCLMUL];\r\n \r\n /// x86_64 asm with SSSE3 SIMD process - pascal version in mormot.core.text.pas\r\n-function GetExtended(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n+function GetExtendedSsse3(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n \r\n /// x86_64 asm with SSSE3 SIMD process - pascal version in mormot.core.variants.pas\r\n-function GetNumericVariantFromJson(Json: PUtf8Char;\r\n+function GetNumericVariantSsse3(Json: PUtf8Char;\r\n   var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n \r\n {$ifdef ASMX64AVX1}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 5,
+          "patch": "@@ -1429,15 +1429,25 @@ procedure UInt32DigitsToUtf8(Value, Digits: PtrUInt; var result: RawUtf8);\n /// fast RawUtf8 version of 64-bit IntToStr(), with proper QWord support\r\n procedure UInt64ToUtf8(Value: QWord; var result: RawUtf8);\r\n \r\n+type\r\n+  /// function prototype of GetExtended() process\r\n+  TGetExtended =  function(P: PUtf8Char; out err: integer): TSynExtended;\r\n+\r\n {$ifndef WIN32DELPHI}  { Delphi x87 asm in mormot.core.base.asmx86.inc }\r\n-{$ifndef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n+{$ifdef ASMX64NOTPIC}  { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n+function GetExtendedPas(P: PUtf8Char; out err: integer): TSynExtended;\r\n+var\r\n+  /// redirect to either GetExtendedPas or GetExtendedSsse3\r\n+  GetExtendedStub: TGetExtended = GetExtendedPas;\r\n+{$endif ASMX64NOTPIC}\r\n+\r\n /// get the extended floating point value stored in P^\r\n // - set the err content to the index of any faulty character, 0 if conversion\r\n // was successful (same as the standard val function)\r\n // - this optimized function is consistent on all platforms/compilers and return\r\n // the decoded value even if err is not 0 (e.g. if P^ is not #0 ended)\r\n-function GetExtended(P: PUtf8Char; out err: integer): TSynExtended; overload;\r\n-{$endif ASMX64NOTPIC}\r\n+function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+  overload; {$ifdef ASMX64NOTPIC} inline; {$endif}\r\n {$endif WIN32DELPHI}\r\n \r\n /// get the extended floating point value stored in P^\r\n@@ -6726,8 +6736,16 @@ function GetExtended(P: PUtf8Char): TSynExtended;\n end;\r\n \r\n {$ifndef WIN32DELPHI}  // Delphi x87 asm in mormot.core.base.asmx86.inc\r\n-{$ifndef ASMX64NOTPIC} // SIMD x64 asm in mormot.core.base.asmx64.inc\r\n+{$ifdef ASMX64NOTPIC}\r\n function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+begin // GetExtendedPas() or GetExtendedSsse3() in mormot.core.base.asmx64.inc\r\n+  result := GetExtendedStub(P, err);\r\n+end;\r\n+\r\n+function GetExtendedPas(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$else}\r\n+function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\r\n+{$endif ASMX64NOTPIC}\r\n var\r\n   c, n: PtrUInt;\r\n   frac: PtrInt;\r\n@@ -6972,7 +6990,6 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n   if fNeg in flags then\r\n     result := -result;\r\n end;\r\n-{$endif ASMX64NOTPIC}\r\n {$endif WIN32DELPHI}\r\n \r\n function ToDouble(const text: RawUtf8; out value: double): boolean;\r\n@@ -11921,6 +11938,10 @@ procedure InitializeUnit;\n   _VariantToUtf8DateTimeIso8601 := __VariantToUtf8DateTimeIso8601;\r\n   _VariantToTempUtf8DateTimeIso8601 := @__VariantToUtf8DateTimeIso8601;\r\n   _VariantSaveJson              := __VariantSaveJson;\r\n+  {$ifdef ASMX64NOTPIC}\r\n+  if cpuSSSE3 in X64CpuFeatures then\r\n+    GetExtendedStub := @GetExtendedSsse3; // SIMD SSSE3 seems the fastest\r\n+  {$endif ASMX64NOTPIC}\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 4,
+          "patch": "@@ -3102,7 +3102,20 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n // - warning: supplied JSON is expected to be not nil\r\n function TextToVariantNumberTypeNoDouble(Json: PUtf8Char): cardinal;\r\n \r\n-{$ifndef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n+type\r\n+  /// function prototype of GetNumericVariantFromJson() process\r\n+  TGetNumericVariantFromJson = function(Json: PUtf8Char;\r\n+    var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n+\r\n+{$ifdef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n+function GetNumericVariantPas(Json: PUtf8Char;\r\n+  var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n+var\r\n+  /// redirect to GetNumericVariantPas by default which seems the fastest\r\n+  // - you may try GetNumericVariantSsse3() for SIMD process on longer numbers\r\n+  GetNumericVariantStub: TGetNumericVariantFromJson = GetNumericVariantPas;\r\n+{$endif ASMX64NOTPIC}\r\n+\r\n /// low-level function to parse a variant from an unescaped JSON number\r\n // - returns the position after the number, and set Value to a variant of type\r\n // varInteger/varInt64/varCurrency (or varDouble if AllowVarDouble is true)\r\n@@ -3113,7 +3126,7 @@ function TextToVariantNumberTypeNoDouble(Json: PUtf8Char): cardinal;\n // parse null/false/true values\r\n function GetNumericVariantFromJson(Json: PUtf8Char;\r\n   var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n-{$endif ASMX64NOTPIC}\r\n+  {$ifdef ASMX64NOTPIC} inline; {$endif}\r\n \r\n /// convert some UTF-8 into a variant, detecting JSON numbers or constants\r\n // - first try GetVariantFromNotStringJson() then fallback to RawUtf8ToVariant()\r\n@@ -11515,9 +11528,19 @@ function TextToVariantNumberType(Json: PUtf8Char): cardinal;\n   end;\r\n end;\r\n \r\n-{$ifndef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n+{$ifdef ASMX64NOTPIC} { SIMD/SSE3 x64 asm in mormot.core.base.asmx64.inc }\r\n function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n   AllowVarDouble: boolean): PUtf8Char;\r\n+begin\r\n+  result := GetNumericVariantStub(Json, Value, AllowVarDouble);\r\n+end;\r\n+\r\n+function GetNumericVariantPas(Json: PUtf8Char;\r\n+  var Value: TVarData; AllowVarDouble: boolean): PUtf8Char;\r\n+{$else}\r\n+function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\r\n+  AllowVarDouble: boolean): PUtf8Char;\r\n+{$endif ASMX64NOTPIC}\r\n const\r\n   CURRENCY_FACTOR: array[-4 .. -1] of integer = (1, 10, 100, 1000);\r\n   CURRENCY_MAX: array[-4 .. -1] of Int64 = (\r\n@@ -11794,7 +11817,6 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n   vd.VDouble := d;\r\n   result := Json;\r\n end;\r\n-{$endif ASMX64NOTPIC}\r\n \r\n procedure UniqueVariant(Interning: TRawUtf8Interning; var aResult: variant;\r\n   aText: PUtf8Char; aTextLen: PtrInt; aAllowVarDouble: boolean);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16900\n+16901",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16900'\r\n+'2.4.16901'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.text",
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7fdb36cbc7ca33845ed6690e87ab5fc936aeef9d",
+      "short_sha": "7fdb36cb",
+      "subject": "ldap - Fix exception if searchalldocraw aborted",
+      "body": "",
+      "author": "Thomas Prud'homme",
+      "date": "2026-09-16T08:55:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7fdb36cbc7ca33845ed6690e87ab5fc936aeef9d",
+      "parents": [
+        "3b77a2fe029daf8d22fe0bb11535cc9c64671e8d"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -7559,6 +7559,8 @@ function TLdapClient.SearchAllDocRaw(out Dest: TDocVariantData;\n       SetUnknownError('Stopped by SearchAllAbort');\r\n       result := false;\r\n       exclude(fFlags, fAborted);\r\n+      if fSearchRange <> nil then\r\n+        FreeAndNil(fSearchRange);\r\n     end\r\n     else if fSearchRange <> nil then\r\n       // additional requests to fill any \"paging attributes\" auto-range results\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3b77a2fe029daf8d22fe0bb11535cc9c64671e8d",
+      "short_sha": "3b77a2fe",
+      "subject": "tests: enhance performance tests",
+      "body": "- include GetNumericVariantFromJson() numbers\n- extend kind of input content",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T08:45:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3b77a2fe029daf8d22fe0bb11535cc9c64671e8d",
+      "parents": [
+        "5f5bd05183917947f5071bddb00604aa33d6a383"
+      ],
+      "stats": {
+        "additions": 96,
+        "deletions": 42,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1492,7 +1492,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         mov     qword ptr [rdx + 8], rax\r\n         mov     dword ptr [rdx], r10d\r\n         mov     rax, r8\r\n-        ret                      // branchless for 3..8 digits integers\r\n+        ret                      // branchless for 3..15 digits integers\r\n @integerTwo:\r\n         pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n         pextrw  eax, xmm0, 0     // fast movd eax,xmm0 + movzx eax,ax\r\n@@ -1502,7 +1502,7 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         movzx   eax, al\r\n @integerDirect:\r\n         test    r11d, 1          // '-' sign?\r\n-        jz      @integerPos      // branchless is not mandatoryu here\r\n+        jz      @integerPos      // branchless is not mandatory here\r\n         neg     eax\r\n @integerPos:\r\n         mov     dword ptr [rdx + 8], eax\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16899\n+16900",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16899'\r\n+'2.4.16900'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 92,
+          "deletions": 38,
+          "patch": "@@ -5108,88 +5108,123 @@ procedure TTestCoreBase.NumericalConversions;\n       'CheckJsonDoubleBits %=%', [PQWord(@TVarData(v).VDouble)^, expected]);\r\n   end;\r\n \r\n-  procedure CheckDecimalRounding;\r\n+  procedure BenchmarkNumbers;\r\n   var\r\n-    i, err, len: integer;\r\n-    p: PUtf8Char;\r\n+    i: PtrUInt;\r\n+    err, len: integer;\r\n+    p, p2: PUtf8Char;\r\n+    c: AnsiChar;\r\n     d, d0: double;\r\n+    v1, v2: TVarData;\r\n     v: array[1 .. 20000] of TShort23;\r\n+    dot: array[1 .. high(v)] of byte;\r\n     Timer: TPrecisionTimer;\r\n   begin\r\n-    // decimal text should be parsed as the nearest IEEE double: digits*POW10[-n]\r\n-    // was not, since 1E-1..1E-22 are inexact - e.g. '1.2' = 1.2000000000000002\r\n-    CheckGetExtendedBits('1.2', $3FF3333333333333);\r\n-    CheckGetExtendedBits('-1.2', QWord($BFF3333333333333));\r\n-    CheckGetExtendedBits('12e-1', $3FF3333333333333);\r\n-    CheckGetExtendedBits('0.1', $3FB999999999999A);\r\n-    CheckGetExtendedBits('0.3', $3FD3333333333333);\r\n-    CheckGetExtendedBits('0.7', $3FE6666666666666);\r\n-    CheckGetExtendedBits('1.15', $3FF2666666666666);\r\n-    CheckGetExtendedBits('39.9', $4043F33333333333);\r\n-    CheckGetExtendedBits('100.1', $4059066666666666);\r\n-    CheckGetExtendedBits('0.35', $3FD6666666666666);\r\n-    CheckGetExtendedBits('4.52', $4012147AE147AE14);\r\n-    CheckGetExtendedBits('452E-2', $4012147AE147AE14);\r\n-    CheckGetExtendedBits('2.675', $4005666666666666);\r\n-    CheckGetExtendedBits('0.009', $3F826E978D4FDF3B);\r\n-    CheckGetExtendedBits('10000.05', $40C3880666666666);\r\n-    CheckGetExtendedBits('0.0003', $3F33A92A30553261);\r\n-    CheckGetExtendedBits('0.00003', $3EFF75104D551D69);\r\n     // 'x.y' and 'x.y0' are the same number, so should return the same double\r\n     FillCharFast(v, SizeOf(v), 0);\r\n     len := 0;\r\n     for i := 1 to high(v) do // pre-compute all values\r\n     begin\r\n-      case i and 7 of\r\n-        0:\r\n+      case i and 15 of\r\n+        0, 12, 13:\r\n+          FormatShort('%', [\r\n+            i div 9 + 1], v[i]);            // 1 char\r\n+        1, 14, 15:\r\n+          FormatShort('%', [\r\n+            i div 99 + 1], v[i]);           // 1-2 chars\r\n+        2:\r\n           FormatShort('%.%', [\r\n             i div 10,\r\n             i mod 10], v[i]);               // ~3-6 chars\r\n-        1:\r\n+        3:\r\n           FormatShort('123%.%', [\r\n             i mod 10000,\r\n             i mod 10], v[i]);               // ~6-10 chars\r\n-        2:\r\n+        4:\r\n           FormatShort('123456%.%', [\r\n             i mod 100000,\r\n             i mod 100], v[i]);              // ~10-14 chars\r\n-        3:\r\n+        5:\r\n           FormatShort('123456789%.%', [\r\n             i mod 100000,\r\n             i mod 1000], v[i]);             // ~14-18 chars\r\n-        4:\r\n+        6:\r\n           FormatShort('123456789012%.%', [\r\n             i mod 10000,\r\n             i mod 1000], v[i]);             // ~17-21 chars\r\n-        5:\r\n+        7:\r\n           FormatShort('0.00000000000%', [\r\n             i mod 10], v[i]);               // long small fraction\r\n-        6:\r\n+        8:\r\n           FormatShort('12.3456789000%', [\r\n             i mod 100], v[i]);              // padded fraction\r\n-        7:\r\n+        9:\r\n           FormatShort('123456789012345.%', [\r\n             i mod 10], v[i]);               // 17 significant digits\r\n+        10:\r\n+          FormatShort('1e%', [\r\n+            i mod 100], v[i]);              // scientific notation\r\n+        11:\r\n+          FormatShort('%.%e%', [\r\n+            i mod 100, i div 100, i mod 10], v[i]);\r\n+      end;\r\n+      p := @v[i];\r\n+      p2 := PosChar(p + 1, '.');\r\n+      if p2 = nil then\r\n+        dot[i] := 0\r\n+      else\r\n+      begin\r\n+        dot[i] := p2 - p;\r\n+        Check(p[dot[i]] = '.', 'dot');\r\n       end;\r\n-      inc(len, length(v[i]) * 3 + 2);\r\n+      inc(len, ord(p^) * 3 + 2);\r\n     end;\r\n     Timer.Start;\r\n     for i := 1 to high(v) do\r\n     begin\r\n       p := @v[i];\r\n       d := GetExtended(p + 1, err);\r\n       CheckEqual(err, 0, 'p');\r\n-      p\n... [truncated, 3722 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5f5bd05183917947f5071bddb00604aa33d6a383",
+      "short_sha": "5f5bd051",
+      "subject": "tests: enhanced x64 asm numbers coverage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T07:41:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5f5bd05183917947f5071bddb00604aa33d6a383",
+      "parents": [
+        "d6709b01f652f3a7d7b3924c9e159925053a4d55"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16898\n+16899",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16898'\r\n+'2.4.16899'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 2,
+          "patch": "@@ -5038,6 +5038,8 @@ procedure TTestCoreBase.NumericalConversions;\n     u: RawUtf8;\r\n     err: integer;\r\n     d: double;\r\n+    vv: variant;\r\n+    p: PUtf8Char;\r\n   begin\r\n     s := DoubleToString(v);\r\n     val(s, d, err);\r\n@@ -5047,6 +5049,9 @@ procedure TTestCoreBase.NumericalConversions;\n     d := GetExtended(pointer(u), err);\r\n     CheckEqual(err, 0);\r\n     CheckSame(d, v);\r\n+    p := GetNumericVariantFromJson(pointer(u), TVarData(vv), true);\r\n+    CheckUtf8(p = PUtf8Char(pointer(u)) + length(u), u);\r\n+    CheckSame(double(vv), v);\r\n   end;\r\n \r\n   {$ifdef CPU64}\r\n@@ -5062,7 +5067,7 @@ procedure TTestCoreBase.NumericalConversions;\n   {$endif CPU64}\r\n \r\n   procedure CheckJsonValue(const text: RawUtf8; kind: integer; expected: double;\r\n-     expectedText: RawUtf8 = '');\r\n+    expectedText: RawUtf8 = '');\r\n   var\r\n     v: variant;\r\n     p: PUtf8Char;\r\n@@ -5081,9 +5086,11 @@ procedure TTestCoreBase.NumericalConversions;\n   procedure CheckJsonExact(const text: RawUtf8; kind: integer; expected: Int64);\r\n   var\r\n     v: variant;\r\n+    p: PUtf8Char;\r\n   begin\r\n     TVarData(v).VType := varEmpty;\r\n-    CheckUtf8(GetNumericVariantFromJson(pointer(text), TVarData(v), false)^ = #0, text);\r\n+    p := GetNumericVariantFromJson(pointer(text), TVarData(v), false);\r\n+    CheckUtf8(p = PUtf8Char(pointer(text)) + length(text), text);\r\n     CheckEqual(TVarData(v).VType, kind, text);\r\n     if kind = varInteger then\r\n       CheckEqual(TVarData(v).VInteger, expected, text)\r\n@@ -5795,6 +5802,20 @@ procedure TTestCoreBase.NumericalConversions;\n     '9.223372036854776E15');\r\n   CheckJsonValue('0.0000000000000000001', varDouble, 1E-19,\r\n     '9.9999999999999998E-20');\r\n+  CheckJsonValue('1E0', varInteger, 1 ,'1');\r\n+  CheckJsonValue('1E1', varDouble, 10, '10');\r\n+  CheckJsonValue('1E2', varDouble, 100, '100');\r\n+  CheckJsonValue('10E1', varDouble, 100, '100');\r\n+  CheckJsonValue('10E2', varDouble, 1000, '1000');\r\n+  CheckJsonValue('10E12', varDouble, 1E13,\r\n+    {$ifdef WIN32DELPHI} '1000000000000' {$else} '1E13' {$endif} );\r\n+  CheckJsonValue('2E101', varDouble, 2E101);\r\n+  CheckJsonValue('-1E0', varInteger, -1 ,'-1');\r\n+  CheckJsonValue('-1E1', varDouble, -10, '-10');\r\n+  CheckJsonValue('-1E2', varDouble, -100, '-100');\r\n+  CheckJsonValue('-1E12', varDouble, -1E12\r\n+    {$ifdef WIN32DELPHI}, '-1000000000000' {$endif} );\r\n+  CheckJsonValue('-2E101', varDouble, -2E101);\r\n   s := '9223372036854775808';\r\n   Check(GetNumericVariantFromJson(pointer(s), TVarData(vj), false) = nil);\r\n   s := '9223372036854775.8';\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d6709b01f652f3a7d7b3924c9e159925053a4d55",
+      "short_sha": "d6709b01",
+      "subject": "core: direct 1/2 digit xEy xxEy patterns for x64 SSSE3 asm",
+      "body": "- to optimize #582 for this common case",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-16T07:40:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d6709b01f652f3a7d7b3924c9e159925053a4d55",
+      "parents": [
+        "102fa3d99708d839948eef595d1d02d2e8fdbb45"
+      ],
+      "stats": {
+        "additions": 76,
+        "deletions": 45,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 74,
+          "deletions": 43,
+          "patch": "@@ -868,10 +868,10 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         pcmpgtb xmm1, [rip + NumericSimdData + NUMERIC_THRESHOLD] // digit lanes\r\n         pmovmskb eax, xmm1\r\n         not     eax             // non-digit lanes; bits 16..31 are sentinels\r\n+        test    al, 1\r\n+        jnz     @fallback       // NaN/Inf or uncommon grammar\r\n         db      $f3             // TZCNT, or BSF without BMI1: identical if <> 0\r\n         bsf     r8d, eax        // p: first non-digit = integer digit count\r\n-        test    r8d, r8d\r\n-        jz      @fallback       // NaN/Inf or uncommon grammar\r\n         cmp     r8d, 15\r\n         ja      @longInteger\r\n         psubb   xmm0, [rip + NumericSimdData + NUMERIC_ASCII0]\r\n@@ -886,10 +886,9 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         je      @integerExponent         // exponent: parsed here, no restart\r\n         mov     dword ptr [rdx], 1       // err := 1 on any other byte (quote/comma)\r\n @integerGo:\r\n-        cmp     r8d, 1\r\n-        je      @one\r\n         cmp     r8d, 2\r\n-        je      @two\r\n+        jb      @integerOne              // fast path for common 1/2 digits\r\n+        je      @integerTwo\r\n         mov     r10d, r8d                // p\r\n         shl     r8d, 4\r\n         lea     r9, [rip + NumericSimdData + NUMERIC_CTRLINT]\r\n@@ -903,17 +902,20 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         ja      @wideInteger\r\n         test    r11d, r11d               // <= 8 digits sit in lanes 0..7: value = H\r\n         jnz     @negativeInteger\r\n-        ret\r\n-@two:   pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n+        ret                              // branchless for 3..8 digits\r\n+@integerTwo:\r\n+        pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n+        pextrw  eax, xmm0, 0             // fast movd eax,xmm0 + movzx eax,ax\r\n+        jmp     @integerDirect\r\n+@integerOne:\r\n         movd    eax, xmm0\r\n-        movzx   eax, ax\r\n-        jmp     @int\r\n-@one:   movd    eax, xmm0\r\n         movzx   eax, al\r\n-@int:   test    r11d, r11d\r\n-        jz      @intPos\r\n-        neg     eax\r\n-@intPos:cvtsi2sd xmm0, eax\r\n+@integerDirect:\r\n+        test    r11d, 1                  // '-' sign?\r\n+        jz      @integerPos\r\n+        neg     eax                      // faster than @negativeInteger\r\n+@integerPos:\r\n+        cvtsi2sd xmm0, eax\r\n         ret\r\n @wideInteger:\r\n         movhlps xmm1, xmm0\r\n@@ -983,6 +985,9 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         jnz     @negativeInteger\r\n         ret\r\n @integerExponent:                        // r8d = p, 'e' at [rcx + p]\r\n+        cmp     r8d, 2\r\n+        jb      @integerExponentOne      // p=1; zero already rejected\r\n+        je      @integerExponentTwo      // p=2\r\n         mov     r10d, r8d\r\n         shl     r8d, 4\r\n         lea     r9, [rip + NumericSimdData + NUMERIC_CTRLINT]\r\n@@ -997,6 +1002,18 @@ function GetExtended(P: PUtf8Char; out err: integer): TSynExtended;\n         mov     r10d, 0                  // f = 0 (flags kept)\r\n         ja      @wideExponent\r\n         jmp     @exponent\r\n+@integerExponentTwo:\r\n+        pmaddubsw xmm0, [rip + NumericSimdData + NUMERIC_TEN]\r\n+        pextrw  eax, xmm0, 0             // 10*d0 + d1\r\n+        jmp     @integerExponentShort\r\n+@integerExponentOne:\r\n+        movd    eax, xmm0\r\n+        movzx   eax, al                   // d0\r\n+@integerExponentShort:\r\n+        cvtsi2sd xmm0, eax                // exact 1..99\r\n+        lea     r9d, [r8 + 1]             // index after 'e'\r\n+        xor     r10d, r10d                // f = 0\r\n+        jmp     @exponent\r\n @fractionExponent:                       // r8d = p, r9d = n, 'e' at [rcx + n]\r\n         mov     r10d, r9d\r\n         sub     r10d, r8d\r\n@@ -1403,19 +1420,19 @@ function GetNumericVariantFromJson(Json: PUtf8Char; var Value: TVarData;\n         {$ifdef ABISYSVX64}\r\n         movzx   r11d, dl         // move AllowDouble in \n... [truncated, 5608 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-16897\n+16898",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.16897'\r\n+'2.4.16898'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
