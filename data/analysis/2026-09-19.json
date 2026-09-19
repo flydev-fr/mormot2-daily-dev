@@ -1,0 +1,2060 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-19",
+  "edition_title": {
+    "en": "POSIX sockets survive signals while TSynLog changes its format ABI",
+    "fr": "Les sockets POSIX survivent aux signaux tandis que TSynLog change son ABI de format",
+    "zh": "POSIX socket 可抵抗 signal，TSynLog 同时更改格式 ABI",
+    "ru": "POSIX sockets переживают signals, а TSynLog меняет format ABI"
+  },
+  "intro": {
+    "en": "This is a large cross-platform batch. POSIX socket waits, accepts and I/O now retry EINTR without extending deadlines, while Delphi AArch64 gains interface dispatch, late-bound variants and correctly aligned time caches. TSynLog deliberately changes formatted APIs from PUtf8Char to RawUtf8 and adds out-of-lock pre-rendering; take the final fixes because build 2.4.16999 can overrun its 4KB stack buffer.",
+    "fr": "Cette série cross-platform est volumineuse. Les attentes, accept et I/O socket POSIX reprennent après EINTR sans allonger les deadlines, tandis que Delphi AArch64 gagne le dispatch d’interfaces, les variants late-bound et un cache temporel bien aligné. TSynLog remplace volontairement PUtf8Char par RawUtf8 dans ses API formatées et pré-rend hors verrou ; prenez les correctifs finaux car la build 2.4.16999 peut dépasser son buffer stack de 4 Ko.",
+    "zh": "这是一次大型跨平台更新。POSIX socket 的等待、accept 与 I/O 现在会在 EINTR 后重试且不延长 deadline；Delphi AArch64 新增 interface dispatch、late-bound variant，并修正时间 cache 对齐。TSynLog 有意把格式化 API 从 PUtf8Char 改为 RawUtf8，并加入锁外预渲染；必须采用最终修复，因为 build 2.4.16999 可能越过 4KB stack buffer。",
+    "ru": "Это крупная cross-platform серия. POSIX socket waits, accept и I/O теперь повторяют EINTR без продления deadlines, а Delphi AArch64 получает interface dispatch, late-bound variants и правильно выровненный time cache. TSynLog намеренно меняет formatted API с PUtf8Char на RawUtf8 и добавляет pre-rendering вне lock; берите финальные fixes, поскольку build 2.4.16999 может выйти за 4KB stack buffer."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17002 at 4ef9dc663bbf00ad1920c83a7274e3676610b37f.",
+      "Do not deploy build 2.4.16999: instance-prefixed formatted logs near 4KB can write past the TSynLog stack buffer.",
+      "Migrate TSynLogProc, formatted Log, DoLog, Enter, EnterLocal and ManualEnter format parameters from PUtf8Char to const RawUtf8.",
+      "POSIX socket I/O, poll, epoll and accept now retry EINTR while preserving finite deadlines; use the completed sequence rather than intermediate builds 2.4.16947–2.4.16964.",
+      "Delphi AArch64 gains DispInvoke and interface-call support on Android and iOS, and GlobalTime lock alignment is repaired.",
+      "Delphi POSIX fixes include ordinal-resource startup hangs and swapped short/long resourcestring decoding."
+    ],
+    "fr": [
+      "Visez la build 2.4.17002 au commit 4ef9dc663bbf00ad1920c83a7274e3676610b37f.",
+      "Ne déployez pas la build 2.4.16999 : un log formaté proche de 4 Ko avec instance peut dépasser le buffer stack TSynLog.",
+      "Migrez les paramètres de format TSynLogProc, Log, DoLog, Enter, EnterLocal et ManualEnter de PUtf8Char vers const RawUtf8.",
+      "Les I/O socket POSIX, poll, epoll et accept reprennent après EINTR en conservant les deadlines ; prenez la séquence complète plutôt que les builds 2.4.16947 à 2.4.16964.",
+      "Delphi AArch64 gagne DispInvoke et les appels d’interface sur Android/iOS, avec correction de l’alignement du verrou GlobalTime.",
+      "Delphi POSIX corrige le blocage des ressources ordinales au démarrage et le décodage inversé des resourcestring courtes/longues."
+    ],
+    "zh": [
+      "应采用 build 2.4.17002 的 4ef9dc663bbf00ad1920c83a7274e3676610b37f。",
+      "不要部署 build 2.4.16999：接近 4KB 且带实例前缀的格式化日志可能写出 TSynLog stack buffer。",
+      "把 TSynLogProc 及格式化 Log、DoLog、Enter、EnterLocal、ManualEnter 的格式参数从 PUtf8Char 迁移到 const RawUtf8。",
+      "POSIX socket I/O、poll、epoll 与 accept 现在会在 EINTR 后重试并保持有限 deadline；请采用完整序列而非中间 build 2.4.16947–2.4.16964。",
+      "Delphi AArch64 在 Android/iOS 获得 DispInvoke 与 interface call 支持，并修复 GlobalTime 锁对齐。",
+      "Delphi POSIX 修复 ordinal resource 启动挂起，以及短/长 resourcestring 解码互换。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17002 в 4ef9dc663bbf00ad1920c83a7274e3676610b37f.",
+      "Не развёртывайте build 2.4.16999: formatted log около 4KB с instance prefix может выйти за TSynLog stack buffer.",
+      "Переведите format parameters TSynLogProc, Log, DoLog, Enter, EnterLocal и ManualEnter с PUtf8Char на const RawUtf8.",
+      "POSIX socket I/O, poll, epoll и accept теперь повторяют EINTR с сохранением finite deadlines; используйте завершённую серию, а не промежуточные builds 2.4.16947–2.4.16964.",
+      "Delphi AArch64 получает DispInvoke и interface calls на Android/iOS, а alignment lock GlobalTime исправлен.",
+      "Delphi POSIX исправляет startup hang ordinal resources и перепутанный decode short/long resourcestring."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "Signal-safe POSIX networking",
+        "fr": "Réseau POSIX résistant aux signaux",
+        "zh": "可抵抗 signal 的 POSIX 网络",
+      "ru": "POSIX-сеть, устойчивая к сигналам"
+      },
+      "summary": {
+        "en": "The socket layer systematically retries EINTR in send, receive, accept, poll and epoll paths, preserves timeout deadlines, verifies asynchronous connect completion through SO_ERROR, and corrects BSD constants.",
+        "fr": "La couche socket reprend systématiquement EINTR dans send, receive, accept, poll et epoll, préserve les deadlines, vérifie les connexions async via SO_ERROR et corrige les constantes BSD.",
+        "zh": "socket 层在 send、receive、accept、poll 与 epoll 路径统一重试 EINTR，保持 timeout deadline，通过 SO_ERROR 验证异步连接完成，并修正 BSD 常量。",
+        "ru": "Socket layer систематически повторяет EINTR в send, receive, accept, poll и epoll, сохраняет timeout deadlines, проверяет async connect через SO_ERROR и исправляет BSD constants."
+      },
+      "shas": [
+        "389ef677a31eaa2f363f76382e534d20190ac75d",
+        "7e5228a578a59cb9d76540cd7fb33ac1aa7a880f",
+        "989e6d5b45806fb3a699b0208aa61dd0d970cc5f",
+        "109cf3c52a8c108bf14062b16fb47fede4b21685",
+        "e637b45f86405b3f0ae392a868bb51737ce5d326",
+        "9c8515b0efec36fb6cbc24b66987598db37f9669",
+        "29c8bebb114c9ad7ce97ec7d8fcf4944fb27cea4",
+        "99bc19a18f97054921271b85d4b6c9c956eff497",
+        "8187f47f8750fc81db4e7818c15880f0144e4f56",
+        "b0bbdf13b46c870bf210b231a0144fc7213b50ae",
+        "3af914ac15eab28c41411a1c449da2cf5b1e3a67",
+        "a299fb590ef7ded3c3f6866d491bf1c222a2e180",
+        "04130d2bec34390e180c5cc9ea4743289cf7c65c",
+        "496af18946b6b83d6ab4feb90279bc1b8084d416",
+        "e8de6bf795fc8fb1b63da735f72955ade03c7f8f",
+        "07c8080b22b97295c1b13bf0cad4b6a81a15f562",
+        "1d878f7fb773d7a064ec1badf4b5724dcb6b6fac",
+        "a74fa349674d7720e1fec94da04ceb4050c5b94a",
+        "6949ac175736fd3b6d44306fd173a2f021e656a8"
+      ]
+    },
+    {
+      "title": {
+        "en": "Delphi AArch64 and POSIX runtime repairs",
+        "fr": "Réparations runtime Delphi AArch64 et POSIX",
+        "zh": "Delphi AArch64 与 POSIX runtime 修复",
+        "ru": "Runtime fixes Delphi AArch64 и POSIX"
+      },
+      "summary": {
+        "en": "AArch64 gains ABI-correct late-bound variants and interface stubs, GlobalTime becomes atomically aligned, and Delphi POSIX fixes resource loading while Android discovers modern ICU layouts.",
+        "fr": "AArch64 gagne variants late-bound et stubs d’interface conformes ABI, GlobalTime devient aligné et Delphi POSIX corrige les ressources tandis qu’Android détecte ICU moderne.",
+        "zh": "AArch64 获得符合 ABI 的 late-bound variant 与 interface stub，GlobalTime 原子对齐；Delphi POSIX 修复资源加载，Android 可发现现代 ICU 布局。",
+        "ru": "AArch64 получает ABI-correct late-bound variants и interface stubs, GlobalTime выравнивается для atomic operations, Delphi POSIX исправляет resources, Android находит современный ICU."
+      },
+      "shas": [
+        "a21c2edb58792bcf2a08762711fe5c52115d00e0",
+        "2b55dc23281f0cf1f5e176f382d92bd237f7b79a",
+        "36796d3cf384b1d4eb15bbaa62b57e96f0cbb112",
+        "b8eaea86a96720a5b7639089684c03ccf412ad93",
+        "ea84706021736732afcaf5949de7cd4433737795",
+        "0d9880b71ce9cf61e17101c964793d93834d20f7",
+        "ce3a81b824e098e7a15322c1f1f4abd02edbd2c3"
+      ]
+    },
+    {
+      "title": {
+        "en": "TSynLog format migration and pre-rendering",
+        "fr": "Migration des formats TSynLog et pré-rendu",
+        "zh": "TSynLog 格式迁移与预渲染",
+        "ru": "Миграция format TSynLog и pre-rendering"
+      },
+      "summary": {
+        "en": "Formatted logging and entry APIs move from PUtf8Char to RawUtf8, then render ordinary arguments and instance text into a 4KB stack buffer before locking. The final fix corrects the remaining-capacity calculation.",
+        "fr": "Les API de log formaté passent de PUtf8Char à RawUtf8, puis rendent arguments et instance dans un buffer stack de 4 Ko avant le verrou. Le correctif final répare le calcul de capacité restante.",
+        "zh": "格式化日志与进入 API 从 PUtf8Char 改为 RawUtf8，随后在加锁前把普通参数与实例文本渲染到 4KB stack buffer；最终修复更正剩余容量计算。",
+        "ru": "Formatted logging APIs переходят с PUtf8Char на RawUtf8 и рендерят обычные arguments и instance text в 4KB stack buffer до lock. Финальный fix исправляет remaining capacity."
+      },
+      "shas": [
+        "e4c69cc114d63e96c02bd38b06d0ff05d6683dff",
+        "1bde88e273208447f10edbc7edd22f6f4b2bb7bc",
+        "ab86987518bba22c30f2985c45c4a7d1bcb97cb8",
+        "5b05ee28e72cc184719597ba23751f6fed03e0e4",
+        "a6bb53dcbcea051f8fd13420ec0a3cb2f55896f3",
+        "99d189cc903f96ca7510991f8a18fe2da70b2583"
+      ]
+    },
+    {
+      "title": {
+        "en": "LogView and remote capture mature",
+        "fr": "LogView et la capture distante mûrissent",
+        "zh": "LogView 与远程捕获趋于成熟",
+        "ru": "LogView и remote capture развиваются"
+      },
+      "summary": {
+        "en": "The Lazarus LogView port lands with sender-aware remote callbacks, layout normalization, stable socket hosting, persistent font size and fixed-column navigation.",
+        "fr": "Le port Lazarus LogView arrive avec callbacks identifiant l’émetteur, normalisation de layout, serveur socket stable, police persistante et colonnes fixes.",
+        "zh": "Lazarus LogView port 带来发送方识别 callback、布局统一、稳定 socket 托管、持久字体大小与固定列导航。",
+        "ru": "Lazarus LogView port получает sender-aware callbacks, normalization layout, stable socket hosting, persistent font size и fixed-column navigation."
+      },
+      "shas": [
+        "307a9fb712171b39e5a0c0e706c8cc6fc7f02670",
+        "e29490aaff1d3a07a94d099d3acb1c6b99bf1740",
+        "6a02c38a852bf97480570330594f3dd0039cca0e",
+        "4f487ad9b0cf031fa2331db48c7b5f6c9d5d2bc5",
+        "1c454fb638fc0f3e5618a703aef6f38a89422dac"
+      ]
+    }
+  ],
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17002. Do not stop in builds 2.4.16947–2.4.16964, where POSIX EINTR, timeout and asynchronous-connect work is repeatedly completed or corrected; build 2.4.16954 specifically regresses timeout reporting. Never deploy build 2.4.16999 because formatted TSynLog lines with an instance prefix can overrun the 4KB stack buffer; 2.4.17000 fixes it. Migrate all formatted logging callbacks and wrappers to RawUtf8, rebuild every Delphi/FPC target, then stress finite socket waits under signals, failed connects, near-4KB log lines, Delphi POSIX resources and AArch64 interface calls.",
+    "fr": "Visez la build 2.4.17002. Évitez 2.4.16947 à 2.4.16964, où les corrections POSIX EINTR, timeout et connexion async restent incomplètes ; 2.4.16954 régresse le reporting des timeouts. Ne déployez jamais 2.4.16999 : une ligne TSynLog formatée avec instance peut dépasser le buffer stack de 4 Ko ; 2.4.17000 corrige ce défaut. Migrez callbacks et wrappers vers RawUtf8, recompilez chaque cible Delphi/FPC, puis testez les signaux, les connexions en échec, les logs proches de 4 Ko, les ressources Delphi POSIX et les appels AArch64.",
+    "zh": "请采用 build 2.4.17002。不要停留在 build 2.4.16947–2.4.16964，其中 POSIX EINTR、timeout 与异步连接工作多次被补全或修正；2.4.16954 明确引入 timeout 报告回归。绝不要部署 2.4.16999，带实例前缀的格式化 TSynLog 行可能越过 4KB stack buffer；2.4.17000 已修复。把所有格式化日志 callback 与 wrapper 迁移到 RawUtf8，重建每个 Delphi/FPC target，再压力测试 signal 下有限 socket 等待、失败连接、接近 4KB 的日志行、Delphi POSIX 资源与 AArch64 interface call。",
+    "ru": "Переходите на build 2.4.17002. Не останавливайтесь на builds 2.4.16947–2.4.16964, где POSIX EINTR, timeout и async-connect work неоднократно дополняется или исправляется; 2.4.16954 отдельно ломает timeout reporting. Никогда не развёртывайте 2.4.16999: formatted TSynLog line с instance prefix может выйти за 4KB stack buffer; 2.4.17000 это исправляет. Переведите formatted logging callbacks и wrappers на RawUtf8, пересоберите все Delphi/FPC targets, затем проверьте finite socket waits под signals, failed connects, строки около 4KB, Delphi POSIX resources и AArch64 interface calls."
+  },
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.16947",
+        "to_build": "2.4.16964",
+        "why": "The POSIX EINTR, timeout and asynchronous-connect sequence receives repeated follow-up fixes; build 16954 also regresses timeout reporting before build 16955 repairs it."
+      },
+      {
+        "from_build": "2.4.16999",
+        "to_build": "2.4.16999",
+        "why": "TSynLog pre-rendering does not subtract the instance prefix from its 4KB stack capacity; build 17000 fixes the possible out-of-bounds write."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "389ef677a31eaa2f363f76382e534d20190ac75d",
+          "7e5228a578a59cb9d76540cd7fb33ac1aa7a880f",
+          "989e6d5b45806fb3a699b0208aa61dd0d970cc5f",
+          "109cf3c52a8c108bf14062b16fb47fede4b21685",
+          "e637b45f86405b3f0ae392a868bb51737ce5d326",
+          "9c8515b0efec36fb6cbc24b66987598db37f9669",
+          "29c8bebb114c9ad7ce97ec7d8fcf4944fb27cea4",
+          "99bc19a18f97054921271b85d4b6c9c956eff497",
+          "8187f47f8750fc81db4e7818c15880f0144e4f56",
+          "b0bbdf13b46c870bf210b231a0144fc7213b50ae",
+          "04130d2bec34390e180c5cc9ea4743289cf7c65c",
+          "496af18946b6b83d6ab4feb90279bc1b8084d416",
+          "07c8080b22b97295c1b13bf0cad4b6a81a15f562",
+          "1d878f7fb773d7a064ec1badf4b5724dcb6b6fac",
+          "a74fa349674d7720e1fec94da04ceb4050c5b94a"
+        ],
+        "why": "Take the POSIX signal handling, timeout repairs and connect completion changes as one completed socket sequence."
+      },
+      {
+        "shas": [
+          "1bde88e273208447f10edbc7edd22f6f4b2bb7bc",
+          "ab86987518bba22c30f2985c45c4a7d1bcb97cb8",
+          "5b05ee28e72cc184719597ba23751f6fed03e0e4",
+          "a6bb53dcbcea051f8fd13420ec0a3cb2f55896f3",
+          "99d189cc903f96ca7510991f8a18fe2da70b2583"
+        ],
+        "why": "Migrate the RawUtf8 logging signatures and take the pre-rendering implementation together with its final stack-capacity fix."
+      },
+      {
+        "shas": [
+          "b8eaea86a96720a5b7639089684c03ccf412ad93",
+          "ea84706021736732afcaf5949de7cd4433737795",
+          "0d9880b71ce9cf61e17101c964793d93834d20f7",
+          "ce3a81b824e098e7a15322c1f1f4abd02edbd2c3"
+        ],
+        "why": "Take the Delphi AArch64 alignment, variant dispatch, interface stubs and follow-up assertion fix together."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "The raw payload contains eight merge commits and 51 non-merge commits; every non-merge commit is covered below. It has no superseded_by markers and no deprecation notice. The two avoid windows are derived from explicit later corrections in the embedded build sequence.",
+    "fr": "Le payload brut contient huit commits de merge et 51 commits non-merge ; chacun est couvert ci-dessous. Il ne contient ni marqueur superseded_by ni avis de dépréciation. Les deux plages à éviter proviennent de corrections explicites plus tard dans la séquence.",
+    "zh": "原始 payload 包含 8 个 merge commit 与 51 个 non-merge commit；下方覆盖全部 non-merge commit。它不含 superseded_by 标记，也没有 deprecation notice。两个避开区间来自嵌入 build 序列中明确的后续修复。",
+    "ru": "Исходный payload содержит восемь merge commits и 51 non-merge commit; ниже покрыт каждый. Маркеров superseded_by и deprecation notice нет. Два исключаемых окна выведены из явных последующих исправлений в build sequence."
+  },
+  "entries": [
+    {
+      "sha": "307a9fb712171b39e5a0c0e706c8cc6fc7f02670",
+      "headline": {
+        "en": "LogView returns as a Lazarus desktop tool",
+        "fr": "LogView revient comme outil desktop Lazarus",
+        "zh": "LogView 以 Lazarus 桌面工具形式回归",
+        "ru": "LogView возвращается как desktop-инструмент Lazarus"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "A new mormot.tools.logview LCL application opens, filters, searches and profiles TSynLog, SynLZ and plain-text files, with DPI-aware layout and queued remote rows.",
+        "fr": "Une nouvelle application LCL mormot.tools.logview ouvre, filtre, recherche et profile les fichiers TSynLog, SynLZ et texte brut, avec layout DPI et file d’attente distante.",
+        "zh": "新的 mormot.tools.logview LCL 应用可打开、过滤、搜索和分析 TSynLog、SynLZ 与纯文本文件，并支持 DPI 布局和远程行队列。",
+        "ru": "Новое LCL-приложение mormot.tools.logview открывает, фильтрует, ищет и профилирует TSynLog, SynLZ и обычные текстовые файлы, с DPI-aware layout и очередью remote rows."
+      },
+      "impact": {
+        "en": "Framework backends are unchanged; FPC/Lazarus users gain a maintained viewer, including safer UI-thread handling of live remote logs.",
+        "fr": "Les backends ne changent pas ; les utilisateurs FPC/Lazarus gagnent un viewer maintenu, avec traitement sûr des logs distants dans le thread UI.",
+        "zh": "framework backend 不变；FPC/Lazarus 用户获得维护中的查看器，并能在 UI thread 中安全处理实时远程日志。",
+        "ru": "Backends framework не меняются; пользователи FPC/Lazarus получают поддерживаемый viewer с безопасной обработкой live remote logs в UI thread."
+      },
+      "action": "none",
+      "units": [
+        "mormot.tools.logview"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e29490aaff1d3a07a94d099d3acb1c6b99bf1740",
+      "headline": {
+        "en": "Remote-log callbacks can identify their sender",
+        "fr": "Les callbacks de log distant peuvent identifier leur émetteur",
+        "zh": "远程日志 callback 可识别发送方",
+        "ru": "Callbacks удалённого лога могут определить отправителя"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRestHttpRemoteLogServer adds CreateWithSender and TRemoteLogReceivedFrom, delivering the connection ID and remote IP; callback fields are assigned before the HTTP server starts.",
+        "fr": "TRestHttpRemoteLogServer ajoute CreateWithSender et TRemoteLogReceivedFrom, avec ID de connexion et IP distante ; les callbacks sont affectés avant le démarrage HTTP.",
+        "zh": "TRestHttpRemoteLogServer 新增 CreateWithSender 与 TRemoteLogReceivedFrom，传递连接 ID 和远程 IP，并在 HTTP server 启动前设置 callback。",
+        "ru": "TRestHttpRemoteLogServer добавляет CreateWithSender и TRemoteLogReceivedFrom с ID соединения и remote IP; callbacks назначаются до запуска HTTP server."
+      },
+      "impact": {
+        "en": "Existing Create users keep their callback. New Delphi/FPC viewers can separate simultaneous senders, and startup requests no longer race an unassigned callback.",
+        "fr": "Les utilisateurs de Create gardent leur callback. Les nouveaux viewers Delphi/FPC distinguent les émetteurs simultanés et les requêtes initiales ne rencontrent plus un callback absent.",
+        "zh": "现有 Create 调用方保持不变；新的 Delphi/FPC viewer 可区分并发发送方，启动阶段请求也不会再遇到未设置 callback。",
+        "ru": "Существующий Create сохраняет callback. Новые viewers Delphi/FPC могут разделять одновременных отправителей, а стартовые запросы больше не попадают в race с неназначенным callback."
+      },
+      "action": "none",
+      "units": [
+        "mormot.rest.http.server"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TRemoteLogReceivedFrom",
+          "change": "added",
+          "note": {
+            "en": "Callback including connection ID and remote IP.",
+            "fr": "Callback avec ID de connexion et IP distante.",
+            "zh": "包含连接 ID 与远程 IP 的 callback。",
+            "ru": "Callback с ID соединения и remote IP."
+          }
+        },
+        {
+          "symbol": "TRestHttpRemoteLogServer.CreateWithSender",
+          "change": "added",
+          "note": {
+            "en": "Creates a remote-log server with sender-aware notifications.",
+            "fr": "Crée un serveur de log distant avec identification de l’émetteur.",
+            "zh": "创建带发送方识别通知的远程日志 server。",
+            "ru": "Создаёт remote-log server с sender-aware уведомлениями."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "6a02c38a852bf97480570330594f3dd0039cca0e",
+      "headline": {
+        "en": "Remote LogView normalizes every client layout",
+        "fr": "LogView normalise le layout de chaque client distant",
+        "zh": "远程 LogView 统一所有客户端布局",
+        "ru": "Remote LogView нормализует layout каждого клиента"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRemoteLogNormalizer rewrites calendar, zoned, high-resolution and plain rows into one timestamp/thread/level layout and assigns unique thread numbers per HTTP connection.",
+        "fr": "TRemoteLogNormalizer réécrit les lignes calendrier, zonées, haute résolution ou texte dans un layout unique et attribue des threads uniques par connexion HTTP.",
+        "zh": "TRemoteLogNormalizer 将日历、时区、高精度与纯文本行统一为 timestamp/thread/level 布局，并为每个 HTTP 连接分配唯一 thread 编号。",
+        "ru": "TRemoteLogNormalizer переписывает calendar, zoned, high-resolution и text rows в единый timestamp/thread/level layout и назначает уникальные thread numbers для каждого HTTP-соединения."
+      },
+      "impact": {
+        "en": "Live logs from clients using different TSynLog layouts are all visible and filterable. The change is confined to the LogView tool and its remote-capture path.",
+        "fr": "Les logs live de clients aux layouts TSynLog différents deviennent tous visibles et filtrables. Le changement reste limité à LogView et à sa capture distante.",
+        "zh": "使用不同 TSynLog 布局的客户端实时日志现在都可显示和过滤；变更仅限 LogView 及其远程捕获路径。",
+        "ru": "Live logs клиентов с разными layouts TSynLog теперь видны и фильтруются. Изменение ограничено LogView и его remote-capture path."
+      },
+      "action": "none",
+      "units": [
+        "mormot.tools.logview",
+        "mormot.tools.logview.remote"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e4c69cc114d63e96c02bd38b06d0ff05d6683dff",
+      "headline": {
+        "en": "Failed TSynLog entry paths keep timing and scope consistent",
+        "fr": "Les échecs d’entrée TSynLog gardent timing et scope cohérents",
+        "zh": "TSynLog 进入失败时保持计时与 scope 一致",
+        "ru": "Сбойные пути входа TSynLog сохраняют timing и scope"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynLog initializes timing in its constructor, forwards MicroSecs through LogEnterFmt, and makes EnterLocal return nil when LockAndPrepareEnter fails.",
+        "fr": "TSynLog initialise le timing dans son constructeur, transmet MicroSecs via LogEnterFmt et fait renvoyer nil par EnterLocal si LockAndPrepareEnter échoue.",
+        "zh": "TSynLog 在 constructor 中初始化计时，将 MicroSecs 传入 LogEnterFmt，并在 LockAndPrepareEnter 失败时让 EnterLocal 返回 nil。",
+        "ru": "TSynLog инициализирует timing в конструкторе, передаёт MicroSecs через LogEnterFmt и возвращает nil из EnterLocal при сбое LockAndPrepareEnter."
+      },
+      "impact": {
+        "en": "Failed startup or rotation no longer leaves callers with a false successful logging scope, and manual timing pointers receive the intended entry timestamp.",
+        "fr": "Un démarrage ou une rotation en échec ne laisse plus un faux scope réussi, et les pointeurs de timing manuel reçoivent le timestamp attendu.",
+        "zh": "启动或轮换失败不再给调用方留下虚假的成功日志 scope，手动计时指针也会收到正确的进入 timestamp。",
+        "ru": "Сбой запуска или ротации больше не оставляет ложный успешный logging scope, а указатели manual timing получают правильный timestamp входа."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade services that rely on EnterLocal or ManualEnter around logger initialization and test failed file creation.",
+        "fr": "Mettez à niveau les services utilisant EnterLocal ou ManualEnter pendant l’initialisation et testez l’échec de création du fichier.",
+        "zh": "使用 EnterLocal 或 ManualEnter 包围 logger 初始化的服务应升级，并测试文件创建失败。",
+        "ru": "Обновите сервисы с EnterLocal или ManualEnter при инициализации logger и проверьте сбой создания файла."
+      }
+    },
+    {
+      "sha": "389ef677a31eaa2f363f76382e534d20190ac75d",
+      "headline": {
+        "en": "UDP send and receive retry interrupted POSIX syscalls",
+        "fr": "Les envois et réceptions UDP reprennent après EINTR sous POSIX",
+        "zh": "POSIX 下 UDP 收发会在 EINTR 后重试",
+        "ru": "UDP send и receive повторяются после EINTR в POSIX"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNetSocketWrap.SendTo and RecvFrom now repeat sendto and recvfrom on POSIX when errno is EINTR, while retaining the existing Windows behavior.",
+        "fr": "TNetSocketWrap.SendTo et RecvFrom répètent sendto et recvfrom sous POSIX lorsque errno vaut EINTR, sans changer Windows.",
+        "zh": "TNetSocketWrap.SendTo 与 RecvFrom 在 POSIX errno 为 EINTR 时重试 sendto/recvfrom，Windows 行为不变。",
+        "ru": "TNetSocketWrap.SendTo и RecvFrom повторяют sendto и recvfrom в POSIX при errno=EINTR, сохраняя поведение Windows."
+      },
+      "impact": {
+        "en": "Signal-heavy Linux and BSD services no longer report transient UDP failures solely because a syscall was interrupted. Public signatures are unchanged.",
+        "fr": "Les services Linux et BSD riches en signaux ne signalent plus d’échec UDP transitoire dû seulement à une interruption syscall. Les signatures ne changent pas.",
+        "zh": "频繁接收 signal 的 Linux/BSD 服务不再仅因 syscall 被中断而报告临时 UDP 失败；公开 signature 不变。",
+        "ru": "Linux- и BSD-сервисы с частыми сигналами больше не получают transient UDP failure только из-за прерванного syscall. Публичные signatures не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a21c2edb58792bcf2a08762711fe5c52115d00e0",
+      "headline": {
+        "en": "Integer resource names no longer hang Delphi POSIX startup",
+        "fr": "Les noms de ressource entiers ne bloquent plus le démarrage Delphi POSIX",
+        "zh": "整数资源名不再导致 Delphi POSIX 启动挂起",
+        "ru": "Integer resource names больше не зависают при запуске Delphi POSIX"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TExecutableResource.Open and ResourceExists reject MAKEINTRESOURCE-style pointers below $10000 on Delphi POSIX before the RTL can cast them to strings.",
+        "fr": "TExecutableResource.Open et ResourceExists rejettent sous Delphi POSIX les pointeurs MAKEINTRESOURCE inférieurs à $10000 avant leur conversion en chaîne par la RTL.",
+        "zh": "Delphi POSIX 上，TExecutableResource.Open 与 ResourceExists 会在 RTL 把 MAKEINTRESOURCE 风格的低于 $10000 指针转成字符串前拒绝它们。",
+        "ru": "TExecutableResource.Open и ResourceExists в Delphi POSIX отклоняют MAKEINTRESOURCE pointers ниже $10000 до того, как RTL преобразует их в строки."
+      },
+      "impact": {
+        "en": "Delphi Linux, macOS, Android and iOS applications avoid a startup GPF/stack-overflow loop when code probes ordinal resources; such ordinal resources remain unsupported.",
+        "fr": "Les applications Delphi Linux, macOS, Android et iOS évitent une boucle GPF/stack overflow au démarrage ; les ressources ordinales restent non prises en charge.",
+        "zh": "Delphi Linux、macOS、Android 与 iOS 应用在探测 ordinal resource 时避免启动 GPF/stack-overflow 循环；ordinal resource 仍不受支持。",
+        "ru": "Приложения Delphi Linux, macOS, Android и iOS избегают GPF/stack-overflow loop при запуске с ordinal resources; такие ресурсы остаются неподдерживаемыми."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2b55dc23281f0cf1f5e176f382d92bd237f7b79a",
+      "headline": {
+        "en": "Delphi POSIX resource strings use the correct layout",
+        "fr": "Les resourcestring Delphi POSIX utilisent le bon layout",
+        "zh": "Delphi POSIX resourcestring 使用正确布局",
+        "ru": "Resourcestring Delphi POSIX используют правильный layout"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "LoadResString checks ShortLen <> $ffff for the short layout; $ffff now correctly selects the long resourcestring record defined by the Delphi RTL.",
+        "fr": "LoadResString teste ShortLen <> $ffff pour le layout court ; $ffff sélectionne maintenant correctement le record resourcestring long de la RTL Delphi.",
+        "zh": "LoadResString 以 ShortLen <> $ffff 判断短布局；$ffff 现在正确选择 Delphi RTL 定义的长 resourcestring record。",
+        "ru": "LoadResString проверяет ShortLen <> $ffff для short layout; $ffff теперь правильно выбирает long resourcestring record Delphi RTL."
+      },
+      "impact": {
+        "en": "Delphi POSIX applications now load short and long localized resource strings from the correct fields instead of returning corrupted or swapped text.",
+        "fr": "Les applications Delphi POSIX chargent les resourcestring courtes et longues depuis les bons champs au lieu d’un texte corrompu ou inversé.",
+        "zh": "Delphi POSIX 应用现在从正确字段加载短、长本地化 resource string，不再返回损坏或互换的文本。",
+        "ru": "Приложения Delphi POSIX теперь загружают short и long localized resource strings из правильных полей вместо повреждённого или перепутанного текста."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.os.delphi"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "36796d3cf384b1d4eb15bbaa62b57e96f0cbb112",
+      "headline": {
+        "en": "Modern Android can find ICU without libicudata",
+        "fr": "Android moderne trouve ICU sans libicudata",
+        "zh": "现代 Android 无需 libicudata 即可发现 ICU",
+        "ru": "Современный Android находит ICU без libicudata"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "Android ICU discovery now falls back to libicuuc.so and libicui18n.so when libicudata.so is absent, then resolves unversioned or versioned symbols as needed.",
+        "fr": "La détection ICU Android essaie libicuuc.so et libicui18n.so quand libicudata.so est absent, puis résout les symboles versionnés ou non.",
+        "zh": "Android ICU 检测在缺少 libicudata.so 时回退到 libicuuc.so 与 libicui18n.so，再按需解析带版本或无版本 symbol。",
+        "ru": "Android ICU detection пробует libicuuc.so и libicui18n.so при отсутствии libicudata.so, затем разрешает versioned или unversioned symbols."
+      },
+      "impact": {
+        "en": "Current Android releases whose ICU data lives in an APEX can expose Unicode conversion support to Delphi/FPC applications again. Other POSIX targets are unchanged.",
+        "fr": "Les versions Android actuelles avec ICU dans un APEX retrouvent la conversion Unicode pour les applications Delphi/FPC. Les autres cibles POSIX ne changent pas.",
+        "zh": "ICU 数据位于 APEX 的现代 Android 版本可重新向 Delphi/FPC 应用提供 Unicode 转换；其他 POSIX target 不变。",
+        "ru": "Современные Android с ICU data в APEX снова предоставляют Unicode conversion приложениям Delphi/FPC. Другие POSIX targets не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.os.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b8eaea86a96720a5b7639089684c03ccf412ad93",
+      "headline": {
+        "en": "GlobalTime locks are aligned on Delphi AArch64",
+        "fr": "Les verrous GlobalTime sont alignés sous Delphi AArch64",
+        "zh": "Delphi AArch64 上 GlobalTime 锁已正确对齐",
+        "ru": "Блокировки GlobalTime выровнены на Delphi AArch64"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The GlobalTime cache record is no longer packed, ensuring TRWLightLock receives pointer alignment; comments and later assertions allow compiler-added padding.",
+        "fr": "Le record du cache GlobalTime n’est plus packed, assurant l’alignement de TRWLightLock ; les assertions ultérieures tolèrent le padding du compiler.",
+        "zh": "GlobalTime cache record 不再 packed，从而保证 TRWLightLock 的指针对齐；后续 assertion 也允许 compiler 添加 padding。",
+        "ru": "Record cache GlobalTime больше не packed, что обеспечивает pointer alignment для TRWLightLock; последующие assertions допускают padding compiler."
+      },
+      "impact": {
+        "en": "Delphi AArch64 applications, notably iOS, avoid access violations from atomic lock instructions on an odd address. Other compilers keep the same cache semantics.",
+        "fr": "Les applications Delphi AArch64, notamment iOS, évitent les access violations des instructions atomiques sur adresse impaire. Les autres compilers gardent la même sémantique.",
+        "zh": "Delphi AArch64 应用，尤其 iOS，可避免原子锁指令访问奇数地址导致的 access violation；其他 compiler 的 cache 语义不变。",
+        "ru": "Приложения Delphi AArch64, особенно iOS, избегают access violation атомарной блокировки на нечётном адресе. Семантика cache для других compilers не меняется."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.datetime"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ea84706021736732afcaf5949de7cd4433737795",
+      "headline": {
+        "en": "DispInvoke understands Delphi AArch64 varargs",
+        "fr": "DispInvoke comprend les varargs Delphi AArch64",
+        "zh": "DispInvoke 支持 Delphi AArch64 varargs",
+        "ru": "DispInvoke понимает varargs Delphi AArch64"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.core.variants adds AAPCS64 and Apple AArch64 va_list readers so DispInvokeNamed retrieves general-purpose, floating-point and by-reference arguments with each platform ABI.",
+        "fr": "mormot.core.variants ajoute des lecteurs va_list AAPCS64 et Apple AArch64 afin que DispInvokeNamed récupère les arguments selon chaque ABI.",
+        "zh": "mormot.core.variants 新增 AAPCS64 与 Apple AArch64 va_list reader，使 DispInvokeNamed 按各平台 ABI 读取通用、浮点与 by-reference 参数。",
+        "ru": "mormot.core.variants добавляет readers va_list для AAPCS64 и Apple AArch64, чтобы DispInvokeNamed получал GP, floating-point и by-reference arguments по ABI платформы."
+      },
+      "impact": {
+        "en": "Late-bound variant method calls now work on Delphi Android, Linux, iOS and macOS AArch64 instead of using an incompatible flat-buffer or x86-64 layout.",
+        "fr": "Late-bound variant fonctionne maintenant sous Delphi Android, Linux, iOS et macOS AArch64 au lieu d’un layout incompatible.",
+        "zh": "late-bound variant method call 现在可在 Delphi Android、Linux、iOS 与 macOS AArch64 上工作，不再使用不兼容的 flat-buffer 或 x86-64 布局。",
+        "ru": "Late-bound variant method calls теперь работают на Delphi Android, Linux, iOS и macOS AArch64 вместо несовместимого flat-buffer или x86-64 layout."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.variants",
+        "mormot.defines"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7e5228a578a59cb9d76540cd7fb33ac1aa7a880f",
+      "headline": {
+        "en": "POSIX stream and datagram I/O consistently retries EINTR",
+        "fr": "POSIX reprend systématiquement les I/O stream et datagram après EINTR",
+        "zh": "POSIX stream 与 datagram I/O 统一重试 EINTR",
+        "ru": "POSIX stream и datagram I/O последовательно повторяет EINTR"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TNetSocketWrap Send, Recv, SendTo and RecvFrom move into platform includes; POSIX implementations retry interrupted syscalls, while Windows keeps direct WinSock calls.",
+        "fr": "Les méthodes Send, Recv, SendTo et RecvFrom passent dans les includes de plateforme ; POSIX reprend les syscalls interrompus et Windows garde WinSock direct.",
+        "zh": "TNetSocketWrap 的 Send、Recv、SendTo 与 RecvFrom 移到平台 include；POSIX 实现重试被中断 syscall，Windows 保持直接 WinSock 调用。",
+        "ru": "TNetSocketWrap Send, Recv, SendTo и RecvFrom перенесены в platform includes; POSIX повторяет interrupted syscalls, Windows сохраняет прямые WinSock calls."
+      },
+      "impact": {
+        "en": "Linux and BSD socket traffic is less likely to fail spuriously under signals across TCP and UDP. Windows behavior and public signatures stay unchanged.",
+        "fr": "Le trafic socket Linux/BSD échoue moins sous les signaux, en TCP comme en UDP. Windows et les signatures publiques restent inchangés.",
+        "zh": "Linux/BSD 的 TCP 与 UDP socket 流量在 signal 下更少出现伪失败；Windows 行为与公开 signature 不变。",
+        "ru": "Socket traffic Linux/BSD реже получает ложные сбои при сигналах для TCP и UDP. Windows и публичные signatures не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0d9880b71ce9cf61e17101c964793d93834d20f7",
+      "headline": {
+        "en": "Delphi Android and iOS gain static AArch64 interface stubs",
+        "fr": "Delphi Android et iOS gagnent des stubs d’interface AArch64 statiques",
+        "zh": "Delphi Android 与 iOS 新增静态 AArch64 interface stub",
+        "ru": "Delphi Android и iOS получают статические AArch64 interface stubs"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.core.interfaces links external AArch64 call/fake-VMT stubs, passes hidden by-reference results through X8, and uses static thunks where iOS forbids generated executable pages.",
+        "fr": "mormot.core.interfaces lie des stubs AArch64 externes, passe les résultats by-reference via X8 et utilise des thunks statiques là où iOS interdit les pages exécutables générées.",
+        "zh": "mormot.core.interfaces 链接外部 AArch64 call/fake-VMT stub，通过 X8 传递隐藏的 by-reference 结果，并在 iOS 禁止动态可执行页面时使用静态 thunk。",
+        "ru": "mormot.core.interfaces связывает внешние AArch64 call/fake-VMT stubs, передаёт hidden by-reference result через X8 и использует static thunks там, где iOS запрещает generated executable pages."
+      },
+      "impact": {
+        "en": "Interface-based services and fake interface dispatch become usable on Delphi Android and iOS AArch64, including code-signed iOS processes. macOS and Windows ARM64 remain outside this implementation.",
+        "fr": "Interface services et fake dispatch deviennent utilisables sous Delphi Android/iOS AArch64, y compris sur iOS signé. macOS et Windows ARM64 restent hors de cette implémentation.",
+        "zh": "基于 interface 的服务与 fake interface dispatch 现在可在 Delphi Android/iOS AArch64 使用，包括签名 iOS 进程；macOS/Windows ARM64 不在此次实现范围。",
+        "ru": "Interface-based services и fake interface dispatch становятся доступны на Delphi Android/iOS AArch64, включая code-signed iOS. macOS и Windows ARM64 пока не охвачены."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.interfaces",
+        "mormot.defines"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "989e6d5b45806fb3a699b0208aa61dd0d970cc5f",
+      "headline": {
+        "en": "Socket waits preserve deadlines across POSIX signals",
+        "fr": "Les attentes socket conservent leur deadline après les signaux POSIX",
+        "zh": "socket 等待在 POSIX signal 后保持 deadline",
+        "ru": "Socket waits сохраняют deadline при POSIX signals"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "PollNoEintr wraps poll, retries EINTR and recomputes the remaining timeout; TNetSocketWrap.WaitFor uses it instead of treating EINTR as a timeout.",
+        "fr": "PollNoEintr enveloppe poll, reprend après EINTR et recalcule le timeout restant ; TNetSocketWrap.WaitFor l’utilise au lieu de traiter EINTR comme un timeout.",
+        "zh": "PollNoEintr 包装 poll，在 EINTR 后重试并重新计算剩余 timeout；TNetSocketWrap.WaitFor 不再把 EINTR 当作超时。",
+        "ru": "PollNoEintr оборачивает poll, повторяет EINTR и пересчитывает оставшийся timeout; TNetSocketWrap.WaitFor использует его вместо трактовки EINTR как timeout."
+      },
+      "impact": {
+        "en": "POSIX clients and servers no longer return early or extend finite waits indefinitely when signals interrupt poll. Windows is unaffected.",
+        "fr": "Les clients et serveurs POSIX ne sortent plus trop tôt et n’allongent plus indéfiniment les attentes finies après un signal. Windows n’est pas affecté.",
+        "zh": "POSIX client/server 在 signal 中断 poll 时不再提前返回，也不会无限延长有限等待；Windows 不受影响。",
+        "ru": "POSIX clients и servers больше не завершают wait преждевременно и не растягивают конечный timeout при signal. Windows не затронут."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "109cf3c52a8c108bf14062b16fb47fede4b21685",
+      "headline": {
+        "en": "accept and accept4 recover from interrupted calls",
+        "fr": "accept et accept4 reprennent après interruption",
+        "zh": "accept 与 accept4 会从中断中恢复",
+        "ru": "accept и accept4 восстанавливаются после interruption"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The POSIX doaccept helper retries accept4 and accept on EINTR, preserves non-blocking descriptors, and records unsupported accept4 only for ENOSYS or EOPNOTSUPP.",
+        "fr": "Le helper POSIX doaccept reprend accept4/accept après EINTR, préserve les descriptors non bloquants et ne marque accept4 unsupported que pour ENOSYS/EOPNOTSUPP.",
+        "zh": "POSIX doaccept helper 在 EINTR 后重试 accept4/accept，保持 non-blocking descriptor，并仅在 ENOSYS/EOPNOTSUPP 时标记 accept4 不支持。",
+        "ru": "POSIX helper doaccept повторяет accept4/accept при EINTR, сохраняет non-blocking descriptors и помечает accept4 unsupported только для ENOSYS/EOPNOTSUPP."
+      },
+      "impact": {
+        "en": "Signal delivery no longer makes POSIX listener loops report transient accept failures, and old kernels still fall back to accept correctly.",
+        "fr": "La livraison d’un signal ne produit plus de faux échec accept sur POSIX, et les anciens kernels gardent un fallback correct.",
+        "zh": "signal 传递不再让 POSIX listener loop 报告临时 accept 失败，旧 kernel 仍能正确回退到 accept。",
+        "ru": "Доставка signal больше не вызывает transient accept failure в POSIX listener loop, а старые kernels корректно переходят на accept."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e637b45f86405b3f0ae392a868bb51737ce5d326",
+      "headline": {
+        "en": "poll-based socket sets ignore EINTR without losing time",
+        "fr": "Les ensembles socket basés sur poll ignorent EINTR sans perdre le temps",
+        "zh": "基于 poll 的 socket 集合忽略 EINTR 且不丢失时间",
+        "ru": "Наборы sockets на poll игнорируют EINTR без потери времени"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPollSocketPoll.WaitForModified and WaitForSeveral now call PollNoEintr, so their finite timeout is preserved across signal interruptions.",
+        "fr": "TPollSocketPoll.WaitForModified et WaitForSeveral appellent maintenant PollNoEintr et conservent leur timeout fini malgré les signaux.",
+        "zh": "TPollSocketPoll.WaitForModified 与 WaitForSeveral 现在调用 PollNoEintr，在 signal 中断后保留有限 timeout。",
+        "ru": "TPollSocketPoll.WaitForModified и WaitForSeveral теперь вызывают PollNoEintr, сохраняя конечный timeout через signal interruptions."
+      },
+      "impact": {
+        "en": "POSIX poll backends stop returning empty or failed result sets solely because a signal arrived. Application APIs do not change.",
+        "fr": "Les backends poll POSIX ne renvoient plus un résultat vide ou erroné à cause d’un signal. Les API ne changent pas.",
+        "zh": "POSIX poll backend 不再仅因 signal 到达而返回空或失败结果集；应用 API 不变。",
+        "ru": "POSIX poll backends больше не возвращают пустой или ошибочный набор только из-за сигнала. API приложений не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9c8515b0efec36fb6cbc24b66987598db37f9669",
+      "headline": {
+        "en": "epoll waits also retain their timeout after EINTR",
+        "fr": "Les attentes epoll gardent aussi leur timeout après EINTR",
+        "zh": "epoll 等待同样在 EINTR 后保持 timeout",
+        "ru": "epoll waits также сохраняют timeout после EINTR"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "EpollWaitNoEintr retries epoll_wait after EINTR and subtracts elapsed time before TPollSocketEpoll.WaitForModified resumes.",
+        "fr": "EpollWaitNoEintr reprend epoll_wait après EINTR et soustrait le temps écoulé avant la reprise de TPollSocketEpoll.WaitForModified.",
+        "zh": "EpollWaitNoEintr 在 EINTR 后重试 epoll_wait，并在 TPollSocketEpoll.WaitForModified 继续前扣除已用时间。",
+        "ru": "EpollWaitNoEintr повторяет epoll_wait после EINTR и вычитает elapsed time перед продолжением TPollSocketEpoll.WaitForModified."
+      },
+      "impact": {
+        "en": "Linux epoll servers keep their requested deadlines and do not surface signal interruptions as missing events. Public APIs are unchanged.",
+        "fr": "Les serveurs epoll Linux respectent leur deadline et ne remontent pas les interruptions comme événements manquants. Les API ne changent pas.",
+        "zh": "Linux epoll server 保持请求的 deadline，不再把 signal 中断表现为事件缺失；公开 API 不变。",
+        "ru": "Linux epoll servers соблюдают requested deadlines и не выдают signal interruption как отсутствие events. Публичные API не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "29c8bebb114c9ad7ce97ec7d8fcf4944fb27cea4",
+      "headline": {
+        "en": "Old kernels reliably fall back from accept4",
+        "fr": "Les anciens kernels passent correctement de accept4 à accept",
+        "zh": "旧 kernel 可可靠地从 accept4 回退",
+        "ru": "Старые kernels надёжно переходят с accept4 на accept"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "doaccept stores errno once, exits on fatal accept4 errors, and falls through to plain accept after ENOSYS or EOPNOTSUPP; POSIX I/O uses direct cerrno checks.",
+        "fr": "doaccept mémorise errno, sort sur erreur fatale accept4 et passe à accept après ENOSYS/EOPNOTSUPP ; les I/O POSIX testent directement cerrno.",
+        "zh": "doaccept 单次保存 errno，遇到致命 accept4 错误退出，遇到 ENOSYS/EOPNOTSUPP 则回退到 accept；POSIX I/O 直接检查 cerrno。",
+        "ru": "doaccept один раз сохраняет errno, выходит при fatal accept4 error и переходит к accept после ENOSYS/EOPNOTSUPP; POSIX I/O напрямую проверяет cerrno."
+      },
+      "impact": {
+        "en": "Linux systems without usable accept4 no longer get stuck on the unsupported path or skip the fallback listener call.",
+        "fr": "Les systèmes Linux sans accept4 utilisable ne restent plus sur le chemin unsupported et exécutent bien le fallback listener.",
+        "zh": "无法使用 accept4 的 Linux 系统不再卡在 unsupported 路径或跳过 fallback listener 调用。",
+        "ru": "Linux без usable accept4 больше не застревает на unsupported path и не пропускает fallback listener call."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "99bc19a18f97054921271b85d4b6c9c956eff497",
+      "headline": {
+        "en": "epoll control retries EINTR and timeout loops are tightened",
+        "fr": "epoll_ctl reprend après EINTR et les boucles de timeout sont resserrées",
+        "zh": "epoll 控制重试 EINTR，并收紧 timeout 循环",
+        "ru": "epoll control повторяет EINTR, timeout loops уточнены"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "EpollCtlNoEIntr wraps epoll_ctl for subscribe/unsubscribe, while poll and epoll retry loops stop once the recomputed timeout reaches zero.",
+        "fr": "EpollCtlNoEIntr enveloppe epoll_ctl pour subscribe/unsubscribe, et les boucles poll/epoll s’arrêtent quand le timeout recalculé atteint zéro.",
+        "zh": "EpollCtlNoEIntr 包装 subscribe/unsubscribe 的 epoll_ctl；poll/epoll 重试循环在重新计算的 timeout 到零时停止。",
+        "ru": "EpollCtlNoEIntr оборачивает epoll_ctl для subscribe/unsubscribe, а poll/epoll retry loops останавливаются при нулевом пересчитанном timeout."
+      },
+      "impact": {
+        "en": "Linux subscriptions resist signal interruption, but this intermediate build omitted a timeout result reset that the next commit restores; do not stop on build 2.4.16954.",
+        "fr": "Linux subscriptions résistent aux signaux, mais cette build intermédiaire omet un reset du résultat timeout rétabli ensuite ; ne restez pas sur 2.4.16954.",
+        "zh": "Linux subscription 可抵抗 signal 中断，但此中间 build 漏掉 timeout 结果重置，下一 commit 才恢复；不要停留在 2.4.16954。",
+        "ru": "Linux subscriptions устойчивы к signal interruption, но этот промежуточный build пропустил сброс timeout result, восстановленный следующим commit; не оставайтесь на 2.4.16954."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8187f47f8750fc81db4e7818c15880f0144e4f56",
+      "headline": {
+        "en": "A socket-wait timeout regression is repaired",
+        "fr": "Une régression de timeout socket est réparée",
+        "zh": "socket 等待 timeout 回归已修复",
+        "ru": "Исправлена regression timeout socket wait"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "PollNoEintr restores result := 0 when its deadline expires, and TNetSocketWrap.WaitFor exits before reading stale revents after a timeout.",
+        "fr": "PollNoEintr rétablit result := 0 à l’expiration, et TNetSocketWrap.WaitFor sort avant de lire des revents périmés.",
+        "zh": "PollNoEintr 在 deadline 到期时恢复 result := 0，TNetSocketWrap.WaitFor 也会在 timeout 后读取旧 revents 前退出。",
+        "ru": "PollNoEintr восстанавливает result := 0 при истечении deadline, а TNetSocketWrap.WaitFor выходит до чтения stale revents после timeout."
+      },
+      "impact": {
+        "en": "POSIX waits again report a clean timeout instead of interpreting stale poll state. This repair is required for the preceding EINTR timeout refactor.",
+        "fr": "Les attentes POSIX renvoient de nouveau un timeout propre au lieu d’interpréter un état poll périmé. Cette réparation est indispensable à la refonte précédente.",
+        "zh": "POSIX 等待再次干净地报告 timeout，不再解释旧 poll 状态；这是此前 EINTR timeout 重构所必需的修复。",
+        "ru": "POSIX waits снова сообщают чистый timeout вместо интерпретации stale poll state. Исправление обязательно для предыдущего EINTR timeout refactor."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Use build 2.4.16955 or later, never 2.4.16954, and rerun finite-timeout network tests under signals.",
+        "fr": "Utilisez la build 2.4.16955 ou ultérieure, jamais 2.4.16954, et rejouez les tests de timeout sous signaux.",
+        "zh": "请使用 build 2.4.16955 或更高版本，绝不要用 2.4.16954，并在 signal 下重跑有限 timeout 网络测试。",
+        "ru": "Используйте build 2.4.16955 или новее, но не 2.4.16954, и повторите finite-timeout network tests под signals."
+      }
+    },
+    {
+      "sha": "b0bbdf13b46c870bf210b231a0144fc7213b50ae",
+      "headline": {
+        "en": "Socket availability handles POSIX signals explicitly",
+        "fr": "La disponibilité socket gère explicitement les signaux POSIX",
+        "zh": "socket 可用性显式处理 POSIX signal",
+        "ru": "Socket availability явно обрабатывает POSIX signals"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNetSocketWrap.Available gains separate POSIX and Windows implementations; POSIX MSG_PEEK retries EINTR and preserves the raw errno for the caller.",
+        "fr": "TNetSocketWrap.Available reçoit des implémentations POSIX et Windows séparées ; POSIX MSG_PEEK reprend après EINTR et conserve errno.",
+        "zh": "TNetSocketWrap.Available 拆分为 POSIX 与 Windows 实现；POSIX MSG_PEEK 在 EINTR 后重试并保留原始 errno。",
+        "ru": "TNetSocketWrap.Available получает отдельные POSIX и Windows implementations; POSIX MSG_PEEK повторяет EINTR и сохраняет raw errno."
+      },
+      "impact": {
+        "en": "Connection checks no longer classify an interrupted POSIX peek as a closed socket. Windows behavior is kept in its platform implementation.",
+        "fr": "Les contrôles de connexion ne classent plus un peek POSIX interrompu comme socket fermée. Le comportement Windows reste identique.",
+        "zh": "连接检查不再把被中断的 POSIX peek 判为 socket 已关闭；Windows 行为保持在其平台实现中。",
+        "ru": "Connection checks больше не считают interrupted POSIX peek закрытым socket. Поведение Windows сохранено в platform implementation."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3af914ac15eab28c41411a1c449da2cf5b1e3a67",
+      "headline": {
+        "en": "Remote MAC discovery survives interrupted ARP sends",
+        "fr": "La découverte MAC distante survit aux envois ARP interrompus",
+        "zh": "远程 MAC 探测可恢复被中断的 ARP 发送",
+        "ru": "Remote MAC discovery переживает interrupted ARP sends"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "GetRemoteMacAddress retries its raw ARP sendto call on EINTR, and the poll/epoll timeout helpers initialize their deadline variables explicitly.",
+        "fr": "GetRemoteMacAddress reprend son sendto ARP après EINTR, et les helpers poll/epoll initialisent explicitement leurs deadlines.",
+        "zh": "GetRemoteMacAddress 在 EINTR 后重试原始 ARP sendto，poll/epoll timeout helper 也会显式初始化 deadline。",
+        "ru": "GetRemoteMacAddress повторяет raw ARP sendto при EINTR, а helpers poll/epoll явно инициализируют deadline variables."
+      },
+      "impact": {
+        "en": "Linux ARP-based MAC lookup is no longer lost to a signal interruption. Other platforms and public APIs are unchanged.",
+        "fr": "La recherche MAC par ARP sous Linux ne se perd plus à cause d’un signal. Les autres plateformes et API ne changent pas.",
+        "zh": "Linux 基于 ARP 的 MAC 查询不再因 signal 中断而丢失；其他平台与公开 API 不变。",
+        "ru": "Linux ARP-based MAC lookup больше не теряется из-за signal interruption. Другие платформы и публичные API не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a299fb590ef7ded3c3f6866d491bf1c222a2e180",
+      "headline": {
+        "en": "Sockets expose their pending SO_ERROR result",
+        "fr": "Les sockets exposent leur résultat SO_ERROR",
+        "zh": "socket 可公开读取待处理 SO_ERROR",
+        "ru": "Sockets предоставляют pending SO_ERROR"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNetSocketWrap adds GetSocketError, querying SOL_SOCKET/SO_ERROR and mapping the raw system value to TNetResult; Delphi POSIX also exports SO_ERROR.",
+        "fr": "TNetSocketWrap ajoute GetSocketError, interroge SOL_SOCKET/SO_ERROR et convertit la valeur en TNetResult ; Delphi POSIX expose aussi SO_ERROR.",
+        "zh": "TNetSocketWrap 新增 GetSocketError，查询 SOL_SOCKET/SO_ERROR 并把原始系统值映射为 TNetResult；Delphi POSIX 同时公开 SO_ERROR。",
+        "ru": "TNetSocketWrap добавляет GetSocketError, читает SOL_SOCKET/SO_ERROR и отображает raw system value в TNetResult; Delphi POSIX также экспортирует SO_ERROR."
+      },
+      "impact": {
+        "en": "Low-level Delphi/FPC networking code can inspect asynchronous connect completion correctly, but this intermediate name becomes GetRawSocketError in the next change.",
+        "fr": "Низкоуровневый код Delphi/FPC может правильно проверять завершение async connect, но это промежуточное имя далее меняется на GetRawSocketError.",
+        "zh": "底层 Delphi/FPC 网络代码可正确检查异步 connect 完成状态，但此中间名称在下一变更中改为 GetRawSocketError。",
+        "ru": "Low-level код Delphi/FPC может правильно проверять async connect completion, но промежуточное имя в следующем изменении станет GetRawSocketError."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os.delphi",
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TNetSocketWrap.GetSocketError",
+          "change": "added",
+          "note": {
+            "en": "Intermediate name; renamed to GetRawSocketError immediately afterward.",
+            "fr": "Nom intermédiaire, renommé ensuite GetRawSocketError.",
+            "zh": "中间名称；随后立即改名为 GetRawSocketError。",
+            "ru": "Промежуточное имя; сразу переименовано в GetRawSocketError."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "04130d2bec34390e180c5cc9ea4743289cf7c65c",
+      "headline": {
+        "en": "Non-blocking connect reports the socket's real completion error",
+        "fr": "La connexion non bloquante renvoie la vraie erreur de fin",
+        "zh": "non-blocking connect 返回真实完成错误",
+        "ru": "Non-blocking connect возвращает реальную completion error"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TNetAddr.SocketConnect replaces a 50ms polling loop with WaitFor followed by SO_ERROR, handles pending asynchronous connects, and renames GetSocketError to GetRawSocketError.",
+        "fr": "TNetAddr.SocketConnect remplace une boucle de 50 ms par WaitFor puis SO_ERROR, gère les connexions async en attente et renomme GetSocketError en GetRawSocketError.",
+        "zh": "TNetAddr.SocketConnect 用 WaitFor 加 SO_ERROR 取代 50ms 轮询，处理待完成异步连接，并把 GetSocketError 改名为 GetRawSocketError。",
+        "ru": "TNetAddr.SocketConnect заменяет 50ms polling loop на WaitFor с SO_ERROR, обрабатывает pending async connect и переименовывает GetSocketError в GetRawSocketError."
+      },
+      "impact": {
+        "en": "Failed TCP connects are no longer mistaken for writable success, and asynchronous callers get nrOk while completion is pending. Users of the one-commit method name must rename it.",
+        "fr": "Les échecs TCP ne sont plus pris pour un succès writable, et les appelants async reçoivent nrOk pendant l’attente. Les utilisateurs du nom intermédiaire doivent le renommer.",
+        "zh": "失败 TCP connect 不再被误判为 writable 成功，异步调用方在连接待完成时得到 nrOk；使用中间方法名的代码必须改名。",
+        "ru": "Failed TCP connects больше не принимаются за writable success, а async callers получают nrOk при pending completion. Пользователи промежуточного имени должны его заменить."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TNetSocketWrap.GetSocketError",
+          "change": "renamed",
+          "note": {
+            "en": "Renamed to GetRawSocketError.",
+            "fr": "Renommé GetRawSocketError.",
+            "zh": "改名为 GetRawSocketError。",
+            "ru": "Переименован в GetRawSocketError."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "496af18946b6b83d6ab4feb90279bc1b8084d416",
+      "headline": {
+        "en": "Immediate TCP connects restore blocking mode for synchronous callers",
+        "fr": "Les connexions TCP immédiates rétablissent le mode bloquant",
+        "zh": "立即完成的 TCP connect 会为同步调用方恢复 blocking 模式",
+        "ru": "Immediate TCP connect восстанавливает blocking mode"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "When non-blocking connect succeeds immediately, TNetAddr.SocketConnect now calls MakeBlocking for ms >= 0 while leaving ms = -1 callers asynchronous.",
+        "fr": "Quand connect réussit immédiatement, TNetAddr.SocketConnect appelle MakeBlocking pour ms >= 0 et laisse les appels ms = -1 asynchrones.",
+        "zh": "non-blocking connect 立即成功时，TNetAddr.SocketConnect 对 ms >= 0 调用 MakeBlocking，而 ms = -1 仍保持异步。",
+        "ru": "При немедленном успехе non-blocking connect TNetAddr.SocketConnect вызывает MakeBlocking для ms >= 0, оставляя ms=-1 асинхронным."
+      },
+      "impact": {
+        "en": "Synchronous Delphi/FPC clients no longer unexpectedly receive a non-blocking socket on the fast local-connect path.",
+        "fr": "Les clients Delphi/FPC synchrones ne reçoivent plus une socket non bloquante sur le chemin de connexion immédiate.",
+        "zh": "同步 Delphi/FPC client 在快速本地连接路径上不再意外收到 non-blocking socket。",
+        "ru": "Синхронные клиенты Delphi/FPC больше не получают неожиданно non-blocking socket на fast local-connect path."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock",
+        "mormot.net.async"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4f487ad9b0cf031fa2331db48c7b5f6c9d5d2bc5",
+      "headline": {
+        "en": "Remote logging always uses the portable socket server",
+        "fr": "Le log distant utilise toujours le serveur socket portable",
+        "zh": "远程日志统一使用可移植 socket server",
+        "ru": "Remote logging всегда использует portable socket server"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRestHttpRemoteLogServer now selects useHttpSocket on every platform instead of HTTP_DEFAULT_MODE, avoiding Windows http.sys URI registration and privilege-dependent fallback.",
+        "fr": "TRestHttpRemoteLogServer choisit useHttpSocket partout au lieu de HTTP_DEFAULT_MODE, évitant l’enregistrement http.sys et un fallback dépendant des droits.",
+        "zh": "TRestHttpRemoteLogServer 在所有平台改用 useHttpSocket，不再依赖 HTTP_DEFAULT_MODE，从而避开 Windows http.sys URI 注册与权限相关 fallback。",
+        "ru": "TRestHttpRemoteLogServer выбирает useHttpSocket на всех платформах вместо HTTP_DEFAULT_MODE, избегая регистрации Windows http.sys URI и privilege-dependent fallback."
+      },
+      "impact": {
+        "en": "Windows remote-log deployments no longer change server backend according to administrator rights. The socket server is sufficient for the intended small client count.",
+        "fr": "Les déploiements Windows ne changent plus de backend selon les droits administrateur. Le serveur socket convient au faible nombre de clients visé.",
+        "zh": "Windows 远程日志部署不再因管理员权限不同而改变 server backend；socket server 足以处理预期的少量 client。",
+        "ru": "Windows remote-log deployments больше не меняют backend в зависимости от admin rights. Socket server достаточен для небольшого числа clients."
+      },
+      "action": "review",
+      "units": [
+        "mormot.rest.http.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ec6e317ba493647053fcad2ee1623ea463394529",
+      "headline": {
+        "en": "SIGPIPE interception uses SIG_IGN and records success",
+        "fr": "L’interception SIGPIPE utilise SIG_IGN et mémorise le succès",
+        "zh": "SIGPIPE 拦截改用 SIG_IGN 并记录成功",
+        "ru": "Перехват SIGPIPE использует SIG_IGN и сохраняет успех"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SigPipeIntercept installs SIG_IGN instead of an empty handler and only sets its process flag when fpSigaction succeeds.",
+        "fr": "SigPipeIntercept installe SIG_IGN au lieu d’un handler vide et ne pose son flag qu’après succès de fpSigaction.",
+        "zh": "SigPipeIntercept 使用 SIG_IGN 取代空 handler，并仅在 fpSigaction 成功后设置进程 flag。",
+        "ru": "SigPipeIntercept устанавливает SIG_IGN вместо пустого handler и ставит process flag только после успеха fpSigaction."
+      },
+      "impact": {
+        "en": "POSIX processes get conventional SIGPIPE suppression and can retry initialization after a failed sigaction. Public APIs remain unchanged.",
+        "fr": "Les processus POSIX obtiennent une suppression conventionnelle de SIGPIPE et peuvent retenter après un sigaction en échec. Les API ne changent pas.",
+        "zh": "POSIX 进程使用标准 SIGPIPE 抑制方式，并可在 sigaction 失败后重试初始化；公开 API 不变。",
+        "ru": "POSIX processes получают стандартное подавление SIGPIPE и могут повторить инициализацию после failed sigaction. Публичные API не меняются."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.os.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e8de6bf795fc8fb1b63da735f72955ade03c7f8f",
+      "headline": {
+        "en": "Accept can return the raw socket error",
+        "fr": "Accept peut renvoyer l’erreur socket brute",
+        "zh": "Accept 可返回原始 socket 错误",
+        "ru": "Accept может вернуть raw socket error"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNetSocketWrap.Accept adds an optional rawError output and passes it through NetLastError, while retaining the existing three-argument call through a default nil value.",
+        "fr": "TNetSocketWrap.Accept ajoute une sortie rawError optionnelle transmise à NetLastError, tout en gardant les appels à trois arguments grâce à nil par défaut.",
+        "zh": "TNetSocketWrap.Accept 新增可选 rawError 输出并传给 NetLastError，同时以默认 nil 保持现有三参数调用兼容。",
+        "ru": "TNetSocketWrap.Accept добавляет optional rawError output через NetLastError, сохраняя трёхаргументные вызовы благодаря default nil."
+      },
+      "impact": {
+        "en": "Servers can log the precise errno behind an accept failure without breaking existing Delphi/FPC source calls.",
+        "fr": "Les serveurs peuvent journaliser errno exact derrière un échec accept sans casser les appels Delphi/FPC existants.",
+        "zh": "server 可记录 accept 失败背后的精确 errno，而不会破坏现有 Delphi/FPC 源码调用。",
+        "ru": "Servers могут логировать точный errno ошибки accept без поломки существующих Delphi/FPC source calls."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os.posix",
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TNetSocketWrap.Accept",
+          "change": "signature-changed",
+          "note": {
+            "en": "Adds optional rawError: PNetErrorInt = nil.",
+            "fr": "Ajoute rawError: PNetErrorInt = nil optionnel.",
+            "zh": "新增可选 rawError: PNetErrorInt = nil。",
+            "ru": "Добавлен optional rawError: PNetErrorInt = nil."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "07c8080b22b97295c1b13bf0cad4b6a81a15f562",
+      "headline": {
+        "en": "A helper combines connect waiting with SO_ERROR",
+        "fr": "Un helper combine attente de connexion et SO_ERROR",
+        "zh": "新 helper 结合连接等待与 SO_ERROR",
+        "ru": "Helper объединяет connect wait и SO_ERROR"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNetSocketWrap.WaitForWithRawSocketError waits for write/error events and then returns GetRawSocketError, using nrRetry for an empty event set.",
+        "fr": "TNetSocketWrap.WaitForWithRawSocketError attend les événements write/error puis renvoie GetRawSocketError, avec nrRetry si aucun événement.",
+        "zh": "TNetSocketWrap.WaitForWithRawSocketError 等待 write/error 事件后返回 GetRawSocketError；事件集为空时返回 nrRetry。",
+        "ru": "TNetSocketWrap.WaitForWithRawSocketError ждёт write/error events и затем возвращает GetRawSocketError, используя nrRetry для пустого набора."
+      },
+      "impact": {
+        "en": "Custom asynchronous Delphi/FPC connection code can reuse the same correct completion check as SocketConnect. Existing callers are unaffected.",
+        "fr": "Le code de connexion async personnalisé peut réutiliser le même contrôle correct que SocketConnect. Les appelants existants ne changent pas.",
+        "zh": "自定义 Delphi/FPC 异步连接代码可复用与 SocketConnect 相同的正确完成检查；现有调用方不受影响。",
+        "ru": "Пользовательский async connection code Delphi/FPC может применять ту же правильную completion check, что SocketConnect. Существующие вызовы не затронуты."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TNetSocketWrap.WaitForWithRawSocketError",
+          "change": "added",
+          "note": {
+            "en": "Waits for socket completion and reads SO_ERROR.",
+            "fr": "Attend la fin socket et lit SO_ERROR.",
+            "zh": "等待 socket 完成并读取 SO_ERROR。",
+            "ru": "Ждёт completion socket и читает SO_ERROR."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "1d878f7fb773d7a064ec1badf4b5724dcb6b6fac",
+      "headline": {
+        "en": "SocketConnect switches modes only after a successful wait",
+        "fr": "SocketConnect change de mode seulement après une attente réussie",
+        "zh": "SocketConnect 仅在等待成功后切换模式",
+        "ru": "SocketConnect меняет режим только после успешного ожидания"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TNetAddr.SocketConnect now keeps the socket asynchronous during WaitForWithRawSocketError, maps nrRetry to nrTimeout, and calls MakeBlocking only after a successful synchronous connection.",
+        "fr": "TNetAddr.SocketConnect garde la socket async pendant WaitForWithRawSocketError, convertit nrRetry en nrTimeout et appelle MakeBlocking seulement après succès.",
+        "zh": "TNetAddr.SocketConnect 在 WaitForWithRawSocketError 期间保持异步，把 nrRetry 映射为 nrTimeout，并仅在同步连接成功后调用 MakeBlocking。",
+        "ru": "TNetAddr.SocketConnect сохраняет async mode во время WaitForWithRawSocketError, отображает nrRetry в nrTimeout и вызывает MakeBlocking только после успешного sync connect."
+      },
+      "impact": {
+        "en": "POSIX and Windows connection completion is checked without switching to blocking mode prematurely, avoiding hangs and preserving the caller's requested mode.",
+        "fr": "La fin de connexion POSIX/Windows est vérifiée sans passer trop tôt en mode bloquant, évitant les blocages et respectant le mode demandé.",
+        "zh": "POSIX/Windows 连接完成检查不会过早切到 blocking 模式，从而避免挂起并保持调用方请求的模式。",
+        "ru": "Completion соединения POSIX/Windows проверяется без преждевременного перехода в blocking mode, предотвращая hangs и сохраняя requested mode."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a74fa349674d7720e1fec94da04ceb4050c5b94a",
+      "headline": {
+        "en": "Reachability checks use verified asynchronous connects",
+        "fr": "Les tests de reachability utilisent des connexions async vérifiées",
+        "zh": "可达性检查改用经过验证的异步连接",
+        "ru": "Reachability checks используют проверенные async connects"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "GetReachableNetAddr uses SocketConnect(-1), WaitForWithRawSocketError and MakeBlocking, closes failed sockets, and stops once no candidate remains.",
+        "fr": "GetReachableNetAddr utilise SocketConnect(-1), WaitForWithRawSocketError et MakeBlocking, ferme les sockets en échec et s’arrête sans candidat.",
+        "zh": "GetReachableNetAddr 使用 SocketConnect(-1)、WaitForWithRawSocketError 与 MakeBlocking，关闭失败 socket，并在无候选时停止。",
+        "ru": "GetReachableNetAddr использует SocketConnect(-1), WaitForWithRawSocketError и MakeBlocking, закрывает failed sockets и останавливается без candidates."
+      },
+      "impact": {
+        "en": "Address probing no longer counts writable sockets with a pending SO_ERROR as reachable, improving endpoint selection in Delphi/FPC clients.",
+        "fr": "Le probing ne considère plus comme reachable une socket writable avec SO_ERROR en attente, améliorant la sélection d’endpoint.",
+        "zh": "地址探测不再把仍有 SO_ERROR 的 writable socket 判为可达，从而改善 Delphi/FPC client 的 endpoint 选择。",
+        "ru": "Address probing больше не считает writable socket с pending SO_ERROR reachable, улучшая выбор endpoint в клиентах Delphi/FPC."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d59aeb92481b5c4554ae7c25ab5b7756e9295f4e",
+      "headline": {
+        "en": "Accept failures include the operating-system error",
+        "fr": "Les échecs accept incluent l’erreur système",
+        "zh": "accept 失败包含操作系统错误",
+        "ru": "Ошибки accept включают OS error"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "Async and threaded HTTP server accept loops request raw errno from TNetSocketWrap.Accept and add SystemErrorShort to debug logging; banned-address checks run only after success.",
+        "fr": "Les boucles accept async et threadées récupèrent errno brut et ajoutent SystemErrorShort aux logs ; la blacklist n’est testée qu’après succès.",
+        "zh": "异步与 thread HTTP server 的 accept loop 获取原始 errno 并在 debug 日志加入 SystemErrorShort；仅在成功后检查 banned address。",
+        "ru": "Async и threaded HTTP server accept loops получают raw errno и добавляют SystemErrorShort в debug logs; banned-address check выполняется только после успеха."
+      },
+      "impact": {
+        "en": "Operators receive actionable accept diagnostics without a public behavior change. Failed accepts no longer feed an uninitialized peer address to the ban check.",
+        "fr": "Les opérateurs obtiennent un diagnostic utile sans changement public. Un accept en échec ne passe plus une adresse non initialisée à la blacklist.",
+        "zh": "运维人员获得可操作的 accept 诊断，公开行为不变；失败 accept 不再把未初始化 peer address 传给 ban 检查。",
+        "ru": "Operators получают полезную диагностику accept без публичного изменения. Failed accept больше не передаёт uninitialized peer address в ban check."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.async",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "93ac7a4a8f354ab5fec6ab87b81f851095f348dc",
+      "headline": {
+        "en": "Tunnel failures retain their socket context",
+        "fr": "Les échecs Tunnel conservent leur contexte socket",
+        "zh": "Tunnel 失败保留 socket 上下文",
+        "ru": "Tunnel failures сохраняют socket context"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TTunnelLocalThread includes the raw accept error in exceptions, and TTunnelLocal.OpenInternal logs the failing class, message, thread and socket before cleanup.",
+        "fr": "TTunnelLocalThread inclut l’erreur accept brute, et TTunnelLocal.OpenInternal logue classe, message, thread et socket avant nettoyage.",
+        "zh": "TTunnelLocalThread 在异常中包含原始 accept 错误，TTunnelLocal.OpenInternal 在清理前记录失败 class、message、thread 与 socket。",
+        "ru": "TTunnelLocalThread включает raw accept error в exception, а TTunnelLocal.OpenInternal логирует class, message, thread и socket до cleanup."
+      },
+      "impact": {
+        "en": "Tunnel connection failures become diagnosable and still close the partial socket. Protocol behavior and public signatures are unchanged.",
+        "fr": "Les échecs Tunnel deviennent diagnostiquables et ferment toujours la socket partielle. Le protocole et les signatures ne changent pas.",
+        "zh": "Tunnel 连接失败现在可诊断，且仍会关闭部分创建的 socket；协议行为与公开 signature 不变。",
+        "ru": "Tunnel connection failures становятся диагностируемыми и по-прежнему закрывают partial socket. Протокол и публичные signatures не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ce3a81b824e098e7a15322c1f1f4abd02edbd2c3",
+      "headline": {
+        "en": "AArch64 alignment and Tunnel cleanup receive follow-up fixes",
+        "fr": "L’alignement AArch64 et le nettoyage Tunnel reçoivent des correctifs",
+        "zh": "AArch64 对齐与 Tunnel 清理获得后续修复",
+        "ru": "AArch64 alignment и Tunnel cleanup получают follow-up fixes"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "GlobalTime assertions allow padding after unpacking, Delphi POSIX resource comments are clarified, and TTunnelLocal.OpenInternal initializes thread before exception logging and reports the socket consistently.",
+        "fr": "Les assertions GlobalTime tolèrent le padding, les commentaires resource sont clarifiés et TTunnelLocal.OpenInternal initialise thread avant les exceptions.",
+        "zh": "GlobalTime assertion 允许 unpack 后的 padding，Delphi POSIX resource 注释更明确，TTunnelLocal.OpenInternal 在异常日志前初始化 thread 并一致报告 socket。",
+        "ru": "Assertions GlobalTime допускают padding, comments ресурсов уточнены, а TTunnelLocal.OpenInternal инициализирует thread до exception logging и последовательно сообщает socket."
+      },
+      "impact": {
+        "en": "This removes a startup assertion risk on Delphi AArch64 and prevents undefined diagnostic values if Tunnel setup fails before thread creation.",
+        "fr": "Cela supprime un risque d’assertion au démarrage Delphi AArch64 et évite des diagnostics indéfinis si Tunnel échoue avant la création du thread.",
+        "zh": "这消除 Delphi AArch64 启动 assertion 风险，并避免 Tunnel 在线程创建前失败时出现未定义诊断值。",
+        "ru": "Это убирает startup assertion risk на Delphi AArch64 и undefined diagnostics при сбое Tunnel до создания thread."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.core.datetime",
+        "mormot.core.os",
+        "mormot.net.tunnel"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "dfac065306bb54c459d92fa90c19839bcb09f626",
+      "headline": {
+        "en": "AArch64 follow-up only adjusts style and inlining",
+        "fr": "Le suivi AArch64 ne change que style et inline",
+        "zh": "AArch64 后续仅调整样式与 inline",
+        "ru": "AArch64 follow-up меняет только стиль и inline"
+      },
+      "category": "chore",
+      "severity": "low",
+      "what_changed": {
+        "en": "The commit fixes indentation, marks AAPCS64 va_list helpers inline, and updates the changelog wording for Delphi 13.1 platform support.",
+        "fr": "Le commit corrige l’indentation, marque les helpers va_list AAPCS64 inline et ajuste le changelog Delphi 13.1.",
+        "zh": "该 commit 修正缩进，把 AAPCS64 va_list helper 标记为 inline，并更新 Delphi 13.1 平台支持 changelog。",
+        "ru": "Commit исправляет indentation, помечает AAPCS64 va_list helpers inline и обновляет changelog по Delphi 13.1."
+      },
+      "impact": {
+        "en": "There is no functional application impact; Delphi/FPC behavior and public APIs remain the same.",
+        "fr": "Il n’y a aucun impact fonctionnel ; le comportement Delphi/FPC et les API restent identiques.",
+        "zh": "应用无功能影响；Delphi/FPC 行为与公开 API 保持不变。",
+        "ru": "Функционального влияния на приложения нет; поведение Delphi/FPC и публичные API не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.interfaces",
+        "mormot.core.variants"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "eabe6fba50e3500af7033fc892a605367349d506",
+      "headline": {
+        "en": "The platform MSG_NOSIGNAL value becomes public",
+        "fr": "La valeur MSG_NOSIGNAL de la plateforme devient publique",
+        "zh": "平台 MSG_NOSIGNAL 值成为公开变量",
+        "ru": "Platform MSG_NOSIGNAL становится публичным"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.net.sock initializes the public NET_MSG_NOSIGNAL variable from the platform constant for reuse by higher-level socket and TLS code.",
+        "fr": "mormot.net.sock initialise la variable publique NET_MSG_NOSIGNAL depuis la constante plateforme pour le code socket/TLS supérieur.",
+        "zh": "mormot.net.sock 用平台常量初始化公开变量 NET_MSG_NOSIGNAL，供上层 socket 与 TLS 代码复用。",
+        "ru": "mormot.net.sock инициализирует публичную переменную NET_MSG_NOSIGNAL из platform constant для higher-level socket и TLS кода."
+      },
+      "impact": {
+        "en": "Existing applications are unaffected; low-level integrations can query the effective flag without duplicating platform conditionals.",
+        "fr": "Les applications existantes ne changent pas ; les intégrations bas niveau peuvent lire le flag sans dupliquer les conditionnels.",
+        "zh": "现有应用不受影响；底层集成可读取有效 flag，无需重复平台条件编译。",
+        "ru": "Существующие приложения не затронуты; low-level integrations могут читать effective flag без дублирования platform conditionals."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "NET_MSG_NOSIGNAL",
+          "change": "added",
+          "note": {
+            "en": "Runtime copy of the platform MSG_NOSIGNAL value.",
+            "fr": "Copie runtime de la valeur MSG_NOSIGNAL plateforme.",
+            "zh": "平台 MSG_NOSIGNAL 值的 runtime 副本。",
+            "ru": "Runtime-копия platform MSG_NOSIGNAL."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "a413d047bc9972fc3330a62372a443fa8320e8db",
+      "headline": {
+        "en": "OpenSSL 4 suppresses SIGPIPE per socket",
+        "fr": "OpenSSL 4 supprime SIGPIPE par socket",
+        "zh": "OpenSSL 4 按 socket 抑制 SIGPIPE",
+        "ru": "OpenSSL 4 подавляет SIGPIPE для каждого socket"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SSLSetFdNoSigPipe uses BIO_C_SET_SEND_FLAGS with NET_MSG_NOSIGNAL on OpenSSL 4+, falling back to process-wide SigPipeIntercept for OpenSSL 1.1/3.x.",
+        "fr": "SSLSetFdNoSigPipe utilise BIO_C_SET_SEND_FLAGS avec NET_MSG_NOSIGNAL sous OpenSSL 4+, avec fallback SigPipeIntercept pour OpenSSL 1.1/3.x.",
+        "zh": "SSLSetFdNoSigPipe 在 OpenSSL 4+ 使用 BIO_C_SET_SEND_FLAGS 与 NET_MSG_NOSIGNAL，在 OpenSSL 1.1/3.x 回退到进程级 SigPipeIntercept。",
+        "ru": "SSLSetFdNoSigPipe использует BIO_C_SET_SEND_FLAGS с NET_MSG_NOSIGNAL на OpenSSL 4+, сохраняя process-wide SigPipeIntercept для OpenSSL 1.1/3.x."
+      },
+      "impact": {
+        "en": "POSIX applications on OpenSSL 4 avoid changing SIGPIPE handling for the whole process. Older OpenSSL versions retain the historical behavior unless explicitly disabled.",
+        "fr": "Les applications POSIX avec OpenSSL 4 ne changent plus SIGPIPE pour tout le processus. Les anciennes versions gardent le comportement historique.",
+        "zh": "使用 OpenSSL 4 的 POSIX 应用不再修改整个进程的 SIGPIPE 处理；旧版 OpenSSL 仍保持历史行为。",
+        "ru": "POSIX-приложения с OpenSSL 4 больше не меняют SIGPIPE handling всего процесса. Старые OpenSSL сохраняют историческое поведение."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.lib.openssl11"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e8264e1b60b90dd5be5922388d60e30b054911b3",
+      "headline": {
+        "en": "MSG_NOSIGNAL constants are corrected across POSIX systems",
+        "fr": "Les constantes MSG_NOSIGNAL sont corrigées sur les systèmes POSIX",
+        "zh": "各 POSIX 系统的 MSG_NOSIGNAL 常量已修正",
+        "ru": "MSG_NOSIGNAL constants исправлены для POSIX systems"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.net.sock.posix corrects MSG_NOSIGNAL values for Darwin, FreeBSD, NetBSD, DragonFlyBSD, OpenBSD and Solaris, while retaining Linux and Android values.",
+        "fr": "mormot.net.sock.posix corrige MSG_NOSIGNAL pour Darwin, FreeBSD, NetBSD, DragonFlyBSD, OpenBSD et Solaris, sans changer Linux/Android.",
+        "zh": "mormot.net.sock.posix 修正 Darwin、FreeBSD、NetBSD、DragonFlyBSD、OpenBSD 与 Solaris 的 MSG_NOSIGNAL 值，保留 Linux/Android 值。",
+        "ru": "mormot.net.sock.posix исправляет MSG_NOSIGNAL для Darwin, FreeBSD, NetBSD, DragonFlyBSD, OpenBSD и Solaris, сохраняя Linux/Android."
+      },
+      "impact": {
+        "en": "Socket sends on affected BSD/Solaris targets now request the intended no-SIGPIPE behavior instead of passing a wrong flag value.",
+        "fr": "Les envois socket sur BSD/Solaris demandent maintenant le bon comportement no-SIGPIPE au lieu d’un flag incorrect.",
+        "zh": "受影响 BSD/Solaris target 的 socket send 现在会请求正确的 no-SIGPIPE 行为，不再传入错误 flag。",
+        "ru": "Socket sends на затронутых BSD/Solaris targets теперь запрашивают правильный no-SIGPIPE вместо неверного flag."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9dc38579390a8824686dc0df838f84f0190a7e69",
+      "headline": {
+        "en": "Absolute XML lookups intentionally move the parser",
+        "fr": "Les recherches XML absolues déplacent volontairement le parser",
+        "zh": "绝对 XML 查询会有意移动 parser",
+        "ru": "Абсолютный XML lookup намеренно перемещает parser"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TXmlParser.GetU returns false for nil paths, preserves position for relative and // paths, but lets an absolute / path rewind and remain at the found position; GetI inherits this behavior.",
+        "fr": "TXmlParser.GetU renvoie false pour nil, préserve la position pour les chemins relatifs et //, mais un chemin / absolu rewind et reste au résultat ; GetI suit ce comportement.",
+        "zh": "TXmlParser.GetU 对 nil path 返回 false；相对 path 与 // path 保持位置，但绝对 / path 会 rewind 并停留在结果位置；GetI 继承该行为。",
+        "ru": "TXmlParser.GetU возвращает false для nil, сохраняет position для relative и // paths, но absolute / path делает rewind и остаётся на найденной позиции; GetI наследует поведение."
+      },
+      "impact": {
+        "en": "Code that expected GetU('/...') or GetI('/...') to restore the prior forward-only parser position will now observe a changed cursor and should review its sequence.",
+        "fr": "Le code qui attendait une restauration après GetU('/...') ou GetI('/...') observe maintenant un curseur déplacé et doit revoir sa séquence.",
+        "zh": "原本期望 GetU('/...') 或 GetI('/...') 恢复 forward-only parser 位置的代码现在会看到 cursor 改变，应检查调用顺序。",
+        "ru": "Код, ожидавший restore позиции после GetU('/...') или GetI('/...'), теперь увидит изменённый cursor и должен проверить последовательность."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.fmt"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for absolute-path GetU/GetI calls and use Save/Restore explicitly if the previous position must survive.",
+        "fr": "Recherchez les GetU/GetI avec chemin absolu et utilisez Save/Restore si la position doit survivre.",
+        "zh": "搜索使用绝对 path 的 GetU/GetI；若需保留原位置，请显式使用 Save/Restore。",
+        "ru": "Найдите GetU/GetI с absolute path и используйте Save/Restore, если прежняя position должна сохраниться."
+      },
+      "api_changes": [
+        {
+          "symbol": "TXmlParser.GetU / GetI",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Absolute paths now leave the parser at the result.",
+            "fr": "Les chemins absolus laissent le parser au résultat.",
+            "zh": "绝对 path 现在让 parser 停留在结果位置。",
+            "ru": "Absolute paths теперь оставляют parser на результате."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "6949ac175736fd3b6d44306fd173a2f021e656a8",
+      "headline": {
+        "en": "BSD socket constants match their native headers",
+        "fr": "Les constantes socket BSD correspondent aux headers natifs",
+        "zh": "BSD socket 常量与原生 header 对齐",
+        "ru": "BSD socket constants соответствуют native headers"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "POSIX definitions correct NI_NUMERIC*, poll write flags, FreeBSD TCP keepalive values, Darwin-only cellular interface handling and ARPOP_InREPLY.",
+        "fr": "Les définitions POSIX corrigent NI_NUMERIC*, les flags poll write, le keepalive FreeBSD, l’interface cellulaire Darwin et ARPOP_InREPLY.",
+        "zh": "POSIX 定义修正 NI_NUMERIC*、poll 写 flag、FreeBSD TCP keepalive、仅 Darwin 的 cellular interface 处理与 ARPOP_InREPLY。",
+        "ru": "POSIX definitions исправляют NI_NUMERIC*, poll write flags, FreeBSD TCP keepalive, Darwin-only cellular interface и ARPOP_InREPLY."
+      },
+      "impact": {
+        "en": "FreeBSD, NetBSD, DragonFlyBSD, OpenBSD, Darwin and Solaris networking uses the intended native option numbers instead of Linux-biased values.",
+        "fr": "Le réseau FreeBSD, NetBSD, DragonFlyBSD, OpenBSD, Darwin et Solaris utilise les bons numéros natifs au lieu de valeurs orientées Linux.",
+        "zh": "FreeBSD、NetBSD、DragonFlyBSD、OpenBSD、Darwin 与 Solaris 网络现在使用正确原生选项号，不再偏向 Linux 值。",
+        "ru": "Networking FreeBSD, NetBSD, DragonFlyBSD, OpenBSD, Darwin и Solaris использует правильные native option numbers вместо Linux-biased значений."
+      },
+    "action": "upgrade-recommended",
+    "action_detail": {
+      "en": "Upgrade to build 2.4.17002 and exercise this corrected path on every affected Delphi/FPC target before deployment.",
+      "fr": "Passez à la build 2.4.17002 et testez ce chemin corrigé sur chaque cible Delphi/FPC concernée avant déploiement.",
+      "zh": "升级到 build 2.4.17002，并在部署前于每个受影响的 Delphi/FPC target 上测试此修复路径。",
+      "ru": "Обновитесь до build 2.4.17002 и до развёртывания проверьте исправленный путь на каждой затронутой Delphi/FPC target."
+    },
+    "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7a04bb593fe9401625178bc3e1befc95d56144fe",
+      "headline": {
+        "en": "Bounded UTF-8 formatting stops parsing once full",
+        "fr": "Le formatage UTF-8 borné arrête le parsing une fois plein",
+        "zh": "有界 UTF-8 格式化在填满后停止解析",
+        "ru": "Bounded UTF-8 formatting прекращает parsing после заполнения"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TFormatUtf8.InitParse receives MaxSize and stops collecting format blocks once that limit is reached; FormatBufferRaw and FormatShort pass their real capacities.",
+        "fr": "TFormatUtf8.InitParse reçoit MaxSize et arrête de collecter les blocs une fois la limite atteinte ; FormatBufferRaw et FormatShort passent leur capacité réelle.",
+        "zh": "TFormatUtf8.InitParse 接收 MaxSize，并在达到限制后停止收集格式块；FormatBufferRaw 与 FormatShort 传入真实容量。",
+        "ru": "TFormatUtf8.InitParse получает MaxSize и прекращает сбор format blocks при достижении лимита; FormatBufferRaw и FormatShort передают реальную ёмкость."
+      },
+      "impact": {
+        "en": "Truncated formatting avoids converting unused later arguments, reducing work for fixed buffers while keeping the same bounded output.",
+        "fr": "Le formatage tronqué évite de convertir les arguments ultérieurs inutiles, réduisant le travail avec la même sortie bornée.",
+        "zh": "截断格式化不再转换后续无用参数，在保持相同有界输出的同时减少工作量。",
+        "ru": "Truncated formatting не преобразует ненужные поздние arguments, снижая работу при том же bounded output."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.text"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "906a763fead1fee81f7591add19f01b8eb48649a",
+      "headline": {
+        "en": "Format arguments can be scanned for object rendering",
+        "fr": "Les arguments de format peuvent être testés pour le rendu d’objets",
+        "zh": "可扫描格式参数是否需要对象渲染",
+        "ru": "Format arguments можно проверить на object rendering"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.text adds VarRecHasObject to detect vtObject or vtInterface values that require TTextWriter.WriteObject instead of the fast formatter.",
+        "fr": "mormot.core.text ajoute VarRecHasObject pour détecter vtObject/vtInterface nécessitant TTextWriter.WriteObject.",
+        "zh": "mormot.core.text 新增 VarRecHasObject，用于检测需要 TTextWriter.WriteObject 的 vtObject 或 vtInterface 值。",
+        "ru": "mormot.core.text добавляет VarRecHasObject для обнаружения vtObject/vtInterface, требующих TTextWriter.WriteObject."
+      },
+      "impact": {
+        "en": "The helper supports later logging optimization and does not alter existing application behavior. Its name is changed to VarRecNeedsWriteObject later in the same batch.",
+        "fr": "Le helper prépare l’optimisation des logs sans changer les applications. Il est renommé VarRecNeedsWriteObject plus tard dans la série.",
+        "zh": "该 helper 支持后续日志优化，不改变现有应用行为；同一批次稍后改名为 VarRecNeedsWriteObject。",
+        "ru": "Helper поддерживает последующую оптимизацию логов и не меняет приложения. Позже в этой серии он переименован в VarRecNeedsWriteObject."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.text"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bcf4e877d67ce4d761ac1c2790296c41377d1924",
+      "headline": {
+        "en": "Control characters can be replaced in place",
+        "fr": "Les caractères de contrôle peuvent être remplacés sur place",
+        "zh": "控制字符可原地替换",
+        "ru": "Управляющие символы можно заменить in-place"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.unicode adds TrimControlCharsBuffer, replacing bytes #0 through #31 with spaces directly in a supplied UTF-8 buffer.",
+        "fr": "mormot.core.unicode ajoute TrimControlCharsBuffer, remplaçant les octets #0 à #31 par des espaces directement dans le buffer UTF-8.",
+        "zh": "mormot.core.unicode 新增 TrimControlCharsBuffer，直接在传入 UTF-8 buffer 中把 #0 到 #31 字节替换为空格。",
+        "ru": "mormot.core.unicode добавляет TrimControlCharsBuffer, заменяющий bytes #0..#31 пробелами прямо в UTF-8 buffer."
+      },
+      "impact": {
+        "en": "Existing code is unchanged; Delphi/FPC callers gain an allocation-free helper used by the new TSynLog pre-rendering path.",
+        "fr": "Le code existant ne change pas ; les appelants gagnent un helper sans allocation utilisé par le nouveau pre-rendering TSynLog.",
+        "zh": "现有代码不变；Delphi/FPC 调用方获得无分配 helper，并用于新的 TSynLog 预渲染路径。",
+        "ru": "Существующий код не меняется; Delphi/FPC получает allocation-free helper для нового TSynLog pre-rendering path."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TrimControlCharsBuffer",
+          "change": "added",
+          "note": {
+            "en": "Replaces ASCII control bytes with spaces in place.",
+            "fr": "Remplace les contrôles ASCII par des espaces sur place.",
+            "zh": "原地把 ASCII 控制字节替换为空格。",
+            "ru": "Заменяет ASCII control bytes пробелами in-place."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "697af4729bfd8cd72ab2f522a700b4f54bb16adb",
+      "headline": {
+        "en": "The object-format probe receives its final name",
+        "fr": "Le test de format objet reçoit son nom final",
+        "zh": "对象格式检测获得最终名称",
+        "ru": "Проверка object format получает финальное имя"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "VarRecHasObject is renamed VarRecNeedsWriteObject with a byte-safe VType test, and TXmlParser comments document the absolute-path cursor behavior.",
+        "fr": "VarRecHasObject devient VarRecNeedsWriteObject avec un test VType byte-safe, et les commentaires TXmlParser documentent le curseur absolu.",
+        "zh": "VarRecHasObject 改名为 VarRecNeedsWriteObject，并使用 byte-safe VType 检查；TXmlParser 注释说明绝对 path 的 cursor 行为。",
+        "ru": "VarRecHasObject переименован в VarRecNeedsWriteObject с byte-safe проверкой VType; comments TXmlParser описывают cursor для absolute path."
+      },
+      "impact": {
+        "en": "Only code written against the immediately preceding intermediate helper name must rename it; pre-existing applications have no migration.",
+        "fr": "Seul le code écrit contre le nom intermédiaire doit le renommer ; les applications antérieures n’ont aucune migration.",
+        "zh": "仅使用前一中间 helper 名称的代码需要改名；更早的现有应用无需迁移。",
+        "ru": "Только код на промежуточном имени helper должен его заменить; ранее существующие приложения не требуют migration."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.fmt",
+        "mormot.core.text"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "VarRecHasObject",
+          "change": "renamed",
+          "note": {
+            "en": "Final name is VarRecNeedsWriteObject.",
+            "fr": "Le nom final est VarRecNeedsWriteObject.",
+            "zh": "最终名称为 VarRecNeedsWriteObject。",
+            "ru": "Финальное имя — VarRecNeedsWriteObject."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "1bde88e273208447f10edbc7edd22f6f4b2bb7bc",
+      "headline": {
+        "en": "Formatted TSynLog APIs now take RawUtf8",
+        "fr": "Les API TSynLog formatées prennent maintenant RawUtf8",
+        "zh": "格式化 TSynLog API 改为接收 RawUtf8",
+        "ru": "Formatted APIs TSynLog теперь принимают RawUtf8"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynLogProc, TSynLog.Log, TSynLog.DoLog and their internal formatter change the format parameter from PUtf8Char to const RawUtf8.",
+        "fr": "TSynLogProc, TSynLog.Log, TSynLog.DoLog et leur formatter interne remplacent PUtf8Char par const RawUtf8.",
+        "zh": "TSynLogProc、TSynLog.Log、TSynLog.DoLog 及内部 formatter 把格式参数从 PUtf8Char 改为 const RawUtf8。",
+        "ru": "TSynLogProc, TSynLog.Log, TSynLog.DoLog и internal formatter меняют format parameter с PUtf8Char на const RawUtf8."
+      },
+      "impact": {
+        "en": "String literals usually remain source-compatible, but callback declarations, method variables and callers passing PUtf8Char no longer match and must adopt RawUtf8.",
+        "fr": "Les littéraux restent souvent compatibles, mais les callbacks, method variables et appels PUtf8Char doivent passer à RawUtf8.",
+        "zh": "字符串 literal 通常仍兼容，但 callback declaration、method variable 与传入 PUtf8Char 的调用不再匹配，必须改用 RawUtf8。",
+        "ru": "String literals обычно совместимы, но callback declarations, method variables и вызовы с PUtf8Char больше не совпадают и должны перейти на RawUtf8."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for TSynLogProc and logging callbacks with PUtf8Char format parameters; change them to const RawUtf8 and convert pointer-only call sites.",
+        "fr": "Recherchez TSynLogProc et les callbacks avec format PUtf8Char ; passez-les à const RawUtf8 et convertissez les appels par pointeur.",
+        "zh": "搜索 TSynLogProc 与使用 PUtf8Char 格式参数的日志 callback；改为 const RawUtf8，并转换仅指针调用点。",
+        "ru": "Найдите TSynLogProc и logging callbacks с PUtf8Char format; замените на const RawUtf8 и преобразуйте pointer-only calls."
+      },
+      "api_changes": [
+        {
+          "symbol": "TSynLogProc",
+          "change": "signature-changed",
+          "note": {
+            "en": "Format parameter is const RawUtf8.",
+            "fr": "Le paramètre Format est const RawUtf8.",
+            "zh": "Format 参数改为 const RawUtf8。",
+            "ru": "Format parameter теперь const RawUtf8."
+          }
+        },
+        {
+          "symbol": "TSynLog.Log / TSynLog.DoLog",
+          "change": "signature-changed",
+          "note": {
+            "en": "Formatted overloads now accept const RawUtf8.",
+            "fr": "Les overloads formatés acceptent const RawUtf8.",
+            "zh": "格式化 overload 现在接收 const RawUtf8。",
+            "ru": "Formatted overloads теперь принимают const RawUtf8."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "ab86987518bba22c30f2985c45c4a7d1bcb97cb8",
+      "headline": {
+        "en": "Formatted log text is rendered before taking the lock",
+        "fr": "Le texte formaté du log est rendu avant le verrou",
+        "zh": "格式化日志文本在加锁前完成渲染",
+        "ru": "Formatted log text рендерится до блокировки"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLog pre-renders up to 4KB into a stack buffer outside the writer lock, trims control bytes, and adds TSynLogFamily.DirectRendering to opt back into in-lock rendering.",
+        "fr": "TSynLog pré-rend jusqu’à 4 Ko sur la stack hors du verrou, remplace les contrôles et ajoute TSynLogFamily.DirectRendering pour revenir au rendu sous verrou.",
+        "zh": "TSynLog 在 writer 锁外预渲染最多 4KB 到 stack buffer，清理控制字节，并新增 TSynLogFamily.DirectRendering 以恢复锁内渲染。",
+        "ru": "TSynLog pre-renders до 4KB в stack buffer вне writer lock, убирает control bytes и добавляет TSynLogFamily.DirectRendering для возврата к in-lock rendering."
+      },
+      "impact": {
+        "en": "Multithreaded services reduce time spent in each logger lock. Object/interface arguments still take the slow path, and DirectRendering can preserve custom writer expectations.",
+        "fr": "Les services multithread réduisent le temps sous verrou. Les arguments object/interface gardent le slow path et DirectRendering préserve les writers personnalisés.",
+        "zh": "多线程服务减少 logger 锁占用时间；object/interface 参数仍走慢路径，DirectRendering 可保留自定义 writer 预期。",
+        "ru": "Multithreaded services меньше держат logger lock. Object/interface arguments используют slow path, а DirectRendering сохраняет ожидания custom writer."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Benchmark high-volume logging and enable DirectRendering if a custom writer depends on formatting while locked.",
+        "fr": "Benchmarkez les logs intensifs et activez DirectRendering si un writer personnalisé dépend du rendu sous verrou.",
+        "zh": "对高吞吐日志进行 benchmark；若自定义 writer 依赖锁内格式化，请启用 DirectRendering。",
+        "ru": "Проведите benchmark интенсивного logging и включите DirectRendering, если custom writer зависит от formatting под lock."
+      },
+      "api_changes": [
+        {
+          "symbol": "TSynLogFamily.DirectRendering",
+          "change": "added",
+          "note": {
+            "en": "Disables the new 4KB pre-rendering fast path.",
+            "fr": "Désactive le nouveau fast path de pré-rendu 4 Ko.",
+            "zh": "禁用新的 4KB 预渲染快速路径。",
+            "ru": "Отключает новый 4KB pre-rendering fast path."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "5b05ee28e72cc184719597ba23751f6fed03e0e4",
+      "headline": {
+        "en": "Formatted TSynLog.Enter overloads also move to RawUtf8",
+        "fr": "Les overloads formatés TSynLog.Enter passent aussi à RawUtf8",
+        "zh": "格式化 TSynLog.Enter overload 同样改用 RawUtf8",
+        "ru": "Formatted overloads TSynLog.Enter также переходят на RawUtf8"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "Formatted Enter, EnterLocal and ManualEnter overloads replace PUtf8Char with const RawUtf8 and share the 4KB pre-rendering path before acquiring the log lock.",
+        "fr": "Les overloads formatés Enter, EnterLocal et ManualEnter remplacent PUtf8Char par const RawUtf8 et partagent le pré-rendu 4 Ko.",
+        "zh": "格式化 Enter、EnterLocal 与 ManualEnter overload 把 PUtf8Char 改为 const RawUtf8，并在获取日志锁前共用 4KB 预渲染路径。",
+        "ru": "Formatted overloads Enter, EnterLocal и ManualEnter меняют PUtf8Char на const RawUtf8 и используют общий 4KB pre-rendering до захвата log lock."
+      },
+      "impact": {
+        "en": "Applications with typed PUtf8Char trace wrappers or matching overload variables will stop compiling; ordinary RawUtf8 and literal calls remain direct.",
+        "fr": "Les wrappers de trace typés PUtf8Char ou variables d’overload ne compilent plus ; les appels RawUtf8 et littéraux restent directs.",
+        "zh": "使用 typed PUtf8Char trace wrapper 或匹配 overload variable 的应用将无法编译；普通 RawUtf8 与 literal 调用仍可直接使用。",
+        "ru": "Приложения с typed PUtf8Char trace wrappers или overload variables перестанут компилироваться; обычные RawUtf8 и literal calls остаются прямыми."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search formatted Enter, EnterLocal and ManualEnter wrappers for PUtf8Char and change their format values to RawUtf8.",
+        "fr": "Recherchez les wrappers formatés Enter, EnterLocal et ManualEnter en PUtf8Char et passez leurs formats à RawUtf8.",
+        "zh": "搜索使用 PUtf8Char 的格式化 Enter、EnterLocal、ManualEnter wrapper，并把格式值改为 RawUtf8。",
+        "ru": "Найдите formatted wrappers Enter, EnterLocal и ManualEnter с PUtf8Char и замените format values на RawUtf8."
+      },
+      "api_changes": [
+        {
+          "symbol": "TSynLog.Enter / EnterLocal",
+          "change": "signature-changed",
+          "note": {
+            "en": "Formatted overloads now take const RawUtf8.",
+            "fr": "Les overloads formatés prennent const RawUtf8.",
+            "zh": "格式化 overload 改为 const RawUtf8。",
+            "ru": "Formatted overloads принимают const RawUtf8."
+          }
+        },
+        {
+          "symbol": "TSynLog.ManualEnter",
+          "change": "signature-changed",
+          "note": {
+            "en": "Formatted overload now takes const RawUtf8.",
+            "fr": "L’overload formaté prend const RawUtf8.",
+            "zh": "格式化 overload 改为 const RawUtf8。",
+            "ru": "Formatted overload принимает const RawUtf8."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "a6bb53dcbcea051f8fd13420ec0a3cb2f55896f3",
+      "headline": {
+        "en": "Instance text is precomputed with the formatted log line",
+        "fr": "Le texte d’instance est pré-calculé avec la ligne de log",
+        "zh": "实例文本与格式化日志行一起预计算",
+        "ru": "Instance text предварительно вычисляется с log line"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLogFamily.PreRenderFmt now writes the instance class/pointer prefix into the same stack buffer outside the writer lock before formatting the message.",
+        "fr": "TSynLogFamily.PreRenderFmt écrit maintenant le préfixe classe/pointeur de l’instance dans le même buffer stack avant le verrou.",
+        "zh": "TSynLogFamily.PreRenderFmt 现在会在 writer 锁外把实例 class/pointer 前缀写入同一 stack buffer，再格式化消息。",
+        "ru": "TSynLogFamily.PreRenderFmt теперь пишет prefix class/pointer instance в тот же stack buffer до writer lock, затем форматирует сообщение."
+      },
+      "impact": {
+        "en": "Instance-heavy multithreaded logging shortens lock duration further, but this intermediate implementation miscalculates remaining buffer space and is repaired in build 2.4.17000.",
+        "fr": "Les logs multithread avec instance réduisent encore le verrou, mais cette version calcule mal l’espace restant et est réparée en 2.4.17000.",
+        "zh": "大量实例的多线程日志进一步缩短锁时间，但此中间实现错误计算剩余 buffer 空间，到 build 2.4.17000 才修复。",
+        "ru": "Instance-heavy multithreaded logging ещё сокращает lock duration, но промежуточная реализация неверно считает remaining buffer и исправлена в build 2.4.17000."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "99d189cc903f96ca7510991f8a18fe2da70b2583",
+      "headline": {
+        "en": "The log pre-render buffer can no longer overflow",
+        "fr": "Le buffer de pré-rendu des logs ne peut plus déborder",
+        "zh": "日志预渲染 buffer 不再溢出",
+        "ru": "Log pre-render buffer больше не переполняется"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "TSynLogFamily.PreRenderFmt subtracts the precomputed instance prefix from the available 4KB capacity, and the Unicode Log overload now supplies its required stack buffer.",
+        "fr": "TSynLogFamily.PreRenderFmt soustrait le préfixe d’instance de la capacité 4 Ko, et l’overload Unicode Log fournit maintenant son buffer stack.",
+        "zh": "TSynLogFamily.PreRenderFmt 从 4KB 可用容量中扣除实例前缀，Unicode Log overload 也会提供所需 stack buffer。",
+        "ru": "TSynLogFamily.PreRenderFmt вычитает prefix instance из доступных 4KB, а Unicode Log overload теперь передаёт required stack buffer."
+      },
+      "impact": {
+        "en": "Build 2.4.16999 could write past the stack buffer for an instance-prefixed formatted line near 4KB. Build 2.4.17000 removes that memory-corruption risk and restores Unicode compilation.",
+        "fr": "Build 2.4.16999 pouvait écrire au-delà du buffer stack pour une ligne proche de 4 Ko avec instance. Build 2.4.17000 supprime ce risque de corruption et rétablit la compilation Unicode.",
+        "zh": "Build 2.4.16999 对接近 4KB 且带实例前缀的格式化行可能写出 stack buffer；build 2.4.17000 消除该内存破坏风险并恢复 Unicode 编译。",
+        "ru": "Build 2.4.16999 мог писать за stack buffer для formatted line около 4KB с instance prefix. Build 2.4.17000 устраняет memory corruption risk и восстанавливает Unicode compilation."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Do not deploy build 2.4.16999. Land on 2.4.17000 or later and test near-4KB formatted lines with a non-nil Instance.",
+        "fr": "Ne déployez pas la build 2.4.16999. Prenez 2.4.17000 ou plus et testez des lignes proches de 4 Ko avec Instance non nil.",
+        "zh": "不要部署 build 2.4.16999；请采用 2.4.17000 或更高版本，并测试带非 nil Instance 的接近 4KB 格式化行。",
+        "ru": "Не развёртывайте build 2.4.16999. Используйте 2.4.17000 или новее и проверьте formatted lines около 4KB с non-nil Instance."
+      }
+    },
+    {
+      "sha": "1c454fb638fc0f3e5618a703aef6f38a89422dac",
+      "headline": {
+        "en": "LogView keeps key columns visible and remembers font size",
+        "fr": "LogView garde les colonnes clés visibles et mémorise la police",
+        "zh": "LogView 保持关键列可见并记住字体大小",
+        "ru": "LogView сохраняет ключевые колонки и размер шрифта"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "LogView prevents text-column clicks from hiding time, level and thread columns, and adds persistent content font sizing through keys, mouse wheel and menu.",
+        "fr": "LogView empêche la colonne texte de cacher heure, niveau et thread, et ajoute une taille de police persistante par clavier, molette et menu.",
+        "zh": "LogView 防止点击文本列隐藏时间、level 与 thread 列，并通过键盘、滚轮与菜单提供持久化内容字体大小。",
+        "ru": "LogView не позволяет text-column скрывать time, level и thread columns и добавляет persistent font sizing через keys, mouse wheel и menu."
+      },
+      "impact": {
+        "en": "Only the Lazarus LogView user interface changes; backend logging and file formats are unaffected.",
+        "fr": "Seule l’interface Lazarus LogView change ; le backend de log et les formats de fichier ne changent pas.",
+        "zh": "仅 Lazarus LogView UI 变化；backend 日志与文件格式不受影响。",
+        "ru": "Меняется только UI Lazarus LogView; backend logging и file formats не затронуты."
+      },
+      "action": "none",
+      "units": [
+        "mormot.tools.logview"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cd8db4642b4b18666c32ecce4080f0c46d66c9f2",
+      "headline": {
+        "en": "Pointer text can be written into any ShortString",
+        "fr": "Le texte d’un pointeur peut être écrit dans tout ShortString",
+        "zh": "指针文本可写入任意 ShortString",
+        "ru": "Pointer text можно записать в любой ShortString"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.text adds PointerToHexShortVar, and PointerToHexShort delegates to it instead of duplicating the pointer-width hexadecimal conversion.",
+        "fr": "mormot.core.text ajoute PointerToHexShortVar, et PointerToHexShort lui délègue la conversion hexadécimale.",
+        "zh": "mormot.core.text 新增 PointerToHexShortVar，PointerToHexShort 委托给它完成指针宽度十六进制转换。",
+        "ru": "mormot.core.text добавляет PointerToHexShortVar, а PointerToHexShort делегирует ему pointer-width hex conversion."
+      },
+      "impact": {
+        "en": "Existing callers are unchanged; allocation-free diagnostic code can now fill an existing ShortString variable directly.",
+        "fr": "Les appelants existants ne changent pas ; le diagnostic sans allocation peut remplir directement un ShortString existant.",
+        "zh": "现有调用方不变；无分配诊断代码现在可直接填充现有 ShortString 变量。",
+        "ru": "Существующие вызовы не меняются; allocation-free diagnostic code может напрямую заполнить существующий ShortString."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.text"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "PointerToHexShortVar",
+          "change": "added",
+          "note": {
+            "en": "Writes a pointer value into a caller-supplied ShortString.",
+            "fr": "Écrit un pointeur dans un ShortString fourni.",
+            "zh": "把指针值写入调用方提供的 ShortString。",
+            "ru": "Записывает pointer value в предоставленный ShortString."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "add4ed16749f2469d9c0897a753779e180317849",
+      "headline": {
+        "en": "Short location lookup may omit the hexadecimal fallback",
+        "fr": "La localisation courte peut omettre le fallback hexadécimal",
+        "zh": "短位置查询可省略十六进制 fallback",
+        "ru": "Short location lookup может убрать hex fallback"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "TDebugFile.FindLocationShort adds aNoHex, using PointerToHexShortVar otherwise; the commit also corrects comments and assignment annotations in recent logging code.",
+        "fr": "TDebugFile.FindLocationShort ajoute aNoHex, utilise PointerToHexShortVar sinon, et corrige des commentaires récents du code de log.",
+        "zh": "TDebugFile.FindLocationShort 新增 aNoHex；否则使用 PointerToHexShortVar；同时修正近期日志代码注释与赋值说明。",
+        "ru": "TDebugFile.FindLocationShort добавляет aNoHex, иначе использует PointerToHexShortVar, а также исправляет comments в recent logging code."
+      },
+      "impact": {
+        "en": "Diagnostic callers can request an empty result when no debug symbol is found instead of receiving only the address. Existing two-argument calls keep hexadecimal fallback.",
+        "fr": "Les appelants diagnostic peuvent demander un résultat vide sans symbole. Les appels à deux arguments gardent le fallback hexadécimal.",
+        "zh": "诊断调用方可在找不到 debug symbol 时请求空结果，而不是只得到地址；现有双参数调用仍保留十六进制 fallback。",
+        "ru": "Diagnostic callers могут запросить пустой результат без debug symbol вместо одного адреса. Existing two-argument calls сохраняют hex fallback."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.FindLocationShort",
+          "change": "signature-changed",
+          "note": {
+            "en": "Adds optional aNoHex: boolean = false.",
+            "fr": "Ajoute aNoHex: boolean = false optionnel.",
+            "zh": "新增可选 aNoHex: boolean = false。",
+            "ru": "Добавлен optional aNoHex: boolean = false."
+          }
+        }
+      ]
+    }
+  ]
+}
