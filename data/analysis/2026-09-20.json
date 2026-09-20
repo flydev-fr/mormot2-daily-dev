@@ -1,0 +1,491 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-20",
+  "edition_title": {
+    "en": "Log inspection preserves MAB files and gains cross-platform caller tracing",
+    "fr": "L’inspection des logs préserve les fichiers MAB et gagne le traçage des appelants",
+    "zh": "日志检查保留 MAB 文件，并新增跨平台调用方追踪",
+    "ru": "Анализ логов сохраняет MAB-файлы и получает cross-platform caller tracing"
+  },
+  "intro": {
+    "en": "This edition hardens the tools around TSynLog rather than changing backend protocols. Log readers no longer crash on empty profiler data or plain-text selections, and TDebugFile no longer deletes an unreadable external .mab file. FreeBSD, FPC and Android builds receive socket and POSIX compatibility repairs, while caller-symbol discovery now works through TDebugFile on every supported compiler.",
+    "fr": "Cette édition renforce surtout les outils autour de TSynLog sans modifier les protocoles backend. Les lecteurs de logs ne plantent plus sur des données de profiler vides ou des sélections de texte brut, et TDebugFile ne supprime plus un fichier .mab externe illisible. FreeBSD, FPC et Android reçoivent des corrections socket et POSIX, tandis que la découverte du symbole appelant passe désormais par TDebugFile sur tous les compilateurs pris en charge.",
+    "zh": "本期主要加固 TSynLog 周边工具，不改变 backend 协议。日志读取器不再因空 profiler 数据或纯文本选择而崩溃，TDebugFile 也不再删除无法读取的外部 .mab 文件。FreeBSD、FPC 与 Android 获得 socket/POSIX 兼容修复，调用方符号发现现在可通过 TDebugFile 覆盖所有受支持编译器。",
+    "ru": "В этой редакции усилены прежде всего инструменты вокруг TSynLog, без изменения backend-протоколов. Чтение логов больше не падает на пустых profiler data или выборе plain text, а TDebugFile не удаляет нечитаемый внешний .mab-файл. FreeBSD, FPC и Android получают socket/POSIX compatibility fixes, а поиск caller symbol теперь работает через TDebugFile на всех поддерживаемых компиляторах."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17019 at fc996116ae8a2534c5e763ac180649cdb78013ab.",
+      "TDebugFile.Create no longer deletes an unreadable external .mab file supplied as aExeName.",
+      "TSynLogFile and TSynLogFileView now handle logs without sllEnter data, plain-text clipboard rows and an empty level filter safely.",
+      "FreeBSD UNIX-domain socket sizing and follow-up FPC, BSD and Android compilation fixes are complete in the final build.",
+      "TDebugFile.AppendCallerShort is new, and TSynLog.Enter or Log calls without text now resolve caller information on FPC as well as Delphi.",
+      "The Lazarus package now retains mormot.crypt.pkcs11 when it regenerates mormot2.pas."
+    ],
+    "fr": [
+      "Visez la build 2.4.17019 au commit fc996116ae8a2534c5e763ac180649cdb78013ab.",
+      "TDebugFile.Create ne supprime plus un fichier .mab externe illisible fourni via aExeName.",
+      "TSynLogFile et TSynLogFileView gèrent sans plantage les logs sans sllEnter, les lignes texte brut copiées et un filtre de niveaux vide.",
+      "Le dimensionnement des sockets UNIX FreeBSD et les corrections de compilation FPC, BSD et Android sont complets dans la build finale.",
+      "TDebugFile.AppendCallerShort est nouveau ; TSynLog.Enter ou Log sans texte résout aussi l’appelant sous FPC, comme sous Delphi.",
+      "Le package Lazarus conserve maintenant mormot.crypt.pkcs11 lorsqu’il régénère mormot2.pas."
+    ],
+    "zh": [
+      "应采用 build 2.4.17019 的 fc996116ae8a2534c5e763ac180649cdb78013ab。",
+      "TDebugFile.Create 不再删除通过 aExeName 提供但无法读取的外部 .mab 文件。",
+      "TSynLogFile 与 TSynLogFileView 现在可安全处理无 sllEnter 的日志、纯文本剪贴板行与空 level filter。",
+      "FreeBSD UNIX-domain socket 大小以及后续 FPC、BSD、Android 编译修复已在最终 build 完成。",
+      "新增 TDebugFile.AppendCallerShort；无文本的 TSynLog.Enter 或 Log 现在在 FPC 与 Delphi 上都能解析调用方信息。",
+      "Lazarus package 重新生成 mormot2.pas 时现在会保留 mormot.crypt.pkcs11。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17019 в fc996116ae8a2534c5e763ac180649cdb78013ab.",
+      "TDebugFile.Create больше не удаляет нечитаемый внешний .mab-файл, переданный как aExeName.",
+      "TSynLogFile и TSynLogFileView безопасно обрабатывают логи без sllEnter, plain-text строки для clipboard и пустой level filter.",
+      "Размер UNIX-domain socket для FreeBSD и последующие FPC, BSD и Android compilation fixes завершены в финальной build.",
+      "Добавлен TDebugFile.AppendCallerShort; TSynLog.Enter или Log без текста теперь определяет caller и в FPC, и в Delphi.",
+      "Lazarus package теперь сохраняет mormot.crypt.pkcs11 при регенерации mormot2.pas."
+    ]
+  },
+  "risk_level": "worth-a-look",
+  "themes": [
+    {
+      "title": {
+        "en": "Safer log inspection and caller symbols",
+        "fr": "Inspection des logs et symboles appelants plus sûrs",
+        "zh": "更安全的日志检查与调用方符号",
+        "ru": "Более безопасный анализ логов и caller symbols"
+      },
+      "summary": {
+        "en": "TSynLogFileView closes plain-text, empty-filter and empty-profiler failure paths. TDebugFile preserves unreadable external MAB files, exposes AppendCallerShort, and supplies caller symbols to no-text TSynLog entries on Delphi and FPC.",
+        "fr": "TSynLogFileView corrige les échecs liés au texte brut, au filtre vide et au profiler vide. TDebugFile préserve les MAB externes illisibles, expose AppendCallerShort et fournit le symbole appelant aux entrées TSynLog sans texte sous Delphi et FPC.",
+        "zh": "TSynLogFileView 修复纯文本、空 filter 与空 profiler 的失败路径。TDebugFile 保留无法读取的外部 MAB，公开 AppendCallerShort，并为 Delphi/FPC 上无文本的 TSynLog entry 提供调用方符号。",
+        "ru": "TSynLogFileView закрывает ошибки plain text, пустого filter и пустого profiler. TDebugFile сохраняет нечитаемые внешние MAB, публикует AppendCallerShort и передаёт caller symbols в TSynLog entries без текста на Delphi и FPC."
+      },
+      "shas": [
+        "a01ae51e083b4ce63a8c84b2d77fae0d83b1ac70",
+        "4ca916cbf065fa14410bda6dd7c07ce0dcbafd84",
+        "19b4860314c2287ef88bec5ac5dee0f890180add",
+        "fc996116ae8a2534c5e763ac180649cdb78013ab"
+      ]
+    },
+    {
+      "title": {
+        "en": "POSIX target compatibility",
+        "fr": "Compatibilité des cibles POSIX",
+        "zh": "POSIX target 兼容性",
+        "ru": "Совместимость POSIX targets"
+      },
+      "summary": {
+        "en": "FreeBSD receives the correct UNIX-domain socket record size. The follow-up batch also repairs FPC and Delphi differences in statfs, Android inode fields, AArch64 labels, conditional constants and dynamic getifaddrs loading.",
+        "fr": "FreeBSD reçoit la bonne taille de record pour les sockets UNIX. La série complémentaire corrige aussi les différences FPC/Delphi dans statfs, les champs inode Android, les libellés AArch64, les constantes conditionnelles et le chargement dynamique de getifaddrs.",
+        "zh": "FreeBSD 获得正确的 UNIX-domain socket record 大小。后续批次还修复 FPC/Delphi 在 statfs、Android inode 字段、AArch64 标签、条件常量与动态 getifaddrs 加载方面的差异。",
+        "ru": "FreeBSD получает правильный размер record для UNIX-domain socket. Следующая серия исправляет различия FPC/Delphi в statfs, Android inode fields, AArch64 labels, conditional constants и динамической загрузке getifaddrs."
+      },
+      "shas": [
+        "b6262622e0249d2d0d53ef48aba61e16d3a29029",
+        "de2e50348e48ad6d9fde23b2d122552e30cd7a91",
+        "e68dce4ad0e6538eb7069656cab5763e2387c449"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "a01ae51e083b4ce63a8c84b2d77fae0d83b1ac70",
+          "4ca916cbf065fa14410bda6dd7c07ce0dcbafd84"
+        ],
+        "why": "Take the log-reader crash fixes and MAB-file preservation first when LogView or external debug archives are used."
+      },
+      {
+        "shas": [
+          "b6262622e0249d2d0d53ef48aba61e16d3a29029",
+          "de2e50348e48ad6d9fde23b2d122552e30cd7a91",
+          "e68dce4ad0e6538eb7069656cab5763e2387c449"
+        ],
+        "why": "Treat the FreeBSD socket layout and the later FPC, BSD and Android compile repairs as one platform update."
+      },
+      {
+        "shas": [
+          "19b4860314c2287ef88bec5ac5dee0f890180add",
+          "fc996116ae8a2534c5e763ac180649cdb78013ab"
+        ],
+        "why": "AppendCallerShort is introduced before TSynLog starts using it for no-text Enter and Log calls on all targets."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17019. Upgrade sooner if LogView opens external .mab files, if log files may lack sllEnter events, or if FreeBSD, FPC BSD or Android is a supported target. Rebuild every platform package, test plain-text clipboard and empty-filter behavior, and verify whether automatic caller symbols change log volume or hot-path cost. The raw payload has no superseded_by markers, so no avoid window is asserted.",
+    "fr": "Visez la build 2.4.17019. Mettez à niveau rapidement si LogView ouvre des .mab externes, si des logs peuvent ne contenir aucun sllEnter, ou si FreeBSD, FPC BSD ou Android est ciblé. Recompilez chaque package, testez la copie de texte brut et le filtre vide, puis vérifiez si les symboles appelants automatiques modifient le volume ou le coût des logs. Aucun marqueur superseded_by n’étaye une plage à éviter.",
+    "zh": "请采用 build 2.4.17019。若 LogView 会打开外部 .mab、日志可能不含 sllEnter，或需支持 FreeBSD、FPC BSD、Android，应尽快升级。重新构建各平台 package，测试纯文本复制与空 filter，并确认自动调用方符号是否改变日志量或热路径成本。原始 payload 没有 superseded_by 标记，因此不声明避开区间。",
+    "ru": "Переходите на build 2.4.17019. Обновляйтесь быстрее, если LogView открывает внешние .mab, логи могут не содержать sllEnter или поддерживаются FreeBSD, FPC BSD и Android. Пересоберите все platform packages, проверьте plain-text clipboard и пустой filter, а также влияние automatic caller symbols на объём и стоимость логирования. В raw payload нет superseded_by, поэтому avoid window не заявляется."
+  },
+  "notes": {
+    "en": "The raw payload contains five merge commits and eight non-merge commits; every non-merge commit is covered below. It contains no superseded_by marker and no deprecation notice. Version-only files are ignored.",
+    "fr": "Le payload brut contient cinq commits de merge et huit commits non-merge ; chacun est couvert ci-dessous. Il ne contient ni marqueur superseded_by ni avis de dépréciation. Les fichiers de version seuls sont ignorés.",
+    "zh": "原始 payload 包含 5 个 merge commit 与 8 个 non-merge commit；下方覆盖全部 non-merge commit。它不含 superseded_by 标记，也没有 deprecation notice。仅版本文件已忽略。",
+    "ru": "Raw payload содержит пять merge commits и восемь non-merge commits; ниже покрыт каждый. Маркеров superseded_by и deprecation notice нет. Файлы только с версией проигнорированы."
+  },
+  "entries": [
+    {
+      "sha": "a01ae51e083b4ce63a8c84b2d77fae0d83b1ac70",
+      "headline": {
+        "en": "Empty and plain-text logs no longer break the viewer",
+        "fr": "Les logs vides ou texte brut ne cassent plus le viewer",
+        "zh": "空日志与纯文本日志不再使 viewer 出错",
+        "ru": "Пустые и plain-text логи больше не ломают viewer"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSynLogFile.SetLogProcMerged now skips profiler-array access when no sllEnter event exists. TSynLogFileView.GetLineForClipboard returns a raw line when fLevels is nil, and Select clears fSelectedCount before handling an empty event filter. TTestCoreBase.Debugging adds regression coverage.",
+        "fr": "TSynLogFile.SetLogProcMerged évite maintenant l’accès aux tableaux du profiler sans événement sllEnter. TSynLogFileView.GetLineForClipboard renvoie la ligne brute lorsque fLevels vaut nil, et Select efface fSelectedCount avant de traiter un filtre d’événements vide. TTestCoreBase.Debugging ajoute les régressions.",
+        "zh": "无 sllEnter event 时，TSynLogFile.SetLogProcMerged 不再访问 profiler array。fLevels 为 nil 时，TSynLogFileView.GetLineForClipboard 返回原始行；Select 在处理空 event filter 前清除 fSelectedCount。TTestCoreBase.Debugging 新增回归测试。",
+        "ru": "TSynLogFile.SetLogProcMerged не обращается к profiler arrays, если нет sllEnter. TSynLogFileView.GetLineForClipboard возвращает исходную строку при fLevels=nil, а Select очищает fSelectedCount до обработки пустого event filter. В TTestCoreBase.Debugging добавлены regression tests."
+      },
+      "impact": {
+        "en": "LogView and custom analyzers avoid out-of-range or nil dereferences on logs without method profiling, can copy plain-text rows, and correctly display no rows after every level is unchecked.",
+        "fr": "LogView et les analyseurs évitent les accès nil ou hors limites sur les logs sans profiling de méthodes, peuvent copier les lignes texte brut et n’affichent aucune ligne lorsque tous les niveaux sont décochés.",
+        "zh": "LogView 与自定义分析器在无方法 profiling 的日志上避免 nil 或越界访问，可复制纯文本行，并在取消全部 level 后正确显示零行。",
+        "ru": "LogView и пользовательские анализаторы избегают nil/out-of-range access для логов без method profiling, копируют plain-text строки и правильно показывают ноль строк после снятия всех levels."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade log-analysis tools and test plain-text files, logs without sllEnter and clearing every level filter.",
+        "fr": "Mettez à niveau les outils d’analyse et testez le texte brut, les logs sans sllEnter et la désactivation de tous les niveaux.",
+        "zh": "升级日志分析工具，并测试纯文本文件、无 sllEnter 的日志以及取消全部 level filter。",
+        "ru": "Обновите инструменты анализа и проверьте plain text, логи без sllEnter и снятие всех level filters."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynLogFile.SetLogProcMerged",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Enabling merged profiling on a log without sllEnter now leaves an empty profiler instead of dereferencing empty arrays.",
+            "fr": "Activer le profiling fusionné sans sllEnter laisse maintenant un profiler vide au lieu de déréférencer des tableaux vides.",
+            "zh": "在无 sllEnter 的日志上启用 merged profiling 时，现在保留空 profiler，不再解引用空 array。",
+            "ru": "Merged profiling для лога без sllEnter теперь оставляет пустой profiler вместо dereference пустых arrays."
+          }
+        },
+        {
+          "symbol": "TSynLogFileView.GetLineForClipboard",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Plain-text files now return the raw selected line and out-of-range rows return an empty string.",
+            "fr": "Les fichiers texte brut renvoient la ligne sélectionnée et les index hors limites une chaîne vide.",
+            "zh": "纯文本文件现在返回所选原始行，越界 row 返回空字符串。",
+            "ru": "Plain-text файлы возвращают исходную выбранную строку, а out-of-range rows — пустую строку."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b6262622e0249d2d0d53ef48aba61e16d3a29029",
+      "headline": {
+        "en": "UNIX socket addresses use the native FreeBSD size",
+        "fr": "Les adresses socket UNIX utilisent la taille native FreeBSD",
+        "zh": "UNIX socket 地址采用 FreeBSD 原生大小",
+        "ru": "UNIX socket addresses используют нативный размер FreeBSD"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSockAddrUnix uses a 104-byte sun_path on platforms with sun_len and 108 bytes elsewhere. SOCKADDR_SIZE follows that layout, while TNetAddr.Size and SetFamily handle AF_UNIX explicitly.",
+        "fr": "TSockAddrUnix utilise un sun_path de 104 octets sur les plateformes avec sun_len et 108 ailleurs. SOCKADDR_SIZE suit ce layout, tandis que TNetAddr.Size et SetFamily traitent AF_UNIX explicitement.",
+        "zh": "有 sun_len 的平台上，TSockAddrUnix 使用 104-byte sun_path，其他平台使用 108 bytes。SOCKADDR_SIZE 跟随该 layout，TNetAddr.Size 与 SetFamily 显式处理 AF_UNIX。",
+        "ru": "TSockAddrUnix использует sun_path размером 104 bytes на платформах с sun_len и 108 bytes на остальных. SOCKADDR_SIZE следует этому layout, а TNetAddr.Size и SetFamily явно обрабатывают AF_UNIX."
+      },
+      "impact": {
+        "en": "FreeBSD and other sun_len targets no longer pass an oversized sockaddr_un buffer or report the generic storage size for AF_UNIX. Linux and Windows layouts are unchanged.",
+        "fr": "FreeBSD et les autres cibles avec sun_len ne passent plus un buffer sockaddr_un trop grand et ne renvoient plus la taille générique pour AF_UNIX. Linux et Windows ne changent pas.",
+        "zh": "FreeBSD 与其他含 sun_len 的 target 不再传入过大的 sockaddr_un buffer，也不再为 AF_UNIX 报告通用存储大小。Linux 与 Windows layout 不变。",
+        "ru": "FreeBSD и другие targets с sun_len больше не передают увеличенный sockaddr_un buffer и не возвращают общий storage size для AF_UNIX. Layout Linux и Windows не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Use build 2.4.17019 for FreeBSD or BSD UNIX-domain sockets and rerun bind/connect tests with maximum path lengths.",
+        "fr": "Utilisez la build 2.4.17019 pour les sockets UNIX FreeBSD/BSD et retestez bind/connect avec des chemins de longueur maximale.",
+        "zh": "FreeBSD/BSD UNIX-domain socket 应使用 build 2.4.17019，并以最大路径长度重新测试 bind/connect。",
+        "ru": "Для UNIX-domain sockets FreeBSD/BSD используйте build 2.4.17019 и повторите bind/connect с путями максимальной длины."
+      },
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix"
+      ],
+      "api_changes": [
+        {
+          "symbol": "SOCKADDR_SIZE",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The public constant is 106 rather than 110 on platforms whose socket records include sun_len.",
+            "fr": "La constante publique vaut 106 au lieu de 110 sur les plateformes dont les records socket contiennent sun_len.",
+            "zh": "在 socket record 含 sun_len 的平台上，此公开常量从 110 改为 106。",
+            "ru": "Публичная константа равна 106 вместо 110 на платформах, где socket record содержит sun_len."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "de2e50348e48ad6d9fde23b2d122552e30cd7a91",
+      "headline": {
+        "en": "POSIX host records match the native C field type",
+        "fr": "Les records host POSIX suivent le type C natif",
+        "zh": "POSIX host record 对齐原生 C 字段类型",
+        "ru": "POSIX host records соответствуют нативному типу C"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "The internal hostent.h_length declaration changes from TSockLen to cint, matching the C ABI. A sockaddr_dl comment is clarified without changing its layout.",
+        "fr": "La déclaration interne hostent.h_length passe de TSockLen à cint pour correspondre à l’ABI C. Un commentaire sockaddr_dl est précisé sans changer le layout.",
+        "zh": "内部 hostent.h_length 声明从 TSockLen 改为 cint，以匹配 C ABI。sockaddr_dl 注释得到澄清，layout 不变。",
+        "ru": "Внутреннее объявление hostent.h_length меняется с TSockLen на cint в соответствии с C ABI. Комментарий sockaddr_dl уточнён без изменения layout."
+      },
+      "impact": {
+        "en": "POSIX name-resolution bindings use the native integer type on FPC and Delphi. Application APIs and Windows behavior do not change.",
+        "fr": "Les bindings de résolution de noms POSIX utilisent le type entier natif sous FPC et Delphi. Les API applicatives et Windows ne changent pas.",
+        "zh": "POSIX 名称解析 binding 在 FPC 与 Delphi 上采用原生整数类型；应用 API 与 Windows 行为不变。",
+        "ru": "Bindings разрешения имён POSIX используют нативный integer type в FPC и Delphi. API приложений и поведение Windows не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.sock.posix"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4ca916cbf065fa14410bda6dd7c07ce0dcbafd84",
+      "headline": {
+        "en": "Unreadable external MAB files are no longer deleted",
+        "fr": "Les fichiers MAB externes illisibles ne sont plus supprimés",
+        "zh": "无法读取的外部 MAB 文件不再被删除",
+        "ru": "Нечитаемые внешние MAB-файлы больше не удаляются"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TDebugFile.Create still attempts LoadMab when the cache timestamp matches, but it no longer calls DeleteFile when loading yields no blocks or symbols.",
+        "fr": "TDebugFile.Create tente toujours LoadMab lorsque le timestamp du cache correspond, mais n’appelle plus DeleteFile si aucun bloc ou symbole n’est chargé.",
+        "zh": "cache timestamp 匹配时，TDebugFile.Create 仍会尝试 LoadMab，但加载不到 block 或 symbol 时不再调用 DeleteFile。",
+        "ru": "TDebugFile.Create по-прежнему вызывает LoadMab при совпадении timestamp cache, но больше не вызывает DeleteFile, если blocks или symbols не загружены."
+      },
+      "impact": {
+        "en": "Passing a user-selected .mab as aExeName, as LogView does, can no longer destroy that file merely because it is unreadable, malformed or incompatible. Failed cache loads still fall back to .map or .dbg parsing.",
+        "fr": "Passer un .mab choisi par l’utilisateur via aExeName, comme le fait LogView, ne peut plus détruire ce fichier parce qu’il est illisible, invalide ou incompatible. Le fallback vers .map ou .dbg reste actif.",
+        "zh": "像 LogView 那样通过 aExeName 传入用户选择的 .mab 时，不会再仅因文件不可读、损坏或不兼容而删除它。cache 加载失败后仍会回退解析 .map 或 .dbg。",
+        "ru": "Переданный через aExeName пользовательский .mab, как в LogView, больше не удаляется только из-за нечитаемости, повреждения или несовместимости. После сбоя cache остаётся fallback к .map или .dbg."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade every tool that opens user-supplied MAB files, and test malformed and read-only inputs before allowing file selection.",
+        "fr": "Mettez à niveau tout outil ouvrant des MAB fournis par l’utilisateur et testez les fichiers invalides ou en lecture seule.",
+        "zh": "升级所有会打开用户 MAB 的工具，并在允许选择文件前测试损坏与只读输入。",
+        "ru": "Обновите все инструменты, открывающие пользовательские MAB, и проверьте повреждённые и read-only inputs."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.Create",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "An unreadable MAB is preserved instead of being deleted before fallback symbol loading.",
+            "fr": "Un MAB illisible est conservé au lieu d’être supprimé avant le fallback de chargement des symboles.",
+            "zh": "无法读取的 MAB 会被保留，不再于 fallback 符号加载前删除。",
+            "ru": "Нечитаемый MAB сохраняется, а не удаляется до fallback-загрузки символов."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7b98b09ac54fc03e78f4e4100b4e03c2ac72c558",
+      "headline": {
+        "en": "The Lazarus package keeps PKCS #11 support",
+        "fr": "Le package Lazarus conserve le support PKCS #11",
+        "zh": "Lazarus package 保留 PKCS #11 支持",
+        "ru": "Lazarus package сохраняет поддержку PKCS #11"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "packages/lazarus/mormot2.lpk adds mormot.crypt.pkcs11 as item 114 and shifts the remaining package items, increasing the declared file count from 123 to 124.",
+        "fr": "packages/lazarus/mormot2.lpk ajoute mormot.crypt.pkcs11 comme item 114, décale les éléments suivants et porte le nombre de fichiers de 123 à 124.",
+        "zh": "packages/lazarus/mormot2.lpk 将 mormot.crypt.pkcs11 添加为 item 114，后续项目顺移，声明文件数从 123 增至 124。",
+        "ru": "packages/lazarus/mormot2.lpk добавляет mormot.crypt.pkcs11 как item 114, сдвигает остальные элементы и увеличивает число файлов с 123 до 124."
+      },
+      "impact": {
+        "en": "Opening or rebuilding the Lazarus package no longer regenerates mormot2.pas without mormot.crypt.pkcs11. Direct unit users and Delphi projects are unaffected.",
+        "fr": "Ouvrir ou reconstruire le package Lazarus ne régénère plus mormot2.pas sans mormot.crypt.pkcs11. Les usages directs et Delphi ne changent pas.",
+        "zh": "打开或重建 Lazarus package 时，不再生成缺少 mormot.crypt.pkcs11 的 mormot2.pas。直接引用 unit 与 Delphi 项目不受影响。",
+        "ru": "Открытие или сборка Lazarus package больше не регенерирует mormot2.pas без mormot.crypt.pkcs11. Прямое использование unit и Delphi не затронуты."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Rebuild the Lazarus package and confirm mormot.crypt.pkcs11 remains in the generated umbrella unit.",
+        "fr": "Recompilez le package Lazarus et vérifiez que mormot.crypt.pkcs11 reste dans l’unité agrégée générée.",
+        "zh": "重建 Lazarus package，并确认生成的 umbrella unit 仍包含 mormot.crypt.pkcs11。",
+        "ru": "Пересоберите Lazarus package и убедитесь, что mormot.crypt.pkcs11 остаётся в сгенерированном umbrella unit."
+      },
+      "units": [
+        "mormot.crypt.pkcs11"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e68dce4ad0e6538eb7069656cab5763e2387c449",
+      "headline": {
+        "en": "BSD, FPC and Android compile paths converge after the platform merge",
+        "fr": "Les chemins BSD, FPC et Android convergent après le merge plateforme",
+        "zh": "平台 merge 后 BSD、FPC 与 Android 编译路径完成统一",
+        "ru": "После platform merge сходятся пути сборки BSD, FPC и Android"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "The follow-up uses CPUAARCH64 for CPU_ARCH_TEXT, makes PosixStatFS accept pointer on both compilers, selects Android st_ino fields by DELPHIPOSIX, repairs conditional socket syntax and an FPC shift cast, and loads getifaddrs through LibraryOpen and LibraryResolve.",
+        "fr": "Le suivi utilise CPUAARCH64 pour CPU_ARCH_TEXT, fait accepter pointer à PosixStatFS sur les deux compilateurs, choisit les champs st_ino Android via DELPHIPOSIX, corrige la syntaxe socket conditionnelle et un cast FPC, puis charge getifaddrs via LibraryOpen et LibraryResolve.",
+        "zh": "后续修复让 CPU_ARCH_TEXT 使用 CPUAARCH64，使 PosixStatFS 在两种编译器上都接受 pointer，按 DELPHIPOSIX 选择 Android st_ino 字段，修正条件 socket 语法与 FPC shift cast，并通过 LibraryOpen/LibraryResolve 加载 getifaddrs。",
+        "ru": "Follow-up использует CPUAARCH64 для CPU_ARCH_TEXT, задаёт pointer для PosixStatFS на обоих компиляторах, выбирает Android st_ino через DELPHIPOSIX, исправляет conditional socket syntax и FPC shift cast, а getifaddrs загружает через LibraryOpen/LibraryResolve."
+      },
+      "impact": {
+        "en": "The merged Delphi Android work and the FreeBSD socket-size change compile correctly across Delphi and FPC POSIX targets. Android file identifiers use the RTL-specific field, and FPC no longer depends on direct dlopen declarations here.",
+        "fr": "Le travail Delphi Android fusionné et la taille socket FreeBSD compilent correctement sur les cibles POSIX Delphi/FPC. Android utilise le champ d’identifiant adapté à la RTL, et FPC ne dépend plus ici des déclarations dlopen directes.",
+        "zh": "合并后的 Delphi Android 工作与 FreeBSD socket-size 修改可在 Delphi/FPC POSIX target 上正确编译。Android 文件标识采用对应 RTL 字段，FPC 在此不再依赖直接 dlopen 声明。",
+        "ru": "Объединённые изменения Delphi Android и размера socket FreeBSD правильно компилируются на POSIX targets Delphi/FPC. Android использует поле file identifier своей RTL, а FPC больше не зависит здесь от прямых объявлений dlopen."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Use build 2.4.17019 for Delphi Android, FPC BSD or AArch64 builds and rerun the full compile matrix rather than cherry-picking the earlier platform commits.",
+        "fr": "Utilisez la build 2.4.17019 pour Delphi Android, FPC BSD ou AArch64 et relancez toute la matrice de compilation plutôt que de sélectionner les commits précédents.",
+        "zh": "Delphi Android、FPC BSD 或 AArch64 build 应采用 2.4.17019，并重新运行完整编译矩阵，不要单独摘取早期平台 commit。",
+        "ru": "Для Delphi Android, FPC BSD и AArch64 используйте build 2.4.17019 и прогоните полную compile matrix вместо cherry-pick ранних platform commits."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.tools.logview"
+      ],
+      "api_changes": [
+        {
+          "symbol": "PosixStatFS",
+          "change": "signature-changed",
+          "note": {
+            "en": "The Info parameter is now pointer on FPC as well as Delphi instead of PStatfs on FPC.",
+            "fr": "Le paramètre Info est maintenant pointer sous FPC comme sous Delphi, au lieu de PStatfs sous FPC.",
+            "zh": "Info 参数现在在 FPC 与 Delphi 上均为 pointer，不再在 FPC 上使用 PStatfs。",
+            "ru": "Параметр Info теперь имеет тип pointer и в FPC, и в Delphi, вместо PStatfs в FPC."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "19b4860314c2287ef88bec5ac5dee0f890180add",
+      "headline": {
+        "en": "Caller symbols can be appended without heap allocation",
+        "fr": "Les symboles appelants peuvent être ajoutés sans allocation heap",
+        "zh": "调用方符号可在不分配 heap 的情况下追加",
+        "ru": "Caller symbols добавляются без heap allocation"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TDebugFile.AppendCallerShort captures up to 62 raw frames, removes duplicates and appends resolved locations into a ShortString. RawStackTrace is shared with StackTrace, and guards intercepted exceptions while probing frames on Delphi and FPC.",
+        "fr": "TDebugFile.AppendCallerShort capture jusqu’à 62 frames brutes, supprime les doublons et ajoute les emplacements résolus dans une ShortString. RawStackTrace est partagé avec StackTrace et protège l’interception d’exceptions lors du parcours sous Delphi et FPC.",
+        "zh": "TDebugFile.AppendCallerShort 捕获最多 62 个原始 frame，去重后把解析位置追加到 ShortString。RawStackTrace 与 StackTrace 共用，并在 Delphi/FPC 探测 frame 时屏蔽被拦截异常。",
+        "ru": "TDebugFile.AppendCallerShort захватывает до 62 raw frames, удаляет дубликаты и добавляет resolved locations в ShortString. RawStackTrace используется вместе со StackTrace и защищает от intercepted exceptions при обходе frames в Delphi и FPC."
+      },
+      "impact": {
+        "en": "Logging and diagnostic code can obtain compact caller locations on FPC as well as Delphi without constructing a RawUtf8 result. Symbol quality still depends on available .map, .gdb or .mab data.",
+        "fr": "Le code de log et diagnostic peut obtenir des emplacements appelants compacts sous FPC comme sous Delphi sans construire de résultat RawUtf8. La qualité dépend toujours des données .map, .gdb ou .mab.",
+        "zh": "日志与诊断代码在 FPC 和 Delphi 上都可获得紧凑调用方位置，无需构造 RawUtf8 结果。符号质量仍取决于可用的 .map、.gdb 或 .mab 数据。",
+        "ru": "Logging и diagnostic code получает компактные caller locations в FPC и Delphi без создания RawUtf8 result. Качество symbols по-прежнему зависит от .map, .gdb или .mab."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.AppendCallerShort",
+          "change": "added",
+          "note": {
+            "en": "This new class procedure appends aSkip/aDepth resolved stack locations into a caller-provided ShortString.",
+            "fr": "Cette nouvelle procédure de classe ajoute aSkip/aDepth emplacements de stack résolus dans une ShortString fournie.",
+            "zh": "此新 class procedure 将 aSkip/aDepth 指定的已解析 stack 位置追加到调用方提供的 ShortString。",
+            "ru": "Новая class procedure добавляет aSkip/aDepth resolved stack locations в переданную ShortString."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fc996116ae8a2534c5e763ac180649cdb78013ab",
+      "headline": {
+        "en": "No-text TSynLog entries identify their caller on every target",
+        "fr": "Les entrées TSynLog sans texte identifient l’appelant sur chaque cible",
+        "zh": "无文本 TSynLog entry 可在所有 target 上识别调用方",
+        "ru": "TSynLog entries без текста определяют caller на всех targets"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLog.Enter with a nil aMethodName and TSynLog.Log(Level) call TDebugFile.AppendCallerShort before taking the writer lock. LogEnter accepts a precomputed PShortString location, and the previous Delphi-only address capture is removed.",
+        "fr": "TSynLog.Enter avec aMethodName=nil et TSynLog.Log(Level) appellent TDebugFile.AppendCallerShort avant le verrou writer. LogEnter accepte un emplacement PShortString précalculé, et la capture d’adresse réservée à Delphi est supprimée.",
+        "zh": "aMethodName=nil 的 TSynLog.Enter 与 TSynLog.Log(Level) 会在获取 writer lock 前调用 TDebugFile.AppendCallerShort。LogEnter 接受预计算的 PShortString location，并移除原 Delphi-only 地址捕获。",
+        "ru": "TSynLog.Enter с aMethodName=nil и TSynLog.Log(Level) вызывают TDebugFile.AppendCallerShort до writer lock. LogEnter принимает заранее вычисленный PShortString location, а прежний Delphi-only address capture удалён."
+      },
+      "impact": {
+        "en": "FPC logs can now include the same caller symbol context as Delphi when debug data is available. Calls that intentionally omit text perform a stack capture and may emit more text, so hot logging paths should be measured.",
+        "fr": "Les logs FPC peuvent maintenant inclure le même contexte de symbole appelant que Delphi si les données de debug existent. Les appels sans texte capturent la stack et peuvent produire plus de texte ; mesurez les chemins de log chauds.",
+        "zh": "有 debug 数据时，FPC 日志现在可包含与 Delphi 相同的调用方符号上下文。故意省略文本的调用会捕获 stack，且可能输出更多文本，因此应测量热日志路径。",
+        "ru": "При наличии debug data FPC logs получают тот же caller symbol context, что и Delphi. Вызовы без текста выполняют stack capture и могут писать больше данных, поэтому hot logging paths следует измерить."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Review no-text Enter and Log calls, confirm the new caller text is wanted, and benchmark high-frequency paths with production debug artifacts.",
+        "fr": "Passez en revue les appels Enter et Log sans texte, confirmez le nouveau texte appelant et mesurez les chemins fréquents avec les artefacts de debug de production.",
+        "zh": "检查无文本 Enter/Log 调用，确认需要新的调用方文本，并使用生产 debug artifact 对高频路径进行 benchmark。",
+        "ru": "Проверьте вызовы Enter и Log без текста, подтвердите необходимость нового caller text и измерьте частые пути с production debug artifacts."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynLog.Enter",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "A nil aMethodName now triggers TDebugFile caller resolution on FPC as well as Delphi.",
+            "fr": "Un aMethodName nil déclenche maintenant la résolution de l’appelant TDebugFile sous FPC comme sous Delphi.",
+            "zh": "aMethodName 为 nil 时，现在在 FPC 与 Delphi 上都会触发 TDebugFile 调用方解析。",
+            "ru": "При aMethodName=nil теперь запускается TDebugFile caller resolution и в FPC, и в Delphi."
+          }
+        },
+        {
+          "symbol": "TSynLog.Log",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The overload taking only a level now appends the resolved caller location when available.",
+            "fr": "L’overload ne prenant qu’un niveau ajoute maintenant l’emplacement appelant résolu s’il est disponible.",
+            "zh": "仅接收 level 的 overload 现在会在可用时追加已解析的调用方位置。",
+            "ru": "Overload только с level теперь добавляет resolved caller location, если он доступен."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
