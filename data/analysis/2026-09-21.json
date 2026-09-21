@@ -1,0 +1,349 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-21",
+  "edition_title": {
+    "en": "Async OpenSSL handshakes retry correctly while TSynLog shortens its write lock",
+    "fr": "OpenSSL async réessaie correctement et TSynLog réduit son verrou d’écriture",
+    "zh": "异步 OpenSSL handshake 正确重试，TSynLog 同时缩短写锁",
+    "ru": "Async OpenSSL handshakes корректно повторяются, а TSynLog сокращает write lock"
+  },
+  "intro": {
+    "en": "OpenSSL-backed non-blocking clients and servers now retry SSL_connect and SSL_accept after WANT_READ or WANT_WRITE instead of treating them as fatal. The final commit preserves the first SSL_get_error result so real handshake failures report the correct cause. TSynLog also moves stack-trace and system-information collection outside its writer lock, reducing contention at the cost of larger per-thread state and bounded suffixes.",
+    "fr": "Les clients et serveurs non bloquants utilisant OpenSSL réessaient maintenant SSL_connect et SSL_accept après WANT_READ ou WANT_WRITE au lieu de les traiter comme fatals. Le commit final conserve le premier résultat SSL_get_error afin de signaler la vraie cause d’un échec. TSynLog déplace aussi la collecte de stack trace et d’informations système hors de son verrou writer, avec moins de contention mais un état par thread plus grand et des suffixes bornés.",
+    "zh": "使用 OpenSSL 的非阻塞 client/server 现在会在 WANT_READ 或 WANT_WRITE 后重试 SSL_connect 与 SSL_accept，而不再视为致命错误。最终 commit 保留首次 SSL_get_error 结果，使真实 handshake 失败报告正确原因。TSynLog 还把 stack trace 与 system information 收集移出 writer lock，以更大的每线程状态和有界 suffix 换取更低争用。",
+    "ru": "Неблокирующие клиенты и серверы на OpenSSL теперь повторяют SSL_connect и SSL_accept после WANT_READ или WANT_WRITE вместо fatal error. Финальный commit сохраняет первый результат SSL_get_error, чтобы реальный сбой handshake сообщал правильную причину. TSynLog также выносит сбор stack trace и system information за пределы writer lock, уменьшая contention ценой большего per-thread state и ограниченных suffixes."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17024 at 13c7b4dd94b23c25d51e5b0ab9b6e207cb039207.",
+      "OpenSSL TLS handshakes over asynchronous sockets now retry WANT_READ and WANT_WRITE for up to five seconds.",
+      "Avoid builds 2.4.17020–2.4.17023: the new retry loop re-queries SSL_get_error while reporting a terminal failure; build 2.4.17024 passes the captured code.",
+      "TSynLog pre-renders configured stack traces and system information before taking its per-writer lock.",
+      "The TSynLog thread record grows by 320 bytes, stack-trace suffixes are capped at 255 bytes and system-information suffixes at 63 bytes.",
+      "AppendSysInfo is a new public helper that appends system information without clearing an existing ShortString."
+    ],
+    "fr": [
+      "Visez la build 2.4.17024 au commit 13c7b4dd94b23c25d51e5b0ab9b6e207cb039207.",
+      "Les handshakes TLS OpenSSL sur sockets async réessaient WANT_READ et WANT_WRITE pendant cinq secondes au maximum.",
+      "Évitez les builds 2.4.17020 à 2.4.17023 : la nouvelle boucle relit SSL_get_error lors d’un échec final ; 2.4.17024 transmet le code déjà capturé.",
+      "TSynLog pré-rend les stack traces et informations système configurées avant de prendre son verrou par writer.",
+      "Le record thread TSynLog grandit de 320 octets ; les suffixes stack trace sont limités à 255 octets et les informations système à 63.",
+      "AppendSysInfo est un nouveau helper public qui ajoute les informations système sans vider la ShortString existante."
+    ],
+    "zh": [
+      "应采用 build 2.4.17024 的 13c7b4dd94b23c25d51e5b0ab9b6e207cb039207。",
+      "异步 socket 上的 OpenSSL TLS handshake 现在会重试 WANT_READ/WANT_WRITE，最长五秒。",
+      "避开 build 2.4.17020–2.4.17023：新重试循环在报告终止错误时再次调用 SSL_get_error；2.4.17024 改为传入已捕获错误码。",
+      "TSynLog 在获取每个 writer 的锁前预渲染配置的 stack trace 与 system information。",
+      "TSynLog thread record 增加 320 bytes；stack-trace suffix 上限为 255 bytes，system-information suffix 为 63 bytes。",
+      "AppendSysInfo 是新的公开 helper，可在不清空现有 ShortString 的情况下追加系统信息。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17024 в 13c7b4dd94b23c25d51e5b0ab9b6e207cb039207.",
+      "OpenSSL TLS handshakes на async sockets теперь повторяют WANT_READ и WANT_WRITE до пяти секунд.",
+      "Избегайте builds 2.4.17020–2.4.17023: новый retry loop повторно вызывает SSL_get_error при финальной ошибке; 2.4.17024 передаёт сохранённый код.",
+      "TSynLog предварительно формирует настроенные stack traces и system information до захвата per-writer lock.",
+      "Thread record TSynLog растёт на 320 bytes; stack-trace suffix ограничен 255 bytes, system-information suffix — 63.",
+      "AppendSysInfo — новый публичный helper, добавляющий system information без очистки существующей ShortString."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "Non-blocking OpenSSL handshake completion",
+        "fr": "Finalisation des handshakes OpenSSL non bloquants",
+        "zh": "非阻塞 OpenSSL handshake 完成逻辑",
+        "ru": "Завершение неблокирующего OpenSSL handshake"
+      },
+      "summary": {
+        "en": "TOpenSslNetTls routes SSL_connect and SSL_accept through a bounded retry loop that waits for the requested socket event. The closing fix forwards the immediately captured SSL_get_error code into EOpenSsl.CheckFailed instead of querying OpenSSL state a second time.",
+        "fr": "TOpenSslNetTls fait passer SSL_connect et SSL_accept par une boucle de retry bornée qui attend l’événement socket demandé. Le correctif final transmet à EOpenSsl.CheckFailed le code SSL_get_error capturé immédiatement au lieu de relire l’état OpenSSL.",
+        "zh": "TOpenSslNetTls 让 SSL_connect 与 SSL_accept 经过有界重试循环，并等待所需 socket event。最终修复把立即捕获的 SSL_get_error 代码传给 EOpenSsl.CheckFailed，不再二次查询 OpenSSL 状态。",
+        "ru": "TOpenSslNetTls проводит SSL_connect и SSL_accept через ограниченный retry loop с ожиданием нужного socket event. Финальный fix передаёт в EOpenSsl.CheckFailed сразу сохранённый SSL_get_error вместо повторного чтения состояния OpenSSL."
+      },
+      "shas": [
+        "1e45eae57bb35aacdb730b9a0595a5ec6ffe41ab",
+        "13c7b4dd94b23c25d51e5b0ab9b6e207cb039207"
+      ]
+    },
+    {
+      "title": {
+        "en": "Shorter TSynLog critical sections",
+        "fr": "Sections critiques TSynLog plus courtes",
+        "zh": "更短的 TSynLog 临界区",
+        "ru": "Более короткие критические секции TSynLog"
+      },
+      "summary": {
+        "en": "System-information appending becomes reusable, debug-file registration reduces exclusive locking, and TSynLog prepares optional stack and system suffixes in thread-local buffers before serializing the final line.",
+        "fr": "L’ajout d’informations système devient réutilisable, l’enregistrement des debug files réduit le verrou exclusif et TSynLog prépare les suffixes stack/système dans des buffers thread-local avant de sérialiser la ligne finale.",
+        "zh": "system-information 追加逻辑可复用，debug-file 注册减少独占锁，TSynLog 在序列化最终行前于 thread-local buffer 中准备可选 stack/system suffix。",
+        "ru": "Добавление system information становится переиспользуемым, регистрация debug files сокращает exclusive lock, а TSynLog готовит stack/system suffixes в thread-local buffers до сериализации строки."
+      },
+      "shas": [
+        "ea2c50668f1641e61ca57d744c4bce206dd1fdc8",
+        "d09fc6cd1cffee09cd8be14791e917d8a52c76eb",
+        "b1ddba46fb1ba2563e46ad02847119a8726cb885"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.17020",
+        "to_build": "2.4.17023",
+        "why": "The asynchronous OpenSSL handshake loop is present, but terminal failures re-query SSL_get_error instead of using the code captured immediately after SSL_connect or SSL_accept; build 17024 fixes the report."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "1e45eae57bb35aacdb730b9a0595a5ec6ffe41ab",
+          "13c7b4dd94b23c25d51e5b0ab9b6e207cb039207"
+        ],
+        "why": "Take the asynchronous OpenSSL handshake retry together with its final captured-error reporting fix."
+      },
+      {
+        "shas": [
+          "ea2c50668f1641e61ca57d744c4bce206dd1fdc8",
+          "d09fc6cd1cffee09cd8be14791e917d8a52c76eb",
+          "b1ddba46fb1ba2563e46ad02847119a8726cb885"
+        ],
+        "why": "Take the system-information helper, debug-file registration refactor and out-of-lock TSynLog pre-rendering as one logging sequence."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17024. OpenSSL users with non-blocking sockets should upgrade and exercise both client SSL_connect and server SSL_accept under WANT_READ, WANT_WRITE, timeout and certificate failure. Do not stop on 2.4.17020–2.4.17023 because the retry path’s final error report is incomplete. If LevelStackTrace or LevelSysInfo is enabled, compare log suffixes and account for 320 additional thread-local bytes per logging thread.",
+    "fr": "Visez la build 2.4.17024. Les utilisateurs OpenSSL avec sockets non bloquants doivent tester SSL_connect côté client et SSL_accept côté serveur sous WANT_READ, WANT_WRITE, timeout et erreur de certificat. Ne restez pas sur 2.4.17020–2.4.17023 : le reporting final du retry est incomplet. Avec LevelStackTrace ou LevelSysInfo, comparez les suffixes et comptez 320 octets thread-local supplémentaires par thread de log.",
+    "zh": "请采用 build 2.4.17024。使用非阻塞 socket 的 OpenSSL 项目应测试 client SSL_connect 与 server SSL_accept 在 WANT_READ、WANT_WRITE、timeout 与证书失败下的行为。不要停留在 2.4.17020–2.4.17023，其重试路径的最终错误报告不完整。若启用 LevelStackTrace 或 LevelSysInfo，请比较日志 suffix，并计入每个日志 thread 新增的 320-byte thread-local 状态。",
+    "ru": "Переходите на build 2.4.17024. Проекты OpenSSL с неблокирующими sockets должны проверить client SSL_connect и server SSL_accept при WANT_READ, WANT_WRITE, timeout и ошибке сертификата. Не оставайтесь на 2.4.17020–2.4.17023: финальный error report retry path неполон. При LevelStackTrace или LevelSysInfo сравните suffixes и учтите дополнительные 320 thread-local bytes на logging thread."
+  },
+  "notes": {
+    "en": "The raw payload contains five non-merge commits and no merge commit; every commit is covered below. It contains no deprecation notice and no superseded_by marker. The avoid range is supported by the direct build 17024 correction to CheckProc in the same payload.",
+    "fr": "Le payload brut contient cinq commits non-merge et aucun merge ; chacun est couvert ci-dessous. Il ne contient ni avis de dépréciation ni marqueur superseded_by. La plage à éviter est étayée par la correction directe de CheckProc en build 17024 dans ce même payload.",
+    "zh": "原始 payload 包含 5 个 non-merge commit，无 merge commit；下方覆盖全部 commit。它没有 deprecation notice 或 superseded_by 标记。避开区间由同一 payload 中 build 17024 对 CheckProc 的直接修正支持。",
+    "ru": "Raw payload содержит пять non-merge commits и ни одного merge; ниже покрыт каждый. Нет deprecation notice и superseded_by. Исключаемый диапазон подтверждён прямым исправлением CheckProc в build 17024 того же payload."
+  },
+  "entries": [
+    {
+      "sha": "1e45eae57bb35aacdb730b9a0595a5ec6ffe41ab",
+      "headline": {
+        "en": "Non-blocking OpenSSL handshakes wait instead of failing immediately",
+        "fr": "Les handshakes OpenSSL non bloquants attendent au lieu d’échouer immédiatement",
+        "zh": "非阻塞 OpenSSL handshake 会等待，不再立即失败",
+        "ru": "Неблокирующие OpenSSL handshakes ожидают вместо немедленного сбоя"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TOpenSslNetTls.AfterConnection and AfterAccept now call CheckProc around SSL_connect and SSL_accept. CheckProc retries SSL_ERROR_WANT_READ or SSL_ERROR_WANT_WRITE, waits for the matching TNetEvents set and enforces a five-second deadline. TShort95 and PShort95 are also added.",
+        "fr": "TOpenSslNetTls.AfterConnection et AfterAccept appellent maintenant CheckProc autour de SSL_connect et SSL_accept. CheckProc réessaie SSL_ERROR_WANT_READ ou SSL_ERROR_WANT_WRITE, attend les TNetEvents correspondants et impose une deadline de cinq secondes. TShort95 et PShort95 sont aussi ajoutés.",
+        "zh": "TOpenSslNetTls.AfterConnection 与 AfterAccept 现在通过 CheckProc 调用 SSL_connect/SSL_accept。CheckProc 重试 SSL_ERROR_WANT_READ 或 SSL_ERROR_WANT_WRITE，等待对应 TNetEvents，并施加五秒 deadline。同时新增 TShort95 与 PShort95。",
+        "ru": "TOpenSslNetTls.AfterConnection и AfterAccept теперь вызывают SSL_connect и SSL_accept через CheckProc. CheckProc повторяет SSL_ERROR_WANT_READ или SSL_ERROR_WANT_WRITE, ждёт соответствующий TNetEvents и ограничивает процесс пятью секундами. Также добавлены TShort95 и PShort95."
+      },
+      "impact": {
+        "en": "OpenSSL-backed asynchronous clients and servers no longer turn a normal non-blocking handshake transition into an EOpenSsl exception. A stalled handshake now raises an explicit timeout after five seconds.",
+        "fr": "Les clients et serveurs async utilisant OpenSSL ne transforment plus une transition normale du handshake non bloquant en exception EOpenSsl. Un handshake bloqué lève un timeout explicite après cinq secondes.",
+        "zh": "使用 OpenSSL 的异步 client/server 不再把正常的非阻塞 handshake 过渡变成 EOpenSsl exception。停滞 handshake 会在五秒后抛出明确 timeout。",
+        "ru": "Async clients и servers на OpenSSL больше не превращают нормальный переход неблокирующего handshake в EOpenSsl exception. Зависший handshake выдаёт явный timeout через пять секунд."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade directly to build 2.4.17024 and test non-blocking client and server handshakes; do not deploy this first retry implementation alone.",
+        "fr": "Passez directement à la build 2.4.17024 et testez les handshakes client/serveur non bloquants ; ne déployez pas cette première implémentation seule.",
+        "zh": "直接升级到 build 2.4.17024 并测试非阻塞 client/server handshake；不要单独部署此首版重试实现。",
+        "ru": "Обновляйтесь сразу до build 2.4.17024 и тестируйте неблокирующие client/server handshakes; не развёртывайте первую retry-реализацию отдельно."
+      },
+      "units": [
+        "mormot.core.base",
+        "mormot.lib.openssl11"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TShort95",
+          "change": "added",
+          "note": {
+            "en": "A public string[95] alias and its PShort95 pointer type are now available.",
+            "fr": "Un alias public string[95] et son type pointeur PShort95 sont maintenant disponibles.",
+            "zh": "新增公开 string[95] alias 及其 PShort95 pointer type。",
+            "ru": "Теперь доступны публичный alias string[95] и pointer type PShort95."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ea2c50668f1641e61ca57d744c4bce206dd1fdc8",
+      "headline": {
+        "en": "System information can be appended to existing short text",
+        "fr": "Les informations système peuvent être ajoutées à un texte court existant",
+        "zh": "系统信息可追加到现有短文本",
+        "ru": "System information можно добавлять к существующему short text"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os exposes AppendSysInfo, which appends processor, load, uptime and memory data to a ShortString without clearing it. RetrieveSysInfoText now clears the destination and delegates to the new helper. A leftover CheckProc writeln is removed.",
+        "fr": "mormot.core.os expose AppendSysInfo, qui ajoute processeur, charge, uptime et mémoire à une ShortString sans la vider. RetrieveSysInfoText efface désormais la destination puis délègue au nouveau helper. Un writeln résiduel de CheckProc est supprimé.",
+        "zh": "mormot.core.os 公开 AppendSysInfo，可在不清空 ShortString 的情况下追加处理器、load、uptime 与内存数据。RetrieveSysInfoText 现在先清空目标再调用新 helper。同时移除 CheckProc 遗留的 writeln。",
+        "ru": "mormot.core.os публикует AppendSysInfo, который добавляет processor, load, uptime и memory data в ShortString без очистки. RetrieveSysInfoText теперь очищает результат и вызывает новый helper. Удалён оставшийся writeln из CheckProc."
+      },
+      "impact": {
+        "en": "Existing RetrieveSysInfoText callers keep replacement semantics. New callers can construct compact prefixed diagnostics in one bounded ShortString, and OpenSSL handshake retries no longer write debug lines to standard output.",
+        "fr": "Les appelants de RetrieveSysInfoText gardent la sémantique de remplacement. Les nouveaux appelants peuvent construire des diagnostics préfixés dans une ShortString bornée, et les retries OpenSSL n’écrivent plus sur la sortie standard.",
+        "zh": "现有 RetrieveSysInfoText 调用仍为替换语义。新调用方可在单个有界 ShortString 中构建带前缀诊断；OpenSSL handshake 重试也不再向标准输出写 debug 行。",
+        "ru": "Существующие вызовы RetrieveSysInfoText сохраняют replacement semantics. Новые callers могут собирать prefixed diagnostics в одной ограниченной ShortString, а OpenSSL retry больше не пишет debug lines в stdout."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.lib.openssl11"
+      ],
+      "api_changes": [
+        {
+          "symbol": "AppendSysInfo",
+          "change": "added",
+          "note": {
+            "en": "The procedure appends system information to the supplied ShortString and does not reset its existing content.",
+            "fr": "La procédure ajoute les informations système à la ShortString fournie sans réinitialiser son contenu.",
+            "zh": "此 procedure 把系统信息追加到传入 ShortString，不会重置现有内容。",
+            "ru": "Процедура добавляет system information в переданную ShortString, не очищая существующее содержимое."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d09fc6cd1cffee09cd8be14791e917d8a52c76eb",
+      "headline": {
+        "en": "Debug-file registration avoids unnecessary exclusive locking",
+        "fr": "L’enregistrement des debug files évite un verrou exclusif inutile",
+        "zh": "debug-file 注册避免不必要的独占锁",
+        "ru": "Регистрация debug files избегает лишнего exclusive lock"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "DebugFileRegister checks shutdown and known-unknown libraries under DebugFilesSafe.ReadLock before acquiring WriteLock, then rechecks inside the write section. RawStackTrace simplifies its exception guard, and AppendCallerShort stops resolving symbols outside the executable.",
+        "fr": "DebugFileRegister vérifie l’arrêt et les bibliothèques déjà inconnues sous DebugFilesSafe.ReadLock avant WriteLock, puis revérifie dans la section d’écriture. RawStackTrace simplifie sa garde d’exception et AppendCallerShort ne résout plus les symboles hors de l’exécutable.",
+        "zh": "DebugFileRegister 先在 DebugFilesSafe.ReadLock 下检查 shutdown 与已知未知 library，再获取 WriteLock，并在写区内复查。RawStackTrace 简化异常保护；AppendCallerShort 不再解析 executable 外部 symbol。",
+        "ru": "DebugFileRegister проверяет shutdown и известные unknown libraries под DebugFilesSafe.ReadLock до WriteLock, затем повторяет проверку в write section. RawStackTrace упрощает exception guard, а AppendCallerShort больше не разрешает symbols вне executable."
+      },
+      "impact": {
+        "en": "Repeated stack resolution for libraries already known to lack debug data no longer serializes all readers behind a write lock. AppendCallerShort output is limited to executable debug information; FindLocationShort still resolves external library names and symbols.",
+        "fr": "La résolution répétée de bibliothèques sans debug data ne sérialise plus tous les lecteurs derrière un write lock. AppendCallerShort se limite aux informations de l’exécutable ; FindLocationShort résout toujours les bibliothèques externes.",
+        "zh": "对已知无 debug data 的 library 重复进行 stack 解析时，不再让所有 reader 等待 write lock。AppendCallerShort 输出限于 executable debug information；FindLocationShort 仍解析外部 library 名称与 symbol。",
+        "ru": "Повторный stack resolution библиотек без debug data больше не сериализует readers за write lock. AppendCallerShort ограничен debug information executable; FindLocationShort по-прежнему разрешает внешние libraries и symbols."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.AppendCallerShort",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Caller stacks no longer include fallback names or symbols for frames outside the executable.",
+            "fr": "Les stacks appelantes n’incluent plus les noms ou symboles de fallback pour les frames hors de l’exécutable.",
+            "zh": "调用方 stack 不再包含 executable 外部 frame 的 fallback 名称或 symbol。",
+            "ru": "Caller stacks больше не включают fallback names или symbols для frames вне executable."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b1ddba46fb1ba2563e46ad02847119a8726cb885",
+      "headline": {
+        "en": "Stack and system suffixes are rendered before the log lock",
+        "fr": "Les suffixes stack et système sont rendus avant le verrou de log",
+        "zh": "stack 与 system suffix 在日志锁前渲染",
+        "ru": "Stack и system suffixes формируются до log lock"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSynLog.LockAndPrepareWrite now fills thread-local StackTrace and SysInfo buffers before fWriteSafe.Lock. LogTrailerAndUnlock appends those buffers and releases the lock. TSynLogThreadInfo gains a 255-byte ShortString and a TShort63, increasing its documented per-thread size by 320 bytes.",
+        "fr": "TSynLog.LockAndPrepareWrite remplit maintenant les buffers thread-local StackTrace et SysInfo avant fWriteSafe.Lock. LogTrailerAndUnlock ajoute ces buffers puis libère le verrou. TSynLogThreadInfo gagne une ShortString de 255 octets et une TShort63, soit 320 octets supplémentaires par thread.",
+        "zh": "TSynLog.LockAndPrepareWrite 现在于 fWriteSafe.Lock 前填充 thread-local StackTrace 与 SysInfo buffer。LogTrailerAndUnlock 追加这些 buffer 并释放锁。TSynLogThreadInfo 新增 255-byte ShortString 与 TShort63，文档标明每线程增加 320 bytes。",
+        "ru": "TSynLog.LockAndPrepareWrite заполняет thread-local buffers StackTrace и SysInfo до fWriteSafe.Lock. LogTrailerAndUnlock добавляет их и освобождает lock. TSynLogThreadInfo получает ShortString на 255 bytes и TShort63, увеличиваясь на 320 bytes на thread."
+      },
+      "impact": {
+        "en": "Slow stack-symbol loading and operating-system queries no longer extend the serialized log-writing section. Services with many logging threads consume more thread-local memory, and configured suffixes are now capped at 255 and 63 bytes respectively.",
+        "fr": "Le chargement lent des symboles et les requêtes OS n’allongent plus la section sérialisée d’écriture. Les services avec beaucoup de threads consomment plus de mémoire thread-local, et les suffixes sont limités à 255 et 63 octets.",
+        "zh": "缓慢的 stack-symbol 加载与 OS 查询不再延长串行日志写入区。拥有大量日志 thread 的服务会消耗更多 thread-local memory，配置 suffix 分别限制为 255 与 63 bytes。",
+        "ru": "Медленная загрузка stack symbols и OS queries больше не удлиняют сериализованную запись. Сервисы с множеством logging threads используют больше thread-local memory, а suffixes ограничены 255 и 63 bytes."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "If LevelStackTrace or LevelSysInfo is enabled, compare suffix completeness and measure contention plus thread-local memory on a representative workload.",
+        "fr": "Si LevelStackTrace ou LevelSysInfo est activé, comparez les suffixes et mesurez contention et mémoire thread-local sur une charge représentative.",
+        "zh": "若启用 LevelStackTrace 或 LevelSysInfo，请比较 suffix 完整性，并在代表性负载下测量 contention 与 thread-local memory。",
+        "ru": "Если включены LevelStackTrace или LevelSysInfo, сравните полноту suffixes и измерьте contention и thread-local memory на реальной нагрузке."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynLogFamily.LevelStackTrace",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Configured stack traces are pre-rendered outside the write lock and capped at 255 AnsiChars.",
+            "fr": "Les stack traces configurées sont pré-rendues hors du verrou et limitées à 255 AnsiChars.",
+            "zh": "配置的 stack trace 在写锁外预渲染，并限制为 255 个 AnsiChar。",
+            "ru": "Настроенные stack traces формируются вне write lock и ограничены 255 AnsiChars."
+          }
+        },
+        {
+          "symbol": "TSynLogFamily.LevelSysInfo",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Configured system-information suffixes are pre-rendered outside the write lock into TShort63.",
+            "fr": "Les suffixes d’informations système sont pré-rendus hors du verrou dans TShort63.",
+            "zh": "配置的 system-information suffix 在写锁外预渲染到 TShort63。",
+            "ru": "Настроенные system-information suffixes формируются вне write lock в TShort63."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "13c7b4dd94b23c25d51e5b0ab9b6e207cb039207",
+      "headline": {
+        "en": "TLS failures retain the error captured beside SSL_connect",
+        "fr": "Les échecs TLS conservent l’erreur capturée près de SSL_connect",
+        "zh": "TLS 失败保留 SSL_connect 后立即捕获的错误",
+        "ru": "TLS failures сохраняют ошибку, полученную рядом с SSL_connect"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "EOpenSsl.CheckFailed accepts an optional sslerrcode. TOpenSslNetTls.CheckProc passes the error returned by CheckSsl immediately after SSL_connect or SSL_accept, so the exception formatter does not call SSL_get_error again after intervening work.",
+        "fr": "EOpenSsl.CheckFailed accepte un sslerrcode optionnel. TOpenSslNetTls.CheckProc transmet l’erreur renvoyée par CheckSsl immédiatement après SSL_connect ou SSL_accept, évitant un second SSL_get_error après d’autres opérations.",
+        "zh": "EOpenSsl.CheckFailed 新增可选 sslerrcode。TOpenSslNetTls.CheckProc 传入紧随 SSL_connect 或 SSL_accept 后由 CheckSsl 返回的错误，使 exception formatter 不再于中间操作后再次调用 SSL_get_error。",
+        "ru": "EOpenSsl.CheckFailed принимает optional sslerrcode. TOpenSslNetTls.CheckProc передаёт ошибку, возвращённую CheckSsl сразу после SSL_connect или SSL_accept, поэтому formatter не вызывает SSL_get_error повторно после промежуточной работы."
+      },
+      "impact": {
+        "en": "Terminal certificate, protocol and peer failures on the new asynchronous handshake path report the original SSL_ERROR_* state and its verification context instead of a stale or unrelated code.",
+        "fr": "Les échecs finaux de certificat, protocole ou pair sur le nouveau chemin async signalent l’état SSL_ERROR_* original et son contexte de vérification au lieu d’un code obsolète.",
+        "zh": "新异步 handshake 路径上的证书、协议与 peer 终止失败现在报告原始 SSL_ERROR_* 状态及验证上下文，不再使用过期或无关代码。",
+        "ru": "Финальные ошибки сертификата, протокола и peer в новом async handshake path сообщают исходное состояние SSL_ERROR_* и verification context вместо устаревшего кода."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Land on build 2.4.17024 and verify that rejected certificates and protocol mismatches produce the expected EOpenSsl details.",
+        "fr": "Passez à la build 2.4.17024 et vérifiez que certificats rejetés et protocoles incompatibles produisent les détails EOpenSsl attendus.",
+        "zh": "采用 build 2.4.17024，并验证被拒证书与协议不匹配会产生预期 EOpenSsl 详情。",
+        "ru": "Переходите на build 2.4.17024 и проверьте ожидаемые детали EOpenSsl для отклонённых сертификатов и несовместимых протоколов."
+      },
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
