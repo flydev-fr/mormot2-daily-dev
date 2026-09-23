@@ -1,0 +1,1022 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-23",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-09-23T03:39:30Z",
+  "range": {
+    "since": "2026-09-21T21:24:41Z",
+    "until": "2026-09-23T03:39:30Z",
+    "head_sha": "03ab5c85c4b2982c96b7f38d683dbff85e016f77"
+  },
+  "version": {
+    "after": "2.4.17082",
+    "before": "2.4.17065"
+  },
+  "totals": {
+    "commits": 17,
+    "additions": 498,
+    "deletions": 536
+  },
+  "commits": [
+    {
+      "sha": "03ab5c85c4b2982c96b7f38d683dbff85e016f77",
+      "short_sha": "03ab5c85",
+      "subject": "lib: introducing TOpenSslNetTls.CheckRes",
+      "body": "- to fix TLS error check in the proper context and return the expected error message",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T19:48:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/03ab5c85c4b2982c96b7f38d683dbff85e016f77",
+      "parents": [
+        "f3b1fe749d7eae2c363cceffc834362dad08a96e"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 20,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 18,
+          "patch": "@@ -11318,7 +11318,7 @@   TOpenSslNetTls = class(TInterfacedObject, INetTls)\n     fPeer: PX509;\n     fCipherName, fServerAddress: RawUtf8;\n     fDoSslShutdown: boolean;\n-    procedure Check(const method: ShortString; res: integer);\n+    procedure CheckRes(const method: ShortString; res: integer);\n       {$ifdef HASINLINE} inline; {$endif}\n     function CheckSsl(res: integer; error: PInteger = nil): TNetResult;\n     procedure CheckProc(proc: TOpenSSLProc; const ctx: ShortString);\n@@ -11404,10 +11404,11 @@ function GetNextCsv(var P: PUtf8Char; var value: RawUtf8): boolean;\n   end;\n end;\n \n-procedure TOpenSslNetTls.Check(const method: ShortString; res: integer);\n+procedure TOpenSslNetTls.CheckRes(const method: ShortString; res: integer);\n begin\n+  // this method is called ouside of SSL I/O error check e.g. during context setup\n   if res <> OPENSSLSUCCESS then\n-    EOpenSslNetTls.CheckFailed(self, method, fLastError, fSsl, res, fServerAddress);\n+    EOpenSslNetTls.CheckFailed(self, method, fLastError, nil, res, fServerAddress);\n end;\n \n // see https://www.ibm.com/support/knowledgecenter/SSB23S_1.1.0.2020/gtps7/s5sple2.html\n@@ -11470,12 +11471,12 @@ procedure TOpenSslNetTls.AfterConnection(Socket: TNetSocket;\n       if not GetNextCsv(P, h) then // default expected peer identity\n         h := ServerAddress; // plain IP here may fail before OpenSSL 3.4\n       SSL_set_hostflags(fSsl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);\n-      Check('AfterConnection set1_host', SSL_set1_host(fSsl, pointer(h)));\n+      CheckRes('AfterConnection set1_host', SSL_set1_host(fSsl, pointer(h)));\n       while GetNextCsv(P, h) do\n-        Check('AfterConnection add1_host', SSL_add1_host(fSsl, pointer(h)));\n+        CheckRes('AfterConnection add1_host', SSL_add1_host(fSsl, pointer(h)));\n     end;\n     // setup the conection using MSG_NOSIGNAL on OpenSSL 4+\n-    Check('AfterConnection set_fd',\n+    CheckRes('AfterConnection set_fd',\n       SSLSetFdNoSigPipe(fSsl, Socket.Socket));\n     // client TLS negotiation with server\n     CheckProc(@SSL_connect, 'AfterConnection SSL_connect');\n@@ -11497,7 +11498,7 @@ procedure TOpenSslNetTls.AfterConnection(Socket: TNetSocket;\n       //PX509DynArrayFree(x);\n       if (fPeer = nil) and\n          not Context.IgnoreCertificateErrors then\n-        Check('AfterConnection get_peer_certificate', 0);\n+         raise EOpenSslNetTls.Create('AfterConnection: missing peer certificate');\n       try\n         if fPeer <> nil then\n         begin\n@@ -11638,11 +11639,11 @@ procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n     xa := LoadCertificates(cert); // PEM\n     if xa <> nil then\n     try\n-      Check('SetupCtx Certificate0',\n+      CheckRes('SetupCtx Certificate0',\n         SSL_CTX_use_certificate(fCtx, xa[0]));\n       for i := 1 to high(xa) do\n       begin\n-        Check('SetupCtx Chain',\n+        CheckRes('SetupCtx Chain',\n           SSL_CTX_add_extra_chain_cert(fCtx, xa[i]));\n         xa[i] := nil; // fCtx owns it now - no inc(refcnt)\n       end;\n@@ -11653,7 +11654,7 @@ procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n             (Context.PrivateKeyFile = '') and\n             ParsePkcs12(cert, Context.PrivatePassword, x, pk, @ca) then\n       try // was .pfx/pkcs#12 format as with SChannel\n-        Check('SetupCtx Certificate',\n+        CheckRes('SetupCtx Certificate',\n           SSL_CTX_use_certificate(fCtx, x));\n         if ca <> nil then\n           for i := 0 to ca^.Count - 1 do\n@@ -11662,9 +11663,9 @@ procedure TOpenSslNetTls.SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n             X509_up_ref(c); // no inc(refcnt) in fCtx\n             SSL_CTX_add_extra_chain_cert(fCtx, c);\n           end;\n-        Check('SetupCtx PrivateKey',\n+        CheckRes('SetupCtx PrivateKey',\n           SSL_CTX_use_PrivateKey(fCtx, pk));\n-        Check('SetupCtx pfx',\n+        CheckRes('SetupCtx pfx',\n           SSL_CTX_check_private_key(fCtx));\n       finally\n         x^.Free;\n@@ -1\n... [truncated, 2254 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17081\n+17082",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17081'\r\n+'2.4.17082'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f3b1fe749d7eae2c363cceffc834362dad08a96e",
+      "short_sha": "f3b1fe74",
+      "subject": "lib: another fixed to TOpenSslNetTls.Send/Receive",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T19:33:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f3b1fe749d7eae2c363cceffc834362dad08a96e",
+      "parents": [
+        "efe676a8982bd1de704171e79e0b7ea9f2ecef85"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 14,
+          "patch": "@@ -11322,6 +11322,7 @@   TOpenSslNetTls = class(TInterfacedObject, INetTls)\n       {$ifdef HASINLINE} inline; {$endif}\n     function CheckSsl(res: integer; error: PInteger = nil): TNetResult;\n     procedure CheckProc(proc: TOpenSSLProc; const ctx: ShortString);\n+    procedure WaitRetry(res, err: integer; var endtix: Int64; const ctx: ShortString);\n     procedure SetupCtx(var Context: TNetTlsContext; Bind: boolean);\n   public\n     destructor Destroy; override;\n@@ -11908,27 +11909,30 @@ function TOpenSslNetTls.CheckSsl(res: integer; error: PInteger): TNetResult;\n     ShortStringToAnsi7String(tmp, fLastError^);\n end;\n \n-procedure WaitRetry(sock: TNetSocket; err: integer; var endtix: Int64;\n+procedure TOpenSslNetTls.WaitRetry(res, err: integer; var endtix: Int64;\n   const ctx: ShortString);\n var\n   ne: TNetEvents;\n begin\n+  case err of\n+    SSL_ERROR_WANT_READ:\n+      ne := [neRead, neError];\n+    SSL_ERROR_WANT_WRITE:\n+      ne := [neWrite, neError];\n+  else\n+    EOpenSslNetTls.CheckFailed(\n+      self, ctx, fLastError, fSsl, res, fServerAddress, err);\n+  end;\n   if endtix = 0 then\n     endtix := GetTickCount64 + 5000 // never loop forever\n   else if GetTickCount64 > endtix then\n     raise EOpenSslNetTls.CreateFmt('%s timeout', [ctx]);\n-  if err = SSL_ERROR_WANT_READ then\n-    ne := [neRead, neError]\n-  else if err = SSL_ERROR_WANT_WRITE then\n-    ne := [neWrite, neError]\n-  else\n-    ne := [neRead, neWrite, neError]; // should never happen\n-  sock.WaitFor(100, ne);\n+  fSocket.WaitFor(100, ne);\n end;\n \n procedure TOpenSslNetTls.CheckProc(proc: TOpenSSLProc; const ctx: ShortString);\n var\n-  res, err: integer;\n+  res: integer;\n   endtix: Int64;\n begin\n   endtix := 0;\n@@ -11937,9 +11941,7 @@ procedure TOpenSslNetTls.CheckProc(proc: TOpenSSLProc; const ctx: ShortString);\n     res := proc(fSsl); // SSL_connect() or SSL_accept()\n     if res = OPENSSLSUCCESS then\n       exit;\n-    if CheckSsl(res, @err) <> nrRetry then // nrRetry happens on async socket\n-      EOpenSslNetTls.CheckFailed(self, ctx, fLastError, fSsl, res, fServerAddress, err);\n-    WaitRetry(fSocket, err, endtix, ctx);\n+    WaitRetry(res, SSL_get_error(fSsl, res), endtix, ctx);\n   until false;\n end;\n \n@@ -11961,7 +11963,7 @@ function TOpenSslNetTls.Receive(Buffer: pointer; var Length: integer): TNetResul\n     result := CheckSsl(Length, @err);\n     if err <> SSL_ERROR_WANT_WRITE then\n       exit; // SSL_ERROR_WANT_READ is handled (asynchronously) by the caller\n-    WaitRetry(fSocket, err, endtix, 'Receive');\n+    WaitRetry(Length, err, endtix, 'Receive');\n   until false;\n end;\n \n@@ -11988,7 +11990,7 @@ function TOpenSslNetTls.Send(Buffer: pointer; var Length: integer): TNetResult;\n     result := CheckSsl(Length, @err);\n     if err <> SSL_ERROR_WANT_READ then\n       exit; // SSL_ERROR_WANT_WRITE is handled (asynchronously) by the caller\n-    WaitRetry(fSocket, err, endtix, 'Send');\n+    WaitRetry(Length, err, endtix, 'Send');\n   until false;\n end;\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17080\n+17081",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17080'\r\n+'2.4.17081'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "efe676a8982bd1de704171e79e0b7ea9f2ecef85",
+      "short_sha": "efe676a8",
+      "subject": "core: GetLastException/GetLastExceptions fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T18:18:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/efe676a8982bd1de704171e79e0b7ea9f2ecef85",
+      "parents": [
+        "ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 36,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 34,
+          "patch": "@@ -2311,9 +2311,7 @@ implementation\n {$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\n {$endif KEEP_STACKFRAMES}\n \n-{$ifndef FPC}\n-{$ifdef OSWINDOWS}\n-{$ifndef CPU64}\n+{$ifdef WIN32DELPHI}\n \n function CheckAsmX86(xret: PtrUInt): boolean; // naive x86 caller detection\n var\n@@ -2378,9 +2376,11 @@ function ManualStackTrace(var frames: TRawStackFrames): PtrInt;\n   end;\n end;\n \n-{$endif CPU64}\n-{$endif OSWINDOWS}\n-{$endif FPC}\n+{$endif WIN32DELPHI}\n+\n+//function backtrace(buffer: PPointer; size: Integer): Integer; cdecl; external 'c';\n+// TODO: try this API on Delphi for POSIX - could be worthwhile but with dynamic\n+// linking on Android (min API < 33) - and with a warmup call at startup\n \n // capture the current thread stack into frames[], returning the frames count\n // - first frame is the caller of this function, plus optional skip levels\n@@ -2412,13 +2412,13 @@ function RawStackTrace(skip: PtrInt; use: TSynLogStackTraceUse;\n     {$ifdef OSWINDOWS}\n     if use <> stOnlyManual then\n       result := RtlCaptureStackBackTrace(skip, length(frames), @frames, nil);\n-    {$ifndef CPU64}\n+    {$ifdef WIN32DELPHI}\n     if (result < 2) and\n        (use <> stOnlyAPI) then\n       // support stOnlyManual/stManualAndAPI on Delphi Win32, where the API\n       // needs stack frames and is likely to return (almost) nothing\n       result := ManualStackTrace(frames);\n-    {$endif CPU64}\n+    {$endif WIN32DELPHI}\n     {$endif OSWINDOWS}\n     {$endif FPC}\n   except\n@@ -7543,8 +7543,8 @@ function GetLastException(out info: TSynLogExceptionInfo): boolean;\n   try\n     n := last^.Next;\n     if n = 0 then\n-      n := high(last^.Infos);\n-    info := last^.Infos[n];\n+      n := length(last^.Infos);\n+    info := last^.Infos[n - 1];\n   finally\n     last^.Safe.UnLock;\n   end;\n@@ -7555,36 +7555,28 @@ procedure GetLastExceptions(out result: TSynLogExceptionInfoDynArray;\n   Depth: integer);\n var\n   last: ^TLastException;\n-  n: PtrInt;\n-\n-  procedure Add(p: PSynLogExceptionInfo; b, e: PtrInt);\n-  begin\n-    while b <= e do\n-    begin\n-      if p^.Context.ELevel <> sllNone then\n-      begin\n-        result[n] := p^;\n-        inc(n);\n-        if n = length(last^.Infos) then\n-          break;\n-      end;\n-      inc(b);\n-      inc(p);\n-    end;\n-  end;\n-\n+  i, n, max: PtrInt;\n begin\n-  // thread-safe retrieve last exceptions\n   if SynLogFileFreeing then\n     exit;\n   last := @GlobalLastException;\n-  SetLength(result, length(last^.Infos)); // pre-allocate\n+  max := length(last^.Infos); // is a power of two by design\n+  if (Depth > 0) and\n+     (max > Depth) then\n+    max := Depth;\n+  SetLength(result, max); // pre-allocate\n   n := 0;\n-  last^.Safe.Lock;\n+  last^.Safe.Lock; // thread-safe retrieve last exceptions\n   try\n-    Add(@last^.Infos[last^.Next], last^.Next, high(last^.Infos));\n-    if n <= length(last^.Infos) then\n-      Add(@last^.Infos[0], 0, last^.Next - 1);\n+    i := last^.Next; // next slot to write\n+    while n < max do\n+    begin\n+      i := (i - 1) and high(last^.Infos);\n+      if last^.Infos[i].Context.ELevel = sllNone then\n+        break; // ring has not been filled up to this point yet\n+      result[n] := last^.Infos[i];\n+      inc(n);\n+    end;\n   finally\n     last^.Safe.UnLock;\n   end;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17079\n+17080",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17079'\r\n+'2.4.17080'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd",
+      "short_sha": "ff2fda39",
+      "subject": "core: rewritten exception logging code",
+      "body": "- to reuse the same stack trace as the \"last exceptions\" list\n- to avoid most instability when resolving the symbols",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:24:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd",
+      "parents": [
+        "0043300fb1304a4227deeef703415f3201515096"
+      ],
+      "stats": {
+        "additions": 46,
+        "deletions": 67,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 44,
+          "deletions": 65,
+          "patch": "@@ -7459,74 +7459,53 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n   finally\n     exclude(nfo^.Flags, tiWriting);\n   end;\n-  if ignored or\n-     (log = nil) or \n-     not log.BeginWrite(nfo) then\n-    exit;\n+  if not log.BeginWrite(nfo) then\n+    exit; // on disk failure, the following code is pointless\n   try\n-    try\n-      if not (logInitDone in log.fFlags) then\n-        log.LogFileInitLocked(nfo);\n-      log.FillInfo(nfo, nil);\n-      if pendingRotate in log.fPendingFlags then\n-        log.PerformRotation(nfo); // outer finally owns the writer unlock\n-      SetThreadInfoAndThreadName(log, nfo);\n-      LogHeaderNoRecursion(log.fWriter, Ctxt.ELevel, @nfo^.CurrentTimeAndThread);\n-      if (Ctxt.ELevel = sllException) and\n-         (Ctxt.EInstance <> nil) and\n-         Ctxt.EInstance.InheritsFrom(ESynException) then\n-      begin\n-        ESynException(Ctxt.EInstance).RaisedAt := pointer(Ctxt.EAddr);\n-        if ESynException(Ctxt.EInstance).CustomLog(log.fWriter, Ctxt) then\n-          goto fin;\n-        goto adr; // CustomLog() includes DefaultSynLogExceptionToStr()\n-      end;\n-      if DefaultSynLogExceptionToStr(log.fWriter, Ctxt, {addinfo=}true) then\n+    if not (logInitDone in log.fFlags) then\n+      log.LogFileInitLocked(nfo);\n+    log.FillInfo(nfo, nil);\n+    if pendingRotate in log.fPendingFlags then\n+      log.PerformRotation(nfo); // outer finally owns the writer unlock\n+    SetThreadInfoAndThreadName(log, nfo);\n+    LogHeaderNoRecursion(log.fWriter, Ctxt.ELevel, @nfo^.CurrentTimeAndThread);\n+    if (Ctxt.ELevel = sllException) and\n+       (Ctxt.EInstance <> nil) and\n+       Ctxt.EInstance.InheritsFrom(ESynException) then\n+    begin\n+      ESynException(Ctxt.EInstance).RaisedAt := pointer(Ctxt.EAddr);\n+      if ESynException(Ctxt.EInstance).CustomLog(log.fWriter, Ctxt) then\n         goto fin;\n-adr:  // regular exception context log with its stack trace\n-      log.fWriter.AddDirect(' ', '['); // [#1 Main]\n-      n := nfo^.ThreadNumber;\n-      if n <> 0 then\n-      begin\n-        log.fWriter.AddDirect('#');\n-        log.fWriter.AddU(n);\n-      end;\n-      thrdnam := CurrentThreadNameShort;\n-      if thrdnam^[0] <> #0 then\n-      begin\n-        log.fWriter.AddDirect(' ');\n-        log.fWriter.AddShort(thrdnam^); // fThreadContext^.ThreadName may be ''\n-      end;\n-      log.fWriter.AddShorter('] at ');\n-      try\n-        log.fWriter.AddPointer(Ctxt.EAddr);\n-        log.fWriter.AddDirect(' ');\n-        TDebugFile.AddLog(log.fWriter, Ctxt.EAddr, {nohex=}true);\n-        {$ifdef FPC}\n-        prev := Ctxt.EAddr;\n-        // we rely on the stack trace supplied by the FPC RTL\n-        for i := 0 to Ctxt.EStackCount - 1 do\n-        begin\n-          curr := Ctxt.EStack[i];\n-          if curr = prev then\n-            continue; // don't log twice\n-          TDebugFile.AddLog(log.fWriter, curr);\n-          prev := curr;\n-        end;\n-        {$else}\n-        {$ifdef CPUX86}\n-        // stack frame OK only for RTLUnwindProc by now\n-        log.AddStackTrace(pointer(Ctxt.EStack));\n-        {$endif CPUX86}\n-        {$endif FPC}\n-      except // paranoid\n-      end;\n-fin:  if Ctxt.ELevel in log.fFamily.fLevelSysInfo then\n-        log.AddSysInfo;\n-      log.fWriterEcho.AddEndOfLine(Ctxt.ELevel);\n-      log.fWriter.FlushToStream;\n-    except\n+      goto adr; // CustomLog() includes DefaultSynLogExceptionToStr()\n+    end;\n+    if DefaultSynLogExceptionToStr(log.fWriter, Ctxt, {addinfo=}true) then\n+      goto fin;\n+adr:// regular exception context log with its stack trace\n+    log.fWriter.AddDirect(' ', '['); // [#1 Main]\n+    n := nfo^.ThreadNumber;\n+    if n <> 0 then\n+    begin\n+      log.fWriter.AddDirect('#');\n+      log.fWriter.AddU(n);\n+    end;\n+    if thrdnam^[0] <> #0 then\n+    begin\n+      log.fWriter.AddDirect(' ');\n+      log.fWriter.AddShort(thrdnam^); // fThreadContext^.ThreadName may be ''\n     end;\n+    log.fWriter.AddShorter('] at ');\n+    log.fWriter.AddPointer(Ctxt.EAddr);\n+    log.fWriter.AddDi\n... [truncated, 457 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17078\n+17079",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17078'\r\n+'2.4.17079'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0043300fb1304a4227deeef703415f3201515096",
+      "short_sha": "0043300f",
+      "subject": "core: refined exception interception initialization",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:24:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0043300fb1304a4227deeef703415f3201515096",
+      "parents": [
+        "f661c29c33de47ea929f0c1fcc1d7aec4d391350"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -4845,16 +4845,17 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext); forward;\n   // local cache containing TSynLogFamily with fHandleExceptions = true\n   HandleExceptionFamily: TSynLogFamily;\n \n-function SearchHandleException(f: PPointer): TSynLogFamily;\n+function SearchHandleException(f: PPointer; ign: pointer): TSynLogFamily;\n var\n   n: integer;\n begin\n   if f <> nil then\n   begin\n     n := PDALen(PAnsiChar(f) - _DALEN)^ + _DAOFF;\n     repeat\n-      result := f^;\n-      if result.fHandleExceptions then // main log is the first\n+      result := f^; // main log is the first\n+      if (result <> ign) and\n+         result.fHandleExceptions then\n         exit;\n       inc(f);\n       dec(n);\n@@ -4867,8 +4868,8 @@ function SearchHandleException(f: PPointer): TSynLogFamily;\n type\n   TSynLogThreads = record\n     Safe: TLightLock;       // topmost to ensure aarch64 alignment\n-    Name: TRawUtf8DynArray; // Name[ThreadNumber - 1] for ptIdentifiedInOneFile\n     Count: integer;         // as returned by TSynLog.ThreadCount\n+    Name: TRawUtf8DynArray; // Name[ThreadNumber - 1] for ptIdentifiedInOneFile\n     IndexReleasedCount: integer;\n     IndexReleased: TWordDynArray; // reuse TSynLogThreadInfo.ThreadNumber\n   end;\n@@ -4951,13 +4952,14 @@ procedure TSynLogFamily.SetLevel(aLevel: TSynLogLevels);\n       begin\n         HandleExceptionFamily := self;\n         RawExceptionIntercept(SynLogException);\n+        // TDebugFile.CurrentDebugFile; // could help to pre-load the debugg info\n       end;\n     end\n     else if HandleExceptionFamily = self then\n     begin\n       SynLogFiles.ReadLock;\n       try\n-        HandleExceptionFamily := SearchHandleException(pointer(SynLogFamily));\n+        HandleExceptionFamily := SearchHandleException(pointer(SynLogFamily), self);\n       finally\n         SynLogFiles.ReadUnLock;\n       end;\n@@ -5007,6 +5009,9 @@ constructor TSynLogFamily.Create(aSynLog: TSynLogClass);\n   fRotateFileDailyAtHour := -1;\n   fBufferSize := 8192;\n   fStackTraceLevel := 30;\n+  {$ifdef WIN32DELPHI}\n+  // fStackTraceUse := stManualAndAPI; // generates lots of false positives\n+  {$endif WIN32DELPHI}\n   fWithUnitName := true;\n   fWithInstancePointer := true;\n   {$ifdef OSWINDOWS}",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17077\n+17078",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17077'\r\n+'2.4.17078'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f661c29c33de47ea929f0c1fcc1d7aec4d391350",
+      "short_sha": "f661c29c",
+      "subject": "core: refactored TDebugFile.StackTrace overloaded methods",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:24:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f661c29c33de47ea929f0c1fcc1d7aec4d391350",
+      "parents": [
+        "8298b7c115c44e5e21d9455c8453e396ce880627"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 126,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 124,
+          "patch": "@@ -4776,11 +4776,24 @@ procedure TAutoFlushThread.Execute;\n {$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\n {$endif KEEP_STACKFRAMES}\n \n+class procedure TDebugFile.AppendCallerShort(var aInfo: ShortString;\n+  aSkip, aDepth: integer);\n+var\n+  frames: TRawStackFrames;\n+  n: PtrInt;\n+begin\n+  if aDepth <= 0 then\n+    exit;\n+  n := RawStackTrace(aSkip + 1, stManualAndAPI, frames); // + 1 to ignore this\n+  AppendLocationsShort(aInfo, @frames, n, aDepth);\n+end;\n+\n class procedure TDebugFile.StackTrace(W: TTextWriter; skip, depth: integer;\n   use: TSynLogStackTraceUse);\n var\n   frames: TRawStackFrames;\n   i, n: PtrInt;\n+  deb: TDebugFile;\n begin\n   if W = nil then\n     exit;\n@@ -4789,10 +4802,13 @@ class procedure TDebugFile.StackTrace(W: TTextWriter; skip, depth: integer;\n   if skip < 0 then\n     skip := 0;\n   n := RawStackTrace(skip + 1, use, frames); // + 1 to ignore this method\n+  if n = 0 then\n+    exit;\n+  deb := CurrentDebugFile; // load debug information once\n   for i := 0 to n - 1 do\n     if (i = 0) or\n        (frames[i] <> frames[i - 1]) then\n-      if AddLog(W, frames[i]) then\n+      if deb.AddLog(W, frames[i]) then\n       begin\n         dec(depth);\n         if depth = 0 then\n@@ -6144,6 +6160,19 @@ class function TSynLog.Enter(aInstance: TObject; aMethodName: PUtf8Char): ISynLo\n     pointer(result) := PAnsiChar(log) + log.fISynLogOffset; // result := self\n end;\n \n+procedure TSynLog.AddStackTrace(Stack: PPtrUInt);\n+begin\n+  if fFamily.StackTraceLevel > 0 then\n+    try\n+      fWriter.AddDirect(' ');\n+      // skip=2 to start at the caller of our caller, as this method did before\n+      TDebugFile.StackTrace(fWriter, {skip=}2, fFamily.StackTraceLevel,\n+        fFamily.StackTraceUse); // use is actually ignored on FPC\n+      fWriter.CancelLastChar(' ');\n+    except // don't let any unexpected GPF break the logging process\n+    end;\n+end;\n+\n {$ifndef KEEP_STACKFRAMES}\n {$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\n {$endif KEEP_STACKFRAMES}\n@@ -7266,129 +7295,6 @@ function TSynLog.GetFileSize: Int64;\n     end;\n end;\n \n-{$ifdef FPC}\n-\n-procedure TSynLog.AddStackTrace(Stack: PPtrUInt);\n-begin\n-  if fFamily.StackTraceLevel > 0 then\n-    try\n-      fWriter.AddDirect(' ');\n-      // skip=2 to start at the caller of our caller, as this method did before\n-      TDebugFile.StackTrace(fWriter, {skip=}2, fFamily.StackTraceLevel,\n-        fFamily.StackTraceUse); // use is actually ignored on FPC\n-      fWriter.CancelLastChar(' ');\n-    except // don't let any unexpected GPF break the logging process\n-    end;\n-end;\n-\n-{$else not FPC}\n-\n-procedure TSynLog.AddStackTrace(Stack: PPtrUInt);\n-{$ifdef OSWINDOWS}\n-{$ifdef CPU64}\n-\n-  procedure AddStackManual(Stack: PPtrUInt);\n-  begin\n-    // not implemented yet\n-  end;\n-\n-{$else}\n-\n-  procedure AddStackManual(Stack: PPtrUInt);\n-  // note: reuses CheckAsmX86() shared with the ManualStackTrace() function\n-  var\n-    st, max_stack, min_stack, depth: PtrUInt;\n-  begin\n-    asm\n-        mov     min_stack, ebp\n-        mov     eax, fs:[4]\n-        mov     max_stack, eax\n-    end;\n-    if Stack = nil then // if no Stack pointer set, retrieve current one\n-      Stack := pointer(min_stack)\n-    else if PtrUInt(Stack) < min_stack then\n-      exit;\n-    fWriter.Add(' ');\n-    depth := fFamily.StackTraceLevel;\n-    try\n-      while (PtrUInt(Stack) < max_stack) and\n-            (depth > 0) do\n-      begin\n-        st := Stack^;\n-        inc(Stack);\n-        if (st >= min_stack) and\n-           (st <= max_stack) then\n-          continue; // on-stack pointer is no code\n-        if not SeemsRealPointer(pointer(st - 8)) or\n-           not CheckAsmX86(st) then\n-          continue;\n-        if not TDebugFile.AddLog(fWriter, st) then\n-        begin\n-          fWriter.AddPointer(st);\n-          fWriter.AddDirect(' ');\n-        end;\n-        dec(depth);\n-        if depth = 0 then\n-          break;\n-      end;\n-    except\n-      // just ignore any access \n... [truncated, 1480 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17076\n+17077",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17076'\r\n+'2.4.17077'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8298b7c115c44e5e21d9455c8453e396ce880627",
+      "short_sha": "8298b7c1",
+      "subject": "core: rewritten last exception in-memory storage",
+      "body": "- previous code had a random GPF issue and an usafe memory and threading model",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:23:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8298b7c115c44e5e21d9455c8453e396ce880627",
+      "parents": [
+        "307fb2dfa52a68633fcdfbd7969ca1979c28e20b"
+      ],
+      "stats": {
+        "additions": 143,
+        "deletions": 124,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 141,
+          "deletions": 122,
+          "patch": "@@ -1668,7 +1668,14 @@ procedure CleanThreadName(var name: RawUtf8);\n \n {$ifndef NOEXCEPTIONINTERCEPT}\n \n+const\n+  /// same limit as FPC RTL objpash.inc RaiseMaxFrameCount\n+  MAX_STACK_TRACE = 16;\n+\n type\n+  /// store some raw pointers of the stack trace, filtered in CurrentDebugFile\n+  TSynLogStackTrace = array[0 .. MAX_STACK_TRACE - 1] of PtrUInt;\n+\n   /// storage of the information associated with an intercepted exception\n   // - as returned by GetLastException() function\n   TSynLogExceptionInfo = record\n@@ -1677,8 +1684,13 @@   TSynLogExceptionInfo = record\n     Context: TSynLogExceptionContext;\n     /// associated Exception.Message content (if any)\n     Message: string;\n+    /// associated storage for filtered Context.EStackCount values\n+    StackTrace: TSynLogStackTrace;\n   end;\n \n+  /// pointer reference to one intercept exception informaiton\n+  PSynLogExceptionInfo = ^TSynLogExceptionInfo;\n+\n   /// storage of information associated with one or several exceptions\n   // - as returned by GetLastExceptions() function\n   TSynLogExceptionInfoDynArray = array of TSynLogExceptionInfo;\n@@ -4423,7 +4435,7 @@ class function TDebugFile.FindFileName(const unitname: RawUtf8): TFileName;\n     name := Executable.ProgramName\n   else\n     name := unitname;\n-  l := TDebugFile.CurrentDebugFile.FindBlockByName(name);\n+  l := CurrentDebugFile.FindBlockByName(name);\n   if l <> nil then\n     Utf8ToFileName(l^.FileName, result);\n end;\n@@ -7403,22 +7415,48 @@ procedure DoLogException(Log: TSynLog; Info: PSynLogThreadInfo;\n   end;\n end;\n \n-const\n-  MAX_EXCEPTHISTORY = 15;\n+function DebugCurrentCleanup(src, dst: PPtrUIntArray; n: PtrInt; main: PtrUInt): PtrInt;\n+var\n+  i: PtrInt;\n+  prev, curr: PtrUInt;\n+  deb: TDebugFile;\n+begin\n+  deb := TDebugFile.CurrentDebugFile; // is likely to have been pre-loaded\n+  prev := 0;\n+  result := 0;\n+  for i := 0 to n - 1 do\n+  begin\n+    curr := src[i];\n+    if (curr = 0) or\n+       (curr = prev) or\n+       (curr = main) then\n+      continue;\n+    if deb = nil then\n+    begin\n+      if not IsCurrentExecutable(pointer(curr)) then\n+        continue;\n+    end\n+    else if not deb.IsCode(curr) then\n+      continue;\n+    prev := curr;\n+    dst[result] := curr;\n+    inc(result);\n+    if result = MAX_STACK_TRACE then\n+      exit;\n+  end;\n+end;\n \n type\n-  TSynLogExceptionInfos = array[0 .. MAX_EXCEPTHISTORY] of TSynLogExceptionInfo;\n+  TSynLogExceptionInfos = array[0 .. 15] of TSynLogExceptionInfo; // power of 2\n   TLastException = record\n-    Index: integer;\n-    StackCount: integer;\n+    Safe: TLightLock;\n+    Next: integer;\n     Infos: TSynLogExceptionInfos;\n-    Stack: array[0 .. MAX_EXCEPTHISTORY - 1] of PtrUInt;\n   end;\n \n var\n   // some static information about the latest exceptions raised\n-  GlobalLastException: TLastException = (\n-    Index: -1{%H-});\n+  GlobalLastException: TLastException;\n \n // this is the main entry point for all intercepted exceptions\n procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n@@ -7427,14 +7465,11 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n   families: TSynLogFamilyDynArray;\n   log: TSynLog;\n   nfo: PSynLogThreadInfo;\n-  info: ^TSynLogExceptionInfo;\n+  info: PSynLogExceptionInfo;\n   thrdnam: PShortString;\n   last: ^TLastException;\n-  ignored: boolean;\n-  i, n: PtrInt;\n-  {$ifdef FPC}\n-  curr, prev: PtrUInt;\n-  {$endif FPC}\n+  i, n, framescount: PtrInt;\n+  frames: TRawStackFrames; // filtered and reduced to TSynLogStackTrace size\n label\n   adr, fin;\n begin\n@@ -7452,63 +7487,63 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n     exit;\n   {$endif ISDELPHIXE6}\n   {$endif WIN64DELPHI}\n+  thrdnam := CurrentThreadNameShort;\n   if nfo^.ThreadBitLo = 0 then\n     InitThreadNumber(nfo);\n-  include(nfo^.Flags, tiWriting);\n-  mainfam := nil;\n-  ignored := false;\n+  include(nfo^.Flags, tiWriting); // avoid any nested exception/logging\n   try\n+    // handle TSynLogFamily settings\n+    SynLogExceptions.Lock;\n     try\n-      SynLogExceptions\n... [truncated, 7940 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17075\n+17076",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17075'\r\n+'2.4.17076'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "307fb2dfa52a68633fcdfbd7969ca1979c28e20b",
+      "short_sha": "307fb2df",
+      "subject": "core: small Delphi Win32 stack trace cleanup",
+      "body": "- but still lots of false positive",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:21:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/307fb2dfa52a68633fcdfbd7969ca1979c28e20b",
+      "parents": [
+        "7c45e35421773ecea4d87416506f6f53a7b769af"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -2353,7 +2353,8 @@ function ManualStackTrace(var frames: TRawStackFrames): PtrInt;\n       if (st >= min_stack) and\n          (st <= max_stack) then\n         continue; // on-stack pointer is no code\n-      if SeemsRealPointer(pointer(st - 8)) and\n+      if (not IntegerScanExists(@frames, result, st)) and\n+         SeemsRealPointer(pointer(st - 8)) and\n          CheckAsmX86(st) then\n       begin\n         frames[result] := st;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17074\n+17075",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17074'\r\n+'2.4.17075'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7c45e35421773ecea4d87416506f6f53a7b769af",
+      "short_sha": "7c45e354",
+      "subject": "core: new TDebugFile.AppendLocationsShort method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:20:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7c45e35421773ecea4d87416506f6f53a7b769af",
+      "parents": [
+        "aa3f2adeb974cf6129c52762dc86fcc269c2d1b5"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 27,
+          "patch": "@@ -230,6 +230,9 @@   TDebugFile = class(TSynPersistent)\n     // - will also return any library name or symbol outside the executable\n     class procedure FindLocationShort(aPointer: pointer; var aInfo: ShortString;\n       aNoHex: boolean = false);   {$ifdef HASINLINE} static; {$endif}\n+    /// append the supplied symbol location(s) - as used by AppendCallerShort()\n+    class procedure AppendLocationsShort(var aInfo: ShortString;\n+      aFrames: PPtrUIntArray; aFramesCount, aDepth: PtrInt);\n     /// append the symbol location(s) according to the current call stack\n     // - won't return any library name or symbol outside the executable\n     class procedure AppendCallerShort(var aInfo: ShortString; aSkip, aDepth: integer);\n@@ -4351,39 +4354,33 @@ class procedure TDebugFile.FindLocationShort(aPointer: pointer;\n   end;\n end;\n \n-{$STACKFRAMES ON} // we need a stack frame for the backtrace API call below\n-\n-class procedure TDebugFile.AppendCallerShort(var aInfo: ShortString;\n-  aSkip, aDepth: integer);\n+class procedure TDebugFile.AppendLocationsShort(var aInfo: ShortString;\n+  aFrames: PPtrUIntArray; aFramesCount, aDepth: PtrInt);\n var\n+  i: PtrInt;\n   deb: TDebugFile;\n-  frames: TRawStackFrames;\n-  i, n: PtrInt;\n   l: AnsiChar;\n begin\n-  if aDepth <= 0 then\n-    exit;\n-  n := RawStackTrace(aSkip + 1, stManualAndAPI, frames); // + 1 to ignore this\n-  for i := 0 to n - 1 do\n-    if (i = 0) or\n-       (frames[i] <> frames[i - 1]) then\n-    begin\n-      l := aInfo[0];\n-      if ord(l) = high(aInfo) then\n-        break; // output buffer is full\n-      deb := DebugFileGet(frames[i], nil); // no tmp = no external symbol\n-      if deb <> nil then\n-        deb.AppendLocationShort(frames[i], aInfo);\n-      if aInfo[0] = l then\n-        continue; // nothing added\n-      dec(aDepth);\n-      if aDepth = 0 then\n-        break; // we got what we needed\n-    end;\n+  if (aFrames <> nil) and\n+     (aDepth > 0) then\n+    for i := 0 to aFramesCount - 1 do\n+      if (i = 0) or\n+         (aFrames[i] <> aFrames[i - 1]) then\n+      begin\n+        l := aInfo[0];\n+        if ord(l) = high(aInfo) then\n+          break; // output buffer is full\n+        deb := DebugFileGet(aFrames[i], nil); // no tmp = no external symbol\n+        if deb <> nil then\n+          deb.AppendLocationShort(aFrames[i], aInfo);\n+        if aInfo[0] = l then\n+          continue; // nothing added\n+        dec(aDepth);\n+        if aDepth = 0 then\n+          break; // we got what we needed\n+      end;\n end;\n \n-{$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\n-\n class function TDebugFile.FindLocationRaisedAt(exc: ESynException): RawUtf8;\n begin\n   if (exc = nil) or",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17073\n+17074",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17073'\r\n+'2.4.17074'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aa3f2adeb974cf6129c52762dc86fcc269c2d1b5",
+      "short_sha": "aa3f2ade",
+      "subject": "core: rewritten TDebugFile.AddLog method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:20:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aa3f2adeb974cf6129c52762dc86fcc269c2d1b5",
+      "parents": [
+        "b619f4a28aa98eb478efe4383054471db5550ba7"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 28,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 26,
+          "patch": "@@ -164,7 +164,7 @@   TDebugFile = class(TSynPersistent)\n     function AbsoluteToRelative(aPointer: PtrUInt): TDebugAddress;\n       {$ifdef HASINLINE}inline;{$endif}\n     procedure AppendLocationShort(aPointer: PtrUInt; var aInfo: ShortString);\n-    function AppendLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean): boolean;\n+    function AddLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean = false): boolean;\n     function GetExeDate: RawUtf8;\n   public\n     /// get the available debugging information\n@@ -256,9 +256,6 @@   TDebugFile = class(TSynPersistent)\n     // - is much faster: around 1us per lookup, whereas lnfodwrf is 20ms\n     class function RegisterBacktraceStrFunc: boolean; static;\n     {$endif FPC}\n-    /// add some debugging information about the supplied absolute memory address\n-    class function AddLog(W: TTextWriter; aPointer: PtrUInt;\n-      NoHex: boolean = false): boolean; {$ifdef HASINLINE} static; {$endif}\n     /// return the current thread stack trace as convenient plain text\n     // - filename, symbol name and line number (if any) of each frame, e.g.\n     // $ 57f480 mormot.core.log.pas TSynLog.LogEscape (5782) 4a0a40 ...\n@@ -277,7 +274,7 @@   TDebugFile = class(TSynPersistent)\n     // - use follows TSynLogFamily.StackTraceUse semantics: ignored on FPC,\n     // and stOnlyManual is implemented on Delphi Win32 only, as TSynLog\n     // - skip does not apply to the heuristic manual stack walk\n-    // - a trailing space is left after each located frame, as TDebugFile.AddLog\n+    // - a trailing space is left after each located frame\n     class procedure StackTrace(W: TTextWriter; skip: integer = 0;\n       depth: integer = 0; use: TSynLogStackTraceUse = stManualAndAPI); overload;\n       {$ifdef HASINLINE} static; {$endif}\n@@ -4223,26 +4220,39 @@ function TDebugFile.FindBlock(aRva: TDebugAddress; out aLine: integer): PDebugBl\n     until L > R;\n end;\n \n-function TDebugFile.AppendLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean): boolean;\n+function TDebugFile.AddLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean): boolean;\n var\n   rva: TDebugAddress;\n   line: integer; // not PtrInt\n   s: PDebugSymbol;\n   l: PDebugBlock;\n begin\n   result := false;\n+  if (W = nil) or\n+     (aPointer = 0) then\n+    exit;\n+  if self = nil then\n+  begin\n+    // no TDebugFile: append the hexa address of process pointer\n+    if NoHex or\n+       not IsCurrentExecutable(pointer(aPointer)) then // fast OS API\n+      exit;\n+    W.AddPointer(aPointer, ' '); // write raw pointer if no debug info\n+    result := true;\n+    exit;\n+  end;\n   rva := AbsoluteToRelative(aPointer);\n   if rva = 0 then\n     exit;\n   s := FindSymbol(rva);\n-  {$ifdef ISDELPHI}\n   if (s <> nil) and\n-     (FindPropName(['SynRtlUnwind', '@HandleAnyException',  'LogExcept',\n-       '@HandleOnException', 'ThreadWrapper', 'ThreadProc'],\n-       s^.Name) >= 0) then\n-    // no stack trace within the Delphi exception interception functions\n-    exit;\n-  {$endif ISDELPHI}\n+     (FindPropName(['LogExcept', 'SynLogException', 'ThreadProc',\n+       'ESynException.RaiseUtf8'\n+       {$ifdef ISDELPHI} , 'SynRtlUnwind',  '@HandleAnyException',\n+       '@HandleOnException', '@InternalRaiseAtExcept', '@RaiseAtExcept',\n+       'ThreadWrapper' {$ifdef CPUX86} , 'RawStackTrace' {$endif}\n+       {$endif ISDELPHI} ], s^.Name) >= 0) then\n+    exit; // only meaningful entries\n   result := true;\n   if not NoHex then\n   begin\n@@ -4268,19 +4278,6 @@ function TDebugFile.AppendLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean)\n   W.AddDirect(')', ' '); // always end with a ' '\n end;\n \n-class function TDebugFile.AddLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean): boolean;\n-var\n-  debug: TDebugFile;\n-begin\n-  result := false;\n-  if (W = nil) or\n-     (aPointer = 0) then\n-    exit;\n-  debug := DebugFileGet(aPointer, nil); // TDebugFile.Get(pointer(aPointer))\n-  if debug <> nil then\n-    result := debug.AppendLog(W, aPointer, NoHex);\n-end;\n-\n procedure TDebugFile.AppendLocationS\n... [truncated, 85 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17072\n+17073",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17072'\r\n+'2.4.17073'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b619f4a28aa98eb478efe4383054471db5550ba7",
+      "short_sha": "b619f4a2",
+      "subject": "core: atomic TDebugFile.CurrentDebugFile initialization",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:13:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b619f4a28aa98eb478efe4383054471db5550ba7",
+      "parents": [
+        "134e87daafbc6ab2b11c18db00a4f5e766ece745"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 12,
+          "patch": "@@ -616,6 +616,10 @@ function FromAppLogLevel(const Text: RawUtf8): TSynLogLevels;\n function RetrieveMemoryManagerInfo: RawUtf8;\n \n var\n+  /// is set to TRUE before ObjArrayClear(SynLogFile) in unit finalization\n+  // - defined here to avoid unexpected GPF at shutdown\n+  SynLogFileFreeing: boolean;\n+\n   /// protects the global TSynLog/TSynLogFamily global lists\n   // - never acquire a TSynLog.fWriteSafe while holding this lock\n   // - a writer may acquire this lock for file-name reservation\n@@ -625,10 +629,6 @@ function RetrieveMemoryManagerInfo: RawUtf8;\n   // - never hold this lock while acquiring a TSynLog.fWriteSafe\n   SynLogExceptions: TOSLock;\n \n-  /// is set to TRUE before ObjArrayClear(SynLogFile) in unit finalization\n-  // - defined here to avoid unexpected GPF at shutdown\n-  SynLogFileFreeing: boolean;\n-\n type\n   /// class of Exceptions raised by this unit\n   ESynLogException = class(ESynException);\n@@ -2465,6 +2465,7 @@ function TDebugFile.Lookup(aRva: TDebugAddress): RawUtf8;\n \n var\n   DebugFileLast, DebugFileCurrent: TDebugFile; // aligned pointer access is atomic\n+  DebugFileCurrentSearched: TLightLock;\n   DebugFilesSafe: TRWLightLock;\n   DebugFiles: array of TDebugFile;\n   DebugFileNamesUnknown: TStringDynArray; // search once\n@@ -2583,15 +2584,9 @@ class function TDebugFile.Get(aPointer: pointer): TDebugFile;\n \n class function TDebugFile.CurrentDebugFile: TDebugFile;\n begin\n-  if DebugFileCurrent = nil then // resolve local procedure\n-  begin\n-    DebugFileCurrent := Get(@TDebugFile.CurrentDebugFile);\n-    if DebugFileCurrent = nil then\n-      DebugFileCurrent := pointer(1);\n-  end;\n+  if DebugFileCurrentSearched.TryLock then // resolve once\n+    DebugFileCurrent := Get(@DebugFileRegister); // local procedure\n   result := DebugFileCurrent;\n-  if result = pointer(1) then\n-    result := nil;\n end;\n \n {$ifdef FPC}",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17071\n+17072",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17071'\r\n+'2.4.17072'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "134e87daafbc6ab2b11c18db00a4f5e766ece745",
+      "short_sha": "134e87da",
+      "subject": "core: include the stack trace captured by FPC RTL",
+      "body": "- fpc_RaiseException() calls GetBacktrace() as needed by mormot.core.log\n- in the exact context of the exception call",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:09:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/134e87daafbc6ab2b11c18db00a4f5e766ece745",
+      "parents": [
+        "bab77b7323b2e112b024a68901d91f7cc4eaa9fe"
+      ],
+      "stats": {
+        "additions": 45,
+        "deletions": 33,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 43,
+          "deletions": 31,
+          "patch": "@@ -1965,40 +1965,51 @@ begin\n     exit;\r\n   backuplasterror := GetLastError;\r\n   backuphandler := _RawLogException;\r\n+  _RawLogException := nil; // disable nested exception at API level\r\n   if Assigned(backuphandler) then // paranoid check (tested before calling)\r\n-    try\r\n-      _RawLogException := nil; // disable nested exception at API level\r\n-      ctxt.ECode := Exc.ExceptionCode;\r\n-      if (Exc.ExceptionCode = cRtlException) and\r\n-         (Exc.ExceptObject <> nil) then\r\n+  try\r\n+    ctxt.EStack := pointer(stack); // for manual unwinding on Delphi x86\r\n+    ctxt.EStackCount := 0;\r\n+    ctxt.ECode := Exc.ExceptionCode;\r\n+    if (Exc.ExceptionCode = cRtlException) and\r\n+       (Exc.ExceptObject <> nil) then\r\n+    begin\r\n+      if Exc.ExceptObject.InheritsFrom(Exception) then\r\n       begin\r\n-        if Exc.ExceptObject.InheritsFrom(Exception) then\r\n-          ctxt.EClass := PPointer(Exc.ExceptObject)^\r\n-        else\r\n-          ctxt.EClass := EExternalException;\r\n-        ctxt.EInstance := Exc.ExceptObject;\r\n-        ctxt.ELevel := sllException;\r\n-        ctxt.EAddr := Exc.ExceptAddr;\r\n+        ctxt.EClass := PPointer(Exc.ExceptObject)^;\r\n+        {$ifdef FPC} // fpc_RaiseException() calls GetBacktrace() as needed\r\n+        if (Exc.NumberParameters >= 4) and\r\n+           (Exc.ExceptionInformation[2] < 63) and\r\n+           (Exc.ExceptionInformation[3] <> 0) then\r\n+        begin\r\n+          ctxt.EStackCount := Exc.ExceptionInformation[2];\r\n+          ctxt.EStack := pointer(Exc.ExceptionInformation[3]);\r\n+        end;\r\n+        {$endif FPC}\r\n       end\r\n       else\r\n-      begin\r\n-        {$ifndef LLVM}\r\n-        if Assigned(ExceptClsProc) then\r\n-          ctxt.EClass := GetExceptionClass(ExceptClsProc)(Exc)\r\n-        else\r\n-        {$endif LLVM}\r\n-          ctxt.EClass := EExternal;\r\n-        ctxt.EInstance := nil;\r\n-        ctxt.ELevel := sllExceptionOS;\r\n-        ctxt.EAddr := Exc.ExceptionAddress;\r\n-      end;\r\n-      ctxt.EStack := pointer(stack);\r\n-      ctxt.EStackCount := 0;\r\n-      ctxt.ETimestamp := UnixTimeUtc; // fast API call\r\n-      backuphandler(ctxt);\r\n-    except\r\n-      { ignore any nested exception }\r\n+        ctxt.EClass := EExternalException;\r\n+      ctxt.EInstance := Exc.ExceptObject;\r\n+      ctxt.ELevel := sllException;\r\n+      ctxt.EAddr := Exc.ExceptAddr;\r\n+    end\r\n+    else\r\n+    begin\r\n+      {$ifndef LLVM}\r\n+      if Assigned(ExceptClsProc) then\r\n+        ctxt.EClass := GetExceptionClass(ExceptClsProc)(Exc)\r\n+      else\r\n+      {$endif LLVM}\r\n+        ctxt.EClass := EExternal;\r\n+      ctxt.EInstance := nil;\r\n+      ctxt.ELevel := sllExceptionOS;\r\n+      ctxt.EAddr := Exc.ExceptionAddress;\r\n     end;\r\n+    ctxt.ETimestamp := UnixTimeUtc; // the fastest API call possible\r\n+    backuphandler(ctxt);\r\n+  except\r\n+    { ignore any nested exception }\r\n+  end;\r\n   _RawLogException := backuphandler;\r\n   SetLastError(backuplasterror); // code above could have changed this\r\n end;\r\n@@ -2012,6 +2023,9 @@ type\n     ContextRecord: pointer;\r\n   end;\r\n \r\n+const\r\n+  EXCEPTION_CONTINUE_SEARCH = 0;\r\n+\r\n var // to register SynLogVectoredHandler once\r\n   AddVectoredExceptionHandlerCalled: boolean;\r\n   // RemoveVectoredContinueHandler() is available under 64 bit editions only\r\n@@ -2020,8 +2034,6 @@ function AddVectoredExceptionHandler(FirstHandler: cardinal;\n   VectoredHandler: pointer): PtrInt; stdcall; external kernel32;\r\n \r\n function SynLogVectoredHandler(ExceptionInfo: PExceptionInfo): PtrInt; stdcall;\r\n-const\r\n-  EXCEPTION_CONTINUE_SEARCH = 0;\r\n begin\r\n   if Assigned(_RawLogException) then\r\n     LogExcept(nil, ExceptionInfo^.ExceptionRecord^);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17070\n+17071",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17070'\r\n+'2.4.17071'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bab77b7323b2e112b024a68901d91f7cc4eaa9fe",
+      "short_sha": "bab77b73",
+      "subject": "core: introducing new KEEP_STACKFRAMES conditional",
+      "body": "- to enable stack frames e.g. for debugging purpose on FPC Linux x64",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:08:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bab77b7323b2e112b024a68901d91f7cc4eaa9fe",
+      "parents": [
+        "9e8264b4fb2fca21ececdf072fc8175a01649d5a"
+      ],
+      "stats": {
+        "additions": 48,
+        "deletions": 12,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 3,
+          "patch": "@@ -2295,7 +2295,9 @@ implementation\n   // on Win64, RtlCaptureStackBackTrace() API is limited to < 62 frames\n   TRawStackFrames = array[0..61] of PtrUInt;\n \n-{$STACKFRAMES ON} // we need a stack frame for the backtrace API calls below\n+{$ifndef KEEP_STACKFRAMES}\n+{$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\n+{$endif KEEP_STACKFRAMES}\n \n {$ifndef FPC}\n {$ifdef OSWINDOWS}\n@@ -2415,7 +2417,9 @@ function RawStackTrace(skip: PtrInt; use: TSynLogStackTraceUse;\n   {$endif NOEXCEPTIONINTERCEPT}\n end;\n \n+{$ifndef KEEP_STACKFRAMES}\n {$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\n+{$endif KEEP_STACKFRAMES}\n \n \n { ************** Debug Symbols Processing from Delphi .map or FPC/GDB DWARF }\n@@ -4766,7 +4770,9 @@ procedure TAutoFlushThread.Execute;\n   TSynLog.NotifyThreadEnded; // as in mormot.core.thread TThreadAbstract\n end;\n \n-{$STACKFRAMES ON} // we need a stack frame for the backtrace API calls below\n+{$ifndef KEEP_STACKFRAMES}\n+{$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\n+{$endif KEEP_STACKFRAMES}\n \n class procedure TDebugFile.StackTrace(W: TTextWriter; skip, depth: integer;\n   use: TSynLogStackTraceUse);\n@@ -4809,7 +4815,9 @@ class function TDebugFile.StackTrace(skip, depth: integer;\n   end;\n end;\n \n+{$ifndef KEEP_STACKFRAMES}\n {$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\n+{$endif KEEP_STACKFRAMES}\n \n {$ifndef NOEXCEPTIONINTERCEPT}\n // this is the main entry point for all intercepted exceptions\n@@ -6084,7 +6092,9 @@ function TSynLog.LogEnterFmt(nfo: PSynLogThreadInfo; var fmt: TPreRenderFmt;\n   EndWrite(nfo);\n end;\n \n-{$STACKFRAMES ON} // we need a stack frame for the backtrace API call below\n+{$ifndef KEEP_STACKFRAMES}\n+{$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\n+{$endif KEEP_STACKFRAMES}\n \n procedure TSynLog.Log(Level: TSynLogLevel);\n var\n@@ -6132,7 +6142,9 @@ class function TSynLog.Enter(aInstance: TObject; aMethodName: PUtf8Char): ISynLo\n     pointer(result) := PAnsiChar(log) + log.fISynLogOffset; // result := self\n end;\n \n+{$ifndef KEEP_STACKFRAMES}\n {$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\n+{$endif KEEP_STACKFRAMES}\n \n class function TSynLog.Enter(const TextFmt: RawUtf8;\n   const TextArgs: array of const; aInstance: TObject): ISynLog;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 3,
+          "patch": "@@ -2193,8 +2193,7 @@ function GetModuleHandle(lpModuleName: PChar): HMODULE;\n // - redefined in mormot.core.os to avoid dependency to the Windows unit\r\n function PostMessage(hWnd: HWND; Msg: UINT; wParam: WPARAM; lParam: LPARAM): BOOL;\r\n \r\n-/// retrieves the current stack trace\r\n-// - only available since Windows XP\r\n+/// retrieves the current stack trace, using Windows XP+ official API\r\n // - FramesToSkip + FramesToCapture should be <= 62\r\n function RtlCaptureStackBackTrace(FramesToSkip, FramesToCapture: cardinal;\r\n   BackTrace, BackTraceHash: pointer): byte; stdcall;\r\n@@ -3095,7 +3094,7 @@   TSynLogExceptionContext = record\n     EStackCount: integer;\r\n     /// the address where the exception occurred\r\n     EAddr: PtrUInt;\r\n-    /// the optional stack trace\r\n+    /// the optional stack trace - only <> nil within the exception handler\r\n     EStack: PPtrUIntArray;\r\n     /// timestamp of this exception, as number of seconds since UNIX Epoch\r\n     // - UnixTimeUtc is faster than NowUtc or GetSystemTime\r\n@@ -8726,6 +8725,10 @@ procedure AppendKb(Size: Int64; var Dest: ShortString; WithSpace: boolean);\n \r\n {$ifndef NOEXCEPTIONINTERCEPT}\r\n \r\n+{$ifndef KEEP_STACKFRAMES}\r\n+{$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\r\n+{$endif KEEP_STACKFRAMES}\r\n+\r\n {$ifdef WITH_RAISEPROC} // for FPC on Win32 + Linux (Win64=WITH_VECTOREXCEPT)\r\n var\r\n   OldRaiseProc: TExceptProc;\r\n@@ -8811,6 +8814,10 @@ function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\n   end;\r\n end;\r\n \r\n+{$ifndef KEEP_STACKFRAMES}\r\n+{$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\r\n+{$endif KEEP_STACKFRAMES}\r\n+\r\n {$endif NOEXCEPTIONINTERCEPT}\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 2,
+          "patch": "@@ -1921,10 +1921,14 @@ var\n   {$ifdef CPU64}\r\n     {$define WITH_VECTOREXCEPT}\r\n   {$else}\r\n-    {$define WITH_RTLUNWINDPROC} //  use x86_64 asm -> Win32 only\r\n+    {$define WITH_RTLUNWINDPROC} //  use x86_64 asm on Delphi Win32\r\n   {$endif CPU64}\r\n {$endif FPC}\r\n \r\n+{$ifndef KEEP_STACKFRAMES}\r\n+{$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\r\n+{$endif KEEP_STACKFRAMES}\r\n+\r\n {$ifndef WITH_RAISEPROC}\r\n \r\n type\r\n@@ -1937,7 +1941,7 @@ type\n     NumberParameters: integer;\r\n     case {IsOsException:} boolean of\r\n       true:\r\n-        (ExceptionInformation: array[0..14] of PtrUInt);\r\n+        (ExceptionInformation: array[0 .. 14] of PtrUInt);\r\n       false: // ExceptionCode = cRtlException\r\n         (ExceptAddr: PtrUInt;\r\n          ExceptObject: Exception);\r\n@@ -2026,6 +2030,10 @@ end;\n \r\n {$endif WITH_VECTOREXCEPT}\r\n \r\n+{$ifndef KEEP_STACKFRAMES}\r\n+{$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\r\n+{$endif KEEP_STACKFRAMES}\r\n+\r\n {$ifdef WITH_RTLUNWINDPROC}\r\n \r\n var\r\n@@ -2051,6 +2059,7 @@ end;\n \r\n {$endif NOEXCEPTIONINTERCEPT}\r\n \r\n+\r\n { TMemoryMap }\r\n \r\n function TMemoryMap.DoMap(aCustomOffset: Int64): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17069\n+17070",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17069'\r\n+'2.4.17070'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 2,
+          "patch": "@@ -51,6 +51,12 @@\n {.$define NOEXCEPTIONINTERCEPT}\r\n // if defined, exceptions shall not be intercepted nor logged\r\n \r\n+{.$define KEEP_STACKFRAMES}\r\n+// if defined, {$W-} won't be forced and stack frames will follow project options\r\n+// - useful mostly with FPC POSIX targets where unwinding info is not available\r\n+// - should NOT be defined for Delphi Win32 which has its own x86 asm\r\n+// - not set by default since has a measurable performance cost\r\n+\r\n {.$define NOCOMPRESSEDTABLE}\r\n // disable compressed tables e.g. UU_COMPRESSED or BIGINT_PRIMES[] which may\r\n // trigger some weak anti-virus heuristic\r\n@@ -147,7 +153,7 @@\n     HAS_UI HAS_UI_VCL_LCL HAS_UI_PDF\r\n     CPU32 CPU64\r\n     CPUINTEL CPUX86 CPUX64 CPUARM3264 CPUARM CPUAARCH64 CPUX86NOTPIC\r\n-    NOASMBLOCK\r\n+    NOASMBLOCK KEEP_STACKFRAMES\r\n     ASMINTEL ASMINTELNOTPIC ASMSSE2 ASMAESNI\r\n     ASMX86 ASMX86NOTPIC ASMX64 ASMX64NOTPIC ASMX64AVX0 ASMX64AVX1\r\n     ABIX86 ABIX64 ABIWINX64 ABISYSVX64 ABIA32 ABIA64 ABIWINA64 ABISYSVA64\r\n@@ -875,13 +881,15 @@\n   {$R-} // disable Range checking in our code\r\n   {$S-} // disable Stack checking in our code\r\n   {$X+} // expect extended syntax\r\n-  {$W-} // disable stack frame generation\r\n   {$Q-} // disable overflow checking in our code\r\n   {$B-} // expect short circuit boolean\r\n   {$V-} // disable Var-String Checking\r\n   {$T-} // Typed @ operator\r\n   {$Z1} // enumerators stored as byte by default\r\n   {$P+} // Open string params\r\n+  {$ifndef KEEP_STACKFRAMES}\r\n+  {$W-} // disable stack frame generation\r\n+  {$endif KEEP_STACKFRAMES}\r\n \r\n   {$ifdef DEBUG}\r\n     {$assertions on}   // assert() may be disabled, e.g. on FPC\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Other"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os",
+        "mormot.core.os.windows",
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9e8264b4fb2fca21ececdf072fc8175a01649d5a",
+      "short_sha": "9e8264b4",
+      "subject": "core: new UnixTimeToShort() wrapper function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T17:06:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9e8264b4fb2fca21ececdf072fc8175a01649d5a",
+      "parents": [
+        "cd7fa5b7476eb5081550d66d481c4f57680b8386"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 0,
+          "patch": "@@ -782,6 +782,9 @@ function NowTextDateShort(UtcDate: boolean = false): TShort15;\n /// convert a TUnixTime date into '19 Sep 2023' English-readable text\r\n function UnixTimeToTextDateShort(Date: TUnixTime): TShort15;\r\n \r\n+/// convert a TUnixTime timestamp into '19 Sep 2023 13:56:52' ISO 8601 text\r\n+function UnixTimeToShort(Epoch: TUnixTime; FirstTimeChar: AnsiChar = ' '): TShort31;\r\n+\r\n /// convert a TDateTime date into '19 Sep 2023' English-readable text\r\n function DateToTextDateShort(Date: TDateTime): TShort15;\r\n \r\n@@ -3578,6 +3581,14 @@ function UnixTimeToTextDateShort(Date: TUnixTime): TShort15;\n   T.ToTextDateShort(result);\r\n end;\r\n \r\n+function UnixTimeToShort(Epoch: TUnixTime; FirstTimeChar: AnsiChar): TShort31;\r\n+var\r\n+  T: TSynSystemTime;\r\n+begin\r\n+  T.FromUnixTime(Epoch);\r\n+  T.ToIsoDateTimeShort(result, FirstTimeChar);\r\n+end;\r\n+\r\n function DateToTextDateShort(Date: TDateTime): TShort15;\r\n var\r\n   T: TSynSystemTime;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17068\n+17069",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17068'\r\n+'2.4.17069'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cd7fa5b7476eb5081550d66d481c4f57680b8386",
+      "short_sha": "cd7fa5b7",
+      "subject": "tests: completed BenchmarkNumbers tests",
+      "body": "- ensure no buffer overflow occurs on unexpected TLecuyer behavior",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T06:50:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cd7fa5b7476eb5081550d66d481c4f57680b8386",
+      "parents": [
+        "f8d9a2952dcdd93bb4ee679c382b43d7072214ae"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17067\n+17068",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17067'\r\n+'2.4.17068'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -5127,9 +5127,9 @@ procedure TTestCoreBase.NumericalConversionsSlow(Sender: TObject);\n   procedure BenchmarkNumbers;\r\n   var\r\n     i, l: PtrUInt;\r\n-    c: cardinal;\r\n+    c, hash: cardinal;\r\n     err: integer;\r\n-    p: PUtf8Char;\r\n+    p, max: PUtf8Char;\r\n     lens: TBytes;\r\n     ref: TInt64DynArray;\r\n     gen: TLecuyer;\r\n@@ -5200,6 +5200,7 @@ procedure TTestCoreBase.NumericalConversionsSlow(Sender: TObject);\n     gen.SeedGenerator(200000); // up to 16GB of deterministic distribution\r\n     SetLength(data, 1758350);  // generate 1.7MB of contiguous numbers\r\n     p := pointer(data);\r\n+    max := p + length(data);\r\n     for i := 0 to high(lens) do\r\n     begin\r\n       c := gen.Next;\r\n@@ -5227,13 +5228,16 @@ procedure TTestCoreBase.NumericalConversionsSlow(Sender: TObject);\n           AppendShortVar(tmp, ['0.000000000000000',c shr 28 + 1]);\r\n       end;\r\n       //ConsoleWrite(tmp);\r\n-      MoveFast(tmp[1], p^, ord(tmp[0]));\r\n       l := ord(tmp[0]);\r\n+      if not Check(p + l < max, 'gen.Next overflow') then\r\n+        exit;\r\n+      MoveFast(tmp[1], p^, l);\r\n       lens[i] := l;\r\n       p[l] := #0; // all with a trailing #0\r\n       inc(p, l + 1);\r\n     end;\r\n     CheckEqual(p - pointer(data), length(data));\r\n+    hash := Hash32(data);\r\n     CheckHash(data, $D2D00549);\r\n     // 'x.y' and 'x.y0' are the same number, so should return the same double\r\n     p := pointer(data);\r\n@@ -5272,7 +5276,8 @@ procedure TTestCoreBase.NumericalConversionsSlow(Sender: TObject);\n       {$endif WIN32DELPHI}\r\n       {$endif ASMX64NOTPIC}\r\n     end;\r\n-    CheckHash(data, $D2D00549, 'untouched');\r\n+    CheckEqual(Hash32(data), hash, 'untouched 1');\r\n+    CheckHash(data, $D2D00549, 'untouched 2');\r\n   end;\r\n \r\n   procedure CheckInvalidNumber(const text: RawUtf8; extendedToo: boolean = true);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f8d9a2952dcdd93bb4ee679c382b43d7072214ae",
+      "short_sha": "f8d9a295",
+      "subject": "core: tuned RetrieveSysInfo() locking",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T06:49:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f8d9a2952dcdd93bb4ee679c382b43d7072214ae",
+      "parents": [
+        "039b0ff81356ecc7d55bb88ae13f314f9c75a450"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 8,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -279,8 +279,7 @@   TDebugFile = class(TSynPersistent)\n     // - skip does not apply to the heuristic manual stack walk\n     // - a trailing space is left after each located frame, as TDebugFile.AddLog\n     class procedure StackTrace(W: TTextWriter; skip: integer = 0;\n-      depth: integer = 0;\n-      use: TSynLogStackTraceUse = stManualAndAPI); overload;\n+      depth: integer = 0; use: TSynLogStackTraceUse = stManualAndAPI); overload;\n       {$ifdef HASINLINE} static; {$endif}\n     /// low-level resolution of a TDebugFile instance from a code address\n     // - this is the main internal thread-safe factory method for this process",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -9485,9 +9485,10 @@ function _GetSystemInfoText(notused: pointer): RawUtf8;\n var\r\n   _Shell: RawUtf8;\r\n   _SystemInfoText: TCachedValue;\r\n+  _SysInfoSafe: TLightLock;\r\n   _SysInfoTix: cardinal;\r\n   _SysInfoCache: TSysInfo;\r\n-  _SysInfoText: TShort95;\r\n+  _SysInfoText: TShort95;  // e.g. '20 0.45 1.02 1.31 5 17.5GB/62.4GB 060c6b08'\r\n \r\n function GetSystemInfoText: RawUtf8;\r\n begin\r\n@@ -9508,7 +9509,7 @@ function RetrieveSysInfo(si: PSysInfo; txt: PAnsiChar; max: PtrInt): boolean;\n   p: PShortString;\r\n begin\r\n   tix := GetTickSec; // cached for 1 second\r\n-  OSSafe.Lock;\r\n+  _SysInfoSafe.Lock;\r\n   if _SysInfoTix <> tix then\r\n   begin\r\n     _SysInfoTix := tix;\r\n@@ -9552,7 +9553,7 @@ function RetrieveSysInfo(si: PSysInfo; txt: PAnsiChar; max: PtrInt): boolean;\n     end;\r\n     AppendShortBuffer(@p^[1], ord(p^[0]), max, txt);\r\n   end;\r\n-  OSSafe.UnLock;\r\n+  _SysInfoSafe.UnLock;\r\n end;\r\n \r\n procedure RetrieveSysInfoText(var text: ShortString);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -4073,14 +4073,15 @@ begin // single syscall gives enough information on Linux\n   result := SysInfo(@si) = 0;\r\n end;\r\n \r\n+// 1 sec cache or single syscall (faster than /proc/loadavg)\r\n function RetrieveSysInfo(si: PSysInfo; txt: PAnsiChar; max: PtrInt): boolean; forward;\r\n \r\n function RetrieveLoadAvg: TShort23;\r\n var\r\n   si: TSysInfo;  // Linuxism\r\n begin\r\n   result[0] := #0;\r\n-  if not RetrieveSysInfo(@si, nil, 0) then // cache or fast syscall\r\n+  if not RetrieveSysInfo(@si, nil, 0) then\r\n     exit;\r\n   AppendShort(TwoDigits(si.loads[0] / double(65536.0)), result);\r\n   AppendShortChar(' ', @result);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17066\n+17067",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17066'\r\n+'2.4.17067'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "039b0ff81356ecc7d55bb88ae13f314f9c75a450",
+      "short_sha": "039b0ff8",
+      "subject": "core: try to fix FPC arm32 TLecuyer.Seed()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-09-22T06:48:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/039b0ff81356ecc7d55bb88ae13f314f9c75a450",
+      "parents": [
+        "743a53fd4cb3af700463b0d143581ce17c6c8b31"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 5,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -10529,8 +10529,11 @@ procedure TLecuyer.Seed(entropy: PByteArray; entropylen: PtrInt);\n end;\r\n \r\n procedure TLecuyer.SeedGenerator(fixedseed: QWord);\r\n+var\r\n+  tmp: QWord; // for FPC arm32\r\n begin\r\n-  SeedGenerator(@fixedseed, SizeOf(fixedseed));\r\n+  tmp := fixedseed;\r\n+  SeedGenerator(@tmp, SizeOf(tmp));\r\n end;\r\n \r\n procedure TLecuyer.SeedGenerator(fixedseed: pointer; fixedseedbytes: integer);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17065\n+17066",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17065'\r\n+'2.4.17066'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2087,7 +2087,7 @@ end;\n { ******************** TLS / HTTPS Encryption Abstract Layer }\r\n \r\n type\r\n-  ESChannel = class(Exception);\r\n+  ESChannel = class(ExceptionWithProps);\r\n \r\n   TSChannelNetTls = class(TInterfacedObject, INetTls)\r\n   private\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/ui/mormot.ui.controls.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -143,7 +143,7 @@   THintWindowDelayed = class(THintWindow)\n \r\n type\r\n   /// exception class raised by TSynLabeledEdit\r\n-  ESynLabeledEdit = class(Exception);\r\n+  ESynLabeledEdit = class(ExceptionWithProps);\r\n \r\n   /// diverse kind of values which may be edited by a TSynLabeledEdit\r\n   TSynLabeledEditKind = (\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Network",
+        "UI"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.net.sock.windows",
+        "mormot.ui.controls"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
