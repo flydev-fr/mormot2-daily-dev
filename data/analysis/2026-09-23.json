@@ -1,0 +1,825 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-23",
+  "edition_title": {
+    "en": "Exception history is rebuilt while OpenSSL gets another I/O correction",
+    "fr": "L’historique des exceptions est reconstruit et OpenSSL reçoit un nouveau correctif I/O",
+    "zh": "异常历史记录重构，OpenSSL 再获 I/O 修复",
+    "ru": "История исключений переписана, OpenSSL получил ещё одно I/O-исправление"
+  },
+  "intro": {
+    "en": "The exception-interception path is substantially rebuilt after upstream identified a random GPF and unsafe memory/threading model in the previous last-exception storage. The sequence finishes with corrected newest-first retrieval and bounded per-exception stack storage. OpenSSL Send/Receive retry handling and setup-error reporting receive two final follow-ups, while FPC gains better stack capture and an ARM32 deterministic-seed repair.",
+    "fr": "Le chemin d’interception des exceptions est largement reconstruit après l’identification d’un GPF aléatoire et d’un modèle mémoire/threading non sûr dans l’ancien stockage des dernières exceptions. La séquence se termine par une récupération newest-first correcte et une stack bornée par exception. Les retries Send/Receive et le reporting des erreurs de configuration OpenSSL reçoivent deux correctifs finaux, tandis que FPC gagne une meilleure capture de stack et une réparation du seed déterministe ARM32.",
+    "zh": "上游确认旧的最近异常存储存在随机 GPF 与不安全的内存/threading 模型后，异常拦截路径被大幅重构。最终实现修正了 newest-first 读取，并为每个异常保存有界 stack。OpenSSL Send/Receive 重试与 setup 错误报告得到两个最终修复，FPC 同时改进 stack 捕获并修复 ARM32 确定性 seed。",
+    "ru": "Путь перехвата исключений существенно переписан после обнаружения случайного GPF и небезопасной memory/threading-модели в прежнем хранилище последних исключений. Финальная версия исправляет newest-first выдачу и хранит ограниченный stack для каждого исключения. OpenSSL получает два завершающих исправления Send/Receive retry и setup errors, а FPC — улучшенный stack capture и починку deterministic seed на ARM32."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17082 at 03ab5c85c4b2982c96b7f38d683dbff85e016f77.",
+      "GetLastException and GetLastExceptions now use a locked 16-entry ring with a private stack copy for every exception.",
+      "OpenSSL retries only WANT_READ/WANT_WRITE, applies a five-second bound and reports setup failures without misusing SSL_get_error.",
+      "The public class method TDebugFile.AddLog is removed; external callers must migrate to the remaining location or StackTrace APIs.",
+      "KEEP_STACKFRAMES can preserve project stack-frame settings, mainly for FPC POSIX debugging, at a documented performance cost.",
+      "FPC Windows consumes the RTL-captured exception stack, and FPC ARM32 gets stable QWord storage for TLecuyer.SeedGenerator."
+    ],
+    "fr": [
+      "Visez la build 2.4.17082 au commit 03ab5c85c4b2982c96b7f38d683dbff85e016f77.",
+      "GetLastException et GetLastExceptions utilisent un ring verrouillé de 16 entrées avec une copie privée de stack par exception.",
+      "OpenSSL ne retente que WANT_READ/WANT_WRITE, impose cinq secondes et rapporte les erreurs de setup sans détourner SSL_get_error.",
+      "La méthode de classe publique TDebugFile.AddLog est supprimée ; les appelants doivent migrer vers les API de location ou StackTrace restantes.",
+      "KEEP_STACKFRAMES conserve les réglages de stack frames du projet, surtout pour le debug FPC POSIX, avec un coût de performance documenté.",
+      "FPC Windows consomme la stack capturée par le RTL et FPC ARM32 stabilise le QWord de TLecuyer.SeedGenerator."
+    ],
+    "zh": [
+      "应采用 build 2.4.17082 的 03ab5c85c4b2982c96b7f38d683dbff85e016f77。",
+      "GetLastException 与 GetLastExceptions 现在使用带锁的 16-entry ring，并为每个异常保存独立 stack 副本。",
+      "OpenSSL 仅重试 WANT_READ/WANT_WRITE，设置五秒上限，并在 setup 失败时不再误用 SSL_get_error。",
+      "公开 class method TDebugFile.AddLog 已移除；外部调用方必须迁移到保留的 location 或 StackTrace API。",
+      "KEEP_STACKFRAMES 可保留项目 stack-frame 设置，主要用于 FPC POSIX 调试，但有明确的性能成本。",
+      "FPC Windows 使用 RTL 捕获的异常 stack，FPC ARM32 则为 TLecuyer.SeedGenerator 提供稳定的 QWord 存储。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17082 в 03ab5c85c4b2982c96b7f38d683dbff85e016f77.",
+      "GetLastException и GetLastExceptions используют защищённое кольцо из 16 записей с отдельной копией stack для каждого исключения.",
+      "OpenSSL повторяет только WANT_READ/WANT_WRITE, ограничивает ожидание пятью секундами и не применяет SSL_get_error к setup failures.",
+      "Публичный class method TDebugFile.AddLog удалён; внешние вызовы нужно перевести на оставшиеся location или StackTrace API.",
+      "KEEP_STACKFRAMES сохраняет project stack-frame settings, главным образом для FPC POSIX debugging, с документированной потерей производительности.",
+      "FPC Windows использует захваченный RTL exception stack, а FPC ARM32 получает стабильное QWord-хранилище для TLecuyer.SeedGenerator."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "Exception history and stack traces are rebuilt as one sequence",
+        "fr": "Historique des exceptions et stack traces sont reconstruits ensemble",
+        "zh": "异常历史与 stack trace 作为同一序列重构",
+        "ru": "История исключений и stack traces переписаны одной серией"
+      },
+      "summary": {
+        "en": "The logging core moves to a locked per-exception ring, copies up to 16 filtered frames into every record, reuses that stack for disk logging and fixes latest-first retrieval. FPC and Delphi stack-capture paths are consolidated around the same symbol-resolution code.",
+        "fr": "Le cœur de log passe à un ring verrouillé par exception, copie jusqu’à 16 frames filtrées dans chaque entrée, réutilise cette stack pour le log disque et corrige l’ordre latest-first. Les chemins FPC et Delphi convergent vers la même résolution de symboles.",
+        "zh": "日志核心改用带锁的 per-exception ring，每条记录复制最多 16 个过滤 frame，磁盘日志复用该 stack，并修正 latest-first 顺序。FPC 与 Delphi 的 stack 捕获统一到同一套符号解析代码。",
+        "ru": "Logging core переходит на защищённое кольцо: в каждую запись копируются до 16 отфильтрованных frames, тот же stack используется для дискового лога, а latest-first порядок исправлен. Пути FPC и Delphi сведены к общей symbol resolution."
+      },
+      "shas": [
+        "bab77b7323b2e112b024a68901d91f7cc4eaa9fe",
+        "134e87daafbc6ab2b11c18db00a4f5e766ece745",
+        "b619f4a28aa98eb478efe4383054471db5550ba7",
+        "aa3f2adeb974cf6129c52762dc86fcc269c2d1b5",
+        "7c45e35421773ecea4d87416506f6f53a7b769af",
+        "307fb2dfa52a68633fcdfbd7969ca1979c28e20b",
+        "8298b7c115c44e5e21d9455c8453e396ce880627",
+        "f661c29c33de47ea929f0c1fcc1d7aec4d391350",
+        "0043300fb1304a4227deeef703415f3201515096",
+        "ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd",
+        "efe676a8982bd1de704171e79e0b7ea9f2ecef85"
+      ]
+    },
+    {
+      "title": {
+        "en": "OpenSSL retry and setup errors reach the correct context",
+        "fr": "Les erreurs OpenSSL de retry et de setup retrouvent leur contexte",
+        "zh": "OpenSSL 重试与 setup 错误回到正确上下文",
+        "ru": "OpenSSL retry и setup errors получают правильный контекст"
+      },
+      "summary": {
+        "en": "A member WaitRetry accepts only WANT_READ or WANT_WRITE, waits on the matching socket event and stops after five seconds. CheckRes separates context/setup return codes from SSL I/O so error reporting no longer asks SSL_get_error about the wrong operation.",
+        "fr": "Le membre WaitRetry n’accepte que WANT_READ ou WANT_WRITE, attend l’événement socket correspondant et s’arrête après cinq secondes. CheckRes sépare les retours de contexte/setup des I/O SSL afin de ne plus interroger SSL_get_error sur la mauvaise opération.",
+        "zh": "成员 WaitRetry 只接受 WANT_READ/WANT_WRITE，等待对应 socket 事件并在五秒后停止。CheckRes 将 context/setup 返回值与 SSL I/O 分离，错误报告不再针对错误操作调用 SSL_get_error。",
+        "ru": "Метод WaitRetry принимает только WANT_READ/WANT_WRITE, ждёт соответствующее socket event и останавливается через пять секунд. CheckRes отделяет context/setup results от SSL I/O, поэтому SSL_get_error больше не вызывается для неверной операции."
+      },
+      "shas": [
+        "f3b1fe749d7eae2c363cceffc834362dad08a96e",
+        "03ab5c85c4b2982c96b7f38d683dbff85e016f77"
+      ]
+    },
+    {
+      "title": {
+        "en": "FPC portability and low-contention diagnostics improve",
+        "fr": "La portabilité FPC et les diagnostics à faible contention progressent",
+        "zh": "FPC 可移植性与低争用诊断得到改进",
+        "ru": "Улучшены переносимость FPC и диагностика с низкой конкуренцией"
+      },
+      "summary": {
+        "en": "FPC ARM32 receives a stable local QWord before deterministic seeding, and RetrieveSysInfo gets a dedicated lock instead of sharing OSSafe. A bounded benchmark now catches generator overruns, while UnixTimeToShort adds a direct timestamp formatter.",
+        "fr": "FPC ARM32 reçoit un QWord local stable avant le seed déterministe et RetrieveSysInfo utilise un verrou dédié au lieu de partager OSSafe. Un benchmark borné détecte les dépassements du générateur et UnixTimeToShort ajoute un formateur direct.",
+        "zh": "FPC ARM32 在确定性 seed 前使用稳定的本地 QWord，RetrieveSysInfo 改用专用锁而不再共享 OSSafe。有界 benchmark 检测 generator 越界，UnixTimeToShort 提供直接时间戳格式化。",
+        "ru": "FPC ARM32 использует стабильный локальный QWord перед deterministic seed, а RetrieveSysInfo получает отдельную блокировку вместо общей OSSafe. Ограниченный benchmark ловит выход generator за буфер, UnixTimeToShort добавляет прямое форматирование timestamp."
+      },
+      "shas": [
+        "039b0ff81356ecc7d55bb88ae13f314f9c75a450",
+        "f8d9a2952dcdd93bb4ee679c382b43d7072214ae",
+        "cd7fa5b7476eb5081550d66d481c4f57680b8386",
+        "9e8264b4fb2fca21ececdf072fc8175a01649d5a"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "bab77b7323b2e112b024a68901d91f7cc4eaa9fe",
+          "134e87daafbc6ab2b11c18db00a4f5e766ece745",
+          "b619f4a28aa98eb478efe4383054471db5550ba7",
+          "aa3f2adeb974cf6129c52762dc86fcc269c2d1b5",
+          "7c45e35421773ecea4d87416506f6f53a7b769af",
+          "307fb2dfa52a68633fcdfbd7969ca1979c28e20b",
+          "8298b7c115c44e5e21d9455c8453e396ce880627",
+          "f661c29c33de47ea929f0c1fcc1d7aec4d391350",
+          "0043300fb1304a4227deeef703415f3201515096",
+          "ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd",
+          "efe676a8982bd1de704171e79e0b7ea9f2ecef85"
+        ],
+        "why": "Take the stack-frame, symbol-resolution, exception ring and retrieval changes as one completed logging sequence."
+      },
+      {
+        "shas": [
+          "f3b1fe749d7eae2c363cceffc834362dad08a96e",
+          "03ab5c85c4b2982c96b7f38d683dbff85e016f77"
+        ],
+        "why": "Take the OpenSSL retry rewrite together with the final separation of setup-return and SSL I/O error handling."
+      },
+      {
+        "shas": [
+          "039b0ff81356ecc7d55bb88ae13f314f9c75a450",
+          "cd7fa5b7476eb5081550d66d481c4f57680b8386"
+        ],
+        "why": "Take the FPC ARM32 seed-storage repair with the benchmark bounds and deterministic-output checks."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17082. Upgrade promptly if production uses exception interception, GetLastException/GetLastExceptions or asynchronous OpenSSL sockets; test concurrent exception bursts, newest-first Depth limits, certificate/setup failures and opposite-direction WANT transitions. Grep for TDebugFile.AddLog because the public class method was removed. Enable KEEP_STACKFRAMES only where FPC POSIX diagnostics justify its documented performance cost. The raw payload has no superseded_by markers, so no avoid window is asserted.",
+    "fr": "Visez la build 2.4.17082. Mettez à niveau rapidement si la production utilise l’interception d’exceptions, GetLastException/GetLastExceptions ou des sockets OpenSSL asynchrones ; testez les rafales concurrentes, les limites Depth newest-first, les erreurs certificat/setup et les transitions WANT opposées. Recherchez TDebugFile.AddLog, dont la méthode de classe publique est supprimée. N’activez KEEP_STACKFRAMES que si le diagnostic FPC POSIX justifie son coût. Aucun superseded_by n’étaye une plage à éviter.",
+    "zh": "请采用 build 2.4.17082。若生产环境使用异常拦截、GetLastException/GetLastExceptions 或异步 OpenSSL socket，应尽快升级；测试并发异常、newest-first Depth、证书/setup 失败及相反方向 WANT 转换。搜索 TDebugFile.AddLog，因为公开 class method 已移除。仅在 FPC POSIX 诊断值得其性能成本时启用 KEEP_STACKFRAMES。原始 payload 没有 superseded_by 标记，因此不声明避开区间。",
+    "ru": "Переходите на build 2.4.17082. Обновляйтесь быстрее при exception interception, GetLastException/GetLastExceptions или async OpenSSL sockets; проверьте конкурентные всплески, newest-first Depth, certificate/setup failures и противоположные WANT transitions. Найдите вызовы TDebugFile.AddLog: публичный class method удалён. Включайте KEEP_STACKFRAMES только если FPC POSIX diagnostics оправдывает стоимость. В raw payload нет superseded_by, поэтому avoid window не заявляется."
+  },
+  "notes": {
+    "en": "Reviewed all 17 non-merge commits from build 2.4.17066 through 2.4.17082: 498 additions and 536 deletions. Version-only changes in mormot.commit.inc and mormot.commit-num.inc were ignored. No commit carries superseded_by metadata; sequencing is based on directly inspected same-unit follow-ups and does not create an avoid range.",
+    "fr": "Les 17 commits non-merge de 2.4.17066 à 2.4.17082 ont été examinés : 498 ajouts et 536 suppressions. Les changements de version seuls dans mormot.commit.inc et mormot.commit-num.inc sont ignorés. Aucun commit ne porte superseded_by ; l’ordre vient des follow-ups du même unit inspectés directement et ne crée pas de plage à éviter.",
+    "zh": "已审查 build 2.4.17066 至 2.4.17082 的全部 17 个 non-merge commit：新增 498 行、删除 536 行。忽略 mormot.commit.inc 与 mormot.commit-num.inc 的纯版本变更。没有 commit 带 superseded_by；顺序来自直接检查的同 unit follow-up，不声明避开区间。",
+    "ru": "Проверены все 17 non-merge commits от 2.4.17066 до 2.4.17082: 498 добавлений и 536 удалений. Чистые version changes в mormot.commit.inc и mormot.commit-num.inc игнорировались. superseded_by отсутствует; порядок основан на проверенных follow-ups в тех же units и не задаёт avoid range."
+  },
+  "entries": [
+    {
+      "sha": "039b0ff81356ecc7d55bb88ae13f314f9c75a450",
+      "headline": {
+        "en": "FPC ARM32 deterministic seeding uses stable local QWord storage",
+        "fr": "Le seed déterministe FPC ARM32 utilise un QWord local stable",
+        "zh": "FPC ARM32 确定性 seed 改用稳定的本地 QWord",
+        "ru": "Deterministic seed на FPC ARM32 использует стабильный локальный QWord"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.base copies the QWord argument of TLecuyer.SeedGenerator into a local tmp before passing its address to the pointer overload. The same commit changes ESChannel and ESynLabeledEdit to inherit from ExceptionWithProps.",
+        "fr": "mormot.core.base copie l’argument QWord de TLecuyer.SeedGenerator dans un tmp local avant de transmettre son adresse à l’overload pointer. Le commit fait aussi hériter ESChannel et ESynLabeledEdit de ExceptionWithProps.",
+        "zh": "mormot.core.base 将 TLecuyer.SeedGenerator 的 QWord 参数复制到本地 tmp，再把地址传给 pointer overload。同一 commit 还让 ESChannel 与 ESynLabeledEdit 继承 ExceptionWithProps。",
+        "ru": "mormot.core.base копирует QWord-параметр TLecuyer.SeedGenerator в локальный tmp перед передачей адреса pointer overload. В том же commit ESChannel и ESynLabeledEdit переведены на ExceptionWithProps."
+      },
+      "impact": {
+        "en": "FPC ARM32 no longer depends on the addressability of a by-value 64-bit parameter when producing deterministic random sequences. Existing exception handlers remain source-compatible, while the two exception classes gain the inherited property-aware behavior.",
+        "fr": "FPC ARM32 ne dépend plus de l’adressabilité d’un paramètre 64-bit passé par valeur pour produire les séquences déterministes. Les handlers restent compatibles et les deux exceptions gagnent le comportement property-aware hérité.",
+        "zh": "FPC ARM32 生成确定性随机序列时不再依赖按值传递的 64-bit 参数地址。现有异常处理代码保持兼容，两种异常类获得继承的 property-aware 行为。",
+        "ru": "FPC ARM32 больше не зависит от адресуемости 64-bit параметра по значению при deterministic sequences. Существующие handlers совместимы, а два класса получают наследуемое property-aware поведение."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "FPC ARM32 users should rebuild and compare TLecuyer.SeedGenerator output against another supported target.",
+        "fr": "Les utilisateurs FPC ARM32 doivent recompiler et comparer la sortie TLecuyer.SeedGenerator avec une autre cible prise en charge.",
+        "zh": "FPC ARM32 用户应重新构建，并将 TLecuyer.SeedGenerator 输出与另一受支持目标比较。",
+        "ru": "Пользователям FPC ARM32 следует пересобрать проект и сравнить TLecuyer.SeedGenerator с другой поддерживаемой целью."
+      },
+      "units": [
+        "mormot.core.base",
+        "mormot.net.sock.windows",
+        "mormot.ui.controls"
+      ],
+      "api_changes": [
+        {
+          "symbol": "ESChannel",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The public exception class now descends from ExceptionWithProps instead of Exception.",
+            "fr": "La classe d’exception publique descend désormais de ExceptionWithProps au lieu de Exception.",
+            "zh": "该公开异常类现在继承 ExceptionWithProps，而非 Exception。",
+            "ru": "Публичный класс исключения теперь наследует ExceptionWithProps вместо Exception."
+          }
+        },
+        {
+          "symbol": "ESynLabeledEdit",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The public UI exception class now descends from ExceptionWithProps.",
+            "fr": "La classe d’exception UI publique descend maintenant de ExceptionWithProps.",
+            "zh": "该公开 UI 异常类现在继承 ExceptionWithProps。",
+            "ru": "Публичный UI-класс исключения теперь наследует ExceptionWithProps."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f8d9a2952dcdd93bb4ee679c382b43d7072214ae",
+      "headline": {
+        "en": "System-information caching stops sharing the global OS lock",
+        "fr": "Le cache d’informations système cesse de partager le verrou OS global",
+        "zh": "系统信息缓存不再共享全局 OS 锁",
+        "ru": "Кэш системной информации больше не использует общую OS-блокировку"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os adds _SysInfoSafe and uses it around the one-second RetrieveSysInfo cache instead of OSSafe. The POSIX comment now states that the path is a one-second cache or a single syscall.",
+        "fr": "mormot.core.os ajoute _SysInfoSafe autour du cache RetrieveSysInfo d’une seconde au lieu de OSSafe. Le commentaire POSIX précise que le chemin utilise le cache ou un seul syscall.",
+        "zh": "mormot.core.os 新增 _SysInfoSafe，用它保护一秒 RetrieveSysInfo cache，而不再使用 OSSafe。POSIX 注释说明该路径为一秒缓存或单次 syscall。",
+        "ru": "mormot.core.os добавляет _SysInfoSafe для секундного RetrieveSysInfo cache вместо OSSafe. POSIX-комментарий уточняет: используется кэш или один syscall."
+      },
+      "impact": {
+        "en": "Frequent system-info logging no longer contends with unrelated users of OSSafe. Return values and the one-second cache interval are unchanged.",
+        "fr": "Les lectures fréquentes d’informations système ne contendront plus avec les autres utilisateurs de OSSafe. Les valeurs et l’intervalle d’une seconde restent inchangés.",
+        "zh": "频繁的系统信息日志不再与 OSSafe 的其他使用者争用。返回值与一秒缓存间隔不变。",
+        "ru": "Частое логирование системной информации больше не конкурирует с другими пользователями OSSafe. Результаты и секундный интервал не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cd7fa5b7476eb5081550d66d481c4f57680b8386",
+      "headline": {
+        "en": "Number benchmark detects generator overruns before copying",
+        "fr": "Le benchmark numérique détecte les dépassements avant la copie",
+        "zh": "数字 benchmark 在复制前检测 generator 越界",
+        "ru": "Числовой benchmark проверяет выход generator за буфер до копирования"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "BenchmarkNumbers records the output limit, checks p + length before MoveFast, hashes the generated buffer once and includes that hash when later parsing assertions fail.",
+        "fr": "BenchmarkNumbers mémorise la limite, vérifie p + length avant MoveFast, calcule une fois le hash du buffer et l’inclut dans les assertions de parsing suivantes.",
+        "zh": "BenchmarkNumbers 记录输出上限，在 MoveFast 前检查 p + length，只计算一次生成 buffer 的 hash，并在后续 parsing 断言失败时输出该 hash。",
+        "ru": "BenchmarkNumbers сохраняет границу, проверяет p + length до MoveFast, один раз считает hash буфера и включает его в последующие parsing assertions."
+      },
+      "impact": {
+        "en": "Production code is unchanged. The slow numerical test now fails safely and reports deterministic evidence if TLecuyer produces an unexpected distribution.",
+        "fr": "Le code de production ne change pas. Le test numérique lent échoue désormais sans overflow et rapporte une preuve déterministe si TLecuyer diverge.",
+        "zh": "生产代码未变。若 TLecuyer 产生异常分布，慢速数值测试现在会安全失败并报告确定性证据。",
+        "ru": "Production code не изменён. Медленный числовой тест безопасно завершается и сообщает deterministic evidence при неожиданном распределении TLecuyer."
+      },
+      "action": "none",
+      "units": [
+        "test.core.base"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9e8264b4fb2fca21ececdf072fc8175a01649d5a",
+      "headline": {
+        "en": "Unix timestamps gain a fixed-size ISO date-time formatter",
+        "fr": "Les timestamps Unix gagnent un formateur ISO date-heure à taille fixe",
+        "zh": "Unix 时间戳新增固定大小 ISO 日期时间格式化",
+        "ru": "Unix timestamps получили formatter ISO date-time фиксированного размера"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.datetime adds UnixTimeToShort. It converts TUnixTime through TSynSystemTime.FromUnixTime and writes a TShort31 with ToIsoDateTimeShort; FirstTimeChar defaults to a space.",
+        "fr": "mormot.core.datetime ajoute UnixTimeToShort. La fonction convertit TUnixTime via TSynSystemTime.FromUnixTime et produit un TShort31 avec ToIsoDateTimeShort ; FirstTimeChar vaut espace par défaut.",
+        "zh": "mormot.core.datetime 新增 UnixTimeToShort。它通过 TSynSystemTime.FromUnixTime 转换 TUnixTime，再由 ToIsoDateTimeShort 写入 TShort31；FirstTimeChar 默认为空格。",
+        "ru": "mormot.core.datetime добавляет UnixTimeToShort. TUnixTime преобразуется через TSynSystemTime.FromUnixTime в TShort31 методом ToIsoDateTimeShort; FirstTimeChar по умолчанию равен пробелу."
+      },
+      "impact": {
+        "en": "Callers can format an epoch timestamp as compact ISO date-time text without allocating a managed string. Existing date helpers are unchanged.",
+        "fr": "Les appelants peuvent formater un epoch en texte ISO compact sans allouer de managed string. Les helpers existants ne changent pas.",
+        "zh": "调用方可将 epoch 格式化为紧凑 ISO 日期时间文本，而无需分配 managed string。现有日期 helper 不变。",
+        "ru": "Можно форматировать epoch в компактный ISO date-time без managed string. Существующие date helpers не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "api_changes": [
+        {
+          "symbol": "UnixTimeToShort",
+          "change": "added",
+          "note": {
+            "en": "A public TUnixTime-to-TShort31 formatter with configurable FirstTimeChar is available.",
+            "fr": "Un formateur public TUnixTime vers TShort31 avec FirstTimeChar configurable est disponible.",
+            "zh": "新增公开 TUnixTime-to-TShort31 formatter，可配置 FirstTimeChar。",
+            "ru": "Добавлен публичный formatter TUnixTime-to-TShort31 с настраиваемым FirstTimeChar."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bab77b7323b2e112b024a68901d91f7cc4eaa9fe",
+      "headline": {
+        "en": "KEEP_STACKFRAMES preserves project stack-frame settings for diagnostics",
+        "fr": "KEEP_STACKFRAMES conserve les réglages de stack frames du projet",
+        "zh": "KEEP_STACKFRAMES 保留项目 stack-frame 设置",
+        "ru": "KEEP_STACKFRAMES сохраняет project stack-frame settings"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.defines.inc declares KEEP_STACKFRAMES and stops forcing {$W-} when it is set. Exception interception and stack-trace sections in mormot.core.log and mormot.core.os also preserve the project setting instead of toggling frames locally.",
+        "fr": "mormot.defines.inc déclare KEEP_STACKFRAMES et ne force plus {$W-} lorsqu’il est défini. Les sections d’interception et de stack trace dans mormot.core.log et mormot.core.os conservent aussi le réglage du projet.",
+        "zh": "mormot.defines.inc 声明 KEEP_STACKFRAMES，定义后不再强制 {$W-}。mormot.core.log 与 mormot.core.os 的异常拦截和 stack-trace 区段也保留项目设置。",
+        "ru": "mormot.defines.inc объявляет KEEP_STACKFRAMES и не форсирует {$W-}, когда символ задан. Секции exception interception и stack trace в mormot.core.log/mormot.core.os также сохраняют настройку проекта."
+      },
+      "impact": {
+        "en": "FPC POSIX builds can retain stack frames where unwinding data is unavailable, improving diagnostics. It is disabled by default, documented as unsuitable for Delphi Win32 and has a measurable performance cost.",
+        "fr": "Les builds FPC POSIX peuvent conserver les stack frames sans données d’unwind et améliorer le diagnostic. L’option est désactivée par défaut, déconseillée sous Delphi Win32 et coûte en performances.",
+        "zh": "FPC POSIX build 可在缺少 unwinding 数据时保留 stack frame，从而改进诊断。该选项默认关闭，不适用于 Delphi Win32，并有可测性能成本。",
+        "ru": "FPC POSIX builds могут сохранять stack frames при отсутствии unwinding data. Опция выключена по умолчанию, не рекомендована для Delphi Win32 и имеет измеримую стоимость."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Enable KEEP_STACKFRAMES only for targets that need the extra diagnostics, then benchmark hot paths and verify frame quality.",
+        "fr": "Activez KEEP_STACKFRAMES seulement sur les cibles qui nécessitent ces diagnostics, puis mesurez les hot paths et la qualité des frames.",
+        "zh": "仅在确需额外诊断的目标启用 KEEP_STACKFRAMES，并对 hot path 与 frame 质量进行基准测试。",
+        "ru": "Включайте KEEP_STACKFRAMES только для целей, которым нужна диагностика, затем измерьте hot paths и качество frames."
+      },
+      "units": [
+        "mormot.defines",
+        "mormot.core.log",
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "api_changes": [
+        {
+          "symbol": "KEEP_STACKFRAMES",
+          "change": "added",
+          "note": {
+            "en": "A public compile-time conditional can keep the project’s stack-frame generation setting.",
+            "fr": "Un conditional de compilation public conserve le réglage de génération des stack frames du projet.",
+            "zh": "新增公开编译 conditional，可保留项目的 stack-frame 生成设置。",
+            "ru": "Новый публичный compile-time conditional сохраняет настройку генерации stack frames проекта."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "134e87daafbc6ab2b11c18db00a4f5e766ece745",
+      "headline": {
+        "en": "FPC Windows exceptions retain the RTL-captured call stack",
+        "fr": "Les exceptions FPC Windows conservent la call stack capturée par le RTL",
+        "zh": "FPC Windows 异常保留 RTL 捕获的 call stack",
+        "ru": "Исключения FPC Windows сохраняют call stack, захваченный RTL"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The Windows LogExcept handler reads FPC exception parameters 2 and 3 when the captured frame count is below 63, placing the RTL stack pointer and count in TSynLogExceptionContext. Nested interception is disabled before context construction and restored afterward.",
+        "fr": "Le handler Windows LogExcept lit les paramètres FPC 2 et 3 quand le nombre de frames est inférieur à 63, puis place pointer et count RTL dans TSynLogExceptionContext. L’interception imbriquée est coupée avant la construction du contexte.",
+        "zh": "Windows LogExcept handler 在 frame 数低于 63 时读取 FPC 异常参数 2/3，并把 RTL stack pointer 与 count 写入 TSynLogExceptionContext。构建上下文前禁用嵌套拦截，之后恢复。",
+        "ru": "Windows LogExcept читает параметры FPC 2 и 3 при числе frames меньше 63 и помещает RTL stack pointer/count в TSynLogExceptionContext. Nested interception отключается до построения контекста и восстанавливается после."
+      },
+      "impact": {
+        "en": "FPC Windows exception logs can use the stack captured at the actual raise site instead of reconstructing it later. The pointer remains valid only inside the exception handler and is copied by later commits in this edition.",
+        "fr": "Les logs d’exception FPC Windows utilisent la stack capturée au point exact du raise au lieu de la reconstruire plus tard. Le pointer n’est valide que dans le handler et sera copié par les commits suivants.",
+        "zh": "FPC Windows 异常日志可使用实际 raise 点捕获的 stack，而非稍后重建。该 pointer 仅在异常 handler 内有效，并由本版后续 commit 复制。",
+        "ru": "Логи FPC Windows используют stack из точного места raise, а не восстанавливают его позже. Pointer действителен только внутри handler и копируется последующими commits этой редакции."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "FPC Windows services that depend on exception stacks should take the complete sequence through build 2.4.17080 and compare symbolized frames.",
+        "fr": "Les services FPC Windows dépendant des stacks d’exception doivent prendre toute la séquence jusqu’à 2.4.17080 et comparer les frames symbolisées.",
+        "zh": "依赖异常 stack 的 FPC Windows 服务应采用完整序列至 build 2.4.17080，并比较符号化 frame。",
+        "ru": "Сервисам FPC Windows, зависящим от exception stacks, следует взять всю серию до 2.4.17080 и сравнить symbolized frames."
+      },
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b619f4a28aa98eb478efe4383054471db5550ba7",
+      "headline": {
+        "en": "Current debug-symbol loading becomes a one-time atomic initialization",
+        "fr": "Le chargement des symboles courants devient une initialisation atomique unique",
+        "zh": "当前调试符号加载变为一次性原子初始化",
+        "ru": "Загрузка текущих debug symbols стала однократной атомарной инициализацией"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TDebugFile.CurrentDebugFile replaces a nil/sentinel check with DebugFileCurrentSearched.TryLock and resolves DebugFileRegister only once. The cached pointer remains an aligned atomic read for all later callers.",
+        "fr": "TDebugFile.CurrentDebugFile remplace le test nil/sentinel par DebugFileCurrentSearched.TryLock et ne résout DebugFileRegister qu’une fois. Les appels suivants lisent le pointer aligné atomiquement.",
+        "zh": "TDebugFile.CurrentDebugFile 用 DebugFileCurrentSearched.TryLock 取代 nil/sentinel 检查，只解析一次 DebugFileRegister。后续调用只进行对齐的原子 pointer 读取。",
+        "ru": "TDebugFile.CurrentDebugFile заменяет nil/sentinel-проверку на DebugFileCurrentSearched.TryLock и разрешает DebugFileRegister один раз. Последующие вызовы атомарно читают выровненный pointer."
+      },
+      "impact": {
+        "en": "Concurrent first use no longer races through repeated current-executable debug-file discovery. Public behavior remains a TDebugFile instance or nil when symbols are unavailable.",
+        "fr": "Les premiers appels concurrents ne lancent plus plusieurs découvertes du debug file courant. Le comportement public reste un TDebugFile ou nil si les symboles sont absents.",
+        "zh": "并发首次调用不再重复竞争当前可执行文件的 debug-file 发现。公开行为仍为返回 TDebugFile，或在无符号时返回 nil。",
+        "ru": "Конкурентный первый вызов больше не запускает повторный поиск debug file. Публичный результат остаётся TDebugFile или nil при отсутствии символов."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade logging-heavy services that may initialize symbol lookup concurrently during startup or exception bursts.",
+        "fr": "Mettez à niveau les services de log susceptibles d’initialiser les symboles en concurrence au démarrage ou pendant une rafale d’exceptions.",
+        "zh": "可能在启动或异常突发时并发初始化符号查找的日志密集服务应升级。",
+        "ru": "Обновите logging-heavy services, где symbol lookup может одновременно запускаться при старте или всплеске исключений."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "aa3f2adeb974cf6129c52762dc86fcc269c2d1b5",
+      "headline": {
+        "en": "Public TDebugFile.AddLog is removed during symbol-writer consolidation",
+        "fr": "TDebugFile.AddLog public est supprimé lors de la consolidation des symboles",
+        "zh": "符号写入合并时移除了公开 TDebugFile.AddLog",
+        "ru": "Публичный TDebugFile.AddLog удалён при объединении symbol writer"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The public static class function TDebugFile.AddLog is removed. The former protected AppendLog becomes an instance AddLog used internally, gains nil/no-address guards and filters more exception-interception frames.",
+        "fr": "La class function statique publique TDebugFile.AddLog est supprimée. L’ancien AppendLog protected devient un AddLog d’instance interne, ajoute des gardes nil/adresse et filtre plus de frames d’interception.",
+        "zh": "公开 static class function TDebugFile.AddLog 被移除。原 protected AppendLog 改为内部 instance AddLog，新增 nil/零地址保护，并过滤更多异常拦截 frame。",
+        "ru": "Публичная static class function TDebugFile.AddLog удалена. Прежний protected AppendLog стал внутренним instance AddLog, получил проверки nil/адреса и фильтрацию interception frames."
+      },
+      "impact": {
+        "en": "Application code that called TDebugFile.AddLog no longer compiles. Internal stack logging keeps equivalent writer behavior through the cached TDebugFile instance.",
+        "fr": "Le code applicatif appelant TDebugFile.AddLog ne compile plus. Le logging interne conserve le comportement writer via l’instance TDebugFile en cache.",
+        "zh": "调用 TDebugFile.AddLog 的应用代码将无法编译。内部 stack 日志通过缓存的 TDebugFile instance 保持等效 writer 行为。",
+        "ru": "Код с вызовом TDebugFile.AddLog больше не компилируется. Внутренний stack logging сохраняет writer behavior через кэшированный TDebugFile instance."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Grep for TDebugFile.AddLog. Use FindLocationShort or FindLocation for one address, or a StackTrace overload for a captured call stack, then append that text to your writer.",
+        "fr": "Recherchez TDebugFile.AddLog. Utilisez FindLocationShort ou FindLocation pour une adresse, ou un overload StackTrace pour une call stack, puis ajoutez ce texte à votre writer.",
+        "zh": "搜索 TDebugFile.AddLog。单地址改用 FindLocationShort/FindLocation，call stack 改用 StackTrace overload，再将文本追加到 writer。",
+        "ru": "Найдите TDebugFile.AddLog. Для одного адреса используйте FindLocationShort/FindLocation, для call stack — StackTrace overload, затем добавьте текст в writer."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.AddLog",
+          "change": "removed",
+          "note": {
+            "en": "The public static writer helper is no longer exposed.",
+            "fr": "Le helper writer statique public n’est plus exposé.",
+            "zh": "公开 static writer helper 不再暴露。",
+            "ru": "Публичный static writer helper больше не доступен."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7c45e35421773ecea4d87416506f6f53a7b769af",
+      "headline": {
+        "en": "Raw frame arrays gain a bounded short-symbol formatter",
+        "fr": "Les tableaux de frames gagnent un formateur de symboles courts borné",
+        "zh": "原始 frame 数组新增有界短符号格式化",
+        "ru": "Массивы raw frames получили ограниченный formatter коротких символов"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "TDebugFile.AppendLocationsShort accepts a PPtrUIntArray, frame count and depth, skips adjacent duplicate addresses and appends only symbols resolved by a matching TDebugFile until the ShortString is full.",
+        "fr": "TDebugFile.AppendLocationsShort accepte PPtrUIntArray, count et depth, ignore les adresses adjacentes dupliquées et ajoute les symboles résolus jusqu’au remplissage du ShortString.",
+        "zh": "TDebugFile.AppendLocationsShort 接受 PPtrUIntArray、frame count 与 depth，跳过相邻重复地址，只追加可由匹配 TDebugFile 解析的符号，直到 ShortString 填满。",
+        "ru": "TDebugFile.AppendLocationsShort принимает PPtrUIntArray, count и depth, пропускает соседние дубликаты и добавляет разрешённые символы до заполнения ShortString."
+      },
+      "impact": {
+        "en": "Callers with an already captured frame array can format it without recapturing the current stack or allocating a managed string.",
+        "fr": "Les appelants disposant déjà d’un tableau de frames peuvent le formater sans recapturer la stack ni allouer de managed string.",
+        "zh": "已有捕获 frame 数组的调用方可直接格式化，无需再次捕获当前 stack 或分配 managed string。",
+        "ru": "Готовый массив frames можно форматировать без повторного захвата stack и без managed string."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDebugFile.AppendLocationsShort",
+          "change": "added",
+          "note": {
+            "en": "A public bounded formatter for captured address arrays is available.",
+            "fr": "Un formateur public borné pour tableaux d’adresses capturées est disponible.",
+            "zh": "新增用于已捕获地址数组的公开有界 formatter。",
+            "ru": "Добавлен публичный ограниченный formatter массивов захваченных адресов."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "307fb2dfa52a68633fcdfbd7969ca1979c28e20b",
+      "headline": {
+        "en": "Delphi Win32 manual stack walk suppresses duplicate addresses",
+        "fr": "Le stack walk manuel Delphi Win32 supprime les adresses dupliquées",
+        "zh": "Delphi Win32 手动 stack walk 抑制重复地址",
+        "ru": "Ручной stack walk Delphi Win32 удаляет повторяющиеся адреса"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "ManualStackTrace now calls IntegerScanExists before accepting a candidate return address, so the same address is not emitted more than once. The upstream subject explicitly notes that false positives still remain.",
+        "fr": "ManualStackTrace appelle désormais IntegerScanExists avant d’accepter une adresse de retour, évitant les doublons. Le sujet upstream précise que beaucoup de faux positifs subsistent.",
+        "zh": "ManualStackTrace 在接受候选返回地址前调用 IntegerScanExists，避免重复输出同一地址。上游 subject 明确指出仍有许多 false positive。",
+        "ru": "ManualStackTrace вызывает IntegerScanExists перед принятием return address и не выдаёт дубликаты. Upstream прямо отмечает, что false positives всё ещё многочисленны."
+      },
+      "impact": {
+        "en": "Delphi Win32 fallback traces contain fewer duplicate frames, but callers should not treat the heuristic output as fully reliable.",
+        "fr": "Les traces fallback Delphi Win32 contiennent moins de doublons, mais leur sortie heuristique ne doit pas être considérée comme totalement fiable.",
+        "zh": "Delphi Win32 fallback trace 的重复 frame 更少，但调用方仍不应把启发式输出视为完全可靠。",
+        "ru": "Fallback traces Delphi Win32 содержат меньше дубликатов, но эвристический результат всё ещё не полностью надёжен."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8298b7c115c44e5e21d9455c8453e396ce880627",
+      "headline": {
+        "en": "Last-exception storage is rebuilt to remove a random GPF and unsafe sharing",
+        "fr": "Le stockage des dernières exceptions est reconstruit pour supprimer un GPF aléatoire",
+        "zh": "最近异常存储重构，消除随机 GPF 与不安全共享",
+        "ru": "Хранилище последних исключений переписано для устранения случайного GPF"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.core.log replaces the old shared stack and index with a TLightLock-protected 16-slot ring. Each TSynLogExceptionInfo owns up to 16 filtered addresses, clears EInstance/EStack references and copies Message while the exception is still valid.",
+        "fr": "mormot.core.log remplace l’ancien stack/index partagé par un ring de 16 slots protégé par TLightLock. Chaque TSynLogExceptionInfo possède jusqu’à 16 adresses filtrées, efface EInstance/EStack et copie Message tant que l’exception est valide.",
+        "zh": "mormot.core.log 用 TLightLock 保护的 16-slot ring 取代旧的共享 stack/index。每个 TSynLogExceptionInfo 保存最多 16 个过滤地址，清除 EInstance/EStack 引用，并在异常仍有效时复制 Message。",
+        "ru": "mormot.core.log заменяет общий stack/index на кольцо из 16 слотов под TLightLock. Каждый TSynLogExceptionInfo хранит до 16 отфильтрованных адресов, очищает EInstance/EStack и копирует Message, пока исключение действительно."
+      },
+      "impact": {
+        "en": "Concurrent exception interception no longer exposes one exception’s stack through shared mutable storage or retains an invalid exception instance. Upstream identifies the previous design as causing a random GPF and unsafe memory/threading behavior.",
+        "fr": "L’interception concurrente n’expose plus la stack d’une exception via un stockage partagé mutable et ne conserve plus une instance invalide. Upstream attribue à l’ancien modèle un GPF aléatoire et un comportement mémoire/threading non sûr.",
+        "zh": "并发异常拦截不再通过共享可变存储暴露其他异常的 stack，也不再保留失效异常 instance。上游明确指出旧设计会造成随机 GPF 及不安全的 memory/threading 行为。",
+        "ru": "Конкурентный перехват больше не делит изменяемый stack между исключениями и не сохраняет недействительный instance. Upstream связывает прежнюю модель со случайным GPF и небезопасным memory/threading behavior."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Services with exception interception enabled should upgrade through build 2.4.17080 and stress concurrent exceptions plus GetLastException/GetLastExceptions readers.",
+        "fr": "Les services avec interception d’exceptions doivent aller jusqu’à 2.4.17080 et stresser les exceptions concurrentes ainsi que les lecteurs GetLastException/GetLastExceptions.",
+        "zh": "启用异常拦截的服务应升级到 build 2.4.17080，并压力测试并发异常及 GetLastException/GetLastExceptions 读取。",
+        "ru": "Сервисам с exception interception следует обновиться до 2.4.17080 и нагрузить конкурентные исключения вместе с GetLastException/GetLastExceptions."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynLogStackTrace",
+          "change": "added",
+          "note": {
+            "en": "A public fixed array stores up to MAX_STACK_TRACE filtered addresses per exception.",
+            "fr": "Un tableau fixe public stocke jusqu’à MAX_STACK_TRACE adresses filtrées par exception.",
+            "zh": "新增公开固定数组，每个异常保存最多 MAX_STACK_TRACE 个过滤地址。",
+            "ru": "Публичный фиксированный массив хранит до MAX_STACK_TRACE адресов на исключение."
+          }
+        },
+        {
+          "symbol": "TSynLogExceptionInfo.StackTrace",
+          "change": "added",
+          "note": {
+            "en": "Each returned exception record now owns its copied stack addresses.",
+            "fr": "Chaque entrée d’exception retournée possède désormais sa copie des adresses de stack.",
+            "zh": "每个返回的异常记录现在拥有自己的 stack 地址副本。",
+            "ru": "Каждая возвращаемая запись исключения теперь содержит собственную копию stack addresses."
+          }
+        },
+        {
+          "symbol": "PSynLogExceptionInfo",
+          "change": "added",
+          "note": {
+            "en": "A public pointer alias for TSynLogExceptionInfo is introduced.",
+            "fr": "Un alias pointer public pour TSynLogExceptionInfo est introduit.",
+            "zh": "新增 TSynLogExceptionInfo 的公开 pointer alias。",
+            "ru": "Добавлен публичный pointer alias для TSynLogExceptionInfo."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f661c29c33de47ea929f0c1fcc1d7aec4d391350",
+      "headline": {
+        "en": "StackTrace overloads share one frame-capture and symbol path",
+        "fr": "Les overloads StackTrace partagent un seul chemin de capture et de symboles",
+        "zh": "StackTrace overload 统一 frame 捕获与符号路径",
+        "ru": "Overloads StackTrace используют общий путь захвата frames и символов"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TDebugFile.AppendCallerShort now captures RawStackTrace and delegates to AppendLocationsShort. The writer StackTrace overload resolves CurrentDebugFile once, and TSynLog.AddStackTrace uses that overload for all compiler branches instead of separate Delphi/FPC implementations.",
+        "fr": "TDebugFile.AppendCallerShort capture RawStackTrace puis délègue à AppendLocationsShort. L’overload writer résout CurrentDebugFile une fois et TSynLog.AddStackTrace l’utilise pour toutes les branches compiler.",
+        "zh": "TDebugFile.AppendCallerShort 捕获 RawStackTrace 后委托给 AppendLocationsShort。writer StackTrace overload 只解析一次 CurrentDebugFile，TSynLog.AddStackTrace 在所有 compiler 分支统一使用它。",
+        "ru": "TDebugFile.AppendCallerShort захватывает RawStackTrace и передаёт его AppendLocationsShort. Writer overload один раз получает CurrentDebugFile, а TSynLog.AddStackTrace использует его для всех compiler branches."
+      },
+      "impact": {
+        "en": "Stack formatting follows one implementation across Delphi and FPC, reducing divergent filtering behavior. Application signatures are unchanged, but exact frame lists may differ after the consolidation.",
+        "fr": "Le formatage suit une implémentation commune sous Delphi et FPC, réduisant les divergences de filtrage. Les signatures restent identiques, mais la liste exacte des frames peut changer.",
+        "zh": "Delphi 与 FPC 的 stack 格式化使用同一实现，减少过滤差异。应用签名未变，但合并后具体 frame 列表可能不同。",
+        "ru": "Форматирование stack унифицировано для Delphi/FPC. Сигнатуры не меняются, но точный список frames после объединения может отличаться."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "If tooling parses symbolized stack text, compare representative Delphi and FPC exception logs after upgrading.",
+        "fr": "Si un outil parse les stacks symbolisées, comparez des logs Delphi et FPC représentatifs après mise à niveau.",
+        "zh": "若工具会解析符号化 stack 文本，请在升级后比较有代表性的 Delphi/FPC 异常日志。",
+        "ru": "Если tooling разбирает symbolized stack text, сравните типичные логи Delphi и FPC после обновления."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "interpretation"
+    },
+    {
+      "sha": "0043300fb1304a4227deeef703415f3201515096",
+      "headline": {
+        "en": "Exception interception switches away from the family being disabled",
+        "fr": "L’interception d’exceptions évite la family en cours de désactivation",
+        "zh": "异常拦截切换时跳过正在禁用的 family",
+        "ru": "Exception interception пропускает отключаемую family"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SearchHandleException receives an ignore pointer, and TSynLogFamily.SetLevel passes self when selecting a replacement family. TSynLogThreads.Safe is kept first while Count moves before managed arrays to preserve AArch64 alignment.",
+        "fr": "SearchHandleException reçoit un pointer à ignorer et TSynLogFamily.SetLevel lui passe self lors du choix d’une family de remplacement. TSynLogThreads.Safe reste premier et Count précède les tableaux managed pour l’alignement AArch64.",
+        "zh": "SearchHandleException 新增 ignore pointer，TSynLogFamily.SetLevel 选择替代 family 时传入 self。TSynLogThreads.Safe 保持首字段，Count 移到 managed array 前以维持 AArch64 对齐。",
+        "ru": "SearchHandleException получает ignore pointer, а TSynLogFamily.SetLevel передаёт self при выборе replacement family. TSynLogThreads.Safe остаётся первым, Count перемещён перед managed arrays для AArch64 alignment."
+      },
+      "impact": {
+        "en": "Disabling exception handling on the active log family can hand interception to another enabled family instead of selecting the one being disabled again. The record layout keeps its lock alignment on AArch64.",
+        "fr": "Désactiver l’interception sur la family active peut désormais la transférer à une autre family active au lieu de resélectionner celle qui se désactive. Le lock reste aligné sur AArch64.",
+        "zh": "禁用当前 log family 的异常处理时，可切换到另一启用 family，而不会再次选中正在禁用的 family。AArch64 上 lock 对齐保持不变。",
+        "ru": "При отключении активной log family перехват передаётся другой включённой family, а не выбирает отключаемую снова. Выравнивание lock на AArch64 сохранено."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Applications with several TSynLogFamily instances should test enabling and disabling HandleExceptions while exceptions are raised.",
+        "fr": "Les applications avec plusieurs TSynLogFamily doivent tester l’activation et la désactivation de HandleExceptions pendant des exceptions.",
+        "zh": "使用多个 TSynLogFamily 的应用应测试异常发生时启用/禁用 HandleExceptions。",
+        "ru": "Приложениям с несколькими TSynLogFamily следует проверить включение/отключение HandleExceptions во время исключений."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ff2fda39d3a2ec5b34fb5d4ddda7d78a6434c6cd",
+      "headline": {
+        "en": "Disk exception logs reuse the safely copied history stack",
+        "fr": "Les logs d’exception disque réutilisent la stack copiée en sécurité",
+        "zh": "磁盘异常日志复用安全复制的历史 stack",
+        "ru": "Дисковые exception logs используют безопасно скопированный history stack"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SynLogException now writes the precomputed filtered frames produced before the history-ring copy instead of resolving a second stack inside the file-writer path. The nested writer try/except is simplified while the writer lock remains protected by finally.",
+        "fr": "SynLogException écrit désormais les frames filtrées pré-calculées avant la copie dans le ring, au lieu de résoudre une seconde stack dans le writer disque. Le try/except imbriqué est simplifié et le lock reste protégé par finally.",
+        "zh": "SynLogException 现在写入历史 ring 复制前预计算的过滤 frame，不再在文件 writer 路径中解析第二份 stack。嵌套 try/except 被简化，writer lock 仍由 finally 保护。",
+        "ru": "SynLogException пишет заранее вычисленные frames до копирования в history ring, а не разрешает второй stack внутри file writer. Вложенный try/except упрощён, writer lock по-прежнему освобождается в finally."
+      },
+      "impact": {
+        "en": "The in-memory history and disk line describe the same call stack, and symbol lookup no longer runs twice in the unstable exception context. Upstream states this avoids most symbol-resolution instability.",
+        "fr": "L’historique mémoire et la ligne disque décrivent la même call stack, et la résolution ne s’exécute plus deux fois dans le contexte instable. Upstream indique que cela évite l’essentiel de l’instabilité.",
+        "zh": "内存历史与磁盘日志描述同一 call stack，符号解析不再于不稳定异常上下文中执行两次。上游说明这可避免大多数符号解析不稳定。",
+        "ru": "История в памяти и строка на диске описывают один stack; symbol lookup не выполняется дважды в нестабильном exception context. Upstream указывает, что это устраняет большую часть нестабильности."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade exception-heavy services through build 2.4.17080 and compare the disk trace with GetLastExceptionText under concurrent failures.",
+        "fr": "Mettez les services riches en exceptions à niveau jusqu’à 2.4.17080 et comparez la trace disque à GetLastExceptionText sous erreurs concurrentes.",
+        "zh": "异常密集服务应升级到 build 2.4.17080，并在并发失败下比较磁盘 trace 与 GetLastExceptionText。",
+        "ru": "Обновите exception-heavy services до 2.4.17080 и сравните disk trace с GetLastExceptionText при конкурентных ошибках."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "efe676a8982bd1de704171e79e0b7ea9f2ecef85",
+      "headline": {
+        "en": "Latest-exception retrieval returns the correct slot and newest-first depth",
+        "fr": "La récupération renvoie le bon slot et respecte depth en newest-first",
+        "zh": "最近异常读取修正 slot，并按 newest-first 应用 depth",
+        "ru": "Получение последних исключений исправляет slot и newest-first depth"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "GetLastException reads Infos[Next - 1], wrapping zero to the array length. GetLastExceptions now walks backward from Next, stops at empty entries, applies Depth to the newest records and returns them latest-first.",
+        "fr": "GetLastException lit Infos[Next - 1] en transformant zéro en longueur du tableau. GetLastExceptions parcourt depuis Next vers l’arrière, s’arrête aux entrées vides, applique Depth aux plus récentes et renvoie latest-first.",
+        "zh": "GetLastException 读取 Infos[Next - 1]，Next 为零时回绕到数组长度。GetLastExceptions 从 Next 向后遍历，遇空项停止，对最新记录应用 Depth，并按 latest-first 返回。",
+        "ru": "GetLastException читает Infos[Next - 1], заменяя ноль длиной массива. GetLastExceptions идёт назад от Next, останавливается на пустых слотах, применяет Depth к новым записям и возвращает latest-first."
+      },
+      "impact": {
+        "en": "Consumers no longer receive the next unwritten slot as the latest exception, and Depth no longer selects or orders the wrong side of the ring. Delphi Win32 manual fallback is also limited explicitly to WIN32DELPHI.",
+        "fr": "Les consommateurs ne reçoivent plus le prochain slot non écrit comme dernière exception et Depth ne sélectionne plus le mauvais côté du ring. Le fallback manuel est aussi limité explicitement à WIN32DELPHI.",
+        "zh": "调用方不再把下一个未写 slot 当作最新异常，Depth 也不再选择或排序 ring 的错误一侧。Delphi Win32 手动 fallback 还被明确限制到 WIN32DELPHI。",
+        "ru": "Потребители больше не получают следующий пустой slot как последнее исключение, а Depth выбирает правильную сторону кольца. Ручной fallback явно ограничен WIN32DELPHI."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this completion of the history rewrite and test Depth values 1, the ring size and larger under concurrent exception production.",
+        "fr": "Prenez ce correctif final et testez Depth à 1, à la taille du ring et au-delà sous production concurrente d’exceptions.",
+        "zh": "采用该历史重构的最终修复，并在并发异常下测试 Depth=1、ring 大小及更大值。",
+        "ru": "Возьмите это завершение history rewrite и проверьте Depth=1, размер кольца и большие значения при конкурентных исключениях."
+      },
+      "units": [
+        "mormot.core.log"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f3b1fe749d7eae2c363cceffc834362dad08a96e",
+      "headline": {
+        "en": "OpenSSL retries reject non-WANT errors immediately",
+        "fr": "Les retries OpenSSL rejettent immédiatement les erreurs non-WANT",
+        "zh": "OpenSSL 重试立即拒绝非 WANT 错误",
+        "ru": "OpenSSL retry немедленно отклоняет ошибки не-WANT"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "WaitRetry becomes a TOpenSslNetTls member, maps only SSL_ERROR_WANT_READ and SSL_ERROR_WANT_WRITE to matching socket events, raises CheckFailed for every other error and keeps the five-second deadline. CheckProc, Receive and Send pass the actual SSL result into it.",
+        "fr": "WaitRetry devient membre de TOpenSslNetTls, mappe seulement SSL_ERROR_WANT_READ/WRITE vers les événements socket, lève CheckFailed pour toute autre erreur et conserve la limite de cinq secondes. CheckProc, Receive et Send lui passent le résultat SSL réel.",
+        "zh": "WaitRetry 改为 TOpenSslNetTls 成员，仅把 SSL_ERROR_WANT_READ/WRITE 映射到对应 socket 事件，其他错误直接抛出 CheckFailed，并保留五秒期限。CheckProc、Receive、Send 传入实际 SSL result。",
+        "ru": "WaitRetry стал методом TOpenSslNetTls, отображает только SSL_ERROR_WANT_READ/WRITE на соответствующие socket events, для остальных вызывает CheckFailed и сохраняет пятисекундный deadline. CheckProc, Receive и Send передают реальный SSL result."
+      },
+      "impact": {
+        "en": "Fatal TLS errors are no longer treated as generic socket readiness waits, and asynchronous opposite-direction WANT transitions remain bounded. Failed handshakes and I/O should surface their real OpenSSL error sooner.",
+        "fr": "Les erreurs TLS fatales ne sont plus traitées comme de simples attentes de disponibilité socket et les transitions WANT opposées restent bornées. Les échecs remontent plus vite leur véritable erreur OpenSSL.",
+        "zh": "致命 TLS 错误不再被当成通用 socket readiness 等待，相反方向 WANT 转换仍有界。握手/I/O 失败应更快暴露真实 OpenSSL 错误。",
+        "ru": "Фатальные TLS errors больше не превращаются в ожидание socket readiness, а противоположные WANT transitions остаются ограниченными. Реальная OpenSSL error появляется раньше."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade through build 2.4.17082 and test SSL_connect, SSL_accept, Send and Receive with WANT_READ, WANT_WRITE, timeout and terminal failure.",
+        "fr": "Passez à 2.4.17082 et testez SSL_connect, SSL_accept, Send et Receive avec WANT_READ, WANT_WRITE, timeout et erreur terminale.",
+        "zh": "升级到 build 2.4.17082，并测试 SSL_connect、SSL_accept、Send、Receive 的 WANT_READ、WANT_WRITE、timeout 与终止失败。",
+        "ru": "Обновитесь до 2.4.17082 и проверьте SSL_connect, SSL_accept, Send и Receive при WANT_READ, WANT_WRITE, timeout и terminal failure."
+      },
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "03ab5c85c4b2982c96b7f38d683dbff85e016f77",
+      "headline": {
+        "en": "OpenSSL setup failures no longer ask the I/O error API for context",
+        "fr": "Les erreurs de setup OpenSSL ne consultent plus l’API d’erreur I/O",
+        "zh": "OpenSSL setup 失败不再向 I/O 错误 API 查询上下文",
+        "ru": "OpenSSL setup failures больше не используют I/O error API"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The former TOpenSslNetTls.Check is renamed CheckRes and passes nil instead of fSsl to CheckFailed for context/setup return codes. Certificate, key, cipher, hostname and set_fd checks use it, while a missing peer certificate raises a direct EOpenSslNetTls message.",
+        "fr": "L’ancien TOpenSslNetTls.Check devient CheckRes et passe nil au lieu de fSsl à CheckFailed pour les codes context/setup. Les vérifications certificat, clé, cipher, hostname et set_fd l’utilisent ; l’absence de peer certificate lève un message direct.",
+        "zh": "原 TOpenSslNetTls.Check 重命名为 CheckRes，在处理 context/setup 返回码时向 CheckFailed 传 nil 而非 fSsl。证书、密钥、cipher、hostname 与 set_fd 检查均使用它；缺少 peer certificate 时直接抛出 EOpenSslNetTls。",
+        "ru": "Прежний TOpenSslNetTls.Check переименован в CheckRes и передаёт nil вместо fSsl в CheckFailed для context/setup results. Его используют certificate, key, cipher, hostname и set_fd checks; отсутствие peer certificate вызывает прямой EOpenSslNetTls."
+      },
+      "impact": {
+        "en": "Configuration and certificate failures report the return-code context that actually failed instead of deriving an unrelated SSL_get_error from the live SSL object. This is the final head of the edition’s OpenSSL sequence.",
+        "fr": "Les erreurs de configuration et certificat rapportent le contexte du code qui a réellement échoué au lieu de dériver un SSL_get_error sans rapport depuis l’objet SSL. C’est le head final de la séquence OpenSSL.",
+        "zh": "配置与证书失败现在报告真正失败的返回码上下文，不再从活动 SSL 对象推导无关的 SSL_get_error。这是本版 OpenSSL 序列的最终 head。",
+        "ru": "Ошибки конфигурации и сертификата сообщают контекст реально сбойного return code, а не посторонний SSL_get_error от активного SSL object. Это финальный head OpenSSL-серии."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Land on this build and verify invalid certificates, missing peer certificates, bad private keys, cipher configuration and hostname validation produce actionable errors.",
+        "fr": "Visez cette build et vérifiez que certificats invalides ou absents, mauvaises clés, ciphers et hostname validation produisent des erreurs exploitables.",
+        "zh": "采用该 build，并验证无效/缺失证书、错误私钥、cipher 配置与 hostname 验证会产生可操作错误。",
+        "ru": "Переходите на эту build и проверьте понятные ошибки для неверных/отсутствующих сертификатов, private keys, cipher config и hostname validation."
+      },
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
