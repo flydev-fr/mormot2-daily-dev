@@ -1,0 +1,2060 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-24",
+  "edition_title": {
+    "en": "TLS backends settle after a full-stack repair",
+    "fr": "Les backends TLS se stabilisent après une réparation complète",
+    "zh": "TLS 后端在全栈修复后趋于稳定",
+    "ru": "TLS-backends стабилизированы после полного цикла исправлений"
+  },
+  "intro": {
+    "en": "OpenSSL and Windows SChannel receive a broad correction pass across callbacks, certificate policy, asynchronous I/O, shutdown and error reporting. External ORM inserts now stop safely when SELECT max(ID) fails instead of retrying IDs from one, and SQLite’s fallback allocator restores the alignment required on Android ARM64. This is a production-facing batch: take the final head rather than any intermediate TLS build.",
+    "fr": "OpenSSL et Windows SChannel reçoivent une large série de corrections pour les callbacks, la policy certificat, les I/O asynchrones, le shutdown et les erreurs. Les insertions ORM externes s’arrêtent si SELECT max(ID) échoue au lieu de reprendre les ID à un, et l’allocateur SQLite restaure l’alignement requis sur Android ARM64. Ce lot touche la production : prenez le head final, pas une build TLS intermédiaire.",
+    "zh": "OpenSSL 与 Windows SChannel 的 callback、证书 policy、异步 I/O、shutdown 及错误报告得到全面修复。外部 ORM 插入在 SELECT max(ID) 失败时安全停止，不再从一重新尝试 ID；SQLite 后备 allocator 也恢复 Android ARM64 所需对齐。这批变更直接影响生产：应采用最终 head，不要停在中间 TLS build。",
+    "ru": "OpenSSL и Windows SChannel получают большой набор исправлений callbacks, certificate policy, async I/O, shutdown и error reporting. Внешние ORM-вставки безопасно прекращаются при ошибке SELECT max(ID), а fallback allocator SQLite восстанавливает alignment для Android ARM64. Это production batch: берите финальный head, не промежуточные TLS builds."
+  },
+  "tldr": {
+    "en": [
+      "Land on upstream head 34c5672df4ab31378524d2868b8482b408eafbdd at build 2.4.17135.",
+      "External ORM max-ID failures return 0 and suppress inserts instead of attempting duplicate IDs from one.",
+      "OpenSSL callbacks, mTLS authorities, async retries, password callbacks, SNI and shutdown receive linked fixes.",
+      "SChannel is rewritten for buffered async I/O, then repaired through handshake, TLS 1.3, shutdown, ClientHello and final error handling.",
+      "SQLite’s fallback allocator uses a 16-byte header so Android ARM64 atomic accesses remain aligned.",
+      "Avoid build 2.4.17117 and the intermediate OpenSSL 2.4.17083–2.4.17113 and SChannel 2.4.17119–2.4.17134 sequences."
+    ],
+    "fr": [
+      "Visez le head 34c5672df4ab31378524d2868b8482b408eafbdd, build 2.4.17135.",
+      "Un échec max-ID ORM retourne 0 et bloque l’insertion au lieu d’essayer des ID dupliqués depuis un.",
+      "OpenSSL reçoit des correctifs liés pour callbacks, autorités mTLS, retries async, passwords, SNI et shutdown.",
+      "SChannel est réécrit pour les I/O async bufferisées puis corrigé pour handshake, TLS 1.3, shutdown, ClientHello et erreurs finales.",
+      "L’allocateur SQLite de secours utilise un header de 16 octets pour aligner Android ARM64.",
+      "Évitez 2.4.17117 et les séquences OpenSSL 2.4.17083–2.4.17113 et SChannel 2.4.17119–2.4.17134."
+    ],
+    "zh": [
+      "采用 upstream head 34c5672df4ab31378524d2868b8482b408eafbdd，即 build 2.4.17135。",
+      "外部 ORM max-ID 失败时返回 0 并取消插入，不再从一开始尝试重复 ID。",
+      "OpenSSL 的 callback、mTLS 信任、异步重试、密码 callback、SNI 与 shutdown 获得关联修复。",
+      "SChannel 为缓冲异步 I/O 重写，随后修复 handshake、TLS 1.3、shutdown、ClientHello 与最终错误处理。",
+      "SQLite 后备 allocator 改用 16 字节 header，确保 Android ARM64 原子访问对齐。",
+      "避开 2.4.17117，以及 OpenSSL 2.4.17083–2.4.17113 与 SChannel 2.4.17119–2.4.17134。"
+    ],
+    "ru": [
+      "Переходите на upstream head 34c5672df4ab31378524d2868b8482b408eafbdd, build 2.4.17135.",
+      "Ошибка max-ID во внешнем ORM возвращает 0 и отменяет insert вместо duplicate ID с единицы.",
+      "OpenSSL получает связанные исправления callbacks, mTLS authorities, async retries, passwords, SNI и shutdown.",
+      "SChannel переписан для buffered async I/O, затем исправлен в handshake, TLS 1.3, shutdown, ClientHello и final errors.",
+      "Fallback allocator SQLite использует 16-byte header для alignment Android ARM64 atomic access.",
+      "Избегайте 2.4.17117 и серий OpenSSL 2.4.17083–2.4.17113 и SChannel 2.4.17119–2.4.17134."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "OpenSSL callback and policy hardening",
+        "fr": "Durcissement callbacks et policy OpenSSL",
+        "zh": "OpenSSL callback 与 policy 强化",
+        "ru": "Усиление OpenSSL callbacks и policy"
+      },
+      "summary": {
+        "en": "Per-connection callback state, exception containment, password and peer contexts, client mTLS authorities, SNI validation, reentrancy, async I/O and clean shutdown are corrected as one sequence.",
+        "fr": "L’état callback par connexion, les exceptions, contexts password/peer, autorités mTLS client, SNI, réentrance, I/O async et shutdown sont corrigés ensemble.",
+        "zh": "每连接 callback 状态、异常隔离、密码与对端 context、客户端 mTLS 信任、SNI、可重入、异步 I/O 与干净关闭作为一个序列得到修复。",
+        "ru": "Callback state по соединениям, exception containment, password/peer contexts, client mTLS authorities, SNI, reentrancy, async I/O и shutdown исправлены одной серией."
+      },
+      "shas": [
+        "c8ac89c3cd1acaa804da4f689b86d9102c80efec",
+        "82d1185a1488d2c45a478fd817c25d156c94521f",
+        "c4666e24f2799a6f01afb54f7e6b88d29450dc9b",
+        "0db48a167825d6929212d921fa691c445f264143",
+        "ec4282ea3b2fa189155c0e3956808c305f15e670",
+        "c98d4afe8d2c8339346e3bd1a9c4bc5e85e0bf14",
+        "a3cbd0866607a2577b7bcca51ce85bc7aa606d21",
+        "3915b75dccea0167200df14905b2de278141cc7e",
+        "71c52e1131dd307a65c7d25361ee5d947989d19b",
+        "f5d0a79ad7cfc7009f96b77a22897331e7fa29d1",
+        "d03acfbc6fae67595bbeb5e92ff057aba3db1018",
+        "8eca964fed46d14b2ab06999846a95dd838793f4",
+        "811d0ff9abd2ebf564ae25f838923986121ca1b9",
+        "6fd56b099aa66dec445ae2de8edf8d8d625f0035",
+        "309ceb0a9ea25ae0506f594b2ea652bb5dc440e4",
+        "fd947708fcea7433857ddd810b7249d89e4017c5",
+        "511e03158b677cca8e7149e004561d0e7b26329f",
+        "54837fd6b1b2e9aa0cc5ba997fee25593c725193",
+        "1e6d6c00e9c7c9c31e51dc07e88037e3c0fb1cda",
+        "734bd258595ede285684ea1b3a5dcab78cf28ac1",
+        "ae8e267c3ad31ef6917a8fb645df1d11d90932a1",
+        "1fcfea85ea174f368d81d41f63446bf119c1be74",
+        "02f0f1fc57d0004061ddbb8a322fc469911fbcb0",
+        "e1c69c623183ba9198994d259979c634b5ac72b5",
+        "124b23dd2c8f3d8afb4c43f27659fa3e20f447f5",
+        "1b63d2d791903f0a4375016cd2d48fe5a8c3b81d",
+        "88081088342c95e14549fa7eb2e41a18042b2052",
+        "81116eb37484b42e80f2335e9bea5b7fdeea68c8",
+        "c82df225f397275a02b26b2acea2e2a538d9de5f",
+        "5608ee277945df614444816ce58cc834c5db9183",
+        "f3cb34c32d7095d5b3bb6934bd730290f88dd039",
+        "86768ea799c47c3a2ceacc9889e04b8f21fd866a"
+      ]
+    },
+    {
+      "title": {
+        "en": "SChannel async I/O is rebuilt and stabilized",
+        "fr": "Les I/O async SChannel sont reconstruites et stabilisées",
+        "zh": "SChannel 异步 I/O 重构并稳定",
+        "ru": "SChannel async I/O переписан и стабилизирован"
+      },
+      "summary": {
+        "en": "Separate encrypted buffers support retryable sockets, followed by fixes for credentials, TLS 1.3, handshake tokens, leaks, partial ClientHello, shutdown output and SSPI errors.",
+        "fr": "Des buffers chiffrés séparés gèrent les sockets retryables, puis credentials, TLS 1.3, tokens, fuites, ClientHello, shutdown et erreurs SSPI sont corrigés.",
+        "zh": "独立加密 buffer 支持可重试 socket，随后修复 credential、TLS 1.3、handshake token、泄漏、分段 ClientHello、shutdown 输出与 SSPI 错误。",
+        "ru": "Раздельные encrypted buffers поддерживают retryable sockets; затем исправлены credentials, TLS 1.3, tokens, leaks, ClientHello, shutdown output и SSPI errors."
+      },
+      "shas": [
+        "66d9147e68a096be094654e0cfc53610bf3be99a",
+        "bf18eb15ccceb36209b7b458aa651d3c20cf8d8a",
+        "39ef397afc700e4a711fab3eba02b50b4438e14a",
+        "ad930f3fcd48fec7fd39ab39f2ff6457c4023eb3",
+        "9de9bf9b4c58f084f79494fcac6789962b548f4c",
+        "1bef50388838c417015cbfa45a2eaa56c535a50e",
+        "a1cf5e0f91a1d2a045ce45ec5b17f1c5439f9a8b",
+        "28348826e215c145eb9461e614ec04d03159bfb2",
+        "1939c37c617d2b64ebf18349c028fa98bce3cd95",
+        "495b0e66a2bf731e3b4b168fd075bc5dd40f5596",
+        "7843132ea5c88263aa87066a93193aeef2eeb553",
+        "fed6728844646c0be6d00576526ba1cd3fbb9b6c",
+        "7dbebefad10dbdb23420be98516b83ea7647b34c",
+        "48f902c51aaa5c05ebe3b5508c9d8b81bebdc66d",
+        "4253042447b5b2f2f01e74c15df7666059609b7f",
+        "77b07e281ec8fb6df6073ffd4a338376c7d0522b",
+        "a7361d837440dc9815b771d9da9a5128b9e4df83"
+      ]
+    },
+    {
+      "title": {
+        "en": "Database failures avoid bad IDs and alignment",
+        "fr": "Les erreurs database évitent mauvais ID et alignement",
+        "zh": "数据库故障避免错误 ID 与对齐",
+        "ru": "Database failures избегают неверных ID и alignment"
+      },
+      "summary": {
+        "en": "TRestStorageExternal suppresses inserts when max-ID lookup fails and retries after recovery. SQLite’s fallback memory manager restores 16-byte alignment.",
+        "fr": "TRestStorageExternal bloque les insertions si max-ID échoue puis retente après reprise. Le memory manager SQLite restaure l’alignement 16 octets.",
+        "zh": "TRestStorageExternal 在 max-ID 查询失败时取消插入并在恢复后重试。SQLite 后备内存管理器恢复 16 字节对齐。",
+        "ru": "TRestStorageExternal отменяет inserts при ошибке max-ID и повторяет после recovery. SQLite fallback memory manager восстанавливает 16-byte alignment."
+      },
+      "shas": [
+        "24ae11c33f663331baeb646774ff7317c3d853ba",
+        "273f65000b9262656bfb2e61ec6f36babde72f16",
+        "ccda80ea4a29bd97ac90b27a96b5cd2282e2af56",
+        "469c0fca28bf7299f9141b61667b45cb26f04be6"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.17083",
+        "to_build": "2.4.17113",
+        "why": "OpenSSL callback, mTLS, SNI, password, reentrancy, shutdown and async I/O work was still receiving direct fixes."
+      },
+      {
+        "from_build": "2.4.17117",
+        "to_build": "2.4.17117",
+        "why": "EngineLockedNextID could exit after failed max-ID lookup without initializing result; 2.4.17118 fixes it."
+      },
+      {
+        "from_build": "2.4.17119",
+        "to_build": "2.4.17134",
+        "why": "The SChannel rewrite received direct fixes for buffering, credentials, TLS 1.3, leaks, ClientHello, shutdown, reset and errors."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "24ae11c33f663331baeb646774ff7317c3d853ba",
+          "273f65000b9262656bfb2e61ec6f36babde72f16",
+          "ccda80ea4a29bd97ac90b27a96b5cd2282e2af56"
+        ],
+        "why": "Take the external-ID fix with its refactor and result-initialization repair."
+      },
+      {
+        "shas": [
+          "c8ac89c3cd1acaa804da4f689b86d9102c80efec",
+          "82d1185a1488d2c45a478fd817c25d156c94521f",
+          "c4666e24f2799a6f01afb54f7e6b88d29450dc9b",
+          "0db48a167825d6929212d921fa691c445f264143",
+          "ec4282ea3b2fa189155c0e3956808c305f15e670",
+          "c98d4afe8d2c8339346e3bd1a9c4bc5e85e0bf14",
+          "a3cbd0866607a2577b7bcca51ce85bc7aa606d21",
+          "3915b75dccea0167200df14905b2de278141cc7e",
+          "71c52e1131dd307a65c7d25361ee5d947989d19b",
+          "f5d0a79ad7cfc7009f96b77a22897331e7fa29d1",
+          "d03acfbc6fae67595bbeb5e92ff057aba3db1018",
+          "8eca964fed46d14b2ab06999846a95dd838793f4",
+          "811d0ff9abd2ebf564ae25f838923986121ca1b9",
+          "6fd56b099aa66dec445ae2de8edf8d8d625f0035",
+          "309ceb0a9ea25ae0506f594b2ea652bb5dc440e4",
+          "fd947708fcea7433857ddd810b7249d89e4017c5",
+          "511e03158b677cca8e7149e004561d0e7b26329f",
+          "54837fd6b1b2e9aa0cc5ba997fee25593c725193",
+          "1e6d6c00e9c7c9c31e51dc07e88037e3c0fb1cda",
+          "734bd258595ede285684ea1b3a5dcab78cf28ac1",
+          "ae8e267c3ad31ef6917a8fb645df1d11d90932a1",
+          "1fcfea85ea174f368d81d41f63446bf119c1be74",
+          "02f0f1fc57d0004061ddbb8a322fc469911fbcb0",
+          "e1c69c623183ba9198994d259979c634b5ac72b5",
+          "124b23dd2c8f3d8afb4c43f27659fa3e20f447f5",
+          "1b63d2d791903f0a4375016cd2d48fe5a8c3b81d",
+          "88081088342c95e14549fa7eb2e41a18042b2052",
+          "81116eb37484b42e80f2335e9bea5b7fdeea68c8",
+          "c82df225f397275a02b26b2acea2e2a538d9de5f",
+          "5608ee277945df614444816ce58cc834c5db9183",
+          "f3cb34c32d7095d5b3bb6934bd730290f88dd039",
+          "86768ea799c47c3a2ceacc9889e04b8f21fd866a"
+        ],
+        "why": "Take the OpenSSL callback, policy and async-I/O work as one completed sequence."
+      },
+      {
+        "shas": [
+          "66d9147e68a096be094654e0cfc53610bf3be99a",
+          "bf18eb15ccceb36209b7b458aa651d3c20cf8d8a",
+          "39ef397afc700e4a711fab3eba02b50b4438e14a",
+          "ad930f3fcd48fec7fd39ab39f2ff6457c4023eb3",
+          "9de9bf9b4c58f084f79494fcac6789962b548f4c",
+          "1bef50388838c417015cbfa45a2eaa56c535a50e",
+          "a1cf5e0f91a1d2a045ce45ec5b17f1c5439f9a8b",
+          "28348826e215c145eb9461e614ec04d03159bfb2",
+          "1939c37c617d2b64ebf18349c028fa98bce3cd95",
+          "495b0e66a2bf731e3b4b168fd075bc5dd40f5596",
+          "7843132ea5c88263aa87066a93193aeef2eeb553",
+          "fed6728844646c0be6d00576526ba1cd3fbb9b6c",
+          "7dbebefad10dbdb23420be98516b83ea7647b34c",
+          "48f902c51aaa5c05ebe3b5508c9d8b81bebdc66d",
+          "4253042447b5b2f2f01e74c15df7666059609b7f",
+          "77b07e281ec8fb6df6073ffd4a338376c7d0522b",
+          "a7361d837440dc9815b771d9da9a5128b9e4df83"
+        ],
+        "why": "Take the SChannel rewrite and all direct repairs as one completed sequence."
+      },
+      {
+        "shas": [
+          "469c0fca28bf7299f9141b61667b45cb26f04be6"
+        ],
+        "why": "Take the SQLite alignment repair wherever the fallback allocator is compiled."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17135 at head 34c5672df4ab31378524d2868b8482b408eafbdd. Upgrade promptly for TRestStorageExternal max-ID allocation, OpenSSL callbacks or mTLS, async TLS, Windows SChannel, or SQLite’s fallback allocator on Android ARM64. Test lost-connection recovery, concurrent certificate callbacks, proxy/SNI/IPv6, WANT retries, SChannel shutdown and partial handshakes. Avoid the three intermediate ranges.",
+    "fr": "Visez la build 2.4.17135 au head 34c5672df4ab31378524d2868b8482b408eafbdd. Mettez à niveau pour TRestStorageExternal max-ID, callbacks OpenSSL/mTLS, TLS async, Windows SChannel ou SQLite fallback sur Android ARM64. Testez reprise, callbacks concurrents, proxy/SNI/IPv6, retries WANT, shutdown SChannel et handshakes partiels. Évitez les trois plages.",
+    "zh": "采用 head 34c5672df4ab31378524d2868b8482b408eafbdd 的 build 2.4.17135。若使用 TRestStorageExternal max-ID、OpenSSL callback/mTLS、异步 TLS、Windows SChannel 或 Android ARM64 SQLite 后备 allocator，应尽快升级。测试断连恢复、并发证书 callback、proxy/SNI/IPv6、WANT 重试、SChannel shutdown 与分段 handshake。避开三个中间区间。",
+    "ru": "Переходите на build 2.4.17135 в head 34c5672df4ab31378524d2868b8482b408eafbdd. Обновляйтесь при TRestStorageExternal max-ID, OpenSSL callbacks/mTLS, async TLS, Windows SChannel или SQLite fallback на Android ARM64. Проверьте recovery, concurrent callbacks, proxy/SNI/IPv6, WANT retries, SChannel shutdown и partial handshakes. Избегайте трёх диапазонов."
+  },
+  "notes": {
+    "en": "Reviewed all 54 non-merge commits from build 2.4.17082 through 2.4.17135: 1,474 additions and 904 deletions. Version bookkeeping was ignored. The raw payload has no superseded_by metadata; avoid windows come from directly inspected same-routine fixes in this edition.",
+    "fr": "Les 54 commits non-merge de 2.4.17082 à 2.4.17135 ont été examinés : 1 474 ajouts et 904 suppressions. Le version bookkeeping est ignoré. Aucun superseded_by ; les plages viennent des correctifs du même routine inspectés.",
+    "zh": "已审查 build 2.4.17082 至 2.4.17135 的全部 54 个 non-merge commit：新增 1,474 行、删除 904 行。忽略版本 bookkeeping。没有 superseded_by；避开区间来自直接检查的同 routine 修复。",
+    "ru": "Проверены все 54 non-merge commits от 2.4.17082 до 2.4.17135: 1474 additions и 904 deletions. Version bookkeeping проигнорирован. superseded_by отсутствует; avoid windows основаны на проверенных fixes тех же routines."
+  },
+  "entries": [
+    {
+      "sha": "24ae11c33f663331baeb646774ff7317c3d853ba",
+      "headline": {
+        "en": "Failed max-ID lookup no longer restarts external IDs at one",
+        "fr": "Un échec max-ID ne redémarre plus les ID externes à un",
+        "zh": "max-ID 查询失败不再让外部 ID 从一开始",
+        "ru": "Сбой max-ID больше не начинает внешние ID с единицы"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Failed max-ID lookup no longer restarts external IDs at one. mormot.orm.sql changes the EngineLockedNextID failure path and its direct callers; the diff was checked against the external SQL insertion flow.",
+        "fr": "Un échec max-ID ne redémarre plus les ID externes à un. mormot.orm.sql modifie le chemin d’échec EngineLockedNextID et ses appelants directs ; le diff a été vérifié dans le flux d’insertion SQL externe.",
+        "zh": "max-ID 查询失败不再让外部 ID 从一开始。mormot.orm.sql 修改 EngineLockedNextID 故障路径及其直接调用方；已对照外部 SQL 插入流程检查 diff。",
+        "ru": "Сбой max-ID больше не начинает внешние ID с единицы. mormot.orm.sql меняет failure path EngineLockedNextID и прямые вызовы; diff проверен по потоку внешней SQL-вставки."
+      },
+      "impact": {
+        "en": "External SQL inserts now stop when the next ID is unknown instead of attempting duplicate IDs. No caller source change is required.",
+        "fr": "Les insertions SQL externes s’arrêtent si l’ID suivant est inconnu au lieu d’essayer des ID dupliqués. Aucun changement source n’est requis.",
+        "zh": "外部 SQL 插入在下一个 ID 未知时停止，不再尝试重复 ID。调用方无需修改源码。",
+        "ru": "Внешние SQL inserts прекращаются, если следующий ID неизвестен, вместо попыток duplicate ID. Исходники менять не нужно."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      },
+      "api_changes": [
+        {
+          "symbol": "TRestStorageExternal.EngineLockedNextID",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Returns 0 when SELECT max(ID) fails instead of deriving ID=1.",
+            "fr": "Retourne 0 si SELECT max(ID) échoue au lieu de produire ID=1.",
+            "zh": "SELECT max(ID) 失败时返回 0，而非生成 ID=1。",
+            "ru": "При ошибке SELECT max(ID) возвращает 0 вместо ID=1."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "c8ac89c3cd1acaa804da4f689b86d9102c80efec",
+      "headline": {
+        "en": "OpenSSL callbacks receive the live server connection context",
+        "fr": "Les callbacks OpenSSL reçoivent le contexte serveur actif",
+        "zh": "OpenSSL callback 获得当前服务端连接上下文",
+        "ru": "OpenSSL callbacks получают текущий server context"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL callbacks receive the live server connection context. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les callbacks OpenSSL reçoivent le contexte serveur actif. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL callback 获得当前服务端连接上下文。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL callbacks получают текущий server context. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "82d1185a1488d2c45a478fd817c25d156c94521f",
+      "headline": {
+        "en": "Missing peer certificates no longer dereference nil",
+        "fr": "Un peer certificate absent ne déréférence plus nil",
+        "zh": "缺少对端证书时不再解引用 nil",
+        "ru": "Отсутствующий peer certificate больше не разыменовывает nil"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "Missing peer certificates no longer dereference nil. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Un peer certificate absent ne déréférence plus nil. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "缺少对端证书时不再解引用 nil。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Отсутствующий peer certificate больше не разыменовывает nil. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "c4666e24f2799a6f01afb54f7e6b88d29450dc9b",
+      "headline": {
+        "en": "Server certificate callbacks stop sharing client state",
+        "fr": "Les callbacks certificat serveur ne partagent plus l’état client",
+        "zh": "服务端证书 callback 不再共享客户端状态",
+        "ru": "Server certificate callbacks больше не делят client state"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Server certificate callbacks stop sharing client state. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les callbacks certificat serveur ne partagent plus l’état client. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "服务端证书 callback 不再共享客户端状态。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Server certificate callbacks больше не делят client state. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "0db48a167825d6929212d921fa691c445f264143",
+      "headline": {
+        "en": "OpenSSL callback exceptions stay inside the C boundary",
+        "fr": "Les exceptions callback OpenSSL restent dans la frontière C",
+        "zh": "OpenSSL callback 异常被限制在 C 边界内",
+        "ru": "Исключения OpenSSL callbacks остаются на границе C"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL callback exceptions stay inside the C boundary. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les exceptions callback OpenSSL restent dans la frontière C. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL callback 异常被限制在 C 边界内。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Исключения OpenSSL callbacks остаются на границе C. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "ec4282ea3b2fa189155c0e3956808c305f15e670",
+      "headline": {
+        "en": "OpenSSL setup and I/O errors use separate reporting",
+        "fr": "Les erreurs setup et I/O OpenSSL sont rapportées séparément",
+        "zh": "OpenSSL setup 与 I/O 错误分开报告",
+        "ru": "Ошибки OpenSSL setup и I/O разделены"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL setup and I/O errors use separate reporting. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les erreurs setup et I/O OpenSSL sont rapportées séparément. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL setup 与 I/O 错误分开报告。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Ошибки OpenSSL setup и I/O разделены. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "c98d4afe8d2c8339346e3bd1a9c4bc5e85e0bf14",
+      "headline": {
+        "en": "OpenSSL authority loading aborts on failure",
+        "fr": "Le chargement des autorités OpenSSL s’arrête en cas d’échec",
+        "zh": "OpenSSL 加载信任机构失败时中止",
+        "ru": "Загрузка OpenSSL authorities прерывается при ошибке"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL authority loading aborts on failure. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Le chargement des autorités OpenSSL s’arrête en cas d’échec. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 加载信任机构失败时中止。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Загрузка OpenSSL authorities прерывается при ошибке. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "a3cbd0866607a2577b7bcca51ce85bc7aa606d21",
+      "headline": {
+        "en": "OpenSSL private-key setup errors are no longer silent",
+        "fr": "Les erreurs de clé privée OpenSSL ne sont plus silencieuses",
+        "zh": "OpenSSL 私钥设置错误不再静默",
+        "ru": "Ошибки OpenSSL private key больше не скрываются"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL private-key setup errors are no longer silent. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les erreurs de clé privée OpenSSL ne sont plus silencieuses. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 私钥设置错误不再静默。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Ошибки OpenSSL private key больше не скрываются. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "3915b75dccea0167200df14905b2de278141cc7e",
+      "headline": {
+        "en": "OpenSSL errors are read at the operation that failed",
+        "fr": "Les erreurs OpenSSL sont lues au point d’échec",
+        "zh": "OpenSSL 错误在失败操作处读取",
+        "ru": "Ошибки OpenSSL читаются у сбойной операции"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "OpenSSL errors are read at the operation that failed. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les erreurs OpenSSL sont lues au point d’échec. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 错误在失败操作处读取。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Ошибки OpenSSL читаются у сбойной операции. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ]
+    },
+    {
+      "sha": "71c52e1131dd307a65c7d25361ee5d947989d19b",
+      "headline": {
+        "en": "A public helper validates DNS names suitable for SNI",
+        "fr": "Un helper public valide les noms DNS adaptés à SNI",
+        "zh": "公开 helper 校验适用于 SNI 的 DNS 名称",
+        "ru": "Публичный helper проверяет DNS-имена для SNI"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "A public helper validates DNS names suitable for SNI. mormot.net.sock changes the TLS context, host selection or connection-reuse path named in the headline; the affected public record and socket flow were inspected.",
+        "fr": "Un helper public valide les noms DNS adaptés à SNI. mormot.net.sock modifie le context TLS, la sélection d’hôte ou la réutilisation nommée dans le titre ; le record public et le flux socket ont été inspectés.",
+        "zh": "公开 helper 校验适用于 SNI 的 DNS 名称。mormot.net.sock 修改标题所指的 TLS context、主机选择或连接复用路径；已检查受影响的公开 record 与 socket 流程。",
+        "ru": "Публичный helper проверяет DNS-имена для SNI. mormot.net.sock меняет указанный TLS context, выбор host или reuse path; проверены публичный record и socket flow."
+      },
+      "impact": {
+        "en": "Existing callers are unaffected because this adds a helper; new code may adopt it for strict RFC 6066 SNI host validation.",
+        "fr": "Les appelants existants ne sont pas affectés car ce helper est ajouté ; le nouveau code peut l’utiliser pour valider SNI selon RFC 6066.",
+        "zh": "现有调用方不受影响，因为这里只新增 helper；新代码可用它进行严格 RFC 6066 SNI 主机校验。",
+        "ru": "Существующие calls не затронуты: добавлен helper для строгой проверки SNI host по RFC 6066."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [
+        {
+          "symbol": "IsDnsHostName",
+          "change": "added",
+          "note": {
+            "en": "Public RFC 6066-style DNS host validation helper for SNI.",
+            "fr": "Helper public de validation DNS style RFC 6066 pour SNI.",
+            "zh": "用于 SNI 的公开 RFC 6066 风格 DNS 主机校验 helper。",
+            "ru": "Публичный helper проверки DNS host по RFC 6066 для SNI."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "f5d0a79ad7cfc7009f96b77a22897331e7fa29d1",
+      "headline": {
+        "en": "OpenSSL sends SNI only for valid DNS host names",
+        "fr": "OpenSSL envoie SNI seulement pour un nom DNS valide",
+        "zh": "OpenSSL 仅对有效 DNS 主机名发送 SNI",
+        "ru": "OpenSSL отправляет SNI только для DNS host"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "OpenSSL sends SNI only for valid DNS host names. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "OpenSSL envoie SNI seulement pour un nom DNS valide. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 仅对有效 DNS 主机名发送 SNI。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL отправляет SNI только для DNS host. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "d03acfbc6fae67595bbeb5e92ff057aba3db1018",
+      "headline": {
+        "en": "A missing OpenSSL certificate file fails explicitly",
+        "fr": "Un fichier certificat OpenSSL absent échoue explicitement",
+        "zh": "OpenSSL 证书文件缺失时明确失败",
+        "ru": "Отсутствующий OpenSSL certificate file даёт явную ошибку"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "A missing OpenSSL certificate file fails explicitly. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Un fichier certificat OpenSSL absent échoue explicitement. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 证书文件缺失时明确失败。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Отсутствующий OpenSSL certificate file даёт явную ошибку. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "8eca964fed46d14b2ab06999846a95dd838793f4",
+      "headline": {
+        "en": "OpenSSL setup uses instance state consistently",
+        "fr": "Le setup OpenSSL utilise l’état de l’instance",
+        "zh": "OpenSSL 设置统一使用实例状态",
+        "ru": "OpenSSL setup использует состояние instance"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "OpenSSL setup uses instance state consistently. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Le setup OpenSSL utilise l’état de l’instance. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 设置统一使用实例状态。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL setup использует состояние instance. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ]
+    },
+    {
+      "sha": "811d0ff9abd2ebf564ae25f838923986121ca1b9",
+      "headline": {
+        "en": "OpenSSL mTLS advertises the client CA",
+        "fr": "OpenSSL mTLS annonce la CA client",
+        "zh": "OpenSSL mTLS 宣告客户端 CA",
+        "ru": "OpenSSL mTLS объявляет client CA"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL mTLS advertises the client CA. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "OpenSSL mTLS annonce la CA client. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL mTLS 宣告客户端 CA。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL mTLS объявляет client CA. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "6fd56b099aa66dec445ae2de8edf8d8d625f0035",
+      "headline": {
+        "en": "OpenSSL mTLS receives a client-authority follow-up",
+        "fr": "OpenSSL mTLS reçoit un correctif client-authority",
+        "zh": "OpenSSL mTLS 获得客户端信任后续修复",
+        "ru": "OpenSSL mTLS получает client-authority follow-up"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL mTLS receives a client-authority follow-up. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "OpenSSL mTLS reçoit un correctif client-authority. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL mTLS 获得客户端信任后续修复。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL mTLS получает client-authority follow-up. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "309ceb0a9ea25ae0506f594b2ea652bb5dc440e4",
+      "headline": {
+        "en": "Peer-certificate probing limits SNI to DNS hosts",
+        "fr": "La lecture du certificat pair limite SNI aux hôtes DNS",
+        "zh": "对端证书探测仅对 DNS 主机使用 SNI",
+        "ru": "Получение peer certificate ограничивает SNI DNS hosts"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "Peer-certificate probing limits SNI to DNS hosts. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "La lecture du certificat pair limite SNI aux hôtes DNS. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "对端证书探测仅对 DNS 主机使用 SNI。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Получение peer certificate ограничивает SNI DNS hosts. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "fd947708fcea7433857ddd810b7249d89e4017c5",
+      "headline": {
+        "en": "TLS reuse compares the full client policy",
+        "fr": "La réutilisation TLS compare toute la policy client",
+        "zh": "TLS 复用比较完整客户端 policy",
+        "ru": "TLS reuse сравнивает всю client policy"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TLS reuse compares the full client policy. mormot.net.sock changes the TLS context, host selection or connection-reuse path named in the headline; the affected public record and socket flow were inspected.",
+        "fr": "La réutilisation TLS compare toute la policy client. mormot.net.sock modifie le context TLS, la sélection d’hôte ou la réutilisation nommée dans le titre ; le record public et le flux socket ont été inspectés.",
+        "zh": "TLS 复用比较完整客户端 policy。mormot.net.sock 修改标题所指的 TLS context、主机选择或连接复用路径；已检查受影响的公开 record 与 socket 流程。",
+        "ru": "TLS reuse сравнивает всю client policy. mormot.net.sock меняет указанный TLS context, выбор host или reuse path; проверены публичный record и socket flow."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      },
+      "api_changes": [
+        {
+          "symbol": "SameNetTlsContext",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Now compares protocol flags, ciphers, peer-info and validation callbacks for client reuse.",
+            "fr": "Compare désormais flags protocole, ciphers, peer-info et callbacks pour la réutilisation client.",
+            "zh": "现在比较协议标志、cipher、peer-info 与验证 callback，以决定客户端复用。",
+            "ru": "Теперь сравнивает protocol flags, ciphers, peer-info и validation callbacks для client reuse."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "511e03158b677cca8e7149e004561d0e7b26329f",
+      "headline": {
+        "en": "Empty host entries no longer poison identity checks",
+        "fr": "Les entrées host vides ne perturbent plus la validation",
+        "zh": "空 host 条目不再破坏身份校验",
+        "ru": "Пустые host entries больше не портят identity checks"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "Empty host entries no longer poison identity checks. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les entrées host vides ne perturbent plus la validation. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "空 host 条目不再破坏身份校验。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Пустые host entries больше не портят identity checks. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "54837fd6b1b2e9aa0cc5ba997fee25593c725193",
+      "headline": {
+        "en": "TLS host parsing and reuse receive corrective follow-ups",
+        "fr": "Le parsing host TLS et la réutilisation sont corrigés",
+        "zh": "TLS host 解析与复用获得修正",
+        "ru": "TLS host parsing и reuse получают fixes"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TLS host parsing and reuse receive corrective follow-ups. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Le parsing host TLS et la réutilisation sont corrigés. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "TLS host 解析与复用获得修正。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "TLS host parsing и reuse получают fixes. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11",
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "1e6d6c00e9c7c9c31e51dc07e88037e3c0fb1cda",
+      "headline": {
+        "en": "Nested HTTPS calls preserve OpenSSL callback state",
+        "fr": "Les appels HTTPS imbriqués préservent l’état callback OpenSSL",
+        "zh": "嵌套 HTTPS 调用保留 OpenSSL callback 状态",
+        "ru": "Вложенные HTTPS сохраняют OpenSSL callback state"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "Nested HTTPS calls preserve OpenSSL callback state. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les appels HTTPS imbriqués préservent l’état callback OpenSSL. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "嵌套 HTTPS 调用保留 OpenSSL callback 状态。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Вложенные HTTPS сохраняют OpenSSL callback state. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "734bd258595ede285684ea1b3a5dcab78cf28ac1",
+      "headline": {
+        "en": "Async HTTP clients keep TLS setup state",
+        "fr": "Les clients HTTP async conservent l’état du setup TLS",
+        "zh": "异步 HTTP 客户端保留 TLS 设置状态",
+        "ru": "Async HTTP clients сохраняют TLS setup state"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Async HTTP clients keep TLS setup state. mormot.net.async corrects the THttpAsyncClientConnection TLS state transition so encrypted asynchronous setup completes before normal I/O.",
+        "fr": "Les clients HTTP async conservent l’état du setup TLS. mormot.net.async corrige la transition TLS de THttpAsyncClientConnection afin que le setup async chiffré se termine avant les I/O.",
+        "zh": "异步 HTTP 客户端保留 TLS 设置状态。mormot.net.async 修正 THttpAsyncClientConnection 的 TLS 状态转换，使加密异步设置在正常 I/O 前完成。",
+        "ru": "Async HTTP clients сохраняют TLS setup state. mormot.net.async исправляет TLS state transition THttpAsyncClientConnection, завершая encrypted async setup до обычного I/O."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.async"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "ae8e267c3ad31ef6917a8fb645df1d11d90932a1",
+      "headline": {
+        "en": "Bracketed IPv6 hosts work in OpenSSL clients",
+        "fr": "Les hôtes IPv6 entre crochets fonctionnent avec OpenSSL",
+        "zh": "带方括号 IPv6 主机可用于 OpenSSL 客户端",
+        "ru": "Bracketed IPv6 hosts работают в OpenSSL clients"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "Bracketed IPv6 hosts work in OpenSSL clients. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les hôtes IPv6 entre crochets fonctionnent avec OpenSSL. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "带方括号 IPv6 主机可用于 OpenSSL 客户端。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Bracketed IPv6 hosts работают в OpenSSL clients. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "1fcfea85ea174f368d81d41f63446bf119c1be74",
+      "headline": {
+        "en": "TLS reuse includes the peer-info choice",
+        "fr": "La réutilisation TLS inclut le choix peer-info",
+        "zh": "TLS 复用包含 peer-info 选项",
+        "ru": "TLS reuse учитывает peer-info"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TLS reuse includes the peer-info choice. mormot.net.sock changes the TLS context, host selection or connection-reuse path named in the headline; the affected public record and socket flow were inspected.",
+        "fr": "La réutilisation TLS inclut le choix peer-info. mormot.net.sock modifie le context TLS, la sélection d’hôte ou la réutilisation nommée dans le titre ; le record public et le flux socket ont été inspectés.",
+        "zh": "TLS 复用包含 peer-info 选项。mormot.net.sock 修改标题所指的 TLS context、主机选择或连接复用路径；已检查受影响的公开 record 与 socket 流程。",
+        "ru": "TLS reuse учитывает peer-info. mormot.net.sock меняет указанный TLS context, выбор host или reuse path; проверены публичный record и socket flow."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "02f0f1fc57d0004061ddbb8a322fc469911fbcb0",
+      "headline": {
+        "en": "HTTPS proxy TLS validates the proxy host",
+        "fr": "HTTPS proxy TLS valide l’hôte proxy",
+        "zh": "HTTPS 代理 TLS 校验代理主机",
+        "ru": "HTTPS proxy TLS проверяет proxy host"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "HTTPS proxy TLS validates the proxy host. mormot.net.sock changes the TLS context, host selection or connection-reuse path named in the headline; the affected public record and socket flow were inspected.",
+        "fr": "HTTPS proxy TLS valide l’hôte proxy. mormot.net.sock modifie le context TLS, la sélection d’hôte ou la réutilisation nommée dans le titre ; le record public et le flux socket ont été inspectés.",
+        "zh": "HTTPS 代理 TLS 校验代理主机。mormot.net.sock 修改标题所指的 TLS context、主机选择或连接复用路径；已检查受影响的公开 record 与 socket 流程。",
+        "ru": "HTTPS proxy TLS проверяет proxy host. mormot.net.sock меняет указанный TLS context, выбор host или reuse path; проверены публичный record и socket flow."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "e1c69c623183ba9198994d259979c634b5ac72b5",
+      "headline": {
+        "en": "Numeric benchmarks validate generated input bounds",
+        "fr": "Les benchmarks numériques valident les limites d’entrée",
+        "zh": "数值 benchmark 校验生成输入边界",
+        "ru": "Numeric benchmarks проверяют input bounds"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "Numeric benchmarks validate generated input bounds. The test diff narrows or extends coverage for the platform case named in the headline without changing a runtime unit.",
+        "fr": "Les benchmarks numériques valident les limites d’entrée. Le diff de test précise ou étend la couverture du cas plateforme nommé dans le titre sans modifier de unit runtime.",
+        "zh": "数值 benchmark 校验生成输入边界。测试 diff 针对标题所指的平台情况收紧或扩展覆盖，不修改 runtime unit。",
+        "ru": "Numeric benchmarks проверяют input bounds. Test diff уточняет или расширяет покрытие указанного platform case без изменения runtime unit."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "124b23dd2c8f3d8afb4c43f27659fa3e20f447f5",
+      "headline": {
+        "en": "OpenSSL I/O callbacks handle TLS 1.2 renegotiation",
+        "fr": "Les callbacks I/O OpenSSL gèrent la renégociation TLS 1.2",
+        "zh": "OpenSSL I/O callback 处理 TLS 1.2 重新协商",
+        "ru": "OpenSSL I/O callbacks обрабатывают TLS 1.2 renegotiation"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL I/O callbacks handle TLS 1.2 renegotiation. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les callbacks I/O OpenSSL gèrent la renégociation TLS 1.2. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL I/O callback 处理 TLS 1.2 重新协商。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL I/O callbacks обрабатывают TLS 1.2 renegotiation. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "1b63d2d791903f0a4375016cd2d48fe5a8c3b81d",
+      "headline": {
+        "en": "ClientVerifyOnce maps to the OpenSSL verification mode",
+        "fr": "ClientVerifyOnce correspond au mode de vérification OpenSSL",
+        "zh": "ClientVerifyOnce 映射到 OpenSSL 验证模式",
+        "ru": "ClientVerifyOnce соответствует OpenSSL verification mode"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "ClientVerifyOnce maps to the OpenSSL verification mode. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "ClientVerifyOnce correspond au mode de vérification OpenSSL. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "ClientVerifyOnce 映射到 OpenSSL 验证模式。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "ClientVerifyOnce соответствует OpenSSL verification mode. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "88081088342c95e14549fa7eb2e41a18042b2052",
+      "headline": {
+        "en": "ARM hard-float tests avoid an undefined shift",
+        "fr": "Les tests ARM hard-float évitent un shift indéfini",
+        "zh": "ARM hard-float 测试避免未定义移位",
+        "ru": "ARM hard-float tests избегают undefined shift"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "ARM hard-float tests avoid an undefined shift. The test diff narrows or extends coverage for the platform case named in the headline without changing a runtime unit.",
+        "fr": "Les tests ARM hard-float évitent un shift indéfini. Le diff de test précise ou étend la couverture du cas plateforme nommé dans le titre sans modifier de unit runtime.",
+        "zh": "ARM hard-float 测试避免未定义移位。测试 diff 针对标题所指的平台情况收紧或扩展覆盖，不修改 runtime unit。",
+        "ru": "ARM hard-float tests избегают undefined shift. Test diff уточняет или расширяет покрытие указанного platform case без изменения runtime unit."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "81116eb37484b42e80f2335e9bea5b7fdeea68c8",
+      "headline": {
+        "en": "PKCS#12 certificates can use the password callback",
+        "fr": "Les certificats PKCS#12 utilisent le callback password",
+        "zh": "PKCS#12 证书可使用密码 callback",
+        "ru": "PKCS#12 certificates используют password callback"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "PKCS#12 certificates can use the password callback. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les certificats PKCS#12 utilisent le callback password. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "PKCS#12 证书可使用密码 callback。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "PKCS#12 certificates используют password callback. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Review this configuration and test it on build 2.4.17135.",
+        "fr": "Vérifiez cette configuration sur la build 2.4.17135.",
+        "zh": "检查该配置并在 build 2.4.17135 上测试。",
+        "ru": "Проверьте эту configuration на build 2.4.17135."
+      }
+    },
+    {
+      "sha": "c82df225f397275a02b26b2acea2e2a538d9de5f",
+      "headline": {
+        "en": "Password callbacks receive SSL_CTX during setup",
+        "fr": "Les callbacks password reçoivent SSL_CTX au setup",
+        "zh": "密码 callback 在设置时接收 SSL_CTX",
+        "ru": "Password callbacks получают SSL_CTX при setup"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Password callbacks receive SSL_CTX during setup. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les callbacks password reçoivent SSL_CTX au setup. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "密码 callback 在设置时接收 SSL_CTX。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Password callbacks получают SSL_CTX при setup. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "5608ee277945df614444816ce58cc834c5db9183",
+      "headline": {
+        "en": "Verification callbacks clear a dangling thread pointer",
+        "fr": "Les callbacks de vérification effacent un pointeur thread pendant",
+        "zh": "验证 callback 清除悬空 thread 指针",
+        "ru": "Verification callbacks убирают dangling thread pointer"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "Verification callbacks clear a dangling thread pointer. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les callbacks de vérification effacent un pointeur thread pendant. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "验证 callback 清除悬空 thread 指针。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "Verification callbacks убирают dangling thread pointer. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "f3cb34c32d7095d5b3bb6934bd730290f88dd039",
+      "headline": {
+        "en": "OpenSSL sends a bounded close notification",
+        "fr": "OpenSSL envoie une fermeture TLS bornée",
+        "zh": "OpenSSL 发送有时限的关闭通知",
+        "ru": "OpenSSL отправляет bounded close notification"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "OpenSSL sends a bounded close notification. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "OpenSSL envoie une fermeture TLS bornée. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 发送有时限的关闭通知。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL отправляет bounded close notification. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "86768ea799c47c3a2ceacc9889e04b8f21fd866a",
+      "headline": {
+        "en": "OpenSSL async sockets wait for the requested event",
+        "fr": "Les sockets async OpenSSL attendent l’événement demandé",
+        "zh": "OpenSSL 异步 socket 等待所需事件",
+        "ru": "OpenSSL async sockets ждут нужное событие"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "OpenSSL async sockets wait for the requested event. mormot.lib.openssl11 changes the OpenSSL context, callback, certificate or I/O path named in the headline; the operation and its cleanup/error branches were inspected in the diff.",
+        "fr": "Les sockets async OpenSSL attendent l’événement demandé. mormot.lib.openssl11 modifie le chemin context, callback, certificat ou I/O OpenSSL nommé dans le titre ; l’opération et ses branches cleanup/error ont été inspectées.",
+        "zh": "OpenSSL 异步 socket 等待所需事件。mormot.lib.openssl11 修改标题所指的 OpenSSL context、callback、证书或 I/O 路径；已检查操作及其 cleanup/error 分支。",
+        "ru": "OpenSSL async sockets ждут нужное событие. mormot.lib.openssl11 меняет указанный в заголовке OpenSSL context, callback, certificate или I/O path; проверены операция и ветви cleanup/error."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "273f65000b9262656bfb2e61ec6f36babde72f16",
+      "headline": {
+        "en": "External-ID allocation is simplified after the fix",
+        "fr": "L’allocation external-ID est simplifiée après le correctif",
+        "zh": "外部 ID 分配在修复后简化",
+        "ru": "External-ID allocation упрощено после fix"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "External-ID allocation is simplified after the fix. mormot.orm.sql changes the EngineLockedNextID failure path and its direct callers; the diff was checked against the external SQL insertion flow.",
+        "fr": "L’allocation external-ID est simplifiée après le correctif. mormot.orm.sql modifie le chemin d’échec EngineLockedNextID et ses appelants directs ; le diff a été vérifié dans le flux d’insertion SQL externe.",
+        "zh": "外部 ID 分配在修复后简化。mormot.orm.sql 修改 EngineLockedNextID 故障路径及其直接调用方；已对照外部 SQL 插入流程检查 diff。",
+        "ru": "External-ID allocation упрощено после fix. mormot.orm.sql меняет failure path EngineLockedNextID и прямые вызовы; diff проверен по потоку внешней SQL-вставки."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.orm.sql"
+      ]
+    },
+    {
+      "sha": "ccda80ea4a29bd97ac90b27a96b5cd2282e2af56",
+      "headline": {
+        "en": "The external-ID refactor initializes its failure result",
+        "fr": "Le refactor external-ID initialise son résultat d’échec",
+        "zh": "外部 ID 重构初始化失败结果",
+        "ru": "External-ID refactor инициализирует failure result"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The external-ID refactor initializes its failure result. mormot.orm.sql changes the EngineLockedNextID failure path and its direct callers; the diff was checked against the external SQL insertion flow.",
+        "fr": "Le refactor external-ID initialise son résultat d’échec. mormot.orm.sql modifie le chemin d’échec EngineLockedNextID et ses appelants directs ; le diff a été vérifié dans le flux d’insertion SQL externe.",
+        "zh": "外部 ID 重构初始化失败结果。mormot.orm.sql 修改 EngineLockedNextID 故障路径及其直接调用方；已对照外部 SQL 插入流程检查 diff。",
+        "ru": "External-ID refactor инициализирует failure result. mormot.orm.sql меняет failure path EngineLockedNextID и прямые вызовы; diff проверен по потоку внешней SQL-вставки."
+      },
+      "impact": {
+        "en": "External SQL inserts now stop when the next ID is unknown instead of attempting duplicate IDs. No caller source change is required.",
+        "fr": "Les insertions SQL externes s’arrêtent si l’ID suivant est inconnu au lieu d’essayer des ID dupliqués. Aucun changement source n’est requis.",
+        "zh": "外部 SQL 插入在下一个 ID 未知时停止，不再尝试重复 ID。调用方无需修改源码。",
+        "ru": "Внешние SQL inserts прекращаются, если следующий ID неизвестен, вместо попыток duplicate ID. Исходники менять не нужно."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.orm.sql",
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "66d9147e68a096be094654e0cfc53610bf3be99a",
+      "headline": {
+        "en": "SChannel begins a stateful async I/O repair",
+        "fr": "SChannel entame une réparation I/O async avec état",
+        "zh": "SChannel 开始有状态异步 I/O 修复",
+        "ru": "SChannel начинает stateful async I/O repair"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel begins a stateful async I/O repair. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel entame une réparation I/O async avec état. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 开始有状态异步 I/O 修复。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel начинает stateful async I/O repair. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ]
+    },
+    {
+      "sha": "bf18eb15ccceb36209b7b458aa651d3c20cf8d8a",
+      "headline": {
+        "en": "SChannel I/O is rewritten around buffered retries",
+        "fr": "Les I/O SChannel sont réécrites autour de retries bufferisés",
+        "zh": "SChannel I/O 围绕缓冲重试重写",
+        "ru": "SChannel I/O переписан вокруг buffered retries"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel I/O is rewritten around buffered retries. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Les I/O SChannel sont réécrites autour de retries bufferisés. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel I/O 围绕缓冲重试重写。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel I/O переписан вокруг buffered retries. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ]
+    },
+    {
+      "sha": "39ef397afc700e4a711fab3eba02b50b4438e14a",
+      "headline": {
+        "en": "The TLS rewrite compiles with Delphi 2007",
+        "fr": "La réécriture TLS compile avec Delphi 2007",
+        "zh": "TLS 重写兼容 Delphi 2007 编译",
+        "ru": "TLS rewrite компилируется в Delphi 2007"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The TLS rewrite compiles with Delphi 2007. The changed declaration or expression restores the compiler/platform path named in the headline without changing the intended runtime contract.",
+        "fr": "La réécriture TLS compile avec Delphi 2007. La déclaration ou expression modifiée restaure le chemin compilateur/plateforme nommé dans le titre sans changer le contrat runtime.",
+        "zh": "TLS 重写兼容 Delphi 2007 编译。修改后的声明或表达式恢复标题所指的编译器/平台路径，不改变预期 runtime 约定。",
+        "ru": "TLS rewrite компилируется в Delphi 2007. Изменённая declaration или expression восстанавливает указанный compiler/platform path без изменения runtime contract."
+      },
+      "impact": {
+        "en": "Projects on the named compiler or platform regain a working build or execution path without changing application source.",
+        "fr": "Les projets sur le compilateur ou la plateforme concernés retrouvent une compilation ou exécution fonctionnelle sans changer leur source.",
+        "zh": "相关编译器或平台上的项目恢复正常编译或执行，无需修改应用源码。",
+        "ru": "Проекты на указанном compiler или platform снова собираются или работают без изменения source."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.core.base"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "ad930f3fcd48fec7fd39ab39f2ff6457c4023eb3",
+      "headline": {
+        "en": "SChannel handshake, send and shutdown states are corrected",
+        "fr": "Les états handshake, send et shutdown SChannel sont corrigés",
+        "zh": "SChannel handshake、send 与 shutdown 状态获修复",
+        "ru": "Исправлены SChannel handshake, send и shutdown"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel handshake, send and shutdown states are corrected. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Les états handshake, send et shutdown SChannel sont corrigés. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel handshake、send 与 shutdown 状态获修复。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "Исправлены SChannel handshake, send и shutdown. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ]
+    },
+    {
+      "sha": "9de9bf9b4c58f084f79494fcac6789962b548f4c",
+      "headline": {
+        "en": "SChannel state handling improves Wine support",
+        "fr": "La gestion d’état SChannel améliore Wine",
+        "zh": "SChannel 状态处理改善 Wine 支持",
+        "ru": "SChannel state handling улучшает Wine"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SChannel state handling improves Wine support. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "La gestion d’état SChannel améliore Wine. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 状态处理改善 Wine 支持。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel state handling улучшает Wine. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "1bef50388838c417015cbfa45a2eaa56c535a50e",
+      "headline": {
+        "en": "SChannel retries incomplete client credentials",
+        "fr": "SChannel retente les credentials client incomplets",
+        "zh": "SChannel 重试不完整客户端 credential",
+        "ru": "SChannel повторяет incomplete client credentials"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel retries incomplete client credentials. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel retente les credentials client incomplets. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 重试不完整客户端 credential。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel повторяет incomplete client credentials. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "a1cf5e0f91a1d2a045ce45ec5b17f1c5439f9a8b",
+      "headline": {
+        "en": "SChannel server certificates support CNG keys",
+        "fr": "Les certificats serveur SChannel acceptent les clés CNG",
+        "zh": "SChannel 服务端证书支持 CNG 密钥",
+        "ru": "SChannel server certificates поддерживают CNG keys"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SChannel server certificates support CNG keys. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Les certificats serveur SChannel acceptent les clés CNG. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 服务端证书支持 CNG 密钥。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel server certificates поддерживают CNG keys. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Review this configuration and test it on build 2.4.17135.",
+        "fr": "Vérifiez cette configuration sur la build 2.4.17135.",
+        "zh": "检查该配置并在 build 2.4.17135 上测试。",
+        "ru": "Проверьте эту configuration на build 2.4.17135."
+      }
+    },
+    {
+      "sha": "28348826e215c145eb9461e614ec04d03159bfb2",
+      "headline": {
+        "en": "SChannel validates credential acquisition results",
+        "fr": "SChannel valide le résultat d’acquisition des credentials",
+        "zh": "SChannel 校验 credential 获取结果",
+        "ru": "SChannel проверяет credential acquisition results"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel validates credential acquisition results. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel valide le résultat d’acquisition des credentials. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 校验 credential 获取结果。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel проверяет credential acquisition results. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows",
+        "mormot.lib.sspi"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "1939c37c617d2b64ebf18349c028fa98bce3cd95",
+      "headline": {
+        "en": "SChannel enables TLS 1.3 with the correct flags",
+        "fr": "SChannel active TLS 1.3 avec les bons flags",
+        "zh": "SChannel 使用正确标志启用 TLS 1.3",
+        "ru": "SChannel включает TLS 1.3 правильными flags"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel enables TLS 1.3 with the correct flags. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel active TLS 1.3 avec les bons flags. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 使用正确标志启用 TLS 1.3。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel включает TLS 1.3 правильными flags. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows",
+        "mormot.lib.sspi"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "495b0e66a2bf731e3b4b168fd075bc5dd40f5596",
+      "headline": {
+        "en": "SChannel frees every handshake output buffer",
+        "fr": "SChannel libère tous les buffers du handshake",
+        "zh": "SChannel 释放所有 handshake 输出 buffer",
+        "ru": "SChannel освобождает все handshake output buffers"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel frees every handshake output buffer. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel libère tous les buffers du handshake. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 释放所有 handshake 输出 buffer。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel освобождает все handshake output buffers. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "7843132ea5c88263aa87066a93193aeef2eeb553",
+      "headline": {
+        "en": "SChannel preserves complete ClientHello input",
+        "fr": "SChannel conserve l’entrée ClientHello complète",
+        "zh": "SChannel 保留完整 ClientHello 输入",
+        "ru": "SChannel сохраняет полный ClientHello input"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel preserves complete ClientHello input. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel conserve l’entrée ClientHello complète. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 保留完整 ClientHello 输入。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel сохраняет полный ClientHello input. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "fed6728844646c0be6d00576526ba1cd3fbb9b6c",
+      "headline": {
+        "en": "SChannel Send retries without losing encrypted output",
+        "fr": "SChannel Send retente sans perdre l’output chiffré",
+        "zh": "SChannel Send 重试时不丢失加密输出",
+        "ru": "SChannel Send повторяет без потери encrypted output"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel Send retries without losing encrypted output. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel Send retente sans perdre l’output chiffré. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel Send 重试时不丢失加密输出。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel Send повторяет без потери encrypted output. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ]
+    },
+    {
+      "sha": "7dbebefad10dbdb23420be98516b83ea7647b34c",
+      "headline": {
+        "en": "Network cleanup leaves TLS behavior unchanged",
+        "fr": "Le nettoyage réseau ne change pas TLS",
+        "zh": "网络清理不改变 TLS 行为",
+        "ru": "Network cleanup не меняет TLS behavior"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "Network cleanup leaves TLS behavior unchanged. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Le nettoyage réseau ne change pas TLS. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "网络清理不改变 TLS 行为。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "Network cleanup не меняет TLS behavior. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows",
+        "mormot.core.log"
+      ]
+    },
+    {
+      "sha": "48f902c51aaa5c05ebe3b5508c9d8b81bebdc66d",
+      "headline": {
+        "en": "SChannel shutdown flushes pending encrypted bytes",
+        "fr": "Le shutdown SChannel vide les octets chiffrés en attente",
+        "zh": "SChannel shutdown 发送待处理加密字节",
+        "ru": "SChannel shutdown отправляет pending encrypted bytes"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SChannel shutdown flushes pending encrypted bytes. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Le shutdown SChannel vide les octets chiffrés en attente. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel shutdown 发送待处理加密字节。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel shutdown отправляет pending encrypted bytes. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "4253042447b5b2f2f01e74c15df7666059609b7f",
+      "headline": {
+        "en": "Failed SChannel connections reset the whole socket state",
+        "fr": "Une connexion SChannel échouée réinitialise tout le socket",
+        "zh": "SChannel 连接失败时重置整个 socket 状态",
+        "ru": "Сбой SChannel connection сбрасывает весь socket state"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Failed SChannel connections reset the whole socket state. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "Une connexion SChannel échouée réinitialise tout le socket. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 连接失败时重置整个 socket 状态。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "Сбой SChannel connection сбрасывает весь socket state. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows",
+        "mormot.net.sock"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "77b07e281ec8fb6df6073ffd4a338376c7d0522b",
+      "headline": {
+        "en": "SChannel treats an expired context as closure",
+        "fr": "SChannel traite un context expiré comme une fermeture",
+        "zh": "SChannel 将过期 context 视为关闭",
+        "ru": "SChannel трактует expired context как закрытие"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel treats an expired context as closure. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel traite un context expiré comme une fermeture. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 将过期 context 视为关闭。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel трактует expired context как закрытие. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "a7361d837440dc9815b771d9da9a5128b9e4df83",
+      "headline": {
+        "en": "SChannel reports final SSPI errors accurately",
+        "fr": "SChannel rapporte correctement les erreurs SSPI finales",
+        "zh": "SChannel 准确报告最终 SSPI 错误",
+        "ru": "SChannel точно сообщает final SSPI errors"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SChannel reports final SSPI errors accurately. mormot.net.sock.windows changes the TSChannelNetTls handshake, credential, buffering, send, receive or shutdown path named in the headline; the SSPI status and buffer transitions were inspected.",
+        "fr": "SChannel rapporte correctement les erreurs SSPI finales. mormot.net.sock.windows modifie le chemin TSChannelNetTls handshake, credential, buffer, send, receive ou shutdown nommé dans le titre ; les transitions SSPI et buffers ont été inspectées.",
+        "zh": "SChannel 准确报告最终 SSPI 错误。mormot.net.sock.windows 修改标题所指的 TSChannelNetTls handshake、credential、buffer、send、receive 或 shutdown 路径；已检查 SSPI 状态及 buffer 转换。",
+        "ru": "SChannel точно сообщает final SSPI errors. mormot.net.sock.windows меняет указанный путь TSChannelNetTls handshake, credential, buffers, send, receive или shutdown; проверены SSPI status и buffer transitions."
+      },
+      "impact": {
+        "en": "Existing TLS source code need not change, but the affected path could fail, leak, crash, stall or apply the wrong policy before this correction. Retest it on the final build.",
+        "fr": "Le source TLS existant ne change pas, mais le chemin concerné pouvait échouer, fuir, planter, bloquer ou appliquer la mauvaise policy. Retestez la build finale.",
+        "zh": "现有 TLS 源码无需修改，但修复前相关路径可能失败、泄漏、崩溃、停滞或应用错误 policy。请在最终 build 重测。",
+        "ru": "Исходный TLS code менять не нужно, но путь мог падать, давать утечку, crash, stall или неверную policy. Повторно проверьте финальную build."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "469c0fca28bf7299f9141b61667b45cb26f04be6",
+      "headline": {
+        "en": "SQLite’s fallback allocator preserves 16-byte alignment",
+        "fr": "L’allocateur SQLite conserve un alignement de 16 octets",
+        "zh": "SQLite 后备 allocator 保持 16 字节对齐",
+        "ru": "Fallback allocator SQLite сохраняет 16-byte alignment"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "SQLite’s fallback allocator preserves 16-byte alignment. mormot.db.raw.sqlite3 changes xMalloc2, xFree2, xRealloc2 and xSize2 to use a 16-byte size header, handle nil and preserve SQLite allocation alignment.",
+        "fr": "L’allocateur SQLite conserve un alignement de 16 octets. mormot.db.raw.sqlite3 fait utiliser à xMalloc2, xFree2, xRealloc2 et xSize2 un header taille de 16 octets, gère nil et conserve l’alignement SQLite.",
+        "zh": "SQLite 后备 allocator 保持 16 字节对齐。mormot.db.raw.sqlite3 让 xMalloc2、xFree2、xRealloc2 与 xSize2 使用 16 字节大小 header，处理 nil 并保持 SQLite 分配对齐。",
+        "ru": "Fallback allocator SQLite сохраняет 16-byte alignment. mormot.db.raw.sqlite3 переводит xMalloc2, xFree2, xRealloc2 и xSize2 на 16-byte size header, обрабатывает nil и сохраняет alignment SQLite."
+      },
+      "impact": {
+        "en": "Fallback SQLite allocators, especially Android ARM64, regain alignment required for atomic access without an application-source migration.",
+        "fr": "Les allocateurs SQLite de secours, surtout Android ARM64, retrouvent l’alignement requis pour les accès atomiques sans migration source.",
+        "zh": "SQLite 后备 allocator（尤其 Android ARM64）恢复原子访问所需对齐，无需应用源码迁移。",
+        "ru": "Fallback SQLite allocators, особенно Android ARM64, снова дают alignment для atomic access без source migration."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.raw.sqlite3"
+      ],
+      "action_detail": {
+        "en": "Land on build 2.4.17135 and retest this exact path.",
+        "fr": "Visez la build 2.4.17135 et retestez précisément ce chemin.",
+        "zh": "采用 build 2.4.17135，并重测这一具体路径。",
+        "ru": "Переходите на build 2.4.17135 и повторно проверьте этот путь."
+      }
+    },
+    {
+      "sha": "793fa7ea2ffe724b0f56a005e71bd0c3b3da02c9",
+      "headline": {
+        "en": "SMBIOS tests distinguish OEM strings from type 12 data",
+        "fr": "Les tests SMBIOS distinguent OEM strings et données type 12",
+        "zh": "SMBIOS 测试区分 OEM 字符串与 type 12 数据",
+        "ru": "SMBIOS tests различают OEM strings и type 12 data"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "SMBIOS tests distinguish OEM strings from type 12 data. The test diff narrows or extends coverage for the platform case named in the headline without changing a runtime unit.",
+        "fr": "Les tests SMBIOS distinguent OEM strings et données type 12. Le diff de test précise ou étend la couverture du cas plateforme nommé dans le titre sans modifier de unit runtime.",
+        "zh": "SMBIOS 测试区分 OEM 字符串与 type 12 数据。测试 diff 针对标题所指的平台情况收紧或扩展覆盖，不修改 runtime unit。",
+        "ru": "SMBIOS tests различают OEM strings и type 12 data. Test diff уточняет или расширяет покрытие указанного platform case без изменения runtime unit."
+      },
+      "impact": {
+        "en": "No impact on application code; this is refactoring, documentation or test coverage around the existing contract.",
+        "fr": "Aucun impact sur le code applicatif ; il s’agit de refactor, documentation ou tests autour du contrat existant.",
+        "zh": "不影响应用代码；这是围绕现有约定的重构、文档或测试覆盖。",
+        "ru": "Влияния на application code нет; это refactor, documentation или tests существующего контракта."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    }
+  ]
+}
