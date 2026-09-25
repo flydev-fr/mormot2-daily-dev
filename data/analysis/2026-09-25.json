@@ -1,0 +1,940 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-25",
+  "edition_title": {
+    "en": "SChannel and HTTP caches settle, but heartbeats regress",
+    "fr": "SChannel et les caches HTTP se stabilisent, mais les heartbeats régressent",
+    "zh": "SChannel 与 HTTP cache 稳定，但 heartbeat 出现回归",
+    "ru": "SChannel и HTTP caches стабилизированы, но heartbeat регрессировал"
+  },
+  "intro": {
+    "en": "Windows SChannel receives concurrency, handshake, renegotiation and memory-use repairs, while HTTP clients gain opt-in redirect restrictions and both proxy caches correct status handling. Async WebSocket heartbeat timing is moved to HeartbeatDelay, but two follow-up edits leave the final idle-loop comparison disabling those callbacks once the default memory-release threshold is reached. Teams using custom INetTls implementations or the removed LastOperationIdleSeconds property also have source migrations to make.",
+    "fr": "Windows SChannel reçoit des corrections de concurrence, handshake, renégociation et mémoire, tandis que les clients HTTP gagnent des restrictions de redirection optionnelles et que les deux proxy caches corrigent les statuts. Le timing heartbeat WebSocket async passe à HeartbeatDelay, mais deux retouches laissent une comparaison finale qui désactive ces callbacks après le seuil mémoire par défaut. Les implémentations INetTls externes et le code utilisant LastOperationIdleSeconds doivent aussi migrer.",
+    "zh": "Windows SChannel 修复了并发、handshake、重协商与内存使用；HTTP client 新增可选 redirect 限制，两个 proxy cache 也修正状态处理。异步 WebSocket heartbeat 改由 HeartbeatDelay 驱动，但两次后续修改使最终 idle-loop 比较在达到默认内存释放阈值后禁用 callback。自定义 INetTls 实现及使用已移除 LastOperationIdleSeconds 属性的代码也需要迁移。",
+    "ru": "Windows SChannel получает исправления concurrency, handshake, renegotiation и памяти; HTTP clients — опциональные ограничения redirect, а оба proxy caches — корректную обработку статусов. Async WebSocket heartbeat переведён на HeartbeatDelay, но две последующие правки оставили сравнение, отключающее callbacks после стандартного порога освобождения памяти. Внешние реализации INetTls и код с удалённым LastOperationIdleSeconds требуют миграции."
+  },
+  "tldr": {
+    "en": [
+      "Land on upstream head c94dba6c18f6a0c5b225734af210da678cc59167 at build 2.4.17161 for the completed SChannel, redirect and cache fixes.",
+      "Async WebSocket heartbeat callbacks are disabled after the default idle-memory threshold; set LastOperationReleaseMemorySeconds to 0 until the comparison is corrected.",
+      "Custom INetTls implementations must add ReleaseBuffers, and callers of TAsyncConnections.LastOperationIdleSeconds must migrate to GetLastOperationIdleSeconds.",
+      "THttpRequestExtendedOptions.RedirectOptions adds opt-in cross-origin credential purging and redirect rejection while preserving unrestricted defaults.",
+      "Proxy-cache downloads now reject non-GET-success statuses, abort progressive readers on failure and verify the final file size.",
+      "Avoid build 2.4.17143 and the incomplete redirect builds 2.4.17159–2.4.17160."
+    ],
+    "fr": [
+      "Visez le head c94dba6c18f6a0c5b225734af210da678cc59167, build 2.4.17161, pour les correctifs SChannel, redirect et cache terminés.",
+      "Les callbacks heartbeat WebSocket async sont désactivés après le seuil mémoire par défaut ; mettez LastOperationReleaseMemorySeconds à 0 en attendant la correction.",
+      "Les implémentations INetTls externes doivent ajouter ReleaseBuffers et LastOperationIdleSeconds doit migrer vers GetLastOperationIdleSeconds.",
+      "THttpRequestExtendedOptions.RedirectOptions ajoute purge cross-origin et rejet de redirects en gardant le comportement libre par défaut.",
+      "Le proxy cache refuse les statuts GET invalides, interrompt les lecteurs progressifs en erreur et vérifie la taille finale.",
+      "Évitez 2.4.17143 et les builds redirect incomplètes 2.4.17159–2.4.17160."
+    ],
+    "zh": [
+      "采用 upstream head c94dba6c18f6a0c5b225734af210da678cc59167，即 build 2.4.17161，以获得完整 SChannel、redirect 与 cache 修复。",
+      "异步 WebSocket heartbeat callback 会在默认 idle-memory 阈值后被禁用；比较条件修复前请将 LastOperationReleaseMemorySeconds 设为 0。",
+      "自定义 INetTls 实现必须添加 ReleaseBuffers，使用 LastOperationIdleSeconds 的代码须迁移到 GetLastOperationIdleSeconds。",
+      "THttpRequestExtendedOptions.RedirectOptions 新增可选 cross-origin credential 清理与 redirect 拒绝，默认仍不受限制。",
+      "Proxy cache 现在拒绝无效 GET 状态，失败时中止 progressive reader，并校验最终文件大小。",
+      "避开 build 2.4.17143 以及未完成的 redirect build 2.4.17159–2.4.17160。"
+    ],
+    "ru": [
+      "Переходите на head c94dba6c18f6a0c5b225734af210da678cc59167, build 2.4.17161, для завершённых исправлений SChannel, redirect и cache.",
+      "Async WebSocket heartbeat callbacks отключаются после стандартного idle-memory threshold; временно задайте LastOperationReleaseMemorySeconds = 0.",
+      "Внешние реализации INetTls должны добавить ReleaseBuffers, а LastOperationIdleSeconds нужно заменить на GetLastOperationIdleSeconds.",
+      "THttpRequestExtendedOptions.RedirectOptions добавляет опциональную очистку cross-origin credentials и запрет redirects при прежнем default.",
+      "Proxy cache теперь отвергает неверные GET statuses, прерывает progressive readers при ошибке и проверяет размер файла.",
+      "Избегайте build 2.4.17143 и незавершённых redirect builds 2.4.17159–2.4.17160."
+    ]
+  },
+  "risk_level": "act-now",
+  "themes": [
+    {
+      "title": {
+        "en": "SChannel concurrency and memory",
+        "fr": "Concurrence et mémoire SChannel",
+        "zh": "SChannel 并发与内存",
+        "ru": "Concurrency и память SChannel"
+      },
+      "summary": {
+        "en": "Receive and Send now serialize TLS 1.3 post-handshake work, partial ClientHello is retained, renegotiation processing is repaired and buffers grow from smaller initial allocations before idle SChannel buffers are released.",
+        "fr": "Receive et Send sérialisent le post-handshake TLS 1.3, conservent un ClientHello partiel, corrigent la renégociation et utilisent de petits buffers extensibles puis libérés au repos.",
+        "zh": "Receive 与 Send 现会串行化 TLS 1.3 post-handshake，保留分段 ClientHello，修复重协商处理，并采用较小的可增长 buffer，空闲时释放 SChannel buffer。",
+        "ru": "Receive и Send сериализуют TLS 1.3 post-handshake, сохраняют partial ClientHello, исправляют renegotiation и используют небольшие растущие buffers с освобождением при idle."
+      },
+      "shas": [
+        "3e2819e1cf94d07692096693033125443a742df1",
+        "7f17ffe4a2f1e39088bbb769544b19337926aea9",
+        "ef2fdc1473d40c2f9507fb16d4883a299d70c1a1",
+        "1ebf95e7b5d2dc8d71694faedb0d6768ffc21ca2",
+        "c6dc158f3a9e1be0dd9a06e063800365f9d4bf45",
+        "f1785ad124735b326bac4135a868913cf13995ca",
+        "8bcdf6c908331e30f1b2123b6933d8ecc5a1861f",
+        "ef8aa8a5e950232d147765f54aec54fe2941c471",
+        "a03577b9f770bdb2f552a1a45f8e082fb0e9018f",
+        "85f08e29e36318d60b0ead9981c2f70bfa0fbe2d"
+      ]
+    },
+    {
+      "title": {
+        "en": "Async heartbeat scheduling",
+        "fr": "Planification heartbeat async",
+        "zh": "异步 heartbeat 调度",
+        "ru": "Планирование async heartbeat"
+      },
+      "summary": {
+        "en": "WebSocket idle callbacks now derive their interval from HeartbeatDelay and generic async servers expose an override, but subsequent cutoff cleanup leaves the final scheduler disabled with the default memory-release interval.",
+        "fr": "Les callbacks WebSocket tirent leur intervalle de HeartbeatDelay et les serveurs async exposent un override, mais le cleanup suivant désactive le scheduler avec l’intervalle mémoire par défaut.",
+        "zh": "WebSocket idle callback 的间隔改由 HeartbeatDelay 决定，通用 async server 提供 override；但后续 cutoff 清理使最终 scheduler 在默认内存释放间隔下失效。",
+        "ru": "Интервал WebSocket idle callbacks берётся из HeartbeatDelay, generic async servers получили override, но последующий cleanup отключает scheduler при стандартном memory-release interval."
+      },
+      "shas": [
+        "efb271619a66db8208135f7cf9204e976a5b6581",
+        "fab1dd9a5d0e3f858b3edd57c556e23aeec7fca6",
+        "edf01585a13c3d00b861887240f1540780170689"
+      ]
+    },
+    {
+      "title": {
+        "en": "Redirect and proxy-cache correctness",
+        "fr": "Correction des redirects et proxy caches",
+        "zh": "Redirect 与 proxy cache 正确性",
+        "ru": "Корректность redirect и proxy cache"
+      },
+      "summary": {
+        "en": "HEAD redirects preserve their method, same-origin redirects update their URL, cache headers retain Location, failed progressive downloads are aborted and new client options can purge credentials or reject unsafe redirects.",
+        "fr": "Les redirects HEAD gardent leur méthode, les redirects same-origin changent d’URL, Location est conservé, les downloads en erreur sont interrompus et de nouvelles options filtrent les redirects dangereux.",
+        "zh": "HEAD redirect 保留方法，same-origin redirect 正确更新 URL，cache header 保留 Location，失败的 progressive download 被中止，新 client 选项可清理 credential 或拒绝不安全 redirect。",
+        "ru": "HEAD redirects сохраняют метод, same-origin redirects обновляют URL, cache headers сохраняют Location, ошибочные progressive downloads прерываются, а новые options фильтруют опасные redirects."
+      },
+      "shas": [
+        "edf01585a13c3d00b861887240f1540780170689",
+        "30f397da00d585168296a6312ef4bc4222a4ebc7",
+        "4894090428232a2db6c0a480788141169e1aea47",
+        "9b96345d47e3885986d6f790444edaf297f9b73e",
+        "e3a44702fb0fee2d0feb6c4fc1b31d3cbc99704e",
+        "597eea1674f2ce5cd91a99b5fd3978f2e12b9554",
+        "b98df07de2a3e66b69b66901de25980f2af82502",
+        "492aeccf1f6a52d299d32beaa34bd83952cefcfe",
+        "882e3435e0e608689357895e8eeb1f73ed1c17cf",
+        "c94dba6c18f6a0c5b225734af210da678cc59167"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [
+      {
+        "from_build": "2.4.17143",
+        "to_build": "2.4.17143",
+        "why": "The SChannel Receive rewrite omitted ProcessBuffers on SEC_I_RENEGOTIATE; build 2.4.17144 restores it."
+      },
+      {
+        "from_build": "2.4.17151",
+        "to_build": "2.4.17161",
+        "why": "The async idle cutoff edits disable WebSocket heartbeat callbacks after the default memory-release threshold unless LastOperationReleaseMemorySeconds is set to 0."
+      },
+      {
+        "from_build": "2.4.17159",
+        "to_build": "2.4.17160",
+        "why": "The initial redirect restrictions did not purge the socket-generated Referer and used direct URI-field comparison; build 2.4.17161 fixes both."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "3e2819e1cf94d07692096693033125443a742df1",
+          "7f17ffe4a2f1e39088bbb769544b19337926aea9",
+          "ef2fdc1473d40c2f9507fb16d4883a299d70c1a1",
+          "1ebf95e7b5d2dc8d71694faedb0d6768ffc21ca2",
+          "c6dc158f3a9e1be0dd9a06e063800365f9d4bf45",
+          "f1785ad124735b326bac4135a868913cf13995ca",
+          "8bcdf6c908331e30f1b2123b6933d8ecc5a1861f"
+        ],
+        "why": "Take the SChannel concurrency, handshake, Receive and adaptive-buffer changes with the direct renegotiation repair."
+      },
+      {
+        "shas": [
+          "e3a44702fb0fee2d0feb6c4fc1b31d3cbc99704e",
+          "597eea1674f2ce5cd91a99b5fd3978f2e12b9554",
+          "b98df07de2a3e66b69b66901de25980f2af82502",
+          "882e3435e0e608689357895e8eeb1f73ed1c17cf"
+        ],
+        "why": "Take the proxy-cache status, failure-abort and 204 handling as one completed sequence."
+      },
+      {
+        "shas": [
+          "492aeccf1f6a52d299d32beaa34bd83952cefcfe",
+          "c94dba6c18f6a0c5b225734af210da678cc59167"
+        ],
+        "why": "Take the redirect security API together with its Referer purge and URI-comparison repair."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17161 at head c94dba6c18f6a0c5b225734af210da678cc59167 for SChannel, redirect and proxy-cache fixes. Before upgrading, implement INetTls.ReleaseBuffers in custom TLS backends and replace LastOperationIdleSeconds usage. Async WebSocket servers should set LastOperationReleaseMemorySeconds to 0 and test heartbeat traffic until the idle cutoff comparison receives a successor fix.",
+    "fr": "Visez la build 2.4.17161 au head c94dba6c18f6a0c5b225734af210da678cc59167 pour SChannel, redirects et proxy cache. Ajoutez INetTls.ReleaseBuffers aux backends TLS externes et remplacez LastOperationIdleSeconds. Les serveurs WebSocket async doivent mettre LastOperationReleaseMemorySeconds à 0 et tester les heartbeats jusqu’au correctif du cutoff.",
+    "zh": "采用 head c94dba6c18f6a0c5b225734af210da678cc59167 的 build 2.4.17161，以获得 SChannel、redirect 与 proxy-cache 修复。升级前为自定义 TLS backend 实现 INetTls.ReleaseBuffers，并替换 LastOperationIdleSeconds。异步 WebSocket server 应将 LastOperationReleaseMemorySeconds 设为 0，并在 cutoff 比较获得后续修复前测试 heartbeat 流量。",
+    "ru": "Переходите на build 2.4.17161 в head c94dba6c18f6a0c5b225734af210da678cc59167 для исправлений SChannel, redirect и proxy cache. Добавьте INetTls.ReleaseBuffers во внешние TLS backends и замените LastOperationIdleSeconds. Async WebSocket servers должны задать LastOperationReleaseMemorySeconds = 0 и проверить heartbeat до следующего исправления cutoff."
+  },
+  "notes": {
+    "en": "Reviewed all 22 non-merge commits from build 2.4.17140 through 2.4.17161: 462 additions and 202 deletions outside version bookkeeping. The raw payload has no superseded_by metadata; avoid windows come from directly inspected same-routine fixes. The heartbeat finding is confirmed from the final source and the default LastOperationReleaseMemorySeconds value of 60.",
+    "fr": "Les 22 commits non-merge de 2.4.17140 à 2.4.17161 ont été examinés : 462 ajouts et 202 suppressions hors version bookkeeping. Aucun superseded_by ; les plages viennent des correctifs du même routine. Le problème heartbeat est confirmé dans la source finale avec LastOperationReleaseMemorySeconds à 60 par défaut.",
+    "zh": "已审查 build 2.4.17140 至 2.4.17161 的全部 22 个 non-merge commit：除版本 bookkeeping 外新增 462 行、删除 202 行。raw payload 没有 superseded_by；避开区间来自直接检查的同 routine 修复。Heartbeat 问题由最终源码及默认值 60 的 LastOperationReleaseMemorySeconds 确认。",
+    "ru": "Проверены все 22 non-merge commits от 2.4.17140 до 2.4.17161: 462 additions и 202 deletions без version bookkeeping. superseded_by отсутствует; avoid windows основаны на проверенных fixes тех же routines. Heartbeat regression подтверждён финальным кодом и default LastOperationReleaseMemorySeconds = 60."
+  },
+  "entries": [
+    {
+      "sha": "c94dba6c18f6a0c5b225734af210da678cc59167",
+      "headline": {
+        "en": "Redirect credential purging now covers generated Referer headers",
+        "fr": "La purge des redirects couvre le Referer généré",
+        "zh": "Redirect credential 清理现覆盖自动生成的 Referer",
+        "ru": "Очистка redirect теперь охватывает созданный Referer"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpClientSocket replaces one authorization flag with fAuthPurge, suppresses both generated Referer and Authorization values after cross-origin purging, and uses TUri.Same for origin comparison.",
+        "fr": "THttpClientSocket utilise fAuthPurge, supprime Referer et Authorization générés après purge cross-origin et compare l’origine avec TUri.Same.",
+        "zh": "THttpClientSocket 改用 fAuthPurge，在 cross-origin 清理后抑制自动生成的 Referer 与 Authorization，并用 TUri.Same 比较 origin。",
+        "ru": "THttpClientSocket использует fAuthPurge, подавляет созданные Referer и Authorization после cross-origin purge и сравнивает origin через TUri.Same."
+      },
+      "impact": {
+        "en": "Applications enabling hroPurgeReferer or hroPurgeAuthorization no longer leak values regenerated by socket fields on the redirected request; default redirect behavior remains unchanged.",
+        "fr": "Avec hroPurgeReferer ou hroPurgeAuthorization, les valeurs régénérées ne fuient plus ; le comportement par défaut reste inchangé.",
+        "zh": "启用 hroPurgeReferer 或 hroPurgeAuthorization 后，socket field 不再在 redirect 请求中重新泄漏这些值；默认行为不变。",
+        "ru": "При hroPurgeReferer или hroPurgeAuthorization значения больше не восстанавливаются socket fields; default не изменён."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this commit with the RedirectOptions introduction and test cross-origin redirects carrying explicit and generated headers.",
+        "fr": "Prenez ce commit avec RedirectOptions et testez les headers explicites et générés en cross-origin.",
+        "zh": "将此 commit 与 RedirectOptions 一并采用，并测试 cross-origin redirect 的显式及自动 header。",
+        "ru": "Берите commit вместе с RedirectOptions и проверьте explicit/generated headers при cross-origin redirect."
+      },
+      "units": ["mormot.net.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "882e3435e0e608689357895e8eeb1f73ed1c17cf",
+      "headline": {
+        "en": "Proxy-cache 204 responses no longer enter file delivery",
+        "fr": "Les réponses 204 du proxy cache évitent la livraison de fichier",
+        "zh": "Proxy cache 的 204 response 不再进入文件传输",
+        "ru": "Ответы 204 proxy cache больше не идут в file delivery"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpProxyServer narrows size and progressive-file handling to HTTP 200 and 206, excluding HTTP 204 while retaining redirect responses and their headers.",
+        "fr": "THttpProxyServer limite taille et progressive-file aux statuts 200 et 206, exclut 204 et conserve les redirects avec leurs headers.",
+        "zh": "THttpProxyServer 将 size 与 progressive-file 处理限定为 HTTP 200/206，排除 204，同时保留 redirect response 及 header。",
+        "ru": "THttpProxyServer ограничивает size/progressive-file статусами 200 и 206, исключает 204 и сохраняет redirects с headers."
+      },
+      "impact": {
+        "en": "A cached origin response with no content is returned as 204 instead of being treated like a downloadable file with an invalid or synthetic length.",
+        "fr": "Une réponse origin sans contenu reste 204 au lieu d’être traitée comme un fichier avec longueur invalide.",
+        "zh": "无内容的 origin response 会保持为 204，不再作为长度无效或伪造的可下载文件处理。",
+        "ru": "Origin response без content остаётся 204 вместо обработки как файла с неверной длиной."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade proxy-cache users that may receive HTTP 204 and verify HEAD and GET responses without bodies.",
+        "fr": "Mettez à niveau les proxy caches pouvant recevoir HTTP 204 et vérifiez HEAD/GET sans body.",
+        "zh": "升级可能收到 HTTP 204 的 proxy-cache，并验证无 body 的 HEAD/GET response。",
+        "ru": "Обновите proxy-cache с HTTP 204 и проверьте HEAD/GET responses без body."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "492aeccf1f6a52d299d32beaa34bd83952cefcfe",
+      "headline": {
+        "en": "HTTP clients gain opt-in redirect security policy",
+        "fr": "Les clients HTTP gagnent une policy de redirect optionnelle",
+        "zh": "HTTP client 新增可选 redirect 安全 policy",
+        "ru": "HTTP clients получили опциональную redirect security policy"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.net.client adds THttpRedirectOption, THttpRedirectOptions and THttpRequestExtendedOptions.RedirectOptions. THttpClientSocket can purge Authorization, Cookie or Referer across origins and reject downgrade, cross-origin or userinfo redirects.",
+        "fr": "mormot.net.client ajoute THttpRedirectOption, THttpRedirectOptions et RedirectOptions pour purger Authorization, Cookie ou Referer et rejeter downgrade, cross-origin ou userinfo.",
+        "zh": "mormot.net.client 新增 THttpRedirectOption、THttpRedirectOptions 与 RedirectOptions，可跨 origin 清理 Authorization/Cookie/Referer，并拒绝 downgrade、cross-origin 或 userinfo redirect。",
+        "ru": "mormot.net.client добавляет THttpRedirectOption, THttpRedirectOptions и RedirectOptions для очистки Authorization/Cookie/Referer и запрета downgrade, cross-origin или userinfo redirects."
+      },
+      "impact": {
+        "en": "Existing code keeps unrestricted redirects because the default is an empty set. Security-sensitive callers can now prevent credential forwarding or unsafe destination changes without replacing the redirect loop.",
+        "fr": "Le default vide conserve les redirects actuels. Les callers sensibles peuvent bloquer la propagation de credentials ou les destinations dangereuses.",
+        "zh": "默认空集合保持原有 unrestricted redirect。安全敏感 caller 可在不替换 redirect loop 的情况下阻止 credential 转发或不安全目的地变化。",
+        "ru": "Пустой default сохраняет прежние redirects. Security-sensitive callers могут запретить перенос credentials и опасную смену destination."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Review clients that follow untrusted redirects and select the required hroPurge* and hroReject* flags; include build 2.4.17161 fixes.",
+        "fr": "Revoyez les clients suivant des redirects non fiables, choisissez les flags hroPurge*/hroReject* et prenez 2.4.17161.",
+        "zh": "检查会跟随不可信 redirect 的 client，选择所需 hroPurge*/hroReject* flag，并包含 build 2.4.17161 修复。",
+        "ru": "Проверьте clients с untrusted redirects, выберите hroPurge*/hroReject* flags и включите fixes 2.4.17161."
+      },
+      "units": ["mormot.net.client"],
+      "api_changes": [
+        {
+          "symbol": "THttpRedirectOption",
+          "change": "added",
+          "note": {
+            "en": "Adds six purge and rejection choices for redirects.",
+            "fr": "Ajoute six choix de purge et rejet.",
+            "zh": "新增六种清理与拒绝选项。",
+            "ru": "Добавляет шесть вариантов purge/reject."
+          }
+        },
+        {
+          "symbol": "THttpRedirectOptions",
+          "change": "added",
+          "note": {
+            "en": "Set of THttpRedirectOption values.",
+            "fr": "Set de valeurs THttpRedirectOption.",
+            "zh": "THttpRedirectOption 的集合。",
+            "ru": "Set значений THttpRedirectOption."
+          }
+        },
+        {
+          "symbol": "THttpRequestExtendedOptions.RedirectOptions",
+          "change": "added",
+          "note": {
+            "en": "Defaults to an empty set and is currently implemented by THttpClientSocket.",
+            "fr": "Vide par défaut et implémenté par THttpClientSocket.",
+            "zh": "默认为空集合，目前由 THttpClientSocket 实现。",
+            "ru": "По умолчанию пусто; реализовано в THttpClientSocket."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b98df07de2a3e66b69b66901de25980f2af82502",
+      "headline": {
+        "en": "Range probing now normalizes 206 without rejecting redirects",
+        "fr": "Le probing Range normalise 206 sans rejeter les redirects",
+        "zh": "Range 探测现规范化 206 且不拒绝 redirect",
+        "ru": "Range probing нормализует 206, не отвергая redirects"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpProxyUrl.RemoteClientHead maps the synthetic Range GET 206 back to 200, while MakeHeadAndComputeFilename only rejects missing size for actual 200/206 downloads and lets 3xx pass through.",
+        "fr": "RemoteClientHead remappe le 206 du Range GET en 200 ; MakeHeadAndComputeFilename exige la taille seulement pour les downloads 200/206 et laisse passer 3xx.",
+        "zh": "RemoteClientHead 将 Range GET 产生的 206 映射回 200；MakeHeadAndComputeFilename 仅对实际 200/206 download 要求 size，并允许 3xx 透传。",
+        "ru": "RemoteClientHead преобразует 206 от Range GET в 200; MakeHeadAndComputeFilename требует size только для 200/206 и пропускает 3xx."
+      },
+      "impact": {
+        "en": "Dynamic resources probed with Range no longer expose a misleading 206 through the proxy, and redirects without a content length are not converted into an error.",
+        "fr": "Les ressources dynamiques ne publient plus un 206 artificiel et les redirects sans Content-Length ne deviennent plus des erreurs.",
+        "zh": "通过 Range 探测的动态资源不再经 proxy 暴露误导性 206；无 Content-Length 的 redirect 也不再被转为错误。",
+        "ru": "Dynamic resources больше не отдают искусственный 206, а redirects без Content-Length не превращаются в ошибку."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this with the remaining proxy-cache status fixes and test Range probing plus redirects without Content-Length.",
+        "fr": "Prenez-le avec les autres correctifs proxy cache et testez Range ainsi que les redirects sans Content-Length.",
+        "zh": "与其余 proxy-cache 状态修复一并采用，并测试 Range 探测及无 Content-Length 的 redirect。",
+        "ru": "Берите с остальными proxy-cache fixes и проверьте Range probing и redirects без Content-Length."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "597eea1674f2ce5cd91a99b5fd3978f2e12b9554",
+      "headline": {
+        "en": "Proxy HEAD and GET paths now preserve non-file status codes",
+        "fr": "Les chemins HEAD et GET du proxy conservent les statuts non fichier",
+        "zh": "Proxy HEAD/GET 路径现保留非文件状态码",
+        "ru": "Proxy HEAD/GET сохраняют non-file status codes"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpProxyServer limits local-file and progressive-output setup to HTTP_GET_OK responses, emits Content-Length separately for other known-size statuses and moves option copying before output setup.",
+        "fr": "THttpProxyServer réserve les fichiers locaux/progressifs à HTTP_GET_OK, émet Content-Length pour les autres statuts connus et copie les options plus tôt.",
+        "zh": "THttpProxyServer 将本地文件与 progressive output 限于 HTTP_GET_OK，对其他已知 size 状态单独输出 Content-Length，并提前复制 option。",
+        "ru": "THttpProxyServer использует local/progressive files только для HTTP_GET_OK, отдельно выдаёт Content-Length и раньше копирует options."
+      },
+      "impact": {
+        "en": "HEAD and GET callers receive the origin status instead of entering file-serving logic for redirects or other responses, reducing malformed proxy responses.",
+        "fr": "Les callers HEAD/GET reçoivent le statut origin sans entrer dans la livraison de fichier pour redirects ou autres réponses.",
+        "zh": "HEAD/GET caller 会收到 origin 状态，而不会让 redirect 或其他 response 进入文件传输逻辑。",
+        "ru": "HEAD/GET callers получают origin status без file-serving logic для redirects и других responses."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade THttpProxyServer deployments and test HEAD and GET against 2xx, 3xx and 4xx origins.",
+        "fr": "Mettez à niveau THttpProxyServer et testez HEAD/GET avec origins 2xx, 3xx et 4xx.",
+        "zh": "升级 THttpProxyServer 部署，并针对 2xx、3xx、4xx origin 测试 HEAD/GET。",
+        "ru": "Обновите THttpProxyServer и проверьте HEAD/GET с origin 2xx, 3xx и 4xx."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e3a44702fb0fee2d0feb6c4fc1b31d3cbc99704e",
+      "headline": {
+        "en": "Failed proxy downloads now abort readers and remove partial files",
+        "fr": "Les downloads proxy en erreur interrompent les lecteurs et fichiers partiels",
+        "zh": "失败的 proxy download 现中止 reader 并删除 partial file",
+        "ru": "Ошибочные proxy downloads прерывают readers и удаляют partial files"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The proxy cache accepts only 200, 204 or 206 for GET data, tracks the expected size, aborts every THttpPartial reader on setup or background failure, and deletes incomplete files after status or size mismatch.",
+        "fr": "Le proxy cache accepte seulement 200/204/206, suit la taille attendue, interrompt tous les THttpPartial en erreur et supprime les fichiers incomplets.",
+        "zh": "Proxy cache 仅接受 GET 的 200/204/206，记录 expected size，在建立或后台失败时中止所有 THttpPartial reader，并删除 status/size 不匹配的 incomplete file。",
+        "ru": "Proxy cache принимает только 200/204/206, хранит expected size, прерывает все THttpPartial readers при ошибке и удаляет incomplete files."
+      },
+      "impact": {
+        "en": "Progressive clients no longer wait on a failed origin transfer or consume a truncated cache object as complete. Redirect or error bodies are not stored as successful resources.",
+        "fr": "Les clients progressifs ne restent plus bloqués et ne consomment plus un objet tronqué ; les bodies de redirect ou erreur ne sont plus mis en cache comme succès.",
+        "zh": "Progressive client 不再等待失败的 origin transfer，也不会将截断 cache object 当作完整内容；redirect/error body 不再作为成功资源存储。",
+        "ru": "Progressive clients больше не ждут failed transfer и не принимают truncated cache object за полный; redirect/error bodies не сохраняются как success."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade proxy-cache deployments and test origin disconnects, wrong Content-Length and 3xx/4xx GET responses.",
+        "fr": "Mettez à niveau les proxy caches et testez disconnect origin, Content-Length erroné et réponses GET 3xx/4xx.",
+        "zh": "升级 proxy-cache 部署，并测试 origin 断连、错误 Content-Length 及 3xx/4xx GET response。",
+        "ru": "Обновите proxy-cache deployments и проверьте origin disconnect, неверный Content-Length и GET 3xx/4xx."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9b96345d47e3885986d6f790444edaf297f9b73e",
+      "headline": {
+        "en": "Peer-cache redirects retain their Location header",
+        "fr": "Les redirects du peer cache conservent Location",
+        "zh": "Peer cache redirect 现保留 Location header",
+        "ru": "Peer-cache redirects сохраняют Location header"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpPeerCache.DirectFileNameHead assigns the client response headers to Ctxt.OutCustomHeaders before checking HTTP_GET_OK, so Location is preserved even when the status is 3xx.",
+        "fr": "DirectFileNameHead assigne les headers à Ctxt.OutCustomHeaders avant le test HTTP_GET_OK, conservant Location pour 3xx.",
+        "zh": "THttpPeerCache.DirectFileNameHead 在检查 HTTP_GET_OK 前将 client response header 赋给 Ctxt.OutCustomHeaders，因此 3xx 也保留 Location。",
+        "ru": "DirectFileNameHead назначает headers в Ctxt.OutCustomHeaders до проверки HTTP_GET_OK, сохраняя Location для 3xx."
+      },
+      "impact": {
+        "en": "Clients can follow redirects returned through THttpPeerCache instead of receiving a 3xx response without its target URL.",
+        "fr": "Les clients peuvent suivre les redirects du THttpPeerCache au lieu de recevoir un 3xx sans URL cible.",
+        "zh": "Client 可跟随 THttpPeerCache 返回的 redirect，不再收到缺少目标 URL 的 3xx。",
+        "ru": "Clients могут следовать redirects через THttpPeerCache вместо 3xx без target URL."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade peer-cache deployments that may return redirects and verify that clients receive the Location header.",
+        "fr": "Mettez à niveau les peer caches avec redirects et vérifiez que Location arrive au client.",
+        "zh": "升级可能返回 redirect 的 peer-cache，并验证 client 收到 Location header。",
+        "ru": "Обновите peer-cache с redirects и проверьте получение Location header клиентом."
+      },
+      "units": ["mormot.net.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4894090428232a2db6c0a480788141169e1aea47",
+      "headline": {
+        "en": "Proxy HEAD probing preserves 204 and redirect outcomes",
+        "fr": "Le probing HEAD du proxy conserve 204 et redirects",
+        "zh": "Proxy HEAD 探测现保留 204 与 redirect 结果",
+        "ru": "Proxy HEAD probing сохраняет 204 и redirects"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpProxyUrl.RemoteClientHead uses the Range GET fallback only for a 200 response without length, returns 204 and 3xx directly, and includes TSimpleHttpClient.RequestContext in later exception diagnostics.",
+        "fr": "RemoteClientHead utilise le fallback Range GET seulement pour 200 sans longueur, retourne 204/3xx directement et ajoute RequestContext aux diagnostics.",
+        "zh": "RemoteClientHead 仅对无长度的 200 使用 Range GET fallback，直接返回 204/3xx，并将 TSimpleHttpClient.RequestContext 加入异常诊断。",
+        "ru": "RemoteClientHead применяет Range GET только для 200 без length, напрямую возвращает 204/3xx и добавляет RequestContext в diagnostics."
+      },
+      "impact": {
+        "en": "Origins that intentionally return no content or a redirect are no longer replaced by a range probe, and proxy logs carry the redirect or socket context needed to diagnose failures.",
+        "fr": "Les origins 204 ou redirect ne sont plus remplacées par un Range probe et les logs contiennent le context utile.",
+        "zh": "有意返回 no-content 或 redirect 的 origin 不再被 Range probe 替换，proxy log 也包含诊断所需 redirect/socket context。",
+        "ru": "Origin 204 или redirect больше не заменяются Range probe, а logs содержат нужный redirect/socket context."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the full proxy-cache sequence and test 204, 3xx and range-fallback origins with diagnostic logging enabled.",
+        "fr": "Prenez toute la séquence proxy cache et testez origins 204, 3xx et Range fallback avec logs.",
+        "zh": "采用完整 proxy-cache 序列，并在启用诊断 log 时测试 204、3xx 与 Range fallback origin。",
+        "ru": "Берите всю proxy-cache серию и проверьте origin 204, 3xx и Range fallback с diagnostic logs."
+      },
+      "units": ["mormot.net.async", "mormot.net.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "30f397da00d585168296a6312ef4bc4222a4ebc7",
+      "headline": {
+        "en": "Same-origin redirects now send the redirected path",
+        "fr": "Les redirects same-origin envoient maintenant le nouveau path",
+        "zh": "Same-origin redirect 现会发送新的 path",
+        "ru": "Same-origin redirects теперь отправляют новый path"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpClientSocket.Request moves ctxt.Url assignment outside the reconnect-only block, so a redirect on the existing connection updates the next request URL even when host, port and TLS mode are unchanged.",
+        "fr": "THttpClientSocket.Request met à jour ctxt.Url hors du bloc reconnect, donc un redirect sur la même connexion utilise bien la nouvelle URL.",
+        "zh": "THttpClientSocket.Request 将 ctxt.Url 赋值移出仅重连 block，因此 host、port、TLS 不变时的 redirect 也会更新下一次请求 URL。",
+        "ru": "THttpClientSocket.Request обновляет ctxt.Url вне reconnect-only блока, поэтому redirect на том же соединении использует новый URL."
+      },
+      "impact": {
+        "en": "Same-server redirects no longer repeat the original path or return the wrong resource while reusing the socket.",
+        "fr": "Les redirects sur le même serveur ne répètent plus l’ancien path et ne renvoient plus la mauvaise ressource.",
+        "zh": "复用 socket 时，same-server redirect 不再重复原 path 或返回错误资源。",
+        "ru": "Same-server redirects больше не повторяют исходный path и не возвращают неверный resource."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade clients that follow same-origin redirects and test relative and absolute Location values on reused connections.",
+        "fr": "Mettez à niveau les clients avec redirects same-origin et testez Location relative/absolue sur connexion réutilisée.",
+        "zh": "升级会跟随 same-origin redirect 的 client，并在复用 connection 上测试相对与绝对 Location。",
+        "ru": "Обновите clients с same-origin redirects и проверьте relative/absolute Location на reused connections."
+      },
+      "units": ["mormot.net.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "edf01585a13c3d00b861887240f1540780170689",
+      "headline": {
+        "en": "HEAD redirects are fixed while the heartbeat cutoff remains wrong",
+        "fr": "Les redirects HEAD sont corrigés mais le cutoff heartbeat reste faux",
+        "zh": "HEAD redirect 已修复，但 heartbeat cutoff 仍错误",
+        "ru": "HEAD redirects исправлены, но heartbeat cutoff остаётся неверным"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpClientSocket keeps HEAD and OPTIONS on 301/303 and changes body-bearing methods to GET. The same commit changes the async idle guard to allowed < gc; after gc becomes the absolute 60-second memory cutoff, that condition sets allowed to zero and skips heartbeat callbacks.",
+        "fr": "THttpClientSocket garde HEAD/OPTIONS sur 301/303 et convertit les méthodes avec body en GET. Le même commit utilise allowed < gc ; gc devenu cutoff absolu à 60 secondes, allowed passe à zéro et les heartbeats sont ignorés.",
+        "zh": "THttpClientSocket 在 301/303 上保留 HEAD/OPTIONS，并将带 body 的方法改为 GET。同一 commit 将 async idle guard 改为 allowed < gc；gc 变为绝对 60 秒内存 cutoff 后，该条件把 allowed 置零并跳过 heartbeat callback。",
+        "ru": "THttpClientSocket сохраняет HEAD/OPTIONS для 301/303 и переводит методы с body в GET. Этот же commit ставит guard allowed < gc; после превращения gc в абсолютный 60-second cutoff allowed обнуляется и heartbeat callbacks пропускаются."
+      },
+      "impact": {
+        "en": "HEAD requests now retain method semantics across redirects. With the default LastOperationReleaseMemorySeconds of 60, async WebSocket servers stop scheduling OnLastOperationIdle once the process passes that threshold; setting it to 0 avoids this branch.",
+        "fr": "HEAD conserve sa sémantique. Avec LastOperationReleaseMemorySeconds=60 par défaut, les serveurs WebSocket async cessent de planifier OnLastOperationIdle ; la valeur 0 évite cette branche.",
+        "zh": "HEAD 请求现保留 redirect 方法语义。默认 LastOperationReleaseMemorySeconds=60 时，async WebSocket server 超过该阈值后停止调度 OnLastOperationIdle；设为 0 可避开此分支。",
+        "ru": "HEAD сохраняет метод. При default LastOperationReleaseMemorySeconds=60 async WebSocket servers перестают планировать OnLastOperationIdle; значение 0 обходит ветвь."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Test HEAD redirects. For async WebSocket servers, set LastOperationReleaseMemorySeconds to 0 and verify ping/pong traffic until upstream corrects the cutoff comparison.",
+        "fr": "Testez les redirects HEAD. Pour WebSocket async, mettez LastOperationReleaseMemorySeconds à 0 et vérifiez ping/pong jusqu’au correctif.",
+        "zh": "测试 HEAD redirect。对 async WebSocket server，将 LastOperationReleaseMemorySeconds 设为 0，并在 upstream 修复 cutoff 比较前验证 ping/pong 流量。",
+        "ru": "Проверьте HEAD redirects. Для async WebSocket задайте LastOperationReleaseMemorySeconds = 0 и проверьте ping/pong до upstream fix."
+      },
+      "units": ["mormot.net.async", "mormot.net.client"],
+      "api_changes": [
+        {
+          "symbol": "THttpClientSocket.Request redirect handling",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "301 and 303 retain methods that have no body, including HEAD and OPTIONS.",
+            "fr": "301 et 303 gardent les méthodes sans body, dont HEAD et OPTIONS.",
+            "zh": "301/303 保留 HEAD、OPTIONS 等无 body 方法。",
+            "ru": "301/303 сохраняют методы без body, включая HEAD и OPTIONS."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fab1dd9a5d0e3f858b3edd57c556e23aeec7fca6",
+      "headline": {
+        "en": "Idle-loop cleanup introduces the heartbeat cutoff regression",
+        "fr": "Le cleanup idle introduit la régression heartbeat",
+        "zh": "Idle-loop 清理引入 heartbeat cutoff 回归",
+        "ru": "Idle-loop cleanup вводит heartbeat regression"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "TAsyncConnections.IdleEverySecond adds underflow guards and shutdown checks, but the heartbeat guard compares sec against the already transformed gc value instead of the heartbeat delay. The next commit changes the operands without restoring the intended cutoff calculation.",
+        "fr": "IdleEverySecond ajoute des gardes underflow et shutdown, mais compare sec au gc déjà transformé au lieu du délai heartbeat. Le commit suivant change les opérandes sans restaurer le calcul.",
+        "zh": "TAsyncConnections.IdleEverySecond 新增 underflow guard 与 shutdown check，但 heartbeat guard 将 sec 与已转换的 gc 比较，而非 heartbeat delay；下一 commit 更换 operand 仍未恢复正确 cutoff。",
+        "ru": "IdleEverySecond добавляет underflow/shutdown checks, но сравнивает sec с уже преобразованным gc вместо heartbeat delay. Следующий commit меняет operands, не восстанавливая cutoff."
+      },
+      "impact": {
+        "en": "The cleanup starts the final-head condition that suppresses async WebSocket idle callbacks after the normal memory-release window; non-WebSocket idle cleanup otherwise gains safer termination checks.",
+        "fr": "Le cleanup déclenche la condition finale qui supprime les callbacks WebSocket après la fenêtre mémoire ; les checks de terminaison sont sinon plus sûrs.",
+        "zh": "该清理启动了最终 head 中抑制 async WebSocket idle callback 的条件；除此之外，非 WebSocket idle cleanup 的终止检查更安全。",
+        "ru": "Cleanup начинает условие, подавляющее async WebSocket callbacks после memory window; прочие termination checks стали безопаснее."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Do not rely on this intermediate heartbeat logic; apply the LastOperationReleaseMemorySeconds workaround described for the final head.",
+        "fr": "Ne comptez pas sur cette logique heartbeat intermédiaire ; appliquez le workaround LastOperationReleaseMemorySeconds du head final.",
+        "zh": "不要依赖此中间 heartbeat 逻辑；应用最终 head 所述 LastOperationReleaseMemorySeconds workaround。",
+        "ru": "Не полагайтесь на эту heartbeat logic; примените workaround LastOperationReleaseMemorySeconds для final head."
+      },
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "efb271619a66db8208135f7cf9204e976a5b6581",
+      "headline": {
+        "en": "WebSocket heartbeat timing moves to HeartbeatDelay",
+        "fr": "Le timing heartbeat WebSocket passe à HeartbeatDelay",
+        "zh": "WebSocket heartbeat 调度改用 HeartbeatDelay",
+        "ru": "WebSocket heartbeat timing переведён на HeartbeatDelay"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "TAsyncConnections removes LastOperationIdleSeconds and adds virtual GetLastOperationIdleSeconds. TWebSocketAsyncConnections overrides it to return Settings.HeartbeatDelay in seconds, and HeartbeatDelay=0 disables ping/pong.",
+        "fr": "TAsyncConnections supprime LastOperationIdleSeconds et ajoute GetLastOperationIdleSeconds virtual. TWebSocketAsyncConnections renvoie Settings.HeartbeatDelay en secondes ; 0 désactive ping/pong.",
+        "zh": "TAsyncConnections 移除 LastOperationIdleSeconds，新增 virtual GetLastOperationIdleSeconds。TWebSocketAsyncConnections override 后返回 Settings.HeartbeatDelay 秒数，0 禁用 ping/pong。",
+        "ru": "TAsyncConnections удаляет LastOperationIdleSeconds и добавляет virtual GetLastOperationIdleSeconds. TWebSocketAsyncConnections возвращает Settings.HeartbeatDelay; 0 отключает ping/pong."
+      },
+      "impact": {
+        "en": "Code assigning LastOperationIdleSeconds no longer compiles. WebSocket servers derive the interval from their settings, but final-head scheduling needs the documented workaround because later commits regress the cutoff.",
+        "fr": "Le code assignant LastOperationIdleSeconds ne compile plus. WebSocket utilise ses settings, mais le head final nécessite le workaround à cause du cutoff régressé.",
+        "zh": "赋值 LastOperationIdleSeconds 的代码将无法编译。WebSocket server 改从 settings 获取间隔，但后续 commit 回归 cutoff，最终 head 需使用 workaround。",
+        "ru": "Код с LastOperationIdleSeconds больше не компилируется. WebSocket берёт interval из settings, но final head требует workaround из-за regression cutoff."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Grep for LastOperationIdleSeconds. Use TWebSocketProtocol.Settings.HeartbeatDelay for WebSockets or override GetLastOperationIdleSeconds in a TAsyncConnections descendant.",
+        "fr": "Cherchez LastOperationIdleSeconds. Utilisez TWebSocketProtocol.Settings.HeartbeatDelay ou surchargez GetLastOperationIdleSeconds.",
+        "zh": "搜索 LastOperationIdleSeconds。WebSocket 使用 TWebSocketProtocol.Settings.HeartbeatDelay，其他 TAsyncConnections descendant override GetLastOperationIdleSeconds。",
+        "ru": "Найдите LastOperationIdleSeconds. Используйте TWebSocketProtocol.Settings.HeartbeatDelay или override GetLastOperationIdleSeconds."
+      },
+      "units": ["mormot.net.async", "mormot.net.ws.async"],
+      "api_changes": [
+        {
+          "symbol": "TAsyncConnections.LastOperationIdleSeconds",
+          "change": "removed",
+          "note": {
+            "en": "The writable property is replaced by a virtual getter.",
+            "fr": "La propriété writable est remplacée par un getter virtual.",
+            "zh": "可写 property 被 virtual getter 取代。",
+            "ru": "Writable property заменено virtual getter."
+          }
+        },
+        {
+          "symbol": "TAsyncConnections.GetLastOperationIdleSeconds",
+          "change": "added",
+          "note": {
+            "en": "Returns zero by default and can be overridden by descendants.",
+            "fr": "Retourne zéro par défaut et peut être surchargé.",
+            "zh": "默认返回 0，可由 descendant override。",
+            "ru": "По умолчанию возвращает 0; descendants могут override."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "85f08e29e36318d60b0ead9981c2f70bfa0fbe2d",
+      "headline": {
+        "en": "Idle async connections release working memory only once",
+        "fr": "Les connexions async libèrent leur mémoire idle une seule fois",
+        "zh": "空闲 async connection 仅释放一次工作内存",
+        "ru": "Idle async connections освобождают память только один раз"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPollAsyncConnection.ReleaseMemoryOnIdle consolidates read, write and TLS cleanup under the correct locks and marks fMemClean after success. New activity clears the marker, avoiding a cleanup attempt every second.",
+        "fr": "ReleaseMemoryOnIdle regroupe le cleanup read/write/TLS sous les locks corrects et marque fMemClean jusqu’à la prochaine activité.",
+        "zh": "TPollAsyncConnection.ReleaseMemoryOnIdle 在正确 lock 下统一 read/write/TLS 清理，成功后标记 fMemClean，新活动再清除，避免每秒重复尝试。",
+        "ru": "ReleaseMemoryOnIdle объединяет read/write/TLS cleanup под нужными locks и ставит fMemClean до следующей активности."
+      },
+      "impact": {
+        "en": "Long-idle servers do less lock and cleanup work each second while still releasing per-connection buffers after activity stops; application code does not change.",
+        "fr": "Les serveurs idle font moins de locks/cleanup tout en libérant les buffers ; aucun changement applicatif.",
+        "zh": "长期空闲 server 每秒减少 lock 与 cleanup 工作，同时仍在活动停止后释放 per-connection buffer；应用代码不变。",
+        "ru": "Long-idle servers выполняют меньше lock/cleanup работы, сохраняя освобождение buffers; application code не меняется."
+      },
+      "action": "none",
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a03577b9f770bdb2f552a1a45f8e082fb0e9018f",
+      "headline": {
+        "en": "Idle async sockets now release SChannel buffers",
+        "fr": "Les sockets async idle libèrent les buffers SChannel",
+        "zh": "空闲 async socket 现释放 SChannel buffer",
+        "ru": "Idle async sockets освобождают SChannel buffers"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPollAsyncConnection.ReleaseMemoryOnIdle acquires both read and write locks as required and invokes INetTls.ReleaseBuffers when no pending plain data remains.",
+        "fr": "ReleaseMemoryOnIdle prend les locks read/write et appelle INetTls.ReleaseBuffers quand aucune donnée plain ne reste.",
+        "zh": "TPollAsyncConnection.ReleaseMemoryOnIdle 按要求获取 read/write lock，在无 pending plain data 时调用 INetTls.ReleaseBuffers。",
+        "ru": "ReleaseMemoryOnIdle берёт read/write locks и вызывает INetTls.ReleaseBuffers при отсутствии pending plain data."
+      },
+      "impact": {
+        "en": "Windows SChannel servers can return unused TLS allocation from idle connections; OpenSSL remains a no-op because its release mode already handles buffers safely.",
+        "fr": "Les serveurs SChannel rendent la mémoire TLS idle ; OpenSSL reste no-op car son mode release la gère déjà.",
+        "zh": "Windows SChannel server 可回收空闲 connection 的 TLS allocation；OpenSSL 因 release mode 已安全处理而保持 no-op。",
+        "ru": "Windows SChannel servers возвращают TLS memory idle connections; OpenSSL остаётся no-op благодаря release mode."
+      },
+      "action": "none",
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ef8aa8a5e950232d147765f54aec54fe2941c471",
+      "headline": {
+        "en": "INetTls gains an idle-buffer release contract",
+        "fr": "INetTls gagne un contrat de libération des buffers idle",
+        "zh": "INetTls 新增空闲 buffer 释放契约",
+        "ru": "INetTls получил контракт освобождения idle buffers"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "The public INetTls interface adds ReleaseBuffers: PtrInt. TSChannelNetTls releases empty input, data and output buffers; TOpenSslNetTls returns zero because SSL_MODE_RELEASE_BUFFERS is already enabled and SSL_free_buffers is unsafe.",
+        "fr": "L’interface publique INetTls ajoute ReleaseBuffers: PtrInt. SChannel libère ses buffers vides ; OpenSSL retourne zéro car SSL_MODE_RELEASE_BUFFERS est déjà actif.",
+        "zh": "公共 INetTls interface 新增 ReleaseBuffers: PtrInt。TSChannelNetTls 释放空 input/data/output buffer；TOpenSslNetTls 返回 0，因为 SSL_MODE_RELEASE_BUFFERS 已启用且 SSL_free_buffers 不安全。",
+        "ru": "Публичный INetTls добавляет ReleaseBuffers: PtrInt. SChannel освобождает пустые buffers; OpenSSL возвращает 0, поскольку SSL_MODE_RELEASE_BUFFERS уже включён."
+      },
+      "impact": {
+        "en": "Any external class implementing INetTls fails to compile until it implements the new method. Built-in OpenSSL and SChannel implementations are complete.",
+        "fr": "Toute classe externe implémentant INetTls ne compile plus avant d’ajouter la méthode. Les backends intégrés sont complets.",
+        "zh": "任何外部 INetTls 实现都会在添加新方法前编译失败；内置 OpenSSL 与 SChannel 实现已完整。",
+        "ru": "Любой внешний implementor INetTls перестаёт компилироваться до добавления метода; built-in backends готовы."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Grep for classes implementing INetTls and add function ReleaseBuffers: PtrInt; return 0 when the backend has no safe explicit release operation.",
+        "fr": "Cherchez les classes implémentant INetTls et ajoutez function ReleaseBuffers: PtrInt ; retournez 0 sans opération sûre.",
+        "zh": "搜索实现 INetTls 的 class，添加 function ReleaseBuffers: PtrInt；backend 无安全显式释放操作时返回 0。",
+        "ru": "Найдите classes, реализующие INetTls, и добавьте function ReleaseBuffers: PtrInt; возвращайте 0 без safe release."
+      },
+      "units": ["mormot.lib.openssl11", "mormot.net.sock", "mormot.net.sock.windows"],
+      "api_changes": [
+        {
+          "symbol": "INetTls.ReleaseBuffers",
+          "change": "added",
+          "note": {
+            "en": "Required method returning the known number of released bytes.",
+            "fr": "Méthode requise retournant les octets libérés connus.",
+            "zh": "必需方法，返回已知释放字节数。",
+            "ru": "Обязательный метод, возвращающий число released bytes."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8bcdf6c908331e30f1b2123b6933d8ecc5a1861f",
+      "headline": {
+        "en": "SChannel buffers use SSPI limits instead of fixed growth",
+        "fr": "Les buffers SChannel suivent les limites SSPI",
+        "zh": "SChannel buffer 改用 SSPI 限制而非固定增长",
+        "ru": "SChannel buffers используют лимиты SSPI"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSChannelNetTls records the exact maximum TLS record size, starts output data at 2 KB and expands missing input by the SECBUFFER_MISSING count up to the SSPI-reported maximum.",
+        "fr": "TSChannelNetTls conserve la taille record maximale, démarre output à 2 Ko et agrandit input selon SECBUFFER_MISSING jusqu’à la limite SSPI.",
+        "zh": "TSChannelNetTls 记录精确最大 TLS record size，output 从 2 KB 开始，并按 SECBUFFER_MISSING 数量增长 input，最高到 SSPI 上限。",
+        "ru": "TSChannelNetTls хранит max TLS record size, начинает output с 2 KB и растит input по SECBUFFER_MISSING до лимита SSPI."
+      },
+      "impact": {
+        "en": "Typical Windows TLS connections retain less memory while large records still grow to the size required by SChannel; application behavior is unchanged.",
+        "fr": "Les connexions TLS Windows gardent moins de mémoire et grandissent jusqu’à la taille SChannel requise ; aucun changement applicatif.",
+        "zh": "典型 Windows TLS connection 占用更少内存，大 record 仍可增长至 SChannel 所需大小；应用行为不变。",
+        "ru": "Обычные Windows TLS connections используют меньше памяти, а большие records растут до нужного SChannel размера."
+      },
+      "action": "none",
+      "units": ["mormot.lib.sspi", "mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f1785ad124735b326bac4135a868913cf13995ca",
+      "headline": {
+        "en": "SChannel connections start with smaller dynamic buffers",
+        "fr": "Les connexions SChannel démarrent avec des buffers dynamiques réduits",
+        "zh": "SChannel connection 改用较小动态初始 buffer",
+        "ru": "SChannel connections начинают с меньших dynamic buffers"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The fixed 19 KB TLSRECMAXSIZE allocation is removed. TSChannelNetTls initializes input, data and output storage at 4 KB and grows it through EnsureLength as records arrive.",
+        "fr": "L’allocation fixe TLSRECMAXSIZE de 19 Ko disparaît ; input/data/output commencent à 4 Ko et grandissent avec EnsureLength.",
+        "zh": "移除固定 19 KB TLSRECMAXSIZE allocation；TSChannelNetTls 的 input/data/output 从 4 KB 开始，并随 record 通过 EnsureLength 增长。",
+        "ru": "Fixed TLSRECMAXSIZE 19 KB удалён; input/data/output начинаются с 4 KB и растут через EnsureLength."
+      },
+      "impact": {
+        "en": "Windows services with many mostly idle TLS connections consume less baseline memory; large transfers still allocate on demand.",
+        "fr": "Les services Windows avec beaucoup de connexions TLS idle réduisent leur mémoire de base ; les grands transferts allouent à la demande.",
+        "zh": "大量 mostly-idle TLS connection 的 Windows service 可降低基础内存占用；大传输仍按需分配。",
+        "ru": "Windows services с множеством idle TLS connections снижают baseline memory; большие transfers растут по требованию."
+      },
+      "action": "none",
+      "units": ["mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c6dc158f3a9e1be0dd9a06e063800365f9d4bf45",
+      "headline": {
+        "en": "SChannel renegotiation again preserves decrypted buffers",
+        "fr": "La renégociation SChannel préserve de nouveau les buffers déchiffrés",
+        "zh": "SChannel 重协商再次保留已解密 buffer",
+        "ru": "SChannel renegotiation снова сохраняет decrypted buffers"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The SEC_I_RENEGOTIATE branch in TSChannelNetTls.Receive now calls ProcessBuffers before checking pending output and continuing the TLS 1.3 post-handshake exchange.",
+        "fr": "La branche SEC_I_RENEGOTIATE de Receive appelle ProcessBuffers avant de vérifier output et poursuivre le post-handshake TLS 1.3.",
+        "zh": "TSChannelNetTls.Receive 的 SEC_I_RENEGOTIATE 分支现先调用 ProcessBuffers，再检查 pending output 并继续 TLS 1.3 post-handshake。",
+        "ru": "Ветка SEC_I_RENEGOTIATE в Receive вызывает ProcessBuffers до проверки output и продолжения TLS 1.3 post-handshake."
+      },
+      "impact": {
+        "en": "Build 2.4.17143 could lose or fail to expose decrypted data accompanying renegotiation. Build 2.4.17144 restores that processing.",
+        "fr": "La build 2.4.17143 pouvait perdre ou masquer les données déchiffrées avec renégociation ; 2.4.17144 les restaure.",
+        "zh": "Build 2.4.17143 可能丢失或不暴露重协商同时到达的解密数据；2.4.17144 恢复处理。",
+        "ru": "Build 2.4.17143 мог потерять decrypted data при renegotiation; 2.4.17144 восстанавливает processing."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Skip build 2.4.17143 and take build 2.4.17144 or later, then test TLS 1.3 post-handshake traffic.",
+        "fr": "Évitez 2.4.17143, prenez 2.4.17144 ou après et testez le trafic post-handshake TLS 1.3.",
+        "zh": "跳过 build 2.4.17143，采用 2.4.17144 或更新版本，并测试 TLS 1.3 post-handshake 流量。",
+        "ru": "Пропустите 2.4.17143, берите 2.4.17144 или новее и проверьте TLS 1.3 post-handshake traffic."
+      },
+      "units": ["mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1ebf95e7b5d2dc8d71694faedb0d6768ffc21ca2",
+      "headline": {
+        "en": "SChannel receive processing is centralized around SSPI results",
+        "fr": "Le receive SChannel est centralisé autour des résultats SSPI",
+        "zh": "SChannel receive 处理围绕 SSPI 结果集中化",
+        "ru": "SChannel Receive централизован вокруг SSPI results"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSChannelNetTls.Receive factors buffer extraction into ProcessBuffers and handles SEC_E_OK, SEC_I_RENEGOTIATE, context expiry and errors in one result switch. The commit also only rewords SQLite and changelog comments.",
+        "fr": "Receive factorise l’extraction dans ProcessBuffers et traite SEC_E_OK, SEC_I_RENEGOTIATE, expiration et erreurs dans un switch. Les changements SQLite/changelog sont textuels.",
+        "zh": "TSChannelNetTls.Receive 将 buffer 提取集中到 ProcessBuffers，并在一个结果 switch 中处理 SEC_E_OK、SEC_I_RENEGOTIATE、context expiry 与错误；SQLite/changelog 仅改文字。",
+        "ru": "Receive выносит extraction в ProcessBuffers и обрабатывает SEC_E_OK, SEC_I_RENEGOTIATE, expiry и errors одним switch; SQLite/changelog меняют только текст."
+      },
+      "impact": {
+        "en": "The receive path becomes easier to reason about and properly coordinates renegotiation with its lock, but this exact build needs the following ProcessBuffers repair. No database behavior changes.",
+        "fr": "Le chemin receive devient plus clair et coordonne la renégociation, mais cette build exige le correctif suivant. Aucun changement database.",
+        "zh": "Receive 路径更易推理并正确协调重协商 lock，但此精确 build 需要下一 commit 的 ProcessBuffers 修复；数据库行为不变。",
+        "ru": "Receive path упрощён и координирует renegotiation lock, но этот build требует следующего ProcessBuffers fix. Database behavior не меняется."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Do not stop on build 2.4.17143; include c6dc158f3a9e1be0dd9a06e063800365f9d4bf45 or later.",
+        "fr": "Ne restez pas sur 2.4.17143 ; incluez c6dc158f3a9e1be0dd9a06e063800365f9d4bf45 ou après.",
+        "zh": "不要停在 build 2.4.17143；应包含 c6dc158f3a9e1be0dd9a06e063800365f9d4bf45 或更新版本。",
+        "ru": "Не останавливайтесь на 2.4.17143; включите c6dc158f3a9e1be0dd9a06e063800365f9d4bf45 или новее."
+      },
+      "units": ["mormot.net.sock.windows", "mormot.db.raw.sqlite3"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ef2fdc1473d40c2f9507fb16d4883a299d70c1a1",
+      "headline": {
+        "en": "SChannel renegotiation uses the Windows OS lock",
+        "fr": "La renégociation SChannel utilise le lock Windows OS",
+        "zh": "SChannel 重协商改用 Windows OS lock",
+        "ru": "SChannel renegotiation использует Windows OS lock"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSChannelNetTls replaces TLightLock with TOSLightLock around the Receive/Send SSPI renegotiation boundary and removes a redundant first-accept state assignment.",
+        "fr": "TSChannelNetTls remplace TLightLock par TOSLightLock autour de la renégociation Receive/Send et retire une affectation redondante.",
+        "zh": "TSChannelNetTls 在 Receive/Send SSPI 重协商边界用 TOSLightLock 取代 TLightLock，并移除冗余 first-accept 状态赋值。",
+        "ru": "TSChannelNetTls заменяет TLightLock на TOSLightLock вокруг Receive/Send renegotiation и удаляет redundant assignment."
+      },
+      "impact": {
+        "en": "A blocked Windows receiver can be scheduled promptly when the sender releases the lock; no application API or non-Windows backend changes.",
+        "fr": "Un receiver Windows bloqué peut repartir dès la libération du lock ; aucun changement API ou hors Windows.",
+        "zh": "Sender 释放 lock 时，被阻塞的 Windows receiver 可更快调度；应用 API 与非 Windows backend 不变。",
+        "ru": "Blocked Windows receiver быстрее возобновляется после release lock; API и non-Windows backends не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.core.os", "mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7f17ffe4a2f1e39088bbb769544b19337926aea9",
+      "headline": {
+        "en": "Fragmented ClientHello no longer restarts SChannel accept",
+        "fr": "Un ClientHello fragmenté ne redémarre plus l’accept SChannel",
+        "zh": "分段 ClientHello 不再重启 SChannel accept",
+        "ru": "Fragmented ClientHello больше не перезапускает SChannel accept"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSChannelNetTls tracks fAcceptFirst and passes the existing SSPI context after AcceptSecurityContext returns SEC_I_CONTINUE_NEEDED, instead of treating an incomplete first ClientHello as a fresh negotiation.",
+        "fr": "TSChannelNetTls suit fAcceptFirst et réutilise le context SSPI après SEC_I_CONTINUE_NEEDED au lieu de recommencer sur un ClientHello incomplet.",
+        "zh": "TSChannelNetTls 跟踪 fAcceptFirst；AcceptSecurityContext 返回 SEC_I_CONTINUE_NEEDED 后复用现有 SSPI context，不再将不完整首个 ClientHello 当作新协商。",
+        "ru": "TSChannelNetTls отслеживает fAcceptFirst и повторно использует SSPI context после SEC_I_CONTINUE_NEEDED вместо нового negotiation."
+      },
+      "impact": {
+        "en": "SChannel servers can complete handshakes when ClientHello arrives in multiple TCP reads rather than failing or corrupting the negotiation context.",
+        "fr": "Les serveurs SChannel terminent les handshakes quand ClientHello arrive en plusieurs lectures TCP.",
+        "zh": "ClientHello 分多个 TCP read 到达时，SChannel server 可完成 handshake，不再失败或破坏协商 context。",
+        "ru": "SChannel servers завершают handshake при ClientHello в нескольких TCP reads вместо failure/context corruption."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Windows SChannel servers and test handshakes with ClientHello split across several TCP reads.",
+        "fr": "Mettez à niveau les serveurs SChannel et testez un ClientHello réparti sur plusieurs lectures TCP.",
+        "zh": "升级 Windows SChannel server，并测试 ClientHello 分散在多次 TCP read 中的 handshake。",
+        "ru": "Обновите Windows SChannel servers и проверьте ClientHello в нескольких TCP reads."
+      },
+      "units": ["mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3e2819e1cf94d07692096693033125443a742df1",
+      "headline": {
+        "en": "Concurrent SChannel send and renegotiation are serialized",
+        "fr": "Send et renégociation SChannel concurrents sont sérialisés",
+        "zh": "并发 SChannel send 与重协商现被串行化",
+        "ru": "Concurrent SChannel Send и renegotiation сериализованы"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSChannelNetTls adds fSspiSafe around Receive handling of SEC_I_RENEGOTIATE and Send encryption. Send returns nrRetry when Receive owns the lock, preventing simultaneous SSPI context use by WebSocket read and write paths.",
+        "fr": "TSChannelNetTls ajoute fSspiSafe autour de SEC_I_RENEGOTIATE et du chiffrement Send. Send retourne nrRetry si Receive tient le lock.",
+        "zh": "TSChannelNetTls 在 Receive 处理 SEC_I_RENEGOTIATE 与 Send 加密周围新增 fSspiSafe；Receive 持 lock 时 Send 返回 nrRetry，避免 WebSocket 读写同时使用 SSPI context。",
+        "ru": "TSChannelNetTls добавляет fSspiSafe вокруг SEC_I_RENEGOTIATE и Send encryption; Send возвращает nrRetry, если lock у Receive."
+      },
+      "impact": {
+        "en": "Windows WebSocket connections no longer race SSPI when TLS 1.3 post-handshake data arrives during a send. Callers already handling nrRetry need no source change.",
+        "fr": "Les WebSockets Windows n’exécutent plus SSPI en race quand le post-handshake TLS 1.3 arrive pendant Send ; les callers nrRetry ne changent pas.",
+        "zh": "TLS 1.3 post-handshake 数据在 send 期间到达时，Windows WebSocket connection 不再并发竞用 SSPI；已处理 nrRetry 的 caller 无需改源码。",
+        "ru": "Windows WebSocket connections больше не гоняют SSPI при TLS 1.3 post-handshake во время Send; callers nrRetry не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Windows WebSocket TLS deployments and stress concurrent Send with TLS 1.3 post-handshake messages.",
+        "fr": "Mettez à niveau les WebSockets TLS Windows et testez Send concurrent avec messages post-handshake TLS 1.3.",
+        "zh": "升级 Windows WebSocket TLS 部署，并压力测试并发 Send 与 TLS 1.3 post-handshake message。",
+        "ru": "Обновите Windows WebSocket TLS и нагрузочно проверьте concurrent Send с TLS 1.3 post-handshake messages."
+      },
+      "units": ["mormot.net.sock.windows"],
+      "confidence": "confirmed"
+    }
+  ]
+}
