@@ -1,0 +1,1070 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-09-29",
+  "edition_title": {
+    "en": "SChannel turns on TLS 1.3 as Windows CNG support comes together",
+    "fr": "SChannel active TLS 1.3 tandis que le support Windows CNG se consolide",
+    "zh": "SChannel 默认启用 TLS 1.3，Windows CNG 支持完成整合",
+    "ru": "SChannel включает TLS 1.3, а поддержка Windows CNG складывается в целое"
+  },
+  "intro": {
+    "en": "This Windows-heavy series changes the default SChannel protocol policy, shares server credentials across accepted HTTPS connections and adds substantial CNG, certificate-store and msLAPS support. The final commits also close Delphi 7 and Delphi 13 compilation gaps, protect Wine from stubbed CNG APIs and fix ownership around certificate private keys.",
+    "fr": "Cette série centrée sur Windows modifie la politique protocolaire SChannel par défaut, partage les credentials serveur entre connexions HTTPS acceptées et ajoute un support important de CNG, des certificate stores et de msLAPS. Les derniers commits corrigent aussi les compilations Delphi 7 et Delphi 13, évitent les stubs CNG de Wine et réparent l’ownership des clés privées.",
+    "zh": "这一以 Windows 为主的系列更改了 SChannel 默认协议策略，在已接受的 HTTPS 连接间共享服务器 credentials，并新增大量 CNG、certificate store 与 msLAPS 支持。最终提交还修复 Delphi 7/13 编译问题、避开 Wine 的 CNG stub，并纠正证书私钥 ownership。",
+    "ru": "Эта Windows-серия меняет протокольную политику SChannel по умолчанию, разделяет server credentials между принятыми HTTPS-соединениями и добавляет крупную поддержку CNG, certificate store и msLAPS. Финальные commits также чинят Delphi 7/13, обходят CNG-заглушки Wine и исправляют ownership закрытых ключей."
+  },
+  "risk_level": "act-now",
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17208 at 18e7d88c0083b279402c59019c030abdfe39e3e1.",
+      "SChannelEnableTls13 now defaults to true on Windows 11 and Windows Server 2022 or newer; set it false before initialization if that rollout is not intended.",
+      "HTTPS servers using SChannel now acquire one shared server credential and keep it alive until the last accepted TLS context is released.",
+      "TNetTlsContext can feed SChannel a PCCERT_CONTEXT or password-protected PFX and ReleaseBuffers now releases idle SChannel buffers.",
+      "New TNCrypt, TWinCertStore and TWinCertCngKey wrappers expose CNG keys, certificate stores, signing, secret unprotection and msLAPS decryption.",
+      "Wine skips its stubbed CNG layer, while Delphi 7 and Delphi 13 receive explicit compilation repairs."
+    ],
+    "fr": [
+      "Visez la build 2.4.17208 au commit 18e7d88c0083b279402c59019c030abdfe39e3e1.",
+      "SChannelEnableTls13 vaut désormais true par défaut sur Windows 11 et Windows Server 2022 ou plus récent ; passez-le à false avant l’initialisation si ce déploiement n’est pas voulu.",
+      "Les serveurs HTTPS SChannel acquièrent un credential serveur partagé, conservé jusqu’à la libération du dernier contexte TLS accepté.",
+      "TNetTlsContext peut fournir à SChannel un PCCERT_CONTEXT ou un PFX protégé, et ReleaseBuffers libère maintenant les buffers SChannel inactifs.",
+      "Les wrappers TNCrypt, TWinCertStore et TWinCertCngKey exposent clés CNG, certificate stores, signature, unprotection de secrets et déchiffrement msLAPS.",
+      "Wine évite sa couche CNG incomplète, tandis que Delphi 7 et Delphi 13 reçoivent des correctifs de compilation explicites."
+    ],
+    "zh": [
+      "应采用 build 2.4.17208 的 18e7d88c0083b279402c59019c030abdfe39e3e1。",
+      "SChannelEnableTls13 在 Windows 11 与 Windows Server 2022 及以上版本默认变为 true；若不准备启用，应在初始化前设为 false。",
+      "使用 SChannel 的 HTTPS 服务器现在只获取一份共享 server credential，并保持到最后一个已接受 TLS context 释放。",
+      "TNetTlsContext 可向 SChannel 提供 PCCERT_CONTEXT 或受密码保护的 PFX，ReleaseBuffers 也可释放空闲 SChannel buffer。",
+      "新的 TNCrypt、TWinCertStore 与 TWinCertCngKey wrapper 提供 CNG key、certificate store、签名、secret unprotection 与 msLAPS 解密。",
+      "Wine 会跳过其 CNG stub 层，Delphi 7 与 Delphi 13 则得到明确的编译修复。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17208 в 18e7d88c0083b279402c59019c030abdfe39e3e1.",
+      "SChannelEnableTls13 теперь по умолчанию true на Windows 11 и Windows Server 2022 или новее; задайте false до инициализации, если такое включение не планировалось.",
+      "HTTPS-серверы на SChannel получают один общий server credential и держат его до освобождения последнего принятого TLS context.",
+      "TNetTlsContext передаёт SChannel PCCERT_CONTEXT или защищённый паролем PFX, а ReleaseBuffers освобождает неактивные SChannel buffers.",
+      "Новые TNCrypt, TWinCertStore и TWinCertCngKey открывают CNG keys, certificate stores, signing, unprotect secrets и расшифровку msLAPS.",
+      "Wine обходит свои CNG-заглушки, а Delphi 7 и Delphi 13 получают явные исправления компиляции."
+    ]
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "SChannel changes protocol policy and credential lifetime",
+        "fr": "SChannel change de politique protocolaire et de durée des credentials",
+        "zh": "SChannel 更改协议策略与 credential 生命周期",
+        "ru": "SChannel меняет протокольную политику и lifetime credentials"
+      },
+      "summary": {
+        "en": "TLS 1.3 becomes the supported-Windows default, server credentials move to one reference-counted shared context, and certificate/PFX input plus buffer release are wired into SChannel. Ownership and compiler follow-ups complete the sequence.",
+        "fr": "TLS 1.3 devient le défaut sur Windows pris en charge, les credentials serveur passent dans un contexte partagé reference-counted, et les entrées certificat/PFX ainsi que la libération des buffers sont reliées à SChannel. Les correctifs d’ownership et de compilation terminent la séquence.",
+        "zh": "TLS 1.3 在受支持 Windows 上成为默认值，服务器 credentials 移入 reference-counted 共享 context，证书/PFX 输入与 buffer 释放接入 SChannel；ownership 与编译后续修复完成该序列。",
+        "ru": "TLS 1.3 становится default на поддерживаемых Windows, server credentials переходят в общий reference-counted context, а certificate/PFX input и освобождение buffers подключаются к SChannel. Серия завершается исправлениями ownership и компиляции."
+      },
+      "shas": [
+        "86828b9918537d82894cc14338a3e985f7b533f3",
+        "f479106f605f554ed683775da416493ffd74f587",
+        "a51ffadffa3dc63386abe1329b7ec031e10f7dbe",
+        "73798d46da6b68bd3bf8c4dddab6e8330fa5cbdd",
+        "3f0914a0871bb8a8c5b11cc1264ed28ef65c4586",
+        "3740564404034f8c6718d38800e0693d091f34fe",
+        "18e7d88c0083b279402c59019c030abdfe39e3e1"
+      ]
+    },
+    {
+      "title": {
+        "en": "CNG and certificate APIs become usable framework services",
+        "fr": "CNG et certificats deviennent des services utilisables du framework",
+        "zh": "CNG 与证书 API 成为可用的框架服务",
+        "ru": "CNG и certificate API становятся готовыми сервисами framework"
+      },
+      "summary": {
+        "en": "The raw NCrypt layer grows into higher-level key signing, secret unprotection and msLAPS helpers, while certificate enumeration, PEM export and certificate-to-CNG-key ownership move into dedicated wrappers. Error names and Wine capability detection support those APIs.",
+        "fr": "La couche NCrypt brute gagne signature de clés, unprotection de secrets et helpers msLAPS, tandis que l’énumération, l’export PEM et l’ownership certificat-vers-clé CNG passent dans des wrappers dédiés. Les noms d’erreur et la détection Wine accompagnent ces API.",
+        "zh": "底层 NCrypt 扩展出高层 key signing、secret unprotection 与 msLAPS helper；证书枚举、PEM 导出和 certificate-to-CNG-key ownership 则进入专用 wrapper。错误名与 Wine 能力检测为这些 API 提供支持。",
+        "ru": "Низкоуровневый NCrypt получает high-level key signing, unprotect secrets и msLAPS helpers, а enumeration, PEM export и ownership certificate-to-CNG-key переходят в отдельные wrappers. API дополняют имена ошибок и определение возможностей Wine."
+      },
+      "shas": [
+        "d6d52bf046d935b7cfd1ed7975d68eb2217433aa",
+        "d73d544537bc57ae6717174b73b5a5f0df3e16ec",
+        "373f69f34b17e32cd85c2bfcbaac5ba6320d020a",
+        "79a03b234cebed37982c40d2b28f62d0823f9ba2",
+        "622071a5a4d80a2b0fe4ddf9ea23507d6b726ece",
+        "32e7d9b32f6656db42147c1f5d5806ae1e965df0",
+        "1d60fd28669b11e85aa25f568b89f3634ea6894e",
+        "3c49fdbf96d719122c59ab092d32c201f0851a17",
+        "6a4f0636e772172f7a0326981d9e6c5ea94dce1b",
+        "6e9ef943db355f53b56921a8d8a073dd4fb66925",
+        "4211be313895799555bff55489d02231536c58ab",
+        "73dc5e6a6b0f839623b99153b73772679ae82d7f"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "d6d52bf046d935b7cfd1ed7975d68eb2217433aa",
+      "headline": {
+        "en": "Crypt32 bindings gain self-signed certificate creation primitives",
+        "fr": "Les bindings Crypt32 gagnent la création de certificats auto-signés",
+        "zh": "Crypt32 binding 新增自签名证书创建原语",
+        "ru": "Bindings Crypt32 получают примитивы создания self-signed certificates"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.lib.sspi declares CertStrToNameW and CertCreateSelfSignCertificate, while mormot.core.os maps CRYPT_E_NOT_FOUND to a readable Windows error name.",
+        "fr": "mormot.lib.sspi déclare CertStrToNameW et CertCreateSelfSignCertificate, et mormot.core.os donne un nom lisible à CRYPT_E_NOT_FOUND.",
+        "zh": "mormot.lib.sspi 声明 CertStrToNameW 与 CertCreateSelfSignCertificate，mormot.core.os 为 CRYPT_E_NOT_FOUND 增加可读错误名。",
+        "ru": "mormot.lib.sspi объявляет CertStrToNameW и CertCreateSelfSignCertificate, а mormot.core.os добавляет читаемое имя CRYPT_E_NOT_FOUND."
+      },
+      "impact": {
+        "en": "Windows backends can build names and create self-signed certificate contexts through the raw Crypt32 surface; existing application code is unchanged.",
+        "fr": "Windows backends peuvent créer des noms et contextes auto-signés via l’API Crypt32 brute ; le code applicatif existant ne change pas.",
+        "zh": "Windows 后端可通过底层 Crypt32 API 构建名称并创建自签名证书 context；现有应用代码不受影响。",
+        "ru": "Windows backends могут создавать names и self-signed certificate contexts через raw Crypt32 API; существующий код не меняется."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "CertStrToNameW",
+          "change": "added",
+          "note": {
+            "en": "Raw Crypt32 name conversion declaration.",
+            "fr": "Déclaration brute de conversion de nom Crypt32.",
+            "zh": "底层 Crypt32 名称转换声明。",
+            "ru": "Raw declaration преобразования имени Crypt32."
+          }
+        },
+        {
+          "symbol": "CertCreateSelfSignCertificate",
+          "change": "added",
+          "note": {
+            "en": "Raw Crypt32 self-signed certificate declaration.",
+            "fr": "Déclaration brute Crypt32 de certificat auto-signé.",
+            "zh": "底层 Crypt32 自签名证书声明。",
+            "ru": "Raw declaration Crypt32 для self-signed certificate."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d73d544537bc57ae6717174b73b5a5f0df3e16ec",
+      "headline": {
+        "en": "Certificate record layouts are corrected after the Crypt32 expansion",
+        "fr": "Les layouts de certificats sont corrigés après l’extension Crypt32",
+        "zh": "Crypt32 扩展后的证书 record 布局得到修正",
+        "ru": "Layouts certificate records исправлены после расширения Crypt32"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The Crypt32 types are moved into mormot.core.os.security and their pointer, blob and record declarations are corrected so mormot.lib.sspi compiles against them.",
+        "fr": "Les types Crypt32 passent dans mormot.core.os.security et leurs déclarations pointer, blob et record sont corrigées pour compiler mormot.lib.sspi.",
+        "zh": "Crypt32 类型移入 mormot.core.os.security，并修正 pointer、blob 与 record 声明，使 mormot.lib.sspi 能够编译。",
+        "ru": "Типы Crypt32 перенесены в mormot.core.os.security; pointer, blob и record declarations исправлены для компиляции mormot.lib.sspi."
+      },
+      "impact": {
+        "en": "This repairs the immediately preceding Windows binding change. Delphi and FPC projects should not consume the earlier intermediate revision alone.",
+        "fr": "Ce correctif répare le changement Windows immédiatement précédent. Les projets Delphi et FPC ne doivent pas prendre seule la révision intermédiaire.",
+        "zh": "该提交修复紧邻的 Windows binding 变更；Delphi 与 FPC 项目不应单独采用之前的中间 revision。",
+        "ru": "Исправлен непосредственно предыдущий Windows binding change; Delphi/FPC не следует брать раннюю промежуточную revision отдельно."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this together with the preceding Crypt32 binding commit, or use the final edition head.",
+        "fr": "Prenez-le avec le commit Crypt32 précédent, ou utilisez la tête finale de l’édition.",
+        "zh": "应与前一个 Crypt32 binding 提交一起采用，或直接使用本期最终 head。",
+        "ru": "Берите вместе с предыдущим Crypt32 commit либо используйте финальный head выпуска."
+      },
+      "units": [
+        "mormot.core.os.security",
+        "mormot.lib.sspi"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "373f69f34b17e32cd85c2bfcbaac5ba6320d020a",
+      "headline": {
+        "en": "A late-bound Windows CNG key-storage layer enters the public API",
+        "fr": "Une couche publique CNG key storage chargée tardivement apparaît",
+        "zh": "公开的延迟加载 Windows CNG key-storage 层加入 API",
+        "ru": "В public API появляется late-bound слой Windows CNG key storage"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.lib.sspi introduces ENCrypt, TNCrypt and the NCrypt factory with dynamically loaded provider, key creation, property, finalize, delete and free operations.",
+        "fr": "mormot.lib.sspi introduit ENCrypt, TNCrypt et la factory NCrypt avec chargement dynamique des opérations provider, création, property, finalize, delete et free.",
+        "zh": "mormot.lib.sspi 新增 ENCrypt、TNCrypt 与 NCrypt factory，动态加载 provider、key 创建、property、finalize、delete 与 free 操作。",
+        "ru": "mormot.lib.sspi добавляет ENCrypt, TNCrypt и factory NCrypt с динамической загрузкой provider, key creation, property, finalize, delete и free."
+      },
+      "impact": {
+        "en": "Windows backends can use CNG without a static ncrypt.dll dependency. XP remains unsupported by CNG and callers must respect runtime availability.",
+        "fr": "Windows backends peuvent utiliser CNG sans dépendance statique à ncrypt.dll. XP reste sans CNG et les appelants doivent respecter la disponibilité runtime.",
+        "zh": "Windows 后端无需静态依赖 ncrypt.dll 即可使用 CNG；XP 仍不支持 CNG，调用方必须检查 runtime 可用性。",
+        "ru": "Windows backends могут использовать CNG без статической зависимости ncrypt.dll; XP не поддерживается, нужно учитывать runtime availability."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Gate new CNG use on NCrypt availability and exercise provider/key cleanup on each supported Windows version.",
+        "fr": "Conditionnez CNG à la disponibilité de NCrypt et testez le cleanup provider/key sur chaque Windows pris en charge.",
+        "zh": "新增 CNG 用法应检查 NCrypt 可用性，并在各受支持 Windows 版本测试 provider/key cleanup。",
+        "ru": "Проверяйте доступность NCrypt и cleanup provider/key на каждой поддерживаемой Windows."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "ENCrypt",
+          "change": "added",
+          "note": {
+            "en": "Public exception for NCrypt/CNG failures.",
+            "fr": "Exception publique pour les échecs NCrypt/CNG.",
+            "zh": "用于 NCrypt/CNG 失败的公开异常。",
+            "ru": "Public exception для ошибок NCrypt/CNG."
+          }
+        },
+        {
+          "symbol": "TNCrypt",
+          "change": "added",
+          "note": {
+            "en": "Late-bound CNG key-storage wrapper.",
+            "fr": "Wrapper CNG key storage chargé tardivement.",
+            "zh": "延迟加载的 CNG key-storage wrapper。",
+            "ru": "Late-bound wrapper CNG key storage."
+          }
+        },
+        {
+          "symbol": "NCrypt",
+          "change": "added",
+          "note": {
+            "en": "Global factory for the CNG wrapper.",
+            "fr": "Factory globale du wrapper CNG.",
+            "zh": "CNG wrapper 的全局 factory。",
+            "ru": "Глобальная factory для CNG wrapper."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "86828b9918537d82894cc14338a3e985f7b533f3",
+      "headline": {
+        "en": "SChannel certificate-key ownership is corrected on PRISM",
+        "fr": "L’ownership des clés de certificat SChannel est corrigé sous PRISM",
+        "zh": "PRISM 上的 SChannel 证书 key ownership 得到修正",
+        "ru": "Ownership ключей сертификата SChannel исправлен на PRISM"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSChannelNetTls.AfterBind stops requesting CRYPT_ACQUIRE_CACHE_FLAG, initializes ownership outputs for every certificate and releases acquired CAPI or CNG handles when the API says the caller owns them.",
+        "fr": "TSChannelNetTls.AfterBind retire CRYPT_ACQUIRE_CACHE_FLAG, initialise les sorties d’ownership pour chaque certificat et libère les handles CAPI ou CNG appartenant à l’appelant.",
+        "zh": "TSChannelNetTls.AfterBind 不再请求 CRYPT_ACQUIRE_CACHE_FLAG，为每个证书初始化 ownership 输出，并在调用方拥有句柄时释放 CAPI/CNG handle。",
+        "ru": "TSChannelNetTls.AfterBind убирает CRYPT_ACQUIRE_CACHE_FLAG, инициализирует ownership outputs для каждого certificate и освобождает CAPI/CNG handles, принадлежащие caller."
+      },
+      "impact": {
+        "en": "SChannel server setup avoids stale output state and leaked private-key handles, including on PRISM targets. No source migration is required.",
+        "fr": "Le setup serveur SChannel évite les états de sortie périmés et les fuites de handles de clé privée, y compris sur PRISM. Aucune migration source.",
+        "zh": "SChannel 服务器 setup 避免陈旧输出状态与私钥 handle 泄漏，包括 PRISM target；无需源码迁移。",
+        "ru": "SChannel server setup избегает stale output state и утечек private-key handles, включая PRISM; source migration не нужна."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Windows SChannel servers that bind certificate private keys and retest shutdown/rebind paths.",
+        "fr": "Mettez à niveau les serveurs SChannel qui lient des clés privées et retestez shutdown/rebind.",
+        "zh": "绑定证书私钥的 Windows SChannel 服务器应升级并重测 shutdown/rebind 路径。",
+        "ru": "Обновите Windows SChannel servers с certificate private keys и проверьте shutdown/rebind."
+      },
+      "units": [
+        "mormot.core.os.security",
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f479106f605f554ed683775da416493ffd74f587",
+      "headline": {
+        "en": "TLS 1.3 becomes the SChannel default on current Windows",
+        "fr": "TLS 1.3 devient le défaut SChannel sur Windows actuel",
+        "zh": "TLS 1.3 成为当前 Windows 上的 SChannel 默认值",
+        "ru": "TLS 1.3 становится default для SChannel на актуальной Windows"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "The public SChannelEnableTls13 global changes its default from false to true. The flag is applied only on Windows 11 and Windows Server 2022 or newer and remains an opt-out switch.",
+        "fr": "La globale publique SChannelEnableTls13 passe par défaut de false à true. Elle ne s’applique qu’à Windows 11 et Windows Server 2022 ou plus récent et reste désactivable.",
+        "zh": "公开全局变量 SChannelEnableTls13 的默认值由 false 改为 true；仅作用于 Windows 11、Windows Server 2022 及以上版本，仍可选择关闭。",
+        "ru": "Public global SChannelEnableTls13 меняет default с false на true; применяется только на Windows 11/Server 2022+ и остаётся opt-out."
+      },
+      "impact": {
+        "en": "Eligible SChannel clients and servers may negotiate TLS 1.3 without an application code change. Protocol behavior can therefore change silently after rebuilding.",
+        "fr": "Les clients et serveurs SChannel éligibles peuvent négocier TLS 1.3 sans changement applicatif ; le comportement protocolaire peut donc changer silencieusement après recompilation.",
+        "zh": "符合条件的 SChannel client/server 可能在不改代码的情况下协商 TLS 1.3，因此重新构建后协议行为会静默变化。",
+        "ru": "Подходящие SChannel clients/servers могут начать согласовывать TLS 1.3 без изменения кода, то есть protocol behavior меняется после rebuild."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Test handshakes, cipher policy and peer compatibility; set SChannelEnableTls13 := false before TLS initialization if rollout must wait.",
+        "fr": "Testez handshakes, cipher policy et compatibilité peer ; passez SChannelEnableTls13 à false avant l’initialisation si nécessaire.",
+        "zh": "测试 handshake、cipher policy 与 peer 兼容性；若需推迟启用，请在 TLS 初始化前设 SChannelEnableTls13 := false。",
+        "ru": "Проверьте handshakes, cipher policy и peers; задайте SChannelEnableTls13 := false до TLS initialization, если rollout откладывается."
+      },
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [
+        {
+          "symbol": "SChannelEnableTls13",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Default is now true on supported Windows versions.",
+            "fr": "La valeur par défaut est true sur les versions Windows prises en charge.",
+            "zh": "在受支持 Windows 版本上默认值现为 true。",
+            "ru": "Default теперь true на поддерживаемых версиях Windows."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "79a03b234cebed37982c40d2b28f62d0823f9ba2",
+      "headline": {
+        "en": "LocalFree is exposed with a pointer-friendly signature",
+        "fr": "LocalFree est exposé avec une signature adaptée aux pointers",
+        "zh": "LocalFree 以便于 pointer 使用的签名公开",
+        "ru": "LocalFree опубликован с удобной для pointer сигнатурой"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os adds a public LocalFree(pointer): pointer declaration and Windows security code removes internal HLOCAL casts when freeing API buffers.",
+        "fr": "mormot.core.os ajoute LocalFree(pointer): pointer au public et le code Windows security retire les casts HLOCAL internes.",
+        "zh": "mormot.core.os 新增公开 LocalFree(pointer): pointer 声明，Windows security 代码移除释放 API buffer 时的 HLOCAL cast。",
+        "ru": "mormot.core.os добавляет public LocalFree(pointer): pointer, а Windows security code убирает внутренние HLOCAL casts."
+      },
+      "impact": {
+        "en": "Windows code can free LocalAlloc-family results without HLOCAL casts. Existing Delphi and FPC backend code remains compatible.",
+        "fr": "Le code Windows peut libérer les résultats LocalAlloc sans cast HLOCAL. Le code Delphi/FPC existant reste compatible.",
+        "zh": "Windows 代码可无需 HLOCAL cast 释放 LocalAlloc 系列结果；现有 Delphi/FPC 后端代码保持兼容。",
+        "ru": "Windows code может освобождать результаты LocalAlloc без HLOCAL casts; существующий Delphi/FPC код совместим."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.security"
+      ],
+      "api_changes": [
+        {
+          "symbol": "LocalFree",
+          "change": "added",
+          "note": {
+            "en": "Public Windows declaration accepting and returning pointer.",
+            "fr": "Déclaration Windows publique en pointer.",
+            "zh": "接受并返回 pointer 的公开 Windows 声明。",
+            "ru": "Public Windows declaration с pointer."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "622071a5a4d80a2b0fe4ddf9ea23507d6b726ece",
+      "headline": {
+        "en": "NCrypt can unprotect secrets and decode encrypted msLAPS values",
+        "fr": "NCrypt peut unprotect les secrets et décoder les valeurs msLAPS chiffrées",
+        "zh": "NCrypt 可解除 secret 保护并解码加密 msLAPS 值",
+        "ru": "NCrypt умеет unprotect secrets и декодировать encrypted msLAPS values"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNCrypt gains Unprotect and LapsDecrypt over optional Windows 8+ protection APIs. LapsDecrypt accepts TLdapAttribute.GetRaw binary data and zeroes the temporary cleartext buffer.",
+        "fr": "TNCrypt gagne Unprotect et LapsDecrypt sur les API de protection optionnelles Windows 8+. LapsDecrypt accepte le binaire TLdapAttribute.GetRaw et efface le buffer cleartext temporaire.",
+        "zh": "TNCrypt 基于 Windows 8+ 可选保护 API 新增 Unprotect 与 LapsDecrypt；LapsDecrypt 接受 TLdapAttribute.GetRaw 二进制数据并清零临时明文 buffer。",
+        "ru": "TNCrypt получает Unprotect и LapsDecrypt поверх optional Windows 8+ APIs; LapsDecrypt принимает TLdapAttribute.GetRaw binary и обнуляет временный cleartext buffer."
+      },
+      "impact": {
+        "en": "Windows directory-management backends can decrypt msLAPS-EncryptedPassword values in process. Unsupported systems or malformed data raise ENCrypt.",
+        "fr": "Windows directory backends peuvent déchiffrer msLAPS-EncryptedPassword en processus. Un système non pris en charge ou des données invalides lèvent ENCrypt.",
+        "zh": "Windows 目录管理后端可在进程内解密 msLAPS-EncryptedPassword；不受支持系统或无效数据会抛出 ENCrypt。",
+        "ru": "Windows directory backends могут расшифровать msLAPS-EncryptedPassword в процессе; unsupported systems и bad data вызывают ENCrypt."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Use only the raw binary LDAP attribute, handle ENCrypt and minimize the lifetime of returned password strings.",
+        "fr": "Utilisez uniquement l’attribut LDAP binaire brut, gérez ENCrypt et minimisez la durée de vie du mot de passe retourné.",
+        "zh": "仅使用 LDAP 原始二进制 attribute，处理 ENCrypt，并尽量缩短返回密码字符串的生命周期。",
+        "ru": "Используйте raw binary LDAP attribute, обрабатывайте ENCrypt и минимизируйте lifetime возвращённого password."
+      },
+      "units": [
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TNCrypt.Unprotect",
+          "change": "added",
+          "note": {
+            "en": "Unprotects data with Windows NCrypt protection APIs.",
+            "fr": "Unprotect via les API Windows NCrypt.",
+            "zh": "通过 Windows NCrypt 保护 API 解除数据保护。",
+            "ru": "Unprotect data через Windows NCrypt APIs."
+          }
+        },
+        {
+          "symbol": "TNCrypt.LapsDecrypt",
+          "change": "added",
+          "note": {
+            "en": "Decodes an msLAPS encrypted-password attribute.",
+            "fr": "Décode un attribut mot de passe chiffré msLAPS.",
+            "zh": "解码 msLAPS 加密密码 attribute。",
+            "ru": "Декодирует msLAPS encrypted-password attribute."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "32e7d9b32f6656db42147c1f5d5806ae1e965df0",
+      "headline": {
+        "en": "The msLAPS decryption helper is simplified without changing its contract",
+        "fr": "Le helper de déchiffrement msLAPS est simplifié sans changer son contrat",
+        "zh": "msLAPS 解密 helper 简化但契约不变",
+        "ru": "Helper расшифровки msLAPS упрощён без изменения контракта"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TNCrypt.LapsDecrypt removes redundant local state, uses the parsed header length directly and corrects an internal LDAPS/msLAPS wording typo.",
+        "fr": "TNCrypt.LapsDecrypt retire un état local redondant, utilise directement la longueur du header et corrige un libellé LDAPS/msLAPS.",
+        "zh": "TNCrypt.LapsDecrypt 移除冗余本地状态，直接使用解析后的 header 长度，并修正内部 LDAPS/msLAPS 文案。",
+        "ru": "TNCrypt.LapsDecrypt убирает лишнее local state, использует длину header напрямую и исправляет текст LDAPS/msLAPS."
+      },
+      "impact": {
+        "en": "No application-code impact is expected; the public signature and the decrypted result remain unchanged.",
+        "fr": "Aucun impact applicatif attendu ; la signature publique et le résultat déchiffré ne changent pas.",
+        "zh": "预计对应用代码无影响；公开签名与解密结果均未变化。",
+        "ru": "Влияния на application code нет; public signature и результат не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.lib.sspi"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a51ffadffa3dc63386abe1329b7ec031e10f7dbe",
+      "headline": {
+        "en": "The TLS factory declaration is made compatible with Delphi 7",
+        "fr": "La déclaration de factory TLS devient compatible Delphi 7",
+        "zh": "TLS factory 声明恢复 Delphi 7 兼容性",
+        "ru": "Объявление TLS factory снова совместимо с Delphi 7"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.net.sock introduces the public TNewNetTls function type for NewNetTls and moves a local character constant to module scope to satisfy Delphi 7.",
+        "fr": "mormot.net.sock introduit le type public TNewNetTls pour NewNetTls et déplace une constante caractère au niveau module pour Delphi 7.",
+        "zh": "mormot.net.sock 为 NewNetTls 新增公开函数类型 TNewNetTls，并将局部字符常量移到 module scope 以满足 Delphi 7。",
+        "ru": "mormot.net.sock добавляет public function type TNewNetTls для NewNetTls и переносит char constant в module scope для Delphi 7."
+      },
+      "impact": {
+        "en": "Delphi 7 projects regain compilation after the surrounding TLS changes. Other compilers see a named type for the existing factory variable.",
+        "fr": "Les projets Delphi 7 recompilent après les changements TLS. Les autres compilateurs voient un type nommé pour la variable factory existante.",
+        "zh": "Delphi 7 项目在相关 TLS 变更后恢复编译；其他编译器获得现有 factory 变量的具名类型。",
+        "ru": "Delphi 7 снова компилируется после TLS changes; остальные compilers получают named type для factory variable."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Delphi 7 users should take this fix together with the complete SChannel series.",
+        "fr": "Les utilisateurs Delphi 7 doivent prendre ce correctif avec toute la série SChannel.",
+        "zh": "Delphi 7 用户应将此修复与完整 SChannel 系列一起采用。",
+        "ru": "Пользователям Delphi 7 следует взять fix вместе со всей SChannel-серией."
+      },
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TNewNetTls",
+          "change": "added",
+          "note": {
+            "en": "Public function type now used by NewNetTls.",
+            "fr": "Type fonction public utilisé par NewNetTls.",
+            "zh": "NewNetTls 使用的新公开函数类型。",
+            "ru": "Public function type для NewNetTls."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "73798d46da6b68bd3bf8c4dddab6e8330fa5cbdd",
+      "headline": {
+        "en": "SChannel HTTPS servers share one credential across connections",
+        "fr": "Les serveurs HTTPS SChannel partagent un credential entre connexions",
+        "zh": "SChannel HTTPS 服务器在连接间共享一份 credential",
+        "ru": "SChannel HTTPS servers разделяют один credential между соединениями"
+      },
+      "category": "performance",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSChannelNetTls.AfterBind creates a reference-counted TSChannelServerContext containing the server CredHandle. Accepted connections share it and release it only after their own security contexts are gone.",
+        "fr": "TSChannelNetTls.AfterBind crée un TSChannelServerContext reference-counted contenant le CredHandle serveur. Les connexions l’utilisent en commun et le libèrent après leurs propres contextes sécurité.",
+        "zh": "TSChannelNetTls.AfterBind 创建包含服务器 CredHandle 的 reference-counted TSChannelServerContext；已接受连接共享它，并在各自 security context 释放后才释放。",
+        "ru": "TSChannelNetTls.AfterBind создаёт reference-counted TSChannelServerContext с server CredHandle; accepted connections разделяют его и освобождают после своих security contexts."
+      },
+      "impact": {
+        "en": "Busy Windows HTTPS servers avoid per-connection AcquireCredentialsHandleW calls and get explicit credential lifetime ordering. The wire protocol and application API are unchanged.",
+        "fr": "Les serveurs HTTPS Windows chargés évitent AcquireCredentialsHandleW par connexion et obtiennent un ordre de lifetime explicite. Protocole et API applicative inchangés.",
+        "zh": "高负载 Windows HTTPS 服务器避免每连接调用 AcquireCredentialsHandleW，并获得明确的 credential 生命周期顺序；线协议和应用 API 不变。",
+        "ru": "Нагруженные Windows HTTPS servers избегают AcquireCredentialsHandleW на каждое соединение и получают явный lifetime ordering; wire protocol и API не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Load-test SChannel accept/shutdown cycles and confirm credential handles disappear after the last active connection.",
+        "fr": "Testez en charge les cycles accept/shutdown SChannel et vérifiez la libération après la dernière connexion.",
+        "zh": "对 SChannel accept/shutdown 周期做负载测试，并确认最后一个活动连接结束后 credential handle 被释放。",
+        "ru": "Нагрузочно проверьте SChannel accept/shutdown и освобождение credential handles после последнего connection."
+      },
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3f0914a0871bb8a8c5b11cc1264ed28ef65c4586",
+      "headline": {
+        "en": "SChannel accepts certificate contexts and password-protected PFX input",
+        "fr": "SChannel accepte les contextes certificat et les PFX protégés",
+        "zh": "SChannel 支持证书 context 与密码保护的 PFX 输入",
+        "ru": "SChannel принимает certificate contexts и защищённые паролем PFX"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "The SChannel backend implements TNetTlsContext.CertificateRaw, PrivatePassword and OnPrivatePassword for server certificates, implements ReleaseBuffers, validates accessible private keys and explicitly rejects unsupported ClientCertificateAuthentication.",
+        "fr": "Le backend SChannel implémente CertificateRaw, PrivatePassword et OnPrivatePassword de TNetTlsContext pour les certificats serveur, implémente ReleaseBuffers, valide les clés privées et rejette explicitement ClientCertificateAuthentication non pris en charge.",
+        "zh": "SChannel 后端为服务器证书实现 TNetTlsContext.CertificateRaw、PrivatePassword 与 OnPrivatePassword，实现 ReleaseBuffers，验证可访问私钥，并明确拒绝尚不支持的 ClientCertificateAuthentication。",
+        "ru": "SChannel backend реализует TNetTlsContext.CertificateRaw, PrivatePassword и OnPrivatePassword для server certificates, ReleaseBuffers, проверяет private keys и явно отклоняет unsupported ClientCertificateAuthentication."
+      },
+      "impact": {
+        "en": "Windows servers can supply an existing PCCERT_CONTEXT or a protected PFX without OpenSSL. Configurations that request SChannel client-certificate authentication now fail explicitly instead of appearing supported.",
+        "fr": "Windows servers peuvent fournir un PCCERT_CONTEXT existant ou un PFX protégé sans OpenSSL. Les configurations demandant l’authentification client SChannel échouent maintenant explicitement.",
+        "zh": "Windows 服务器无需 OpenSSL 即可提供现有 PCCERT_CONTEXT 或受保护 PFX；请求 SChannel client-certificate authentication 的配置现在会明确失败。",
+        "ru": "Windows servers могут передать PCCERT_CONTEXT или protected PFX без OpenSSL; запрос SChannel client-certificate authentication теперь явно завершается ошибкой."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Test certificate import, password callbacks and idle-buffer release; do not enable ClientCertificateAuthentication on SChannel.",
+        "fr": "Testez import certificat, callbacks mot de passe et libération des buffers ; n’activez pas ClientCertificateAuthentication sous SChannel.",
+        "zh": "测试证书导入、密码 callback 与空闲 buffer 释放；不要在 SChannel 上启用 ClientCertificateAuthentication。",
+        "ru": "Проверьте certificate import, password callbacks и buffer release; не включайте ClientCertificateAuthentication на SChannel."
+      },
+      "units": [
+        "mormot.lib.sspi",
+        "mormot.net.sock",
+        "mormot.net.sock.windows"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TNetTlsContext.CertificateRaw",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "SChannel server now consumes a PCCERT_CONTEXT.",
+            "fr": "Le serveur SChannel consomme maintenant un PCCERT_CONTEXT.",
+            "zh": "SChannel 服务器现在使用 PCCERT_CONTEXT。",
+            "ru": "SChannel server теперь принимает PCCERT_CONTEXT."
+          }
+        },
+        {
+          "symbol": "TNetTlsContext.PrivatePassword",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Used as the SChannel PFX import password.",
+            "fr": "Utilisé comme mot de passe import PFX SChannel.",
+            "zh": "用作 SChannel PFX 导入密码。",
+            "ru": "Используется как пароль импорта PFX SChannel."
+          }
+        },
+        {
+          "symbol": "TNetTlsContext.OnPrivatePassword",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Can override the SChannel PFX password.",
+            "fr": "Peut remplacer le mot de passe PFX SChannel.",
+            "zh": "可覆盖 SChannel PFX 密码。",
+            "ru": "Может переопределить пароль PFX SChannel."
+          }
+        },
+        {
+          "symbol": "INetTls.ReleaseBuffers",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "SChannel now releases idle read/write buffers.",
+            "fr": "SChannel libère maintenant les buffers read/write inactifs.",
+            "zh": "SChannel 现在释放空闲读写 buffer。",
+            "ru": "SChannel теперь освобождает idle read/write buffers."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1d60fd28669b11e85aa25f568b89f3634ea6894e",
+      "headline": {
+        "en": "Wine is marked as unsafe for CNG calls",
+        "fr": "Wine est marqué comme non fiable pour les appels CNG",
+        "zh": "Wine 被标记为不适合调用 CNG",
+        "ru": "Wine помечается как небезопасный для CNG calls"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TWindowsSpec gains wsWeakCng; Wine detection sets it and InitializeNCrypt skips ncrypt.dll because Wine exposes stubs that report success without implementing the work.",
+        "fr": "TWindowsSpec gagne wsWeakCng ; Wine le positionne et InitializeNCrypt ignore ncrypt.dll car ses stubs annoncent un succès sans effectuer l’opération.",
+        "zh": "TWindowsSpec 新增 wsWeakCng；Wine 检测设置该标志，InitializeNCrypt 跳过 ncrypt.dll，因为 Wine stub 会报告成功却不执行操作。",
+        "ru": "TWindowsSpec получает wsWeakCng; Wine выставляет его, а InitializeNCrypt пропускает ncrypt.dll из-за stubs, сообщающих success без реализации."
+      },
+      "impact": {
+        "en": "mORMot2 applications running under Wine no longer attempt unreliable CNG operations. Native Windows behavior is unchanged.",
+        "fr": "Les applications mORMot2 sous Wine n’essaient plus des opérations CNG non fiables. Le comportement Windows natif ne change pas.",
+        "zh": "在 Wine 下运行的 mORMot2 应用不再尝试不可靠的 CNG 操作；原生 Windows 行为不变。",
+        "ru": "Приложения под Wine больше не выполняют ненадёжные CNG operations; native Windows не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Wine deployments using new CNG-dependent features should detect NCrypt unavailability and provide another path.",
+        "fr": "Les déploiements Wine utilisant CNG doivent gérer l’indisponibilité de NCrypt et prévoir une alternative.",
+        "zh": "Wine 部署若使用依赖 CNG 的新功能，应处理 NCrypt 不可用并提供替代路径。",
+        "ru": "Wine deployments с CNG-функциями должны обработать недоступность NCrypt и иметь fallback."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TWindowsSpec.wsWeakCng",
+          "change": "added",
+          "note": {
+            "en": "Marks Windows environments with unusable CNG APIs.",
+            "fr": "Marque les environnements aux API CNG inutilisables.",
+            "zh": "标记 CNG API 不可用的 Windows 环境。",
+            "ru": "Отмечает среды с unusable CNG APIs."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3c49fdbf96d719122c59ab092d32c201f0851a17",
+      "headline": {
+        "en": "Windows CNG status codes receive readable error names",
+        "fr": "Les codes d’état Windows CNG reçoivent des noms lisibles",
+        "zh": "Windows CNG 状态码获得可读错误名",
+        "ru": "Коды Windows CNG получают читаемые имена ошибок"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "WinErrorShort and OSErrorShort recognize the NTE_* range returned by CNG, and the core test suite adds coverage for those names.",
+        "fr": "WinErrorShort et OSErrorShort reconnaissent la plage NTE_* renvoyée par CNG, avec couverture ajoutée aux tests core.",
+        "zh": "WinErrorShort 与 OSErrorShort 识别 CNG 返回的 NTE_* 范围，core 测试套件新增相应覆盖。",
+        "ru": "WinErrorShort и OSErrorShort распознают NTE_* от CNG; core tests получают соответствующее покрытие."
+      },
+      "impact": {
+        "en": "CNG failures in Delphi and FPC backends produce diagnostic names instead of bare numeric codes. Application behavior is otherwise unchanged.",
+        "fr": "Les échecs CNG affichent des noms diagnostiques plutôt que des codes numériques. Le comportement applicatif ne change pas.",
+        "zh": "Delphi/FPC 后端的 CNG 失败会显示诊断名称而非纯数字错误码；其他应用行为不变。",
+        "ru": "Ошибки CNG получают diagnostic names вместо чисел; прочее application behavior не меняется."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "test.core.base"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3740564404034f8c6718d38800e0693d091f34fe",
+      "headline": {
+        "en": "Logging serialization and SChannel acceptance compile after the new flags",
+        "fr": "Logging serialization et acceptation SChannel recompilent après les nouveaux flags",
+        "zh": "新增 flag 后 logging serialization 与 SChannel accept 恢复编译",
+        "ru": "Logging serialization и SChannel accept снова компилируются после новых flags"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWindowsSpecs serialization in mormot.core.log grows from byte to word after wsWeakCng is added, and the SChannel accept path stores the shared context in a TObject local before casting.",
+        "fr": "La sérialisation TWindowsSpecs passe de byte à word après wsWeakCng, et le chemin accept SChannel stocke le contexte partagé dans un local TObject avant cast.",
+        "zh": "新增 wsWeakCng 后，mormot.core.log 中 TWindowsSpecs serialization 由 byte 扩为 word；SChannel accept 路径先将共享 context 存入 TObject 局部变量再 cast。",
+        "ru": "Serialization TWindowsSpecs расширена с byte до word после wsWeakCng; SChannel accept сохраняет shared context в local TObject перед cast."
+      },
+      "impact": {
+        "en": "This closes compilation issues introduced by the preceding Windows-spec and shared-context work. No application source change is required.",
+        "fr": "Ce commit ferme des problèmes de compilation introduits par les changements Windows-spec et shared context. Aucun changement source applicatif.",
+        "zh": "该提交修复此前 Windows-spec 与 shared-context 变更引入的编译问题；无需修改应用源码。",
+        "ru": "Закрыты compilation issues от Windows-spec и shared-context changes; application source менять не нужно."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the Wine flag and shared SChannel context together with this compiler follow-up.",
+        "fr": "Prenez le flag Wine et le contexte SChannel partagé avec ce correctif compilateur.",
+        "zh": "采用 Wine flag 与 SChannel 共享 context 时应同时包含此编译修复。",
+        "ru": "Берите Wine flag и shared SChannel context вместе с этим compiler follow-up."
+      },
+      "units": [
+        "mormot.core.log",
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6a4f0636e772172f7a0326981d9e6c5ea94dce1b",
+      "headline": {
+        "en": "The CNG wrapper gains complete property, signing and decrypt helpers",
+        "fr": "Le wrapper CNG gagne les helpers complets de property, signature et decrypt",
+        "zh": "CNG wrapper 补全 property、签名与解密 helper",
+        "ru": "CNG wrapper получает полный набор property, signing и decrypt helpers"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TNCrypt adds typed handles, hash and signing modes, raw OpenKey/GetProperty/SignHash/Decrypt operations, and higher-level GetCardinal, GetBuffer, KeyBits, KeyUsage and KeySign methods.",
+        "fr": "TNCrypt ajoute handles typés, modes hash/signature, opérations brutes OpenKey/GetProperty/SignHash/Decrypt et helpers GetCardinal, GetBuffer, KeyBits, KeyUsage et KeySign.",
+        "zh": "TNCrypt 新增具名 handle、hash/signing mode、底层 OpenKey/GetProperty/SignHash/Decrypt 操作，以及高层 GetCardinal、GetBuffer、KeyBits、KeyUsage、KeySign 方法。",
+        "ru": "TNCrypt добавляет typed handles, hash/sign modes, raw OpenKey/GetProperty/SignHash/Decrypt и high-level GetCardinal, GetBuffer, KeyBits, KeyUsage, KeySign."
+      },
+      "impact": {
+        "en": "Windows backends can inspect and use CNG private keys, including RSA PKCS#1/PSS and ECDSA signing, through checked wrappers that raise ENCrypt on failure.",
+        "fr": "Windows backends peuvent inspecter et utiliser les clés privées CNG, dont les signatures RSA PKCS#1/PSS et ECDSA, via des wrappers vérifiés levant ENCrypt.",
+        "zh": "Windows 后端可通过带检查的 wrapper 读取和使用 CNG 私钥，包括 RSA PKCS#1/PSS 与 ECDSA 签名；失败时抛出 ENCrypt。",
+        "ru": "Windows backends могут работать с CNG private keys, включая RSA PKCS#1/PSS и ECDSA signing, через checked wrappers с ENCrypt."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Select TNcryptSignMode explicitly, verify provider key usage and test signatures against an independent verifier.",
+        "fr": "Choisissez TNcryptSignMode explicitement, vérifiez key usage et testez les signatures avec un vérificateur indépendant.",
+        "zh": "明确选择 TNcryptSignMode，检查 provider key usage，并用独立验证器测试签名。",
+        "ru": "Явно выбирайте TNcryptSignMode, проверяйте key usage и signatures независимым verifier."
+      },
+      "units": [
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TNcryptHashAlgo",
+          "change": "added",
+          "note": {
+            "en": "Public hash selector for CNG signing.",
+            "fr": "Sélecteur hash public pour la signature CNG.",
+            "zh": "CNG 签名的公开 hash selector。",
+            "ru": "Public hash selector для CNG signing."
+          }
+        },
+        {
+          "symbol": "TNcryptSignMode",
+          "change": "added",
+          "note": {
+            "en": "Public RSA/ECDSA signing mode selector.",
+            "fr": "Sélecteur public de mode RSA/ECDSA.",
+            "zh": "公开 RSA/ECDSA 签名模式 selector。",
+            "ru": "Public selector режима RSA/ECDSA."
+          }
+        },
+        {
+          "symbol": "TNCrypt.KeySign",
+          "change": "added",
+          "note": {
+            "en": "High-level checked CNG signing helper.",
+            "fr": "Helper de signature CNG vérifié.",
+            "zh": "高层带检查 CNG 签名 helper。",
+            "ru": "Проверенный high-level helper для CNG signing."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6e9ef943db355f53b56921a8d8a073dd4fb66925",
+      "headline": {
+        "en": "Certificate metadata and CNG signing details are hardened",
+        "fr": "Les métadonnées certificat et la signature CNG sont renforcées",
+        "zh": "证书元数据与 CNG 签名细节得到强化",
+        "ru": "Certificate metadata и детали CNG signing усилены"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TWinCertInfo records provider type, flags and key spec; certificate enumeration bindings are added; NTE_BAD_PUBLIC_KEY is named; and the ECDSA signing path initializes the PKCS#1 algorithm pointer to nil.",
+        "fr": "TWinCertInfo enregistre provider type, flags et key spec ; les bindings d’énumération sont ajoutés ; NTE_BAD_PUBLIC_KEY est nommé ; et le chemin ECDSA initialise le pointeur algorithme PKCS#1 à nil.",
+        "zh": "TWinCertInfo 记录 provider type、flags 与 key spec；新增证书枚举 binding；识别 NTE_BAD_PUBLIC_KEY；ECDSA 签名路径将 PKCS#1 algorithm pointer 初始化为 nil。",
+        "ru": "TWinCertInfo хранит provider type, flags и key spec; добавлены certificate enumeration bindings, имя NTE_BAD_PUBLIC_KEY и nil initialization PKCS#1 pointer для ECDSA."
+      },
+      "impact": {
+        "en": "Certificate consumers get the provider information needed to choose CAPI versus CNG, and ECDSA signing no longer passes uninitialized padding metadata.",
+        "fr": "Les consommateurs disposent des informations provider pour choisir CAPI ou CNG, et la signature ECDSA ne transmet plus de padding non initialisé.",
+        "zh": "证书使用方可根据 provider 信息选择 CAPI 或 CNG，ECDSA 签名也不再传递未初始化的 padding 元数据。",
+        "ru": "Certificate consumers получают данные для выбора CAPI/CNG, а ECDSA signing больше не передаёт uninitialized padding metadata."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade users of the new CNG signing path and validate RSA plus ECDSA certificates from each target provider.",
+        "fr": "Mettez à niveau les utilisateurs du nouveau chemin CNG et validez les certificats RSA et ECDSA de chaque provider.",
+        "zh": "使用新 CNG 签名路径的用户应升级，并验证各目标 provider 的 RSA 与 ECDSA 证书。",
+        "ru": "Обновите пользователей нового CNG signing path и проверьте RSA/ECDSA certificates каждого provider."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.security",
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TWinCertInfo.KeyProviderType",
+          "change": "added",
+          "note": {
+            "en": "Exposes the certificate key provider type.",
+            "fr": "Expose le type de provider de clé.",
+            "zh": "公开证书 key provider 类型。",
+            "ru": "Открывает тип key provider."
+          }
+        },
+        {
+          "symbol": "TWinCertInfo.KeyProviderFlags",
+          "change": "added",
+          "note": {
+            "en": "Exposes provider acquisition flags.",
+            "fr": "Expose les flags d’acquisition provider.",
+            "zh": "公开 provider 获取 flags。",
+            "ru": "Открывает provider acquisition flags."
+          }
+        },
+        {
+          "symbol": "TWinCertInfo.KeySpec",
+          "change": "added",
+          "note": {
+            "en": "Exposes the certificate key specification.",
+            "fr": "Expose la key specification du certificat.",
+            "zh": "公开证书 key specification。",
+            "ru": "Открывает спецификацию ключа сертификата."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4211be313895799555bff55489d02231536c58ab",
+      "headline": {
+        "en": "Windows certificate stores gain an owning iterator and PEM export",
+        "fr": "Les certificate stores Windows gagnent un itérateur propriétaire et l’export PEM",
+        "zh": "Windows certificate store 新增 owning iterator 与 PEM 导出",
+        "ru": "Windows certificate stores получают owning iterator и PEM export"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.os.security introduces TWinCertStore and TWinCertStoreLocation with Create, Next, Duplicate and ToPem, plus WinCryptBinaryAppendAsText. Existing system-store PEM collection is refactored onto the wrapper.",
+        "fr": "mormot.core.os.security introduit TWinCertStore et TWinCertStoreLocation avec Create, Next, Duplicate et ToPem, ainsi que WinCryptBinaryAppendAsText. La collecte PEM existante est refactorée dessus.",
+        "zh": "mormot.core.os.security 新增 TWinCertStore、TWinCertStoreLocation 及 Create/Next/Duplicate/ToPem，并新增 WinCryptBinaryAppendAsText；现有系统 store PEM 收集改用该 wrapper。",
+        "ru": "mormot.core.os.security добавляет TWinCertStore, TWinCertStoreLocation, Create/Next/Duplicate/ToPem и WinCryptBinaryAppendAsText; существующий PEM collection переведён на wrapper."
+      },
+      "impact": {
+        "en": "Windows backends can safely enumerate stores, duplicate contexts that must outlive iteration and export certificates as PEM. The object owns its store and current context.",
+        "fr": "Windows backends peuvent énumérer les stores, dupliquer les contextes durables et exporter en PEM. L’objet possède son store et son contexte courant.",
+        "zh": "Windows 后端可安全枚举 store、复制需跨迭代存活的 context，并导出 PEM；对象拥有 store 与当前 context。",
+        "ru": "Windows backends могут безопасно перечислять stores, дублировать долгоживущие contexts и экспортировать PEM; object владеет store и current context."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Call Duplicate before retaining Context beyond the next Next call, and free each TWinCertStore instance.",
+        "fr": "Appelez Duplicate avant de conserver Context au-delà du prochain Next et libérez chaque TWinCertStore.",
+        "zh": "若要在下一次 Next 后继续保留 Context，应先调用 Duplicate，并释放每个 TWinCertStore 实例。",
+        "ru": "Вызывайте Duplicate перед сохранением Context за пределами следующего Next и освобождайте TWinCertStore."
+      },
+      "units": [
+        "mormot.core.os.security",
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TWinCertStoreLocation",
+          "change": "added",
+          "note": {
+            "en": "Public selector for Windows certificate-store location.",
+            "fr": "Sélecteur public de location du certificate store.",
+            "zh": "Windows certificate-store location 的公开 selector。",
+            "ru": "Public selector расположения certificate store."
+          }
+        },
+        {
+          "symbol": "TWinCertStore",
+          "change": "added",
+          "note": {
+            "en": "Owning Windows certificate-store iterator.",
+            "fr": "Itérateur propriétaire de certificate store Windows.",
+            "zh": "拥有资源的 Windows certificate-store iterator。",
+            "ru": "Owning iterator Windows certificate store."
+          }
+        },
+        {
+          "symbol": "WinCryptBinaryAppendAsText",
+          "change": "added",
+          "note": {
+            "en": "Appends Windows binary data as PEM/base64 text.",
+            "fr": "Ajoute des données Windows sous forme PEM/base64.",
+            "zh": "将 Windows 二进制数据追加为 PEM/base64 文本。",
+            "ru": "Добавляет Windows binary как PEM/base64 text."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "73dc5e6a6b0f839623b99153b73772679ae82d7f",
+      "headline": {
+        "en": "A certificate-to-CNG-key wrapper centralizes ownership checks",
+        "fr": "Un wrapper certificat-vers-clé CNG centralise les contrôles d’ownership",
+        "zh": "certificate-to-CNG-key wrapper 集中处理 ownership 检查",
+        "ru": "Wrapper certificate-to-CNG-key централизует ownership checks"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWinCertCngKey acquires a certificate private key, requires a CNG handle, optionally compares it with the certificate public key and releases it according to CryptAcquireCertificatePrivateKey ownership. Related constants move into core Windows security.",
+        "fr": "TWinCertCngKey acquiert la clé privée d’un certificat, exige un handle CNG, compare optionnellement la clé publique et libère selon l’ownership CryptAcquireCertificatePrivateKey. Les constantes associées passent dans core security.",
+        "zh": "TWinCertCngKey 获取证书私钥，要求 CNG handle，可选比较证书公钥，并按 CryptAcquireCertificatePrivateKey ownership 规则释放；相关常量移入 core Windows security。",
+        "ru": "TWinCertCngKey получает private key сертификата, требует CNG handle, опционально сравнивает public key и освобождает по ownership CryptAcquireCertificatePrivateKey; constants перенесены в core security."
+      },
+      "impact": {
+        "en": "SChannel and other Windows backends get one checked lifetime boundary for certificate-backed CNG signing keys, reducing leaks and accidental use of CAPI handles.",
+        "fr": "SChannel et les autres backends Windows obtiennent une frontière de lifetime vérifiée pour les clés CNG de certificat, réduisant fuites et confusion CAPI.",
+        "zh": "SChannel 与其他 Windows 后端获得统一的证书 CNG 签名 key 生命周期检查边界，减少泄漏和误用 CAPI handle。",
+        "ru": "SChannel и другие Windows backends получают checked lifetime boundary для certificate-backed CNG keys, уменьшая leaks и ошибочное использование CAPI handles."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Use Init/Done as a pair and enable CompareKey when certificate/key mismatch must be rejected.",
+        "fr": "Utilisez Init/Done ensemble et activez CompareKey si un mismatch certificat/clé doit être rejeté.",
+        "zh": "成对使用 Init/Done；若必须拒绝证书与 key 不匹配，请启用 CompareKey。",
+        "ru": "Используйте Init/Done парой и CompareKey, если mismatch certificate/key недопустим."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.security",
+        "mormot.lib.sspi",
+        "mormot.net.sock.windows"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TWinCertCngKey",
+          "change": "added",
+          "note": {
+            "en": "Short-lived checked wrapper for a certificate CNG private key.",
+            "fr": "Wrapper vérifié à courte durée pour une clé privée CNG.",
+            "zh": "证书 CNG 私钥的短生命周期检查 wrapper。",
+            "ru": "Short-lived checked wrapper для CNG private key сертификата."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "18e7d88c0083b279402c59019c030abdfe39e3e1",
+      "headline": {
+        "en": "The final SChannel certificate path compiles on Delphi 13",
+        "fr": "Le chemin certificat SChannel final compile sous Delphi 13",
+        "zh": "最终 SChannel 证书路径可在 Delphi 13 编译",
+        "ru": "Финальный SChannel certificate path компилируется на Delphi 13"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.net.sock.windows removes an explicit PCCERT_CONTEXT cast when passing Context.CertificateRaw to CertDuplicateCertificateContext, matching Delphi 13's type checking.",
+        "fr": "mormot.net.sock.windows retire un cast PCCERT_CONTEXT explicite autour de Context.CertificateRaw pour respecter le typage Delphi 13.",
+        "zh": "mormot.net.sock.windows 在将 Context.CertificateRaw 传给 CertDuplicateCertificateContext 时移除显式 PCCERT_CONTEXT cast，以符合 Delphi 13 类型检查。",
+        "ru": "mormot.net.sock.windows убирает явный PCCERT_CONTEXT cast для Context.CertificateRaw при вызове CertDuplicateCertificateContext, соответствуя Delphi 13 type checking."
+      },
+      "impact": {
+        "en": "Delphi 13 projects using the new SChannel CertificateRaw path compile at the final edition head. Runtime behavior is unchanged.",
+        "fr": "Les projets Delphi 13 utilisant le nouveau chemin SChannel CertificateRaw compilent à la tête finale. Le comportement runtime ne change pas.",
+        "zh": "使用新 SChannel CertificateRaw 路径的 Delphi 13 项目可在本期最终 head 编译；runtime 行为不变。",
+        "ru": "Delphi 13 projects с новым SChannel CertificateRaw компилируются на final head; runtime behavior не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Delphi 13 users should land on this final commit rather than an earlier point in the SChannel series.",
+        "fr": "Les utilisateurs Delphi 13 doivent viser ce commit final plutôt qu’un point antérieur de la série SChannel.",
+        "zh": "Delphi 13 用户应采用此最终提交，不要停在 SChannel 系列的更早点位。",
+        "ru": "Пользователям Delphi 13 следует взять финальный commit, а не раннюю точку SChannel-серии."
+      },
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "confidence": "confirmed"
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "f479106f605f554ed683775da416493ffd74f587",
+          "73798d46da6b68bd3bf8c4dddab6e8330fa5cbdd",
+          "3f0914a0871bb8a8c5b11cc1264ed28ef65c4586",
+          "86828b9918537d82894cc14338a3e985f7b533f3",
+          "a51ffadffa3dc63386abe1329b7ec031e10f7dbe",
+          "3740564404034f8c6718d38800e0693d091f34fe",
+          "18e7d88c0083b279402c59019c030abdfe39e3e1"
+        ],
+        "why": "Take the SChannel policy, shared-credential, certificate-input, ownership and compiler changes as one sequence ending at the edition head."
+      },
+      {
+        "shas": [
+          "373f69f34b17e32cd85c2bfcbaac5ba6320d020a",
+          "622071a5a4d80a2b0fe4ddf9ea23507d6b726ece",
+          "32e7d9b32f6656db42147c1f5d5806ae1e965df0",
+          "1d60fd28669b11e85aa25f568b89f3634ea6894e",
+          "3c49fdbf96d719122c59ab092d32c201f0851a17",
+          "6a4f0636e772172f7a0326981d9e6c5ea94dce1b",
+          "6e9ef943db355f53b56921a8d8a073dd4fb66925"
+        ],
+        "why": "Take the CNG loader, Wine guard, error mapping and completed high-level wrapper together."
+      },
+      {
+        "shas": [
+          "d6d52bf046d935b7cfd1ed7975d68eb2217433aa",
+          "d73d544537bc57ae6717174b73b5a5f0df3e16ec",
+          "79a03b234cebed37982c40d2b28f62d0823f9ba2",
+          "4211be313895799555bff55489d02231536c58ab",
+          "73dc5e6a6b0f839623b99153b73772679ae82d7f"
+        ],
+        "why": "Take the Crypt32 layout repair and the owning certificate-store/key wrappers as a unit."
+      }
+    ],
+    "still_moving": []
+  },
+  "upgrade_advice": {
+    "en": "Windows SChannel users should pull the complete edition through build 2.4.17208, then test TLS 1.3 negotiation, certificate/PFX loading and server shutdown under concurrency. Set SChannelEnableTls13 to false before TLS initialization only when the new default is not yet acceptable. Delphi 7, Delphi 13 and Wine users should not stop before the final compatibility fixes.",
+    "fr": "Les utilisateurs SChannel Windows doivent prendre toute l’édition jusqu’à 2.4.17208, puis tester TLS 1.3, le chargement certificat/PFX et l’arrêt serveur concurrent. Positionnez SChannelEnableTls13 à false avant TLS seulement si le nouveau défaut n’est pas acceptable. Delphi 7, Delphi 13 et Wine doivent inclure les correctifs finaux.",
+    "zh": "Windows SChannel 用户应完整升级至 build 2.4.17208，并测试 TLS 1.3 协商、证书/PFX 加载及并发服务器关闭。仅当新默认值尚不可接受时，才在 TLS 初始化前将 SChannelEnableTls13 设为 false。Delphi 7、Delphi 13 与 Wine 用户不应停在最终兼容修复之前。",
+    "ru": "Пользователям Windows SChannel следует взять выпуск целиком до build 2.4.17208 и проверить TLS 1.3, certificate/PFX loading и concurrent shutdown. Задавайте SChannelEnableTls13=false до TLS только если новый default неприемлем. Delphi 7, Delphi 13 и Wine должны включать финальные compatibility fixes."
+  },
+  "notes": {
+    "en": "Reviewed all 19 non-merge commits from build 2.4.17190 through 2.4.17208: 1176 additions and 372 deletions across 11 non-version files. Version-only changes in mormot.commit.inc and mormot.commit-num.inc were ignored. The raw payload has no superseded_by links, so avoid and still_moving remain empty; the final upstream head still matches the payload head.",
+    "fr": "Les 19 commits non-merge de 2.4.17190 à 2.4.17208 ont été examinés : 1176 ajouts et 372 suppressions dans 11 fichiers hors version. Les changements de mormot.commit.inc et mormot.commit-num.inc sont ignorés. Le raw ne contient aucun superseded_by ; avoid et still_moving restent vides, et la tête upstream finale correspond au payload.",
+    "zh": "已审查 build 2.4.17190 至 2.4.17208 的全部 19 个 non-merge commit：11 个非版本文件新增 1176 行、删除 372 行。忽略 mormot.commit.inc 与 mormot.commit-num.inc 的纯版本变更。raw payload 没有 superseded_by，因此 avoid 与 still_moving 为空；最终 upstream head 仍与 payload head 一致。",
+    "ru": "Проверены все 19 non-merge commits от 2.4.17190 до 2.4.17208: 1176 добавлений и 372 удаления в 11 non-version files. Version-only mormot.commit.inc и mormot.commit-num.inc игнорировались. В raw нет superseded_by, поэтому avoid и still_moving пусты; final upstream head совпадает с payload."
+  }
+}
