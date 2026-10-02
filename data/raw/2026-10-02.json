@@ -1,0 +1,1792 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-02",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-02T03:41:14Z",
+  "range": {
+    "since": "2026-09-30T21:05:47Z",
+    "until": "2026-10-02T03:41:14Z",
+    "head_sha": "05e40cd692d391efb62ed97f78f264867477e8e5"
+  },
+  "version": {
+    "after": "2.4.17324",
+    "before": "2.4.17293"
+  },
+  "totals": {
+    "commits": 30,
+    "additions": 992,
+    "deletions": 386
+  },
+  "commits": [
+    {
+      "sha": "05e40cd692d391efb62ed97f78f264867477e8e5",
+      "short_sha": "05e40cd6",
+      "subject": "tests: disable issue #418 coverage",
+      "body": "which seems buggy especially on Windows 11",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T18:10:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/05e40cd692d391efb62ed97f78f264867477e8e5",
+      "parents": [
+        "9a417d31dbb9afd0306398e8deeb1a7053b64def"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17323\n+17324",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17323'\r\n+'2.4.17324'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -342,6 +342,7 @@ procedure TNetworkProtocols._HttpApiWebSocketServer;\n   end;\r\n \r\n begin\r\n+  exit;\r\n   if (OSVersion < wEight) or // websocket.dll is only available since Windows 8\r\n      (wsWine in WindowsSpecs) then // Wine only implements some minimal stubs\r\n     exit;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 418,
+      "is_merge": false
+    },
+    {
+      "sha": "9a417d31dbb9afd0306398e8deeb1a7053b64def",
+      "short_sha": "9a417d31",
+      "subject": "test: fixed WS broadcast thread synchronization",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T17:52:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9a417d31dbb9afd0306398e8deeb1a7053b64def",
+      "parents": [
+        "1a03af2e9716b87b9e9cd30a3fa78dd1f23a7da5"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17322\n+17323",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17322'\r\n+'2.4.17323'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 13,
+          "patch": "@@ -1033,22 +1033,25 @@   TWebSocketBroadcastThread = class(TLoggedThread)\n procedure TWebSocketBroadcastThread.DoExecute;\r\n var\r\n   frame: TWebSocketFrame;\r\n-  one, sent: integer;\r\n-  toggle: boolean;\r\n+  one, sent, ms: integer;\r\n begin\r\n   frame.opcode := focText;\r\n   frame.content := [];\r\n   frame.tix := 0;\r\n   frame.payload := '{\"ping\":1}';\r\n   sent := 0;\r\n-  toggle := false;\r\n+  ms := 0;\r\n   while not Terminated do\r\n   begin\r\n-    one := fServer.WebSocketBroadcast(frame, nil, 50 * ord(toggle));\r\n-    TSynLog.Add.Log(sllTrace, 'DoExecute: broadcast=%', [one], self);\r\n+    one := fServer.WebSocketBroadcast(frame, nil, ms);\r\n     inc(sent, one);\r\n-    toggle := not toggle;\r\n+    TSynLog.Add.Log(sllTrace, 'DoExecute: broadcast(%)=%', [ms, one], self);\r\n+    if ms = 0 then\r\n+      ms := 50\r\n+    else\r\n+      ms := 0;\r\n   end;\r\n+  TSynLog.Add.Log(sllTrace, 'DoExecute: sent=%', [sent], self);\r\n   if fSent <> nil then\r\n     fSent^ := sent;\r\n end;\r\n@@ -1064,16 +1067,15 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n   status: RawUtf8;\r\n begin\r\n   // WebSocketBroadcast() used to deadlock when Write() failed on a reset peer\r\n+  wedged := false;\r\n   sent := 0;\r\n   server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbcast',\r\n     2, '', '', {ajax=}true, [], TSynLog);\r\n+  server.WaitStarted(10);\r\n   bcast := TWebSocketBroadcastThread.Create({susp=}true, nil, nil, TSynLog, 'bcast');\r\n-  bcast.fServer := server;\r\n-  bcast.fSent := @sent;\r\n-  wedged := false;\r\n   try\r\n-    server.WaitStarted(10);\r\n-    bcast.Start;\r\n+    bcast.fServer := server;\r\n+    bcast.fSent := @sent;\r\n     for i := 1 to 50 do // connect/disconnect 50 clients while broadcasting\r\n     begin\r\n       TSynLog.Add.Log(sllTrace, 'WebSocketAsyncServer: client #%', [i], self);\r\n@@ -1086,6 +1088,8 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n           'Sec-WebSocket-Version: 13'#13#10,\r\n           'Sec-WebSocket-Protocol: synopsejson'#13#10]);\r\n         client.SockSendFlush;\r\n+        if i = 1 then\r\n+          bcast.Start; // don't start too early\r\n         // a deadlocked server would not answer any new connection\r\n         try\r\n           client.SockRecvLn(status); // ENetSock after 5 seconds if wedged\r\n@@ -1107,9 +1111,11 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n       end;\r\n     end;\r\n   finally\r\n-    if not wedged then\r\n+    if wedged then\r\n+      bcast.fSent := nil // avoid GPF at shutdown\r\n+    else\r\n     begin\r\n-      bcast.Free; // Terminate + WaitFor\r\n+      bcast.Free;       // Terminate + WaitFor\r\n       server.Free;\r\n     end;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1a03af2e9716b87b9e9cd30a3fa78dd1f23a7da5",
+      "short_sha": "1a03af2e",
+      "subject": "net: fixed graceful disconnection during SChannel sending",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T17:52:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1a03af2e9716b87b9e9cd30a3fa78dd1f23a7da5",
+      "parents": [
+        "0eadadb7fd7fc2ae1bc1074cf325d7322376e711"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17321\n+17322",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17321'\r\n+'2.4.17322'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -2734,8 +2734,9 @@ begin\n       dec(len, sent);\r\n       continue;\r\n     end;\r\n-    if sent = 0 then\r\n-      raise ESChannel.CreateFmt('%s: connection closed', [ctx]);\r\n+    result := nrClosed;\r\n+    if sent = 0 then // graceful disconnection\r\n+      exit;\r\n     result := NetLastError(NO_ERROR, @err);\r\n     case result of\r\n       nrRetry:\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0eadadb7fd7fc2ae1bc1074cf325d7322376e711",
+      "short_sha": "0eadadb7",
+      "subject": "test: enhanced WS broadcast process",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T17:13:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0eadadb7fd7fc2ae1bc1074cf325d7322376e711",
+      "parents": [
+        "2d800eaa624d7603088a8a0529838c94f879ab3f"
+      ],
+      "stats": {
+        "additions": 22,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17320\n+17321",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17320'\r\n+'2.4.17321'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 5,
+          "patch": "@@ -1026,20 +1026,31 @@ procedure TNetworkProtocols.RTSPOverHTTPBufferedWrite;\n   TWebSocketBroadcastThread = class(TLoggedThread)\r\n   protected\r\n     fServer: TWebSocketAsyncServer;\r\n-    fSent: integer;\r\n+    fSent: PInteger;\r\n     procedure DoExecute; override;\r\n   end;\r\n \r\n procedure TWebSocketBroadcastThread.DoExecute;\r\n var\r\n   frame: TWebSocketFrame;\r\n+  one, sent: integer;\r\n+  toggle: boolean;\r\n begin\r\n   frame.opcode := focText;\r\n   frame.content := [];\r\n   frame.tix := 0;\r\n   frame.payload := '{\"ping\":1}';\r\n+  sent := 0;\r\n+  toggle := false;\r\n   while not Terminated do\r\n-    inc(fSent, fServer.WebSocketBroadcast(frame, nil, 50));\r\n+  begin\r\n+    one := fServer.WebSocketBroadcast(frame, nil, 50 * ord(toggle));\r\n+    TSynLog.Add.Log(sllTrace, 'DoExecute: broadcast=%', [one], self);\r\n+    inc(sent, one);\r\n+    toggle := not toggle;\r\n+  end;\r\n+  if fSent <> nil then\r\n+    fSent^ := sent;\r\n end;\r\n \r\n procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\r\n@@ -1048,20 +1059,24 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n   bcast: TWebSocketBroadcastThread;\r\n   client: TCrtSocket;\r\n   i: PtrInt;\r\n+  sent: integer;\r\n   wedged: boolean;\r\n   status: RawUtf8;\r\n begin\r\n   // WebSocketBroadcast() used to deadlock when Write() failed on a reset peer\r\n+  sent := 0;\r\n   server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbcast',\r\n     2, '', '', {ajax=}true, [], TSynLog);\r\n   bcast := TWebSocketBroadcastThread.Create({susp=}true, nil, nil, TSynLog, 'bcast');\r\n   bcast.fServer := server;\r\n+  bcast.fSent := @sent;\r\n   wedged := false;\r\n   try\r\n     server.WaitStarted(10);\r\n     bcast.Start;\r\n-    for i := 1 to 50 do\r\n+    for i := 1 to 50 do // connect/disconnect 50 clients while broadcasting\r\n     begin\r\n+      TSynLog.Add.Log(sllTrace, 'WebSocketAsyncServer: client #%', [i], self);\r\n       client := TCrtSocket.Open('127.0.0.1', '8897', nlTcp, 5000);\r\n       try\r\n         client.SockSend([ // SockSend() appends the final CRLF\r\n@@ -1082,7 +1097,7 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n           end;\r\n         end;\r\n         if not CheckUtf8(IdemPChar(pointer(status), 'HTTP/1.1 101'),\r\n-                 'upgrade %', [status]) then\r\n+                         'upgrade %', [status]) then\r\n           break;\r\n         // close with unread frames: RST so that the next server Write() fails\r\n         client.SockReceivePending(1000); // wait for a broadcasted frame\r\n@@ -1091,14 +1106,14 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n         client.Free;\r\n       end;\r\n     end;\r\n-    Check(bcast.fSent > 0, 'sent');\r\n   finally\r\n     if not wedged then\r\n     begin\r\n       bcast.Free; // Terminate + WaitFor\r\n       server.Free;\r\n     end;\r\n   end;\r\n+  Check(sent > 0, 'sent');\r\n end;\r\n \r\n function TNetworkProtocols.DoRequest_(Ctxt: THttpServerRequestAbstract): cardinal;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2d800eaa624d7603088a8a0529838c94f879ab3f",
+      "short_sha": "2d800eaa",
+      "subject": "net: several fixes to SChannel socket closure",
+      "body": "- don't raise an exception e.g. at shutdown",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T17:01:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2d800eaa624d7603088a8a0529838c94f879ab3f",
+      "parents": [
+        "8e6133ef4b560cb6cf13bace7f14ead027d7d638"
+      ],
+      "stats": {
+        "additions": 46,
+        "deletions": 26,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17319\n+17320",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17319'\r\n+'2.4.17320'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -2603,6 +2603,9 @@ function NetErrorFromSystem(SystemError, AnotherNonFatal: integer): TNetResult;\n       result := nrRefused;\r\n     {$ifdef OSPOSIX}\r\n     ESysEPIPE,\r\n+    {$else}\r\n+    WSAENOTCONN,\r\n+    WSAESHUTDOWN,\r\n     {$endif OSPOSIX}\r\n     WSAECONNRESET,\r\n     WSAECONNABORTED:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 22,
+          "patch": "@@ -2218,7 +2218,8 @@ type\n     procedure WaitRawRetry(const ctx: ShortString; events: TNetEvents;\r\n       var endtix: Int64; timeout: integer);\r\n     function SendOutput: TNetResult;\r\n-    procedure SendRawAll(const ctx: ShortString; buf: PByte; len, timeout: integer);\r\n+    function SendRawAll(const ctx: ShortString; buf: PByte;\r\n+      len, timeout: integer): TNetResult;\r\n     function RecvRaw(const ctx: ShortString; buf: PByte; len: integer): integer;\r\n     function HandshakeStep(buf: PByteArray; var len: integer): cardinal;\r\n     procedure HandshakeLoop(NeedRecv: boolean = true);\r\n@@ -2714,12 +2715,13 @@ begin\n   fOutputPos := 0;\r\n end;\r\n \r\n-procedure TSChannelNetTls.SendRawAll(const ctx: ShortString;\r\n-  buf: PByte; len, timeout: integer);\r\n+function TSChannelNetTls.SendRawAll(const ctx: ShortString;\r\n+  buf: PByte; len, timeout: integer): TNetResult;\r\n var\r\n   sent, err: integer;\r\n   endtix: Int64;\r\n begin\r\n+  result := nrInvalidParameter;\r\n   if buf = nil then\r\n     exit;\r\n   endtix := 0;\r\n@@ -2734,16 +2736,23 @@ begin\n     end;\r\n     if sent = 0 then\r\n       raise ESChannel.CreateFmt('%s: connection closed', [ctx]);\r\n-    if NetLastError(NO_ERROR, @err) <> nrRetry then\r\n-      raise ESChannel.CreateFmt('%s: Socket Error %s',\r\n-        [ctx, WinErrorShort(err)]);\r\n-    WaitRawRetry(ctx, [neWrite, neError], endtix, timeout); // asynch socket\r\n+    result := NetLastError(NO_ERROR, @err);\r\n+    case result of\r\n+      nrRetry:\r\n+        WaitRawRetry(ctx, [neWrite, neError], endtix, timeout); // asynch socket\r\n+      nrClosed:\r\n+        exit;\r\n+    else\r\n+      raise ESChannel.CreateFmt('%s: %s %s', [ctx, _NR[result], WinErrorShort(err)]);\r\n+    end;\r\n   end;\r\n+  result := nrOk;\r\n end;\r\n \r\n function TSChannelNetTls.RecvRaw(const ctx: ShortString;\r\n   buf: PByte; len: integer): integer;\r\n var\r\n+  res: TNetResult;\r\n   err: integer;\r\n   endtix: Int64;\r\n begin\r\n@@ -2754,9 +2763,9 @@ begin\n       exit;\r\n     if result = 0 then\r\n       raise ESChannel.CreateFmt('%s: connection closed', [ctx]);\r\n-    if NetLastError(NO_ERROR, @err) <> nrRetry then\r\n-      raise ESChannel.CreateFmt('%s: Socket Error %s',\r\n-        [ctx, WinErrorShort(err)]);\r\n+    res := NetLastError(NO_ERROR, @err);\r\n+    if res <> nrRetry then\r\n+      raise ESChannel.CreateFmt('%s: %s %s', [ctx, _NR[res], WinErrorShort(err)]);\r\n     WaitRawRetry(ctx, [neRead, neError], endtix, 5000); // asynchronous socket\r\n   until false;\r\n end;\r\n@@ -2854,7 +2863,7 @@ procedure TSChannelNetTls.AfterConnection(Socket: TNetSocket;\n   var Context: TNetTlsContext; const ServerAddress: RawUtf8);\r\n var\r\n   cred: TSChannelCred;\r\n-  buf: THandshakeBuf;\r\n+  b: THandshakeBuf;\r\n   res, f: cardinal;\r\n begin\r\n   // reset output information\r\n@@ -2876,22 +2885,24 @@ begin\n       nil, @cred, nil, nil, @fCred, nil));\r\n   fFlags := ISC_REQ_FLAGS;\r\n   // initiate a ClientHello TLS message and a new fCtxt\r\n-  HandshakeBufInit(buf);\r\n+  HandshakeBufInit(b);\r\n   try\r\n     res := InitializeSecurityContextW(\r\n       @fCred, nil, pointer(fServerAddressW), fFlags, 0, 0,\r\n-      nil, 0, @fCtxt, @buf.output, f, nil);\r\n+      nil, 0, @fCtxt, @b.output, f, nil);\r\n     res := CompleteHandshakeToken(\r\n-      'AfterConnection CompleteAuthToken', res, @buf.output);\r\n+      'AfterConnection CompleteAuthToken', res, @b.output);\r\n     if res <> SEC_I_CONTINUE_NEEDED then\r\n       ESChannelRaiseError('InitializeSecurityContextW', res);\r\n-    if (buf.buf[2].cbBuffer = 0) or // SECBUFFER_TOKEN\r\n-       (buf.buf[2].pvBuffer = nil) then\r\n-      raise ESChannel.CreateFmt('Void Hello answer to %s', [ServerAddress]);\r\n-    SendRawAll('AfterConnection send',\r\n-      buf.buf[2].pvBuffer, buf.buf[2].cbBuffer, {timeoutms=}5000);\r\n+    if (b.buf[2].cbBuffer = 0) or // SECBUFFER_TOKEN\r\n+       (b.buf[2].pvBuffer = nil) then\r\n+      raise ESChannel.CreateFmt(\r\n+        'AfterConnection: void Hello answer for %s', [ServerAddress]);\r\n+    if SendRawAll('AfterConnection send',\r\n+         b.buf[2].pvBuffer, b.buf[2].cbBuffer, {timeout\n... [truncated, 776 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 2,
+          "patch": "@@ -7465,14 +7465,16 @@ procedure TNetworkProtocols._SChannel;\n     // existing one-way SChannel HTTPS behavior must remain unchanged\r\n     RunCase('19002', sttFile, server, ca, nil,\r\n       [stfExpected, stfOneWayTls]);\r\n-    // validate many TLS records in each direction over TLS 1.2\r\n+    // validate many TLS records (huge POST) over TLS 1.2\r\n     RunCase('19003', sttFile, server, ca, valid,\r\n       [stfExpected, stfHugeContent, stfDisableTls13]);\r\n     // same with TLS 1.3 where supported\r\n     if OSVersion >= wEleven then\r\n     begin\r\n+      // validate huge POST over SChannel TLS 1.3\r\n       RunCase('19004', sttFile, server, ca, valid,\r\n         [stfExpected, stfHugeContent]);\r\n+      // trigger TLS 1.3 renegotiation from client side\r\n       RunCase('19005', sttFile, server, ca, valid,\r\n         [stfExpected, stfHugeContent, stfKeyUpdate]);\r\n     end;\r\n@@ -7505,9 +7507,12 @@ procedure TNetworkProtocols._SChannel;\n     // existing one-way OpenSSL HTTPS behavior must remain unchanged\r\n     RunCase('19015', sttFile, server, ca, nil,\r\n       [stfExpected, stfOneWayTls, stfOpenSslServer]);\r\n-    // validate many TLS records in each direction over OpenSSL\r\n+    // validate huge POST over OpenSSL\r\n     RunCase('19016', sttFile, server, ca, valid,\r\n       [stfExpected, stfHugeContent]);\r\n+    // trigger TLS 1.3 renegotiation from client side\r\n+    RunCase('19017', sttFile, server, ca, valid,\r\n+      [stfExpected, stfHugeContent, stfKeyUpdate]);\r\n     RunWait;\r\n   finally\r\n     NewNetTls := previous;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8e6133ef4b560cb6cf13bace7f14ead027d7d638",
+      "short_sha": "8e6133ef",
+      "subject": "net: SChannel fixes and new tests about TLS 1.3 renegotiation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T16:27:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8e6133ef4b560cb6cf13bace7f14ead027d7d638",
+      "parents": [
+        "9a5d0e77b741a3fab56c81f3ef2dd25ac2ce552b"
+      ],
+      "stats": {
+        "additions": 56,
+        "deletions": 26,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -3726,6 +3726,8 @@ function EventEquals(const eventA, eventB): boolean;\n   TBuffer8K = array[0 .. pred(8 shl 10)] of AnsiChar;\r\n   /// define a buffer of 16KB of data\r\n   TBuffer16K = array[0 .. pred(16 shl 10)] of AnsiChar;\r\n+  /// define a buffer of 32KB of data\r\n+  TBuffer32K = array[0 .. pred(32 shl 10)] of AnsiChar;\r\n   /// define a buffer of 64KB of data\r\n   TBuffer64K = array[word] of AnsiChar;\r\n   /// define a buffer of 128KB of data\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 8,
+          "patch": "@@ -2201,6 +2201,7 @@ function SSL_CTX_use_PrivateKey_file(ctx: PSSL_CTX; _file: PUtf8Char;\n    typ: integer): integer; cdecl;\n function SSL_CTX_set_cipher_list(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n function SSL_CTX_set_ciphersuites(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n+function SSL_key_update(s: PSSL; updatetype: integer): integer; cdecl;\n function SSL_set_fd(s: PSSL; fd: integer): integer; cdecl;\n function SSL_get_current_cipher(s: PSSL): PSSL_CIPHER; cdecl;\n function SSL_CIPHER_description(p1: PSSL_CIPHER;\n@@ -2211,7 +2212,6 @@ procedure SSL_set_hostflags(s: PSSL; flags: cardinal); cdecl;\n function SSL_load_client_CA_file(_file: PUtf8Char): Pstack_st_X509_NAME; cdecl;\n procedure SSL_CTX_set_client_CA_list(ctx: PSSL_CTX; list: Pstack_st_X509_NAME); cdecl;\n function SSL_CTX_add_client_CA(ctx: PSSL_CTX; cacert: PX509): integer; cdecl;\n-function SSL_key_update(s: PSSL; updatetype: integer): integer; cdecl;\n function SSL_set1_host(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n function SSL_add1_host(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n \n@@ -3070,6 +3070,7 @@   TLibSsl = class(TSynLibrary)\n     SSL_CTX_use_PrivateKey_file: function(ctx: PSSL_CTX; _file: PUtf8Char; typ: integer): integer; cdecl;\n     SSL_CTX_set_cipher_list: function(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n     SSL_CTX_set_ciphersuites: function(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n+    SSL_key_update: function(s: PSSL; updatetype: integer): integer; cdecl;\n     SSL_set_fd: function(s: PSSL; fd: integer): integer; cdecl;\n     SSL_get_current_cipher: function(s: PSSL): PSSL_CIPHER; cdecl;\n     SSL_CIPHER_description: function(p1: PSSL_CIPHER; buf: PUtf8Char; size: integer): PUtf8Char; cdecl;\n@@ -3078,7 +3079,6 @@   TLibSsl = class(TSynLibrary)\n     SSL_load_client_CA_file: function(_file: PUtf8Char): Pstack_st_X509_NAME; cdecl;\n     SSL_CTX_set_client_CA_list: procedure(ctx: PSSL_CTX; list: Pstack_st_X509_NAME); cdecl;\n     SSL_CTX_add_client_CA: function(ctx: PSSL_CTX; cacert: PX509): integer; cdecl;\n-    SSL_key_update: function(s: PSSL; updatetype: integer): integer; cdecl;\n     SSL_set1_host: function(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n     // expected to be the last entry in OpenSslInitialize() below\n     SSL_add1_host: function(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n@@ -3137,6 +3137,7 @@   TLibSsl = class(TSynLibrary)\n     'SSL_CTX_use_PrivateKey_file',\n     'SSL_CTX_set_cipher_list',\n     '?SSL_CTX_set_ciphersuites', // TLS 1.3 specific for recent OpenSSL\n+    '?SSL_key_update',           // TLS 1.3 specific for recent OpenSSL\n     'SSL_set_fd',\n     'SSL_get_current_cipher',\n     'SSL_CIPHER_description',\n@@ -3145,7 +3146,6 @@   TLibSsl = class(TSynLibrary)\n     'SSL_load_client_CA_file',\n     'SSL_CTX_set_client_CA_list',\n     'SSL_CTX_add_client_CA',\n-    '?SSL_key_update',\n     'SSL_set1_host',\n     'SSL_add1_host',\n     nil);\n@@ -3426,6 +3426,14 @@ function SSL_CTX_set_ciphersuites(ctx: PSSL_CTX; str: PUtf8Char): integer;\n     result := OPENSSLSUCCESS; // OpenSSL 1.1.0 has no TLS 1.3 anyway\n end;\n \n+function SSL_key_update(s: PSSL; updatetype: integer): integer;\n+begin\n+  if Assigned(libssl.SSL_key_update) then\n+    result := libssl.SSL_key_update(s, updatetype)\n+  else\n+    result := OPENSSLSUCCESS; // OpenSSL 1.1.0 has no TLS 1.3 anyway\n+end;\n+\n function SSL_set_fd(s: PSSL; fd: integer): integer;\n begin\n   result := libssl.SSL_set_fd(s, fd);\n@@ -3466,11 +3474,6 @@ function SSL_CTX_add_client_CA(ctx: PSSL_CTX; cacert: PX509): integer;\n   result := libssl.SSL_CTX_add_client_CA(ctx, cacert);\n end;\n \n-function SSL_key_update(s: PSSL; updatetype: integer): integer;\n-begin\n-  result := libssl.SSL_key_update(s, updatetype);\n-end;\n-\n function SSL_set1_host(s: PSSL; hostname: PUtf8Char): integer;\n begin\n   result := libssl.SSL_set1_host(s, hostname);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17318\n+17319",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17318'\r\n+'2.4.17319'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 16,
+          "patch": "@@ -7117,16 +7117,20 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n   tls: TNetTlsContext;\r\n   keyfile: TFileName;\r\n   request, reply: RawByteString;\r\n-  len, pos, todo: integer;\r\n+  len, pos: integer;\r\n+  updated: boolean;\r\n+  ssl: PSSL;\r\n   net: TNetResult;\r\n+  log: ISynLog;\r\n begin\r\n+  TSynLog.EnterLocal(log, 'OpenSslClient %', [Port], self);\r\n   result := false;\r\n   fClientError := '';\r\n   socket := nil;\r\n   keyfile := '';\r\n   try\r\n     if NewTcpClientSocket('127.0.0.1', Port, 5000, socket) <> nrOK then\r\n-      raise Exception.Create('unable to connect the focused mTLS client');\r\n+      raise ESynException.Create('unable to connect the focused mTLS client');\r\n     InitNetTlsContext(tls);\r\n     tls.IgnoreCertificateErrors := true; // the test server identity is private\r\n     tls.DisableTls13 := stfDisableTls13 in Flags;\r\n@@ -7136,7 +7140,7 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n       keyfile := MakeString([Test.WorkDir, 'schannel-mtls-client-', Port, '.pem']);\r\n       if not FileFromString(\r\n           Certificate.Save(cccPrivateKeyOnly, '', ccfPem), keyfile) then\r\n-        raise Exception.Create('unable to save the focused mTLS client key');\r\n+        raise ESynException.Create('unable to save the focused mTLS client key');\r\n       tls.PrivateKeyFile := StringToUtf8(keyfile);\r\n     end;\r\n     secure := NewOpenSslNetTls;\r\n@@ -7150,40 +7154,52 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n         'Connection: close'#13#10#13#10])\r\n     else\r\n       request := 'GET / HTTP/1.0'#13#10'Host: localhost'#13#10#13#10;\r\n+    if Assigned(log) then\r\n+      log.Log(sllDebug, 'OpenSslClient: Afterconnection cipher=% request=%',\r\n+        [tls.CipherName, request], self);\r\n     len := length(request);\r\n     net := secure.Send(pointer(request), len);\r\n     if (net <> nrOK) or\r\n        (len <> length(request)) then\r\n-      raise Exception.Create(\r\n-        'mTLS client could not send HTTP headers');\r\n+      raise ESynException.Create('mTLS client could not send HTTP headers');\r\n     if stfHugeContent in Flags then\r\n     begin\r\n+      updated := false;\r\n       pos := 1;\r\n       while pos <= length(Body) do\r\n       begin\r\n-        todo := length(Body) - pos + 1;\r\n-        // feliberately don't send huge chunks\r\n-        if todo > 32749 then\r\n-          todo := 32749;\r\n-        len := todo;\r\n+        len := MinPtrInt(32749, length(Body) - pos + 1);     // per 32KB chunk\r\n         net := secure.Send(@PByteArray(Body)[pos - 1], len);\r\n         if net = nrRetry then\r\n           continue;\r\n         if net <> nrOK then\r\n-          raise Exception.CreateFmt(\r\n-            'huge TLS send failed at %d', [pos]);\r\n-        if len <= 0 then\r\n-          raise Exception.Create(\r\n-            'huge TLS send made no progress');\r\n+          raise ESynException.CreateUtf8(\r\n+            'huge TLS send failed % at %', [ToText(net)^, pos]);\r\n+        if len <= 0 then // typical Send() len = 16384\r\n+          raise ESynException.Create('huge TLS send made no progress');\r\n         inc(pos, len);\r\n+        if (stfKeyUpdate in Flags) and\r\n+           not updated and\r\n+           (pos > length(body) shr 1) then\r\n+        begin\r\n+          ssl := secure.GetRawTls;\r\n+          if Test.Check(ssl <> nil, 'OpenSSL raw TLS') then\r\n+            Test.CheckEqual(\r\n+              SSL_key_update(ssl, SSL_KEY_UPDATE_REQUESTED), OPENSSLSUCCESS,\r\n+              'SSL_key_update');\r\n+          updated := true;\r\n+        end;\r\n       end;\r\n+      Test.Check((stfKeyUpdate in Flags) = updated, 'missing SSL_key_update');\r\n     end;\r\n     SetLength(reply, 4096);\r\n     len := length(reply);\r\n     net := secure.Receive(pointer(reply), len);\r\n     SetLength(reply, len);\r\n     result := (net = nrOK) and\r\n               (PosEx('HTTP/', reply) = 1);\r\n+    if Assigned(log) then\r\n+      log.Log(sllDebug, 'OpenSslClient Receive: reply=%', [reply], self);\r\n     if not result then\r\n       fClientError := FormatUtf8('mTLS server closed the connection (% %)',\r\n\n... [truncated, 1638 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Core",
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9a5d0e77b741a3fab56c81f3ef2dd25ac2ce552b",
+      "short_sha": "9a5d0e77",
+      "subject": "test: cover huge content with mTLS",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T15:48:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9a5d0e77b741a3fab56c81f3ef2dd25ac2ce552b",
+      "parents": [
+        "8f4fd5a1ef53aa1b9c12321be0babd83b0f6d060"
+      ],
+      "stats": {
+        "additions": 105,
+        "deletions": 28,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17317\n+17318",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17317'\r\n+'2.4.17318'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 103,
+          "deletions": 26,
+          "patch": "@@ -336,8 +336,8 @@ procedure TNetworkProtocols._HttpApiWebSocketServer;\n     finally\r\n       ResetSystemEnv(CHILD_ENV);\r\n     end;\r\n-    CheckEqual(exitcode, 0, RawUtf8(output));\r\n-    CheckUtf8(PosEx('All tests passed successfully', RawUtf8(output)) <> 0,\r\n+    CheckEqual(exitcode, 0, output);\r\n+    CheckUtf8(PosEx('All tests passed successfully', output) <> 0,\r\n       ChildMode + ' WebSocket API test did not complete');\r\n   end;\r\n \r\n@@ -6426,7 +6426,7 @@ procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\n     mptext := RandomIdentifier(20000);  // 20000 bytes of content\r\n     CheckEqual(length(mptext), 20000);\r\n     Check(MultiPartFormDataAddField('field', mptext, mpa), 'mp add');\r\n-    Check(MultiPartFormDataEncode(mpa, mpct, RawUtf8(mp)), 'mp encode');\r\n+    Check(MultiPartFormDataEncode(mpa, mpct, mp), 'mp encode');\r\n     for fam := 0 to 1 do\r\n     begin\r\n       // validate both socket server families with the very same steps\r\n@@ -7032,7 +7032,7 @@ procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\n \r\n   TSChannelTestFlags = set of (\r\n    stfExpected, stfCallbacks, stfRejectEach, stfDisableTls13, stfOneWayTls,\r\n-   stfOpenSslServer, stfEachInvalid);\r\n+   stfOpenSslServer, stfEachInvalid, stfHugeContent, stfKeyUpdate);\r\n \r\n   TRunCase = class\r\n   public\r\n@@ -7046,15 +7046,20 @@   TRunCase = class\n     fEachInvalid: integer;\r\n     fAfterCount: integer;\r\n     fAfterUseful: integer;\r\n+    fHugeHash: cardinal;\r\n+    fHugeLength: integer;\r\n     fClientError: RawUtf8;\r\n+    Body: RawByteString;\r\n+    ExpectedHash: cardinal;\r\n     class procedure DoRunCase(Sender: TObject);\r\n     procedure Execute;\r\n     function OnEachCertificate(Socket: TNetSocket;\r\n       Context: PNetTlsContext; WasOk: boolean; TLS, Peer: pointer): boolean;\r\n     procedure OnAfterCertificate(Socket: TNetSocket;\r\n       Context: PNetTlsContext; TLS, Peer: pointer);\r\n+    function DoHugeRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n     function OpenSslClient(const Port: RawUtf8;\r\n-      const Certificate: ICryptCert; DisableTls13: boolean): boolean;\r\n+      const Certificate: ICryptCert): boolean;\r\n   end;\r\n \r\n function TRunCase.OnEachCertificate(Socket: TNetSocket;\r\n@@ -7091,17 +7096,28 @@ procedure TRunCase.OnAfterCertificate(Socket: TNetSocket;\n     LockedInc32(@fAfterUseful);\r\n end;\r\n \r\n+function TRunCase.DoHugeRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  result := HTTP_SUCCESS;\r\n+  if Ctxt.Url <> '/huge' then\r\n+  begin\r\n+    Ctxt.OutContent := 'ok';\r\n+    exit;\r\n+  end;\r\n+  fHugeLength := length(Ctxt.InContent);\r\n+  fHugeHash := crc32cHash(Ctxt.InContent);\r\n+  Ctxt.OutContent := Make(['ok ', fHugeLength, ' ', CardinalToHexShort(fHugeHash)]);\r\n+end;\r\n+\r\n function TRunCase.OpenSslClient(const Port: RawUtf8;\r\n-  const Certificate: ICryptCert; DisableTls13: boolean): boolean;\r\n-const\r\n-  REQUEST: RawUtf8 = 'GET / HTTP/1.0'#13#10'Host: localhost'#13#10#13#10;\r\n+  const Certificate: ICryptCert): boolean;\r\n var\r\n   socket: TNetSocket;\r\n   secure: INetTls;\r\n   tls: TNetTlsContext;\r\n   keyfile: TFileName;\r\n-  reply: RawByteString;\r\n-  len: integer;\r\n+  request, reply: RawByteString;\r\n+  len, pos, todo: integer;\r\n   net: TNetResult;\r\n begin\r\n   result := false;\r\n@@ -7113,7 +7129,7 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n       raise Exception.Create('unable to connect the focused mTLS client');\r\n     InitNetTlsContext(tls);\r\n     tls.IgnoreCertificateErrors := true; // the test server identity is private\r\n-    tls.DisableTls13 := DisableTls13;\r\n+    tls.DisableTls13 := stfDisableTls13 in Flags;\r\n     if Certificate <> nil then\r\n     begin\r\n       tls.CertificateBin := Certificate.Save(cccCertOnly, '', ccfPem);\r\n@@ -7125,20 +7141,57 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n     end;\r\n     secure := NewOpenSslNetTls;\r\n     secure.AfterConnection(socket, tls, 'localhost');\r\n-    len := length(REQUEST);\r\n-    net := secure.Send(pointer(REQUEST), len);\r\n+    if stfHugeContent in Flags then\n... [truncated, 6754 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8f4fd5a1ef53aa1b9c12321be0babd83b0f6d060",
+      "short_sha": "8f4fd5a1",
+      "subject": "lib: new SSL_key_update() OpenSSL function wrapper",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T15:09:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8f4fd5a1ef53aa1b9c12321be0babd83b0f6d060",
+      "parents": [
+        "d3366efda715d01a0d9308abc580627711677733"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 12,
+          "patch": "@@ -804,17 +804,20 @@ function OpenSslWinLocateEntry(const entries: TRawUtf8DynArray;\n   SSL_TLSEXT_ERR_ALERT_FATAL = 2;\n   SSL_TLSEXT_ERR_NOACK = 3;\n \n-  SSL_MODE_ENABLE_PARTIAL_WRITE = $00000001;\n+  SSL_MODE_ENABLE_PARTIAL_WRITE       = $00000001;\n   SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER = $00000002;\n-  SSL_MODE_AUTO_RETRY = $00000004;\n-  SSL_MODE_NO_AUTO_CHAIN = $00000008;\n-  SSL_MODE_RELEASE_BUFFERS = $00000010;\n-  SSL_MODE_SEND_CLIENTHELLO_TIME = $00000020;\n-  SSL_MODE_SEND_SERVERHELLO_TIME = $00000040;\n-  SSL_MODE_SEND_FALLBACK_SCSV = $00000080;\n-  SSL_MODE_ASYNC = $00000100;\n+  SSL_MODE_AUTO_RETRY                 = $00000004;\n+  SSL_MODE_NO_AUTO_CHAIN              = $00000008;\n+  SSL_MODE_RELEASE_BUFFERS            = $00000010;\n+  SSL_MODE_SEND_CLIENTHELLO_TIME      = $00000020;\n+  SSL_MODE_SEND_SERVERHELLO_TIME      = $00000040;\n+  SSL_MODE_SEND_FALLBACK_SCSV         = $00000080;\n+  SSL_MODE_ASYNC                      = $00000100;\n   SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG = $00000400;\n \n+  SSL_KEY_UPDATE_NOT_REQUESTED = 0;\n+  SSL_KEY_UPDATE_REQUESTED     = 1;\n+\n   X509_FILETYPE_PEM = 1;\n   X509_FILETYPE_ASN1 = 2;\n   X509_FILETYPE_DEFAULT = 3;\n@@ -2208,6 +2211,7 @@ procedure SSL_set_hostflags(s: PSSL; flags: cardinal); cdecl;\n function SSL_load_client_CA_file(_file: PUtf8Char): Pstack_st_X509_NAME; cdecl;\n procedure SSL_CTX_set_client_CA_list(ctx: PSSL_CTX; list: Pstack_st_X509_NAME); cdecl;\n function SSL_CTX_add_client_CA(ctx: PSSL_CTX; cacert: PX509): integer; cdecl;\n+function SSL_key_update(s: PSSL; updatetype: integer): integer; cdecl;\n function SSL_set1_host(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n function SSL_add1_host(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n \n@@ -3074,13 +3078,14 @@   TLibSsl = class(TSynLibrary)\n     SSL_load_client_CA_file: function(_file: PUtf8Char): Pstack_st_X509_NAME; cdecl;\n     SSL_CTX_set_client_CA_list: procedure(ctx: PSSL_CTX; list: Pstack_st_X509_NAME); cdecl;\n     SSL_CTX_add_client_CA: function(ctx: PSSL_CTX; cacert: PX509): integer; cdecl;\n+    SSL_key_update: function(s: PSSL; updatetype: integer): integer; cdecl;\n     SSL_set1_host: function(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n     // expected to be the last entry in OpenSslInitialize() below\n     SSL_add1_host: function(s: PSSL; hostname: PUtf8Char): integer; cdecl;\n   end;\n \n const\n-  LIBSSL_ENTRIES: array[0..61] of PAnsiChar = (\n+  LIBSSL_ENTRIES: array[0..62] of PAnsiChar = (\n     'SSL_CTX_new',\n     'SSL_CTX_free',\n     'SSL_CTX_set_timeout',\n@@ -3140,6 +3145,7 @@   TLibSsl = class(TSynLibrary)\n     'SSL_load_client_CA_file',\n     'SSL_CTX_set_client_CA_list',\n     'SSL_CTX_add_client_CA',\n+    '?SSL_key_update',\n     'SSL_set1_host',\n     'SSL_add1_host',\n     nil);\n@@ -3460,6 +3466,11 @@ function SSL_CTX_add_client_CA(ctx: PSSL_CTX; cacert: PX509): integer;\n   result := libssl.SSL_CTX_add_client_CA(ctx, cacert);\n end;\n \n+function SSL_key_update(s: PSSL; updatetype: integer): integer;\n+begin\n+  result := libssl.SSL_key_update(s, updatetype);\n+end;\n+\n function SSL_set1_host(s: PSSL; hostname: PUtf8Char): integer;\n begin\n   result := libssl.SSL_set1_host(s, hostname);\n@@ -6408,7 +6419,7 @@ function OpenSslInitialize(const libcryptoname, libsslname: TFileName;\n   end;\n end;\n \n-{$else}\n+{$else} // OPENSSLSTATIC\n \n { ******************** Statically linked OpenSSL Library Functions }\n \n@@ -6581,8 +6592,11 @@ function SSL_CTX_set_ciphersuites(ctx: PSSL_CTX; str: PUtf8Char): integer;\n begin\n   result := OPENSSLSUCCESS; // OpenSSL 1.1.0 has no TLS 1.3 anyway\n end;\n-//function SSL_CTX_set_ciphersuites(ctx: PSSL_CTX; str: PUtf8Char): integer; cdecl;\n-//  external LIB_SSL name _PU + 'SSL_CTX_set_ciphersuites';\n+\n+function SSL_key_update(s: PSSL; updatetype: integer): integer; cdecl;\n+begin\n+  result := OPENSSLSUCCESS; // OpenSSL 1.1.0 has no TLS 1.3 anyway\n+end;\n \n function SSL_set_fd(s: PSSL; fd: integer): integer; cdecl;\n   external LIB_SSL name _PU + 'SSL_set_fd';",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17316\n+17317",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17316'\r\n+'2.4.17317'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.openssl11"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d3366efda715d01a0d9308abc580627711677733",
+      "short_sha": "d3366efd",
+      "subject": "net: minor fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T15:09:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d3366efda715d01a0d9308abc580627711677733",
+      "parents": [
+        "7b54667b8cc45b27b0bc86dd9bc0ad55e1838a54"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2886,7 +2886,6 @@ procedure UnSetBit64(var Bits: Int64; aIndex: PtrInt);\n   CPUAVX512X64V4 = [cfAVX512F, cfAVX512BW, cfAVX512CD, cfAVX512DQ, cfAVX512VL];\r\n \r\n type\r\n-\r\n   /// recognize the main Intel/AMD CPU manufacturers\r\n   TIntelCpuManufacturer = (icmOther, icmIntel, icmAmd);\r\n \r\n@@ -2973,6 +2972,7 @@ function HasHWAes: boolean;\n var\r\n   /// the available Intel/AMD CPU features retrieved using CPUID\r\n   CpuFeatures: TIntelCpuFeatures;\r\n+\r\n   /// the AVX-512 features of this CPU which can actually be used\r\n   // - CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even\r\n   // if the OS does not save the opmask/ZMM registers at context switch (e.g.\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17312\n+17316",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17312'\r\n+'2.4.17316'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -214,8 +214,8 @@   TCldapServer = record\n // e.g. on Windows, you need to run also the function on cLocalHost, and on\r\n // POSIX it seems to require a specific broadcast per interface network mask\r\n // otherwise only a single interface is broadcasted\r\n-// - is useful only for low-level forensic tools: to find out which LDAP\r\n-// client ot use, rather call CldapGetLdapController/CldapMyLdapController\r\n+// - is useful only for low-level forensic tools: to properly locate a LDAP\r\n+// server, rather call CldapGetLdapController/CldapMyLdapController\r\n function CldapBroadcast(var Servers: TCldapServers; TimeOutMS: integer = 100;\r\n   const Address: RawUtf8 = cBroadcast; const Port: RawUtf8 = LDAP_PORT): integer;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -445,7 +445,7 @@ procedure TWebSocketServer.WebSocketBroadcast(const aFrame: TWebSocketFrame;\n   if ids > 0 then\r\n   begin\r\n     sorted.Init(pointer(aClientsConnectionID), ids * 8);\r\n-    QuickSortInt64(sorted.buf, 0, ids - 1);\r\n+    QuickSortInt64(sorted.buf, 0, ids - 1); // for FastFindInt64Sorted() below\r\n   end;\r\n   dec(ids); // WebSocketBroadcast(nil) -> ids<0 -> broadcast all\r\n   temp.opcode := aFrame.opcode;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.net.ldap",
+        "mormot.net.ws.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7b54667b8cc45b27b0bc86dd9bc0ad55e1838a54",
+      "short_sha": "7b54667b",
+      "subject": "Merge pull request #628 from dkounal/avx512",
+      "body": "core: introducing IntelAvx512 to detect AVX-512 support enabled by the OS",
+      "author": "ab",
+      "date": "2026-10-01T14:26:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7b54667b8cc45b27b0bc86dd9bc0ad55e1838a54",
+      "parents": [
+        "bb3be0ae98ca274636955c72016865c832e5a8fa",
+        "fb73482335d159443f8b3ebd031ac0b40a1385ce"
+      ],
+      "stats": {
+        "additions": 52,
+        "deletions": 2,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -4386,6 +4386,16 @@ function IsXmmYmmOSEnabled: boolean;\n         sete    al        // true if OS enabled both XMM and YMM\r\n end;\r\n \r\n+function IsZmmOSEnabled: boolean;\r\n+{$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n+// AVX-512 requires the OS to save opmask and ZMM registers at context switch\r\n+        xor     ecx, ecx  // specify control register XCR0=XFEATURE_ENABLED_MASK\r\n+        db $0f, $01, $d0  // XGETBV opcode reads XCR0 into EDX:EAX\r\n+        and     eax, $e6\r\n+        cmp     al, $e6   // XMM+YMM (bits 1-2) + opmask/ZMM_Hi256/Hi16_ZMM (5-7)\r\n+        sete    al        // true if OS enabled the whole AVX-512 state\r\n+end;\r\n+\r\n procedure _GetCpuid(cpueax, cpuecx: cardinal; var regs: TIntelRegisters);\r\n {$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         mov     eax, cpueax\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -2587,6 +2587,16 @@ asm // see https://software.intel.com/en-us/blogs/2011/04/14/is-avx-enabled\n         sete    al\r\n end;\r\n \r\n+function IsZmmOSEnabled: boolean;\r\n+{$ifdef FPC}nostackframe; assembler;{$endif}\r\n+asm // AVX-512 requires the OS to save opmask and ZMM registers\r\n+        xor     ecx, ecx  // get control register XCR0 = XFEATURE_ENABLED_MASK\r\n+        db  $0f, $01, $d0 // XGETBV reads XCR0 into EDX:EAX\r\n+        and     eax, $e6  // XMM+YMM (bits 1-2) + opmask/ZMM_Hi256/Hi16_ZMM (5-7)\r\n+        cmp     al, $e6\r\n+        sete    al\r\n+end;\r\n+\r\n procedure _GetCpuid(cpueax, cpuecx: cardinal; var Registers: TIntelRegisters);\r\n {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 1,
+          "patch": "@@ -2876,6 +2876,17 @@ procedure UnSetBit64(var Bits: Int64; aIndex: PtrInt);\n   /// all CPU features flags, as retrieved from an Intel/AMD CPU\r\n   TIntelCpuFeatures = set of TIntelCpuFeature;\r\n \r\n+const\r\n+  /// all AVX-512 CPUID flags, as filtered into the IntelAvx512 variable\r\n+  CPUAVX512FEATURES = [cfAVX512F, cfAVX512DQ, cfAVX512IFMA, cfAVX512PF, cfAVX512ER,\r\n+    cfAVX512CD, cfAVX512BW, cfAVX512VL, cfAVX512VBMI, cfAVX512VBMI2,\r\n+    cfAVX512NNI, cfAVX512BITALG, cfAVX512VPC, cfAVX512NNIW, cfAVX512MAPS,\r\n+    cfAVX512VP2I, cfAVX512FP16, cfAVX512BF16];\r\n+  /// the AVX-512 subset expected by x86-64-v4, i.e. Skylake-X/Zen4 level\r\n+  CPUAVX512X64V4 = [cfAVX512F, cfAVX512BW, cfAVX512CD, cfAVX512DQ, cfAVX512VL];\r\n+\r\n+type\r\n+\r\n   /// recognize the main Intel/AMD CPU manufacturers\r\n   TIntelCpuManufacturer = (icmOther, icmIntel, icmAmd);\r\n \r\n@@ -2962,6 +2973,13 @@ function HasHWAes: boolean;\n var\r\n   /// the available Intel/AMD CPU features retrieved using CPUID\r\n   CpuFeatures: TIntelCpuFeatures;\r\n+  /// the AVX-512 features of this CPU which can actually be used\r\n+  // - CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even\r\n+  // if the OS does not save the opmask/ZMM registers at context switch (e.g.\r\n+  // on old Windows or within some VMs) - this also checks XCR0 via XGETBV\r\n+  // - contains CpuFeatures * CPUAVX512FEATURES, or [] if not enabled by the OS\r\n+  // - e.g. CPUAVX512X64V4 - IntelAvx512 = [] identifies x86-64-v4 support\r\n+  IntelAvx512: TIntelCpuFeatures;\r\n \r\n   // additional low-level Intel/AMD CPU information retrieved using CPUID\r\n   CpuManufacturer: TIntelCpuManufacturer;\r\n@@ -3116,8 +3134,9 @@ function BSRqword(const q: Qword): cardinal;\n   // - cpuHaswell identifies Intel/AMD AVX2+BMI support at Haswell level\r\n   // as expected e.g. by IsValidUtf8Avx2/Base64EncodeAvx2 dedicated asm\r\n   // - won't include ERMSB flag because it is not propagated within some VMs\r\n+  // - cpuAVX512 identifies x86-64-v4 AVX-512 support, also enabled by the OS\r\n   TX64CpuFeatures = set of (\r\n-    cpuAVX, cpuAVX2, cpuHaswell);\r\n+    cpuAVX, cpuAVX2, cpuHaswell, cpuAVX512);\r\n \r\n var\r\n   /// internal flags used by FillCharFast - easier from asm that CpuFeatures\r\n@@ -10974,6 +10993,12 @@ procedure TestCpuFeatures;\n      not IsXmmYmmOSEnabled then\r\n     // AVX is available on the CPU, but not supported at OS context switch\r\n     CpuFeatures := CpuFeatures - [cfAVX, cfAVX2, cfAVX10, cfFMA];\r\n+  IntelAvx512 := CpuFeatures * CPUAVX512FEATURES;\r\n+  if (IntelAvx512 <> []) and\r\n+     not ((cfOSXS in CpuFeatures) and\r\n+          IsZmmOSEnabled) then // XGETBV is only valid with OSXSAVE\r\n+    // AVX-512 is available on the CPU, but opmask/ZMM are not saved by the OS\r\n+    IntelAvx512 := [];\r\n   if cfSSE42 in CpuFeatures then\r\n     try\r\n       if crc32cby4sse42(0, 1) <> 3712330424 then\r\n@@ -10999,6 +11024,8 @@ procedure TestCpuFeatures;\n       include(X64CpuFeatures, cpuAVX2);\r\n     if CpuFeatures * CPUAVX2HASWELL = CPUAVX2HASWELL then\r\n       include(X64CpuFeatures, cpuHaswell);\r\n+    if IntelAvx512 * CPUAVX512X64V4 = CPUAVX512X64V4 then\r\n+      include(X64CpuFeatures, cpuAVX512);\r\n   end;\r\n   {$endif ASMX64NOTPIC}\r\n   // redirect some CPU-aware functions\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -2855,7 +2855,10 @@ procedure TTestCoreBase.CustomRTLSlow(Sender: TObject);\n   SetLength(buf, 16 shl 20); // 16MB\r\n   {$ifdef ASMX64NOTPIC} // activate and validate SSE2 + AVX branches\r\n   bak := X64CpuFeatures;\r\n-  cpu := bak - [cpuHaswell, cpuAvx2];\r\n+  Check(IntelAvx512 - CpuFeatures * CPUAVX512FEATURES = [], 'avx512');\r\n+  Check(not (cpuAVX512 in bak) or\r\n+        (CPUAVX512X64V4 - IntelAvx512 = []), 'x86-64-v4');\r\n+  cpu := bak - [cpuHaswell, cpuAvx2, cpuAVX512];\r\n   X64CpuFeatures := []; // default SSE2 128-bit process\r\n   Validate({rtl=}false);\r\n   {$ifdef ASMX64AVX1} // oldest Delphi doesn't support AVX asm\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86"
+      ],
+      "pr": 628,
+      "is_merge": true
+    },
+    {
+      "sha": "bb3be0ae98ca274636955c72016865c832e5a8fa",
+      "short_sha": "bb3be0ae",
+      "subject": "tests: fixed #629 coverage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T14:13:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bb3be0ae98ca274636955c72016865c832e5a8fa",
+      "parents": [
+        "f253c6034eb5aa0d86e38f728b8d082afc6647f2"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17311\n+17312",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17311'\r\n+'2.4.17312'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 14,
+          "patch": "@@ -159,11 +159,15 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoHttpFileRange(Sender: TObject);\r\n     /// validate THttpServerRequestAbstract.SetOutStream streamed body download\r\n     procedure DoHttpOutStream(Sender: TObject);\r\n+    /// validate TWebSocketAsyncServer.WebSocketBroadcast with closing peers\r\n+    procedure DoTWebSocketAsyncServer(Sender: TObject);\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n     procedure _HttpApiWebSocketServer;\r\n     {$endif USEWININET}\r\n+    /// asynchronously start slow tests in background threads on /multithread\r\n+    procedure SlowTests;\r\n     /// Engine.IO and Socket.IO regression tests\r\n     procedure _SocketIO;\r\n     /// validate DNS and LDAP clients (and NTP/SNTP)\r\n@@ -184,8 +188,6 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure RTSPOverHTTP;\r\n     /// RTSP over HTTP, with always temporary buffering\r\n     procedure RTSPOverHTTPBufferedWrite;\r\n-    /// validate TWebSocketAsyncServer.WebSocketBroadcast with closing peers\r\n-    procedure _TWebSocketAsyncServer;\r\n     /// validate IP processing functions\r\n     procedure IPAddresses;\r\n     /// validate mormot.net.openapi unit\r\n@@ -477,21 +479,26 @@ procedure TNetworkProtocols.DoTFTPShutdown;\n   CheckEqual(TftpOwnerAccessed, 1, 'owner access after terminate');\r\n end;\r\n \r\n-procedure TNetworkProtocols._SocketIO;\r\n-var\r\n-  m: TSocketIOMessage;\r\n-  abc, event: RawUtf8;\r\n-  d: TDocVariantData;\r\n-  ws: TSha1Digest;\r\n+procedure TNetworkProtocols.SlowTests;\r\n begin\r\n   // start some slow tests in background if /multithread is enabled\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n   Run(DoHttpOutStream, self, 'HttpOutStream', true, false);\r\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n+  Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n+end;\r\n+\r\n+procedure TNetworkProtocols._SocketIO;\r\n+var\r\n+  m: TSocketIOMessage;\r\n+  abc, event: RawUtf8;\r\n+  d: TDocVariantData;\r\n+  ws: TSha1Digest;\r\n+begin\r\n   // from https://datatracker.ietf.org/doc/html/rfc6455#section-1.3\r\n   ComputeChallenge('dGhlIHNhbXBsZSBub25jZQ==', ws);\r\n   CheckEqual(Sha1DigestToString(ws), 'b37a4f2cc0624f1690f64606cf385945b2bec4ea');\r\n@@ -1016,14 +1023,14 @@ procedure TNetworkProtocols.RTSPOverHTTPBufferedWrite;\n \r\n type\r\n   // broadcast frames to all connections, from a background thread\r\n-  TWebSocketBroadcastThread = class(TThread)\r\n+  TWebSocketBroadcastThread = class(TLoggedThread)\r\n   protected\r\n     fServer: TWebSocketAsyncServer;\r\n     fSent: integer;\r\n-    procedure Execute; override;\r\n+    procedure DoExecute; override;\r\n   end;\r\n \r\n-procedure TWebSocketBroadcastThread.Execute;\r\n+procedure TWebSocketBroadcastThread.DoExecute;\r\n var\r\n   frame: TWebSocketFrame;\r\n begin\r\n@@ -1035,7 +1042,7 @@ procedure TWebSocketBroadcastThread.Execute;\n     inc(fSent, fServer.WebSocketBroadcast(frame, nil, 50));\r\n end;\r\n \r\n-procedure TNetworkProtocols._TWebSocketAsyncServer;\r\n+procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\r\n var\r\n   server: TWebSocketAsyncServerRest;\r\n   bcast: TWebSocketBroadcastThread;\r\n@@ -1045,9 +1052,9 @@ procedure TNetworkProtocols._TWebSocketAsyncServer;\n   status: RawUtf8;\r\n begin\r\n   // WebSocketBroadcast() used to deadlock when Write() failed on a reset peer\r\n-  server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbroadcast',\r\n+  server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbcast',\r\n     2, '', '', {ajax=}true, [], TSynLog);\r\n-  bcast := TWebSocketBroadcastThread.Create({suspended=}true);\r\n+  bcast := TWebSocketBroadcastThread.Create({susp=}true, nil, nil, TSynLog, 'bcast');\r\n   bcast.fServer := server;\r\n   wedged := false;\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 629,
+      "is_merge": false
+    },
+    {
+      "sha": "f253c6034eb5aa0d86e38f728b8d082afc6647f2",
+      "short_sha": "f253c603",
+      "subject": "net: properly fixed #629",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T14:12:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f253c6034eb5aa0d86e38f728b8d082afc6647f2",
+      "parents": [
+        "40766691c0e12bf22b0b8a3439b8d1e7143d89f6"
+      ],
+      "stats": {
+        "additions": 53,
+        "deletions": 40,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17310\n+17311",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17310'\r\n+'2.4.17311'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 18,
+          "patch": "@@ -3657,21 +3657,19 @@ procedure TAsyncConnections.EndConnection(connection: TAsyncConnection);\n function TAsyncConnections.GetConnectionHandles: TConnectionAsyncHandleDynArray;\r\n var\r\n   i, n: PtrInt;\r\n-  p: PAsyncConnection;\r\n+  c: TAsyncConnection;\r\n begin\r\n   n := 0;\r\n   fConnectionLock.ReadOnlyLock;\r\n   try\r\n     SetLength(result, fConnectionCount);\r\n-    p := pointer(fConnection);\r\n-    for i := 1 to fConnectionCount do\r\n+    for i := 0 to fConnectionCount - 1 do\r\n     begin\r\n-      if not p^.IsClosed then\r\n-      begin\r\n-        result[n] := p^.Handle;\r\n-        inc(n);\r\n-      end;\r\n-      inc(p);\r\n+      c := fConnection[i];\r\n+      if c.IsClosed then\r\n+        continue;\r\n+      result[n] := c.Handle;\r\n+      inc(n);\r\n     end;\r\n   finally\r\n     fConnectionLock.ReadOnlyUnLock;\r\n@@ -3683,21 +3681,19 @@ function TAsyncConnections.GetConnectionHandles: TConnectionAsyncHandleDynArray;\n function TAsyncConnections.GetConnectionInstances: TAsyncConnectionDynArray;\r\n var\r\n   i, n: PtrInt;\r\n-  p: PAsyncConnection;\r\n+  c: TAsyncConnection;\r\n begin\r\n   n := 0;\r\n   fConnectionLock.ReadOnlyLock;\r\n   try\r\n     SetLength(result, fConnectionCount);\r\n-    p := pointer(fConnection);\r\n-    for i := 1 to fConnectionCount do\r\n+    for i := 0 to fConnectionCount - 1 do\r\n     begin\r\n-      if not p^.IsClosed then\r\n-      begin\r\n-        result[n] := p^;\r\n-        inc(n);\r\n-      end;\r\n-      inc(p);\r\n+      c := fConnection[i];\r\n+      if c.IsClosed then\r\n+        continue;\r\n+      result[n] := c;\r\n+      inc(n);\r\n     end;\r\n   finally\r\n     fConnectionLock.ReadOnlyUnLock;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.async.pas",
+          "status": "modified",
+          "additions": 37,
+          "deletions": 20,
+          "patch": "@@ -700,37 +700,54 @@ function TWebSocketAsyncServer.WebSocketBroadcast(const aFrame: TWebSocketFrame;\n   aTimeOut: integer): integer;\r\n var\r\n   i, n: PtrInt;\r\n-  tmp: TSynTempBuffer;\r\n-  ids: THttpServerConnectionIDDynArray;\r\n+  ids: TConnectionAsyncHandleDynArray;\r\n+  conns: TAsyncConnectionDynArray;\r\n+  conn: TWebSocketAsyncConnection;\r\n+  tmp: TSynTempBuffer; // local fame content computed once\r\n begin\r\n   result := 0;\r\n   if Terminated or\r\n      (fAsync = nil) or\r\n      not (aFrame.opcode in [focText, focBinary, focConnectionClose]) then\r\n     exit;\r\n-  ids := aClientsConnectionID;\r\n-  if ids = nil then\r\n-  begin\r\n-    // broadcast to all connected clients: get their handles within the lock\r\n-    fAsync.ConnectionLock.ReadOnlyLock;\r\n-    try\r\n-      n := fAsync.ConnectionCount;\r\n-      SetLength(ids, n);\r\n-      for i := 0 to n - 1 do\r\n-        ids[i] := fAsync.Connection[i].Handle;\r\n-    finally\r\n-      fAsync.ConnectionLock.ReadOnlyUnLock;\r\n-    end;\r\n-  end;\r\n-  if ids = nil then\r\n-    exit; // no connection\r\n   // send outside the lock: a failing Write() calls ConnectionDelete() -> WriteLock\r\n   FrameSendEncode(aFrame, {mask=}0, tmp);\r\n   try\r\n+    // compute the destination TConnectionAsyncHandle\r\n+    n := length(aClientsConnectionID);\r\n+    if n = 0 then\r\n+    begin\r\n+      // broadcast to all connected clients\r\n+      if aTimeOut = 0 then\r\n+      begin\r\n+        // most common case of non-blocking notifications could use instances\r\n+        conns := fAsync.GetConnectionInstances;\r\n+        for i := 0 to length(conns) - 1 do\r\n+          if TWebSocketAsyncConnection(conns[i]).SendDirect(tmp, aFrame.opcode, 0) then\r\n+            inc(result);\r\n+        exit;\r\n+      end;\r\n+      // get live handles for late access within aTimeOut\r\n+      ids := fAsync.GetConnectionHandles;\r\n+    end\r\n+    else\r\n+    begin\r\n+      // convert 64-bit THttpServerConnectionID into 32-bit TConnectionAsyncHandle\r\n+      SetLength(ids, n);\r\n+      for i := 0 to n - 1 do\r\n+        ids[i] := aClientsConnectionID[i];\r\n+    end;\r\n+    if ids = nil then\r\n+      exit; // no connection\r\n     // use TWebSocketAsyncConnection.SendDirect for non-blocking socket sending\r\n     for i := 0 to length(ids) - 1 do\r\n-      inc(result, ord(TWebSocketAsyncConnection(fAsync.ConnectionFind(ids[i])).\r\n-        SendDirect(tmp, aFrame.opcode, aTimeOut))); // O(log(n)) search\r\n+    begin\r\n+      // O(log(n)) search is safer against GC with aTimeOut > 0\r\n+      conn := TWebSocketAsyncConnection(fAsync.ConnectionFind(ids[i]));\r\n+      if Assigned(conn) and\r\n+         conn.SendDirect(tmp, aFrame.opcode, aTimeOut) then\r\n+        inc(result);\r\n+    end;\r\n   finally\r\n     tmp.Done;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.ws.async"
+      ],
+      "pr": 629,
+      "is_merge": false
+    },
+    {
+      "sha": "40766691c0e12bf22b0b8a3439b8d1e7143d89f6",
+      "short_sha": "40766691",
+      "subject": "net: new TAsyncConnections.GetConnectionInstances/GetConnectionHandles methods",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T13:50:48Z",
+      "url": "https://github.com/synopse/mORMot2/commit/40766691c0e12bf22b0b8a3439b8d1e7143d89f6",
+      "parents": [
+        "3327833c922e401c81624bdf77bb0d0c09559538"
+      ],
+      "stats": {
+        "additions": 61,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17309\n+17310",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17309'\r\n+'2.4.17310'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 0,
+          "patch": "@@ -708,6 +708,13 @@   TAsyncConnections = class(TLoggedThread)\n     function ConnectionRemove(Handle: TConnectionAsyncHandle): boolean;\r\n     /// call ConnectionRemove unless acoNoConnectionTrack is set\r\n     procedure EndConnection(connection: TAsyncConnection);\r\n+    /// create a copy of all live TAsyncConnection.Handle (i.e. not IsClosed)\r\n+    // - to be resolved using ConnectionFind() methods just before usage\r\n+    function GetConnectionHandles: TConnectionAsyncHandleDynArray;\r\n+    /// create a copy of all TAsyncConnection live instances (i.e. not IsClosed)\r\n+    // - don't use for any potentially blocking operation: returned instances\r\n+    // are protected from recycling only for KeepConnectionInstanceMS\r\n+    function GetConnectionInstances: TAsyncConnectionDynArray;\r\n     /// add some data to the asynchronous output buffer of a given connection\r\n     // - could be executed e.g. from a TAsyncConnection.OnRead method\r\n     function Write(connection: TAsyncConnection; data: pointer; datalen: integer;\r\n@@ -3647,6 +3654,58 @@ procedure TAsyncConnections.EndConnection(connection: TAsyncConnection);\n     ConnectionDelete(connection);\r\n end;\r\n \r\n+function TAsyncConnections.GetConnectionHandles: TConnectionAsyncHandleDynArray;\r\n+var\r\n+  i, n: PtrInt;\r\n+  p: PAsyncConnection;\r\n+begin\r\n+  n := 0;\r\n+  fConnectionLock.ReadOnlyLock;\r\n+  try\r\n+    SetLength(result, fConnectionCount);\r\n+    p := pointer(fConnection);\r\n+    for i := 1 to fConnectionCount do\r\n+    begin\r\n+      if not p^.IsClosed then\r\n+      begin\r\n+        result[n] := p^.Handle;\r\n+        inc(n);\r\n+      end;\r\n+      inc(p);\r\n+    end;\r\n+  finally\r\n+    fConnectionLock.ReadOnlyUnLock;\r\n+  end;\r\n+  if n <> length(result) then\r\n+    SetLength(result, n);\r\n+end;\r\n+\r\n+function TAsyncConnections.GetConnectionInstances: TAsyncConnectionDynArray;\r\n+var\r\n+  i, n: PtrInt;\r\n+  p: PAsyncConnection;\r\n+begin\r\n+  n := 0;\r\n+  fConnectionLock.ReadOnlyLock;\r\n+  try\r\n+    SetLength(result, fConnectionCount);\r\n+    p := pointer(fConnection);\r\n+    for i := 1 to fConnectionCount do\r\n+    begin\r\n+      if not p^.IsClosed then\r\n+      begin\r\n+        result[n] := p^;\r\n+        inc(n);\r\n+      end;\r\n+      inc(p);\r\n+    end;\r\n+  finally\r\n+    fConnectionLock.ReadOnlyUnLock;\r\n+  end;\r\n+  if n <> length(result) then\r\n+    SetLength(result, n);\r\n+end;\r\n+\r\n function TAsyncConnections.Write(connection: TAsyncConnection; data: pointer;\r\n   datalen: integer; timeout: integer): boolean;\r\n begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fb73482335d159443f8b3ebd031ac0b40a1385ce",
+      "short_sha": "fb734823",
+      "subject": "core: IntelAvx512 is now a global variable pre-computed at startup",
+      "body": "As suggested in the PR review: all needed information is already retrieved\nin TestCpuFeatures, so there is no need to call XGETBV at each call.\nIt stays [] on Darwin x64 with DISABLE_SSE42, where AVX is disabled anyway.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-01T13:41:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fb73482335d159443f8b3ebd031ac0b40a1385ce",
+      "parents": [
+        "6941a143a1f580a0f662ab9e86a319449e2e7b35"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 18,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 18,
+          "patch": "@@ -2877,7 +2877,7 @@ procedure UnSetBit64(var Bits: Int64; aIndex: PtrInt);\n   TIntelCpuFeatures = set of TIntelCpuFeature;\r\n \r\n const\r\n-  /// all AVX-512 CPUID flags, as filtered by IntelAvx512()\r\n+  /// all AVX-512 CPUID flags, as filtered into the IntelAvx512 variable\r\n   CPUAVX512FEATURES = [cfAVX512F, cfAVX512DQ, cfAVX512IFMA, cfAVX512PF, cfAVX512ER,\r\n     cfAVX512CD, cfAVX512BW, cfAVX512VL, cfAVX512VBMI, cfAVX512VBMI2,\r\n     cfAVX512NNI, cfAVX512BITALG, cfAVX512VPC, cfAVX512NNIW, cfAVX512MAPS,\r\n@@ -2973,6 +2973,13 @@ function HasHWAes: boolean;\n var\r\n   /// the available Intel/AMD CPU features retrieved using CPUID\r\n   CpuFeatures: TIntelCpuFeatures;\r\n+  /// the AVX-512 features of this CPU which can actually be used\r\n+  // - CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even\r\n+  // if the OS does not save the opmask/ZMM registers at context switch (e.g.\r\n+  // on old Windows or within some VMs) - this also checks XCR0 via XGETBV\r\n+  // - contains CpuFeatures * CPUAVX512FEATURES, or [] if not enabled by the OS\r\n+  // - e.g. CPUAVX512X64V4 - IntelAvx512 = [] identifies x86-64-v4 support\r\n+  IntelAvx512: TIntelCpuFeatures;\r\n \r\n   // additional low-level Intel/AMD CPU information retrieved using CPUID\r\n   CpuManufacturer: TIntelCpuManufacturer;\r\n@@ -3001,14 +3008,6 @@ function IntelHypervisor: RawUtf8;\n // - only set if cfAVX10 is part of CpuFeatures - returns 0 otherwise\r\n function IntelAvx10: cardinal;\r\n \r\n-/// the AVX-512 features of this CPU which can actually be used\r\n-// - CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even\r\n-// if the OS does not save the opmask/ZMM registers at context switch (e.g. on\r\n-// old Windows or within some VMs) - this function also checks XCR0 via XGETBV\r\n-// - returns CpuFeatures * CPUAVX512FEATURES, or [] if AVX-512 is not enabled by the OS\r\n-// - e.g. CPUAVX512X64V4 - IntelAvx512 = [] identifies x86-64-v4 support\r\n-function IntelAvx512: TIntelCpuFeatures;\r\n-\r\n /// compute 32-bit random number generated by modern Intel CPU hardware\r\n // - using NIST SP 800-90A and FIPS 140-2 compliant RDRAND Intel x86/x64 opcode\r\n // - caller should ensure that cfSSE42 is included in CpuFeatures flags\r\n@@ -10879,15 +10878,6 @@ function IntelAvx10: cardinal;\n   result := ToByte(regs.ebx);\r\n end; // no \"vector width\" bits any more: AVX10 means 128-, 256- and 512-bit\r\n \r\n-function IntelAvx512: TIntelCpuFeatures;\r\n-begin\r\n-  result := CpuFeatures * CPUAVX512FEATURES;\r\n-  if (result <> []) and\r\n-     not ((cfOSXS in CpuFeatures) and\r\n-          IsZmmOSEnabled) then // XGETBV is only valid with OSXSAVE\r\n-    result := [];\r\n-end;\r\n-\r\n procedure TestCpuFeatures;\r\n var\r\n   regs: TIntelRegisters;\r\n@@ -11003,6 +10993,12 @@ procedure TestCpuFeatures;\n      not IsXmmYmmOSEnabled then\r\n     // AVX is available on the CPU, but not supported at OS context switch\r\n     CpuFeatures := CpuFeatures - [cfAVX, cfAVX2, cfAVX10, cfFMA];\r\n+  IntelAvx512 := CpuFeatures * CPUAVX512FEATURES;\r\n+  if (IntelAvx512 <> []) and\r\n+     not ((cfOSXS in CpuFeatures) and\r\n+          IsZmmOSEnabled) then // XGETBV is only valid with OSXSAVE\r\n+    // AVX-512 is available on the CPU, but opmask/ZMM are not saved by the OS\r\n+    IntelAvx512 := [];\r\n   if cfSSE42 in CpuFeatures then\r\n     try\r\n       if crc32cby4sse42(0, 1) <> 3712330424 then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3327833c922e401c81624bdf77bb0d0c09559538",
+      "short_sha": "3327833c",
+      "subject": "core: some minor fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T13:00:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3327833c922e401c81624bdf77bb0d0c09559538",
+      "parents": [
+        "d0a246f3dfef1a9a4abb9d2c5894e039987f2a09"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 15,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 9,
+          "patch": "@@ -4260,15 +4260,15 @@ function TDebugFile.AddLog(W: TTextWriter; aPointer: PtrUInt; NoHex: boolean): b\n   if rva = 0 then\n     exit;\n   s := FindSymbol(rva);\n-  if (s <> nil) and\n-     (FindPropName(['LogExcept', 'SynLogException', 'ThreadProc',\n-       'ESynException.RaiseUtf8', 'SynLogVectoredHandler'\n-       {$ifdef ISDELPHI} , 'SynRtlUnwind',  '@HandleAnyException',\n-       '@HandleOnException', '@InternalRaiseAtExcept', '@RaiseAtExcept',\n-       '@RaiseExcept', '@RaiseAgain', 'ThreadWrapper'\n-       {$ifdef CPUX86} , 'RawStackTrace' {$endif}\n-       {$endif ISDELPHI} ], s^.Name) >= 0) then\n-    exit; // only meaningful entries\n+  if s <> nil then\n+    if FindPropName(['LogExcept', 'SynLogException', 'ThreadProc',\n+         'SynLogVectoredHandler', 'SynRaiseProc'\n+         {$ifdef ISDELPHI} , 'SynRtlUnwind',  '@HandleAnyException',\n+         '@HandleOnException', '@RaiseExcept', '@RaiseAgain',\n+         '@RaiseAtExcept', '@InternalRaiseAtExcept', 'ThreadWrapper'\n+         {$ifdef CPUX86} , 'RawStackTrace' {$endif}\n+         {$endif ISDELPHI} ], s^.Name) >= 0 then\n+      exit; // only meaningful entries\n   result := true;\n   if not NoHex then\n   begin",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -1663,8 +1663,10 @@ var\n   // FPC: intercept via the RaiseProc global variable\r\n   {$define WITH_RAISEPROC}\r\n {$else}\r\n-  // Delphi POSIX: intercept via the RaiseExceptObjProc global variable\r\n-  {$define WITH_RAISEEXCEPTOBJPROC}\r\n+  {$ifdef HASRAISEEXCEPTOBJPROC}\r\n+    // Delphi POSIX: intercept via the RaiseExceptObjProc global variable\r\n+    {$define WITH_RAISEEXCEPTOBJPROC}\r\n+  {$endif HASRAISEEXCEPTOBJPROC}\r\n {$endif FPC}\r\n \r\n {$endif NOEXCEPTIONINTERCEPT}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17304\n+17309",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17304'\r\n+'2.4.17309'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -756,7 +756,7 @@   TAsyncConnections = class(TLoggedThread)\n     {$endif USE_WINIOCP}\r\n     /// low-level unsafe direct access to the connection instances\r\n     // - ensure this property is used in a thread-safe manner, i.e. calling\r\n-    // ConnectionFindAndLock() high-level function, ot via manual\r\n+    // ConnectionFindAndLock() high-level function, or via manual\r\n     // ! ConnectionLock.ReadOnlyLock;\r\n     // ! try ... finally ConnectionLock.ReadOnlyUnLock; end;\r\n     // - never Write() within ReadOnlyLock: it may need ConnectionDelete()\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -80,7 +80,7 @@   TInjectableObjectRest = class(TInjectableObject)\n     // so may be nil if the instance was created outside the SOA context\r\n     property Factory: TServiceFactoryServer\r\n       read fFactory;\r\n-    /// access ot the associated REST Server, e.g. to its ORM methods\r\n+    /// access of the associated REST Server, e.g. to its ORM methods\r\n     // - slightly faster than Factory.RestServer\r\n     // - this value will be injected by TServiceFactoryServer.CreateInstance,\r\n     // so may be nil if the instance was created outside the SOA context\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Network",
+        "SOA"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os.posix",
+        "mormot.net.async",
+        "mormot.soa.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d0a246f3dfef1a9a4abb9d2c5894e039987f2a09",
+      "short_sha": "d0a246f3",
+      "subject": "Merge pull request #629 from flydev-fr/fix/websocketbroadcast-send-deadlock",
+      "body": "net: fixed TWebSocketAsyncServer.WebSocketBroadcast deadlock when a send fails",
+      "author": "ab",
+      "date": "2026-10-01T12:58:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d0a246f3dfef1a9a4abb9d2c5894e039987f2a09",
+      "parents": [
+        "e27981992682c0046fe93db659bfa2b850c1d5f1",
+        "c0f6defb447687f1a80cbba22fdf1a919e6f7bc5"
+      ],
+      "stats": {
+        "additions": 111,
+        "deletions": 19,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -684,6 +684,7 @@   TAsyncConnections = class(TLoggedThread)\n     // - returns nil if the handle was not found\r\n     // - returns the maching instance, and caller should release the main lock as:\r\n     // ! try ... finally UnLock(aLock); end;\r\n+    // - never Write() within a cReadOnly lock: it may need ConnectionDelete()\r\n     function ConnectionFindAndLock(aHandle: TConnectionAsyncHandle;\r\n       aLock: TRWLockContext; aIndex: PInteger = nil): TAsyncConnection;\r\n     /// high-level access to a connection instance, from its handle\r\n@@ -758,6 +759,7 @@   TAsyncConnections = class(TLoggedThread)\n     // ConnectionFindAndLock() high-level function, ot via manual\r\n     // ! ConnectionLock.ReadOnlyLock;\r\n     // ! try ... finally ConnectionLock.ReadOnlyUnLock; end;\r\n+    // - never Write() within ReadOnlyLock: it may need ConnectionDelete()\r\n     property Connection: TAsyncConnectionDynArray\r\n       read fConnection;\r\n     /// access to the R/W lock protecting the Connection[] array\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.rtsphttp.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -174,14 +174,13 @@ function TPostConnection.OnRead: TPollAsyncSocketOnReadWrite;\n   if decoded = '' then\r\n     exit; // maybe some pending command chars - retry later\r\n   fRd.Reset;\r\n-  rtsp := fOwner.ConnectionFindAndLock(fRtspTag, cReadOnly);\r\n+  // no ConnectionLock here: a failing WriteString() calls ConnectionDelete()\r\n+  rtsp := fOwner.ConnectionFind(fRtspTag);\r\n   if rtsp <> nil then\r\n-  try\r\n+  begin\r\n     fOwner.WriteString(rtsp, decoded); // async sending to RTSP server\r\n     fOwner.LogClass.Add.Log(sllDebug, 'OnRead % POST forwarded RTSP command [%]',\r\n       [Handle, decoded], self);\r\n-  finally\r\n-    fOwner.ConnectionLock.ReadOnlyUnLock;\r\n   end\r\n   else\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.async.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 15,
+          "patch": "@@ -102,6 +102,7 @@   TWebSocketAsyncConnection = class(THttpAsyncServerConnection)\n     // called every 10 seconds to check against HeartbeatDelay and send ping\r\n     function OnLastOperationIdle(nowsec: TAsyncConnectionSec): boolean; override;\r\n     // used e.g. by TWebSocketAsyncServer.WebSocketBroadcast\r\n+    // - never called within ConnectionLock: Write() may call ConnectionDelete()\r\n     function SendDirect(const tmp: TSynTempBuffer;\r\n       opcode: TWebSocketFrameOpCode; timeout: integer): boolean;\r\n   public\r\n@@ -378,7 +379,6 @@ function TWebSocketAsyncConnection.SendDirect(const tmp: TSynTempBuffer;\n     result := false\r\n   else\r\n   begin\r\n-    // use timeout=0 since WebSocketBroadcast() has a connection lock\r\n     result := fOwner.Write(self, tmp.buf, tmp.len, timeout);\r\n     if result and\r\n        (opcode = focConnectionClose) then\r\n@@ -699,31 +699,39 @@ function TWebSocketAsyncServer.WebSocketBroadcast(const aFrame: TWebSocketFrame;\n   const aClientsConnectionID: THttpServerConnectionIDDynArray;\r\n   aTimeOut: integer): integer;\r\n var\r\n-  i: PtrInt;\r\n+  i, n: PtrInt;\r\n   tmp: TSynTempBuffer;\r\n+  ids: THttpServerConnectionIDDynArray;\r\n begin\r\n   result := 0;\r\n   if Terminated or\r\n      (fAsync = nil) or\r\n      not (aFrame.opcode in [focText, focBinary, focConnectionClose]) then\r\n     exit;\r\n+  ids := aClientsConnectionID;\r\n+  if ids = nil then\r\n+  begin\r\n+    // broadcast to all connected clients: get their handles within the lock\r\n+    fAsync.ConnectionLock.ReadOnlyLock;\r\n+    try\r\n+      n := fAsync.ConnectionCount;\r\n+      SetLength(ids, n);\r\n+      for i := 0 to n - 1 do\r\n+        ids[i] := fAsync.Connection[i].Handle;\r\n+    finally\r\n+      fAsync.ConnectionLock.ReadOnlyUnLock;\r\n+    end;\r\n+  end;\r\n+  if ids = nil then\r\n+    exit; // no connection\r\n+  // send outside the lock: a failing Write() calls ConnectionDelete() -> WriteLock\r\n   FrameSendEncode(aFrame, {mask=}0, tmp);\r\n-  fAsync.ConnectionLock.ReadOnlyLock;\r\n   try\r\n     // use TWebSocketAsyncConnection.SendDirect for non-blocking socket sending\r\n-    if aClientsConnectionID = nil then\r\n-      // broadcast to all connected clients\r\n-      for i := 0 to fAsync.ConnectionCount - 1 do\r\n-        inc(result, ord(TWebSocketAsyncConnection(fAsync.Connection[i]).\r\n-           SendDirect(tmp, aFrame.opcode, aTimeOut)))\r\n-    else\r\n-      // broadcast to some specified connected clients, using O(log(n)) search\r\n-      for i := 0 to length(aClientsConnectionID) - 1 do\r\n-        inc(result, ord(TWebSocketAsyncConnection(\r\n-          fAsync.LockedConnectionSearch(aClientsConnectionID[i])).\r\n-            SendDirect(tmp, aFrame.opcode, aTimeOut)));\r\n+    for i := 0 to length(ids) - 1 do\r\n+      inc(result, ord(TWebSocketAsyncConnection(fAsync.ConnectionFind(ids[i])).\r\n+        SendDirect(tmp, aFrame.opcode, aTimeOut))); // O(log(n)) search\r\n   finally\r\n-    fAsync.ConnectionLock.ReadOnlyUnLock;\r\n     tmp.Done;\r\n   end;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 83,
+          "deletions": 0,
+          "patch": "@@ -57,6 +57,7 @@ interface\n   mormot.net.server,\r\n   mormot.net.async,\r\n   mormot.net.ws.core,\r\n+  mormot.net.ws.async,\r\n   mormot.net.openapi,\r\n   mormot.net.ldap,\r\n   mormot.net.dns,\r\n@@ -183,6 +184,8 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure RTSPOverHTTP;\r\n     /// RTSP over HTTP, with always temporary buffering\r\n     procedure RTSPOverHTTPBufferedWrite;\r\n+    /// validate TWebSocketAsyncServer.WebSocketBroadcast with closing peers\r\n+    procedure _TWebSocketAsyncServer;\r\n     /// validate IP processing functions\r\n     procedure IPAddresses;\r\n     /// validate mormot.net.openapi unit\r\n@@ -1011,6 +1014,86 @@ procedure TNetworkProtocols.RTSPOverHTTPBufferedWrite;\n   DoRtspOverHttp(ASYNC_OPTION + [acoWritePollOnly]);\r\n end;\r\n \r\n+type\r\n+  // broadcast frames to all connections, from a background thread\r\n+  TWebSocketBroadcastThread = class(TThread)\r\n+  protected\r\n+    fServer: TWebSocketAsyncServer;\r\n+    fSent: integer;\r\n+    procedure Execute; override;\r\n+  end;\r\n+\r\n+procedure TWebSocketBroadcastThread.Execute;\r\n+var\r\n+  frame: TWebSocketFrame;\r\n+begin\r\n+  frame.opcode := focText;\r\n+  frame.content := [];\r\n+  frame.tix := 0;\r\n+  frame.payload := '{\"ping\":1}';\r\n+  while not Terminated do\r\n+    inc(fSent, fServer.WebSocketBroadcast(frame, nil, 50));\r\n+end;\r\n+\r\n+procedure TNetworkProtocols._TWebSocketAsyncServer;\r\n+var\r\n+  server: TWebSocketAsyncServerRest;\r\n+  bcast: TWebSocketBroadcastThread;\r\n+  client: TCrtSocket;\r\n+  i: PtrInt;\r\n+  wedged: boolean;\r\n+  status: RawUtf8;\r\n+begin\r\n+  // WebSocketBroadcast() used to deadlock when Write() failed on a reset peer\r\n+  server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbroadcast',\r\n+    2, '', '', {ajax=}true, [], TSynLog);\r\n+  bcast := TWebSocketBroadcastThread.Create({suspended=}true);\r\n+  bcast.fServer := server;\r\n+  wedged := false;\r\n+  try\r\n+    server.WaitStarted(10);\r\n+    bcast.Start;\r\n+    for i := 1 to 50 do\r\n+    begin\r\n+      client := TCrtSocket.Open('127.0.0.1', '8897', nlTcp, 5000);\r\n+      try\r\n+        client.SockSend([ // SockSend() appends the final CRLF\r\n+          'GET / HTTP/1.1'#13#10'Host: 127.0.0.1'#13#10,\r\n+          'Upgrade: websocket'#13#10'Connection: Upgrade'#13#10,\r\n+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='#13#10,\r\n+          'Sec-WebSocket-Version: 13'#13#10,\r\n+          'Sec-WebSocket-Protocol: synopsejson'#13#10]);\r\n+        client.SockSendFlush;\r\n+        // a deadlocked server would not answer any new connection\r\n+        try\r\n+          client.SockRecvLn(status); // ENetSock after 5 seconds if wedged\r\n+        except\r\n+          on E: ENetSock do\r\n+          begin\r\n+            wedged := E.LastError = nrTimeout; // can't release a wedged server\r\n+            StringToUtf8(E.Message, status);\r\n+          end;\r\n+        end;\r\n+        if not CheckUtf8(IdemPChar(pointer(status), 'HTTP/1.1 101'),\r\n+                 'upgrade %', [status]) then\r\n+          break;\r\n+        // close with unread frames: RST so that the next server Write() fails\r\n+        client.SockReceivePending(1000); // wait for a broadcasted frame\r\n+        client.Sock.SetLinger(0);\r\n+      finally\r\n+        client.Free;\r\n+      end;\r\n+    end;\r\n+    Check(bcast.fSent > 0, 'sent');\r\n+  finally\r\n+    if not wedged then\r\n+    begin\r\n+      bcast.Free; // Terminate + WaitFor\r\n+      server.Free;\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n function TNetworkProtocols.DoRequest_(Ctxt: THttpServerRequestAbstract): cardinal;\r\n begin\r\n   reqone := Ctxt['one'];\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.rtsphttp",
+        "mormot.net.ws.async"
+      ],
+      "pr": 629,
+      "is_merge": true
+    },
+    {
+      "sha": "e27981992682c0046fe93db659bfa2b850c1d5f1",
+      "short_sha": "e2798199",
+      "subject": "core: preliminary exception logging on Delphi POSIX",
+      "body": "- intercept via the RaiseExceptObjProc global variable",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T12:16:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e27981992682c0046fe93db659bfa2b850c1d5f1",
+      "parents": [
+        "b6de95bfd8d71bb3e1190479c9126c8bd36fa56a"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 3,
+          "patch": "@@ -1656,11 +1656,16 @@ end;\n {$ifndef NOEXCEPTIONINTERCEPT}\r\n \r\n var\r\n+  // RaiseProc/RaiseExceptObjProc redirection in the main mormot.core.os.pas\r\n   _RawLogException: TOnRawLogException;\r\n \r\n-// FPC: intercept via the RaiseProc global variable; Delphi: nothing yet\r\n-{$define WITH_RAISEPROC}\r\n-// RaiseProc redirection is implemented in the main mormot.core.os.pas\r\n+{$ifdef FPC}\r\n+  // FPC: intercept via the RaiseProc global variable\r\n+  {$define WITH_RAISEPROC}\r\n+{$else}\r\n+  // Delphi POSIX: intercept via the RaiseExceptObjProc global variable\r\n+  {$define WITH_RAISEEXCEPTOBJPROC}\r\n+{$endif FPC}\r\n \r\n {$endif NOEXCEPTIONINTERCEPT}\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17303\n+17304",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17303'\r\n+'2.4.17304'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -579,6 +579,7 @@\n       http://blog.synopse.info/post/2011/01/29/record-and-object-issue-in-Delphi-2010 }\r\n     {$define UNDIRECTDYNARRAY}\r\n     {$define HASTTHREADFINISHED}    // Delphi 2009 introduced TThread.Finished\r\n+    {$define HASRAISEEXCEPTOBJPROC} // Delphi 2009+ RaiseExceptObjProc() global\r\n   {$else}\r\n     {$define HASNOSTATICRTTI}        // Delphi 7/2007 has no TypeInfo(TGuid)\r\n   {$endif UNICODE}\r\n@@ -826,7 +827,6 @@\n   {$else}\r\n     {$define POSIXDELPHI}\r\n     {$define NOASMBLOCK}             // no \"asm\" block support by LLVM compilers\r\n-    {$define NOEXCEPTIONINTERCEPT}   // TODO: interception for Delphi POSIX\r\n     {$ifdef CPUX64}\r\n       {$define DISPINVOKE_SYSVAMD64} // use SysV AMD64 va_list layout\r\n     {$endif CPUX64}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Other"
+      ],
+      "units": [
+        "mormot.core.os.posix",
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b6de95bfd8d71bb3e1190479c9126c8bd36fa56a",
+      "short_sha": "b6de95bf",
+      "subject": "core: refined Delphi exception logging",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T12:08:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b6de95bfd8d71bb3e1190479c9126c8bd36fa56a",
+      "parents": [
+        "128e713458f62ea22bbcd4b80334d7fcfb120527"
+      ],
+      "stats": {
+        "additions": 56,
+        "deletions": 40,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 6,
+          "patch": "@@ -8765,12 +8765,13 @@ procedure AppendKb(Size: Int64; var Dest: ShortString; WithSpace: boolean);\n {$ifdef WITH_RAISEPROC} // for FPC on Win32 + Linux (Win64=WITH_VECTOREXCEPT)\r\n var\r\n   OldRaiseProc: TExceptProc;\r\n+{$endif WITH_RAISEPROC}\r\n \r\n-procedure SynRaiseProc(Obj: TObject; Addr: CodePointer;\r\n-  FrameCount: integer; Frame: PCodePointer);\r\n+procedure SynRaiseProc(Obj: TObject; Addr: pointer;\r\n+  FrameCount: integer = 0; Frame: pointer = nil);\r\n var\r\n   ctxt: TSynLogExceptionContext;\r\n-  backuplasterror: DWord;\r\n+  backuplasterror: integer;\r\n begin\r\n   if (Obj <> nil) and\r\n      Obj.InheritsFrom(Exception) and\r\n@@ -8784,20 +8785,41 @@ procedure SynRaiseProc(Obj: TObject; Addr: CodePointer;\n       if Obj.InheritsFrom(EExternal) then // e.g. EDivByZero or EMathError\r\n         ctxt.ELevel := sllExceptionOS\r\n       else\r\n-        ctxt.ELevel := sllException; // regular \"raise\" exception\r\n-      ctxt.ETimestamp := UnixTimeUtc;\r\n-      ctxt.EStack := pointer(Frame);\r\n+        ctxt.ELevel := sllException;      // regular \"raise\" exception\r\n+      ctxt.EStack := Frame;\r\n       ctxt.EStackCount := FrameCount;\r\n+      ctxt.ETimestamp := UnixTimeUtc;     // the fastest API call possible\r\n       _RawLogException(ctxt); // e.g. SynLogException() from mormot.core.log\r\n     except\r\n       { ignore any nested exception }\r\n     end;\r\n     SetLastError(backuplasterror); // may have changed above\r\n   end;\r\n+  {$ifdef WITH_RAISEPROC}\r\n   if Assigned(OldRaiseProc) then\r\n     OldRaiseProc(Obj, Addr, FrameCount, Frame);\r\n+  {$endif WITH_RAISEPROC}\r\n end;\r\n \r\n+{$ifndef WITH_RAISEPROC}\r\n+{$ifdef WITH_RAISEEXCEPTOBJPROC} // Delphi 2009+ Delphi Exceptions interceptor\r\n+var\r\n+  OldRaiseExceptObjProc: procedure(P: PExceptionRecord);\r\n+\r\n+procedure SynRaiseExceptObj(P: PExceptionRecord);\r\n+begin\r\n+  // preserve SysUtils.Exception.RaisingException(), third-party hooks, etc.\r\n+  if Assigned(OldRaiseExceptObjProc) then\r\n+    OldRaiseExceptObjProc(P);\r\n+  if (P <> nil) and\r\n+     Assigned(_RawLogException) then\r\n+    {$ifdef OSWINDOWS}\r\n+    SynRaiseProc(P^.ExceptObject, pointer(P^.ExceptAddr));\r\n+    {$else} // modern Delphi LLVM ZCX/SJLJ targets left Addr unset with garbage\r\n+    SynRaiseProc(P^.ExceptObject, nil);\r\n+    {$endif OSWINDOWS}\r\n+end;\r\n+{$endif WITH_RAISEEXCEPTOBJPROC}\r\n {$endif WITH_RAISEPROC}\r\n \r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 32,
+          "patch": "@@ -1908,7 +1908,7 @@ var\n   _RawLogException: TOnRawLogException;\r\n \r\n {$ifdef CPU64}\r\n-  {$define WITH_VECTOREXCEPT} // Win64 SEH AddVectoredExceptionHandler API\r\n+  {$define WITH_VECTOREXCEPT}     // Win64 SEH AddVectoredExceptionHandler API\r\n {$else}\r\n   {$ifdef FPC}\r\n     {$ifdef FPC_USE_WIN32_SEH}\r\n@@ -1917,12 +1917,12 @@ var\n       {$define WITH_RAISEPROC}    // RaiseProc is set in main mormot.core.os.pas\r\n     {$endif FPC_USE_WIN32_SEH}\r\n   {$else}\r\n-    {$define WITH_RTLUNWINDPROC}        // global raw i386 asm on Delphi Win32\r\n-    {$ifdef UNICODE}                    // Delphi 2009+ new global variable\r\n-      {$define WITH_RAISEEXCEPTOBJPROC} // cleaner support of Delphi exceptions\r\n-    {$endif UNICODE}\r\n+    {$define WITH_RTLUNWINDPROC}  // global raw i386 asm on Delphi Win32\r\n   {$endif FPC}\r\n {$endif CPU64}\r\n+{$ifdef HASRAISEEXCEPTOBJPROC}    // Delphi 2009+ new global variable\r\n+  {$define WITH_RAISEEXCEPTOBJPROC} // direct support of Delphi exceptions\r\n+{$endif HASRAISEEXCEPTOBJPROC}      // (also with WITH_VECTOREXCEPT)\r\n \r\n {$ifndef KEEP_STACKFRAMES}\r\n {$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\r\n@@ -1947,13 +1947,14 @@ type\n         (ExceptAddr: PtrUInt;\r\n          ExceptObject: Exception);\r\n   end;\r\n-  GetExceptionClass = function(const P: TExceptionRecord): ExceptClass;\r\n+  TOnGetExceptionClass = function(const P: TExceptionRecord): ExceptClass;\r\n \r\n const\r\n   {$ifdef FPC}\r\n-  cRtlException = $E0465043; // $E0 F P C\r\n+  cRtlException  = $E0465043; // $E0 F P C\r\n   {$else}\r\n-  cRtlException = $0EEDFADE; // Delphi exception\r\n+  cRtlException  = $0EEDFADE; // Delphi exception\r\n+  cLastException = $0EEDFAE5; // Delphi last fake exception (cDelphiExitFinally)\r\n   {$endif FPC}\r\n \r\n procedure LogExcept(stack: PPtrUInt; const Exc: TExceptionRecord);\r\n@@ -1962,6 +1963,10 @@ var\n   backuplasterror: DWord;\r\n begin\r\n   if (Exc.ExceptionCode = cSetThreadNameException) or\r\n+     {$ifdef ISDELPHI}\r\n+     ((Exc.ExceptionCode > cRtlException) and\r\n+      (Exc.ExceptionCode <= cLastException)) or\r\n+     {$endif ISDELPHI}\r\n      not Assigned(_RawLogException) then\r\n     exit;\r\n   backuplasterror := GetLastError;\r\n@@ -1995,7 +2000,7 @@ begin\n     begin\r\n       {$ifndef LLVM}\r\n       if Assigned(ExceptClsProc) then\r\n-        ctxt.EClass := GetExceptionClass(ExceptClsProc)(Exc)\r\n+        ctxt.EClass := TOnGetExceptionClass(ExceptClsProc)(Exc)\r\n       else\r\n       {$endif LLVM}\r\n         ctxt.EClass := EExternal;\r\n@@ -2033,7 +2038,10 @@ function AddVectoredExceptionHandler(FirstHandler: cardinal;\n function SynLogVectoredHandler(ExceptionInfo: PExceptionInfo): PtrInt; stdcall;\r\n begin\r\n   if Assigned(_RawLogException) then\r\n-    LogExcept(nil, ExceptionInfo^.ExceptionRecord^);\r\n+    {$ifdef WITH_RAISEEXCEPTOBJPROC}\r\n+    if ExceptionInfo^.ExceptionRecord^.ExceptionCode <> cRtlException then\r\n+    {$endif WITH_RAISEEXCEPTOBJPROC}\r\n+      LogExcept(nil, ExceptionInfo^.ExceptionRecord^);\r\n   result := EXCEPTION_CONTINUE_SEARCH;\r\n end;\r\n \r\n@@ -2057,37 +2065,23 @@ asm\n         mov     edx, ExceptionRecord\r\n         test    edx, edx\r\n         jz      @done\r\n-        {$ifdef WITH_RAISEEXCEPTOBJPROC}\r\n-        cmp     dword ptr [edx].TExceptionRecord.ExceptionCode, cRtlException\r\n-        je      @done // RaiseExceptObjProc did handle Delphi exceptions\r\n-        {$endif WITH_RAISEEXCEPTOBJPROC}\r\n+        {$ifdef WITH_RAISEEXCEPTOBJPROC} // duplicate no RaiseExceptObjProc\r\n+        mov     eax, dword ptr [edx].TExceptionRecord.ExceptionCode\r\n+        cmp     eax, cRtlException\r\n+        jb      @ok\r\n+        cmp     eax, cLastException\r\n+        jbe     @done                    // internal Delphi fake exceptions\r\n+@ok:    {$endif WITH_RAISEEXCEPTOBJPROC}\r\n         mov     eax, TargetFrame\r\n         mov     edx, ExceptionRecord\r\n         call    LogExcept\r\n @done:  popad\r\n-@old:   pop     ebp // hidden push ebp at asm level\r\n+@old:   pop     ebp                      // hidden push ebp at asm level\r\n   \n... [truncated, 634 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17302\n+17303",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17302'\r\n+'2.4.17303'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "128e713458f62ea22bbcd4b80334d7fcfb120527",
+      "short_sha": "128e7134",
+      "subject": "core: fixed SynLogException() with Ctxt.EAddr = 0",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T12:06:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/128e713458f62ea22bbcd4b80334d7fcfb120527",
+      "parents": [
+        "6b486e00b182cf114ef7f44e4dc7b385fa2e8c22"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -7481,7 +7481,7 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n     if DefaultSynLogExceptionToStr(log.fWriter, Ctxt, {addinfo=}true) then\n       goto fin;\n adr:// regular exception context log with its stack trace\n-    log.fWriter.AddDirect(' ', '['); // [#1 Main]\n+    log.fWriter.AddShort(' ['); // [#1 Main] with safe AddDirect() calls\n     n := nfo^.ThreadNumber;\n     if n <> 0 then\n     begin\n@@ -7493,9 +7493,14 @@ procedure SynLogException(const Ctxt: TSynLogExceptionContext);\n       log.fWriter.AddDirect(' ');\n       log.fWriter.AddShort(thrdnam^); // fThreadContext^.ThreadName may be ''\n     end;\n-    log.fWriter.AddShorter('] at ');\n-    log.fWriter.AddPointer(Ctxt.EAddr);\n-    log.fWriter.AddDirect(' ');\n+    if Ctxt.EAddr = 0 then            // may happen e.g. with Delphi LLVM\n+      log.fWriter.AddDirect(']', ' ')\n+    else\n+    begin\n+      log.fWriter.AddShorter('] at ');\n+      log.fWriter.AddPointer(Ctxt.EAddr);\n+      log.fWriter.AddDirect(' ');\n+    end;\n     try\n       DebugFileCurrent.AddLog(log.fWriter, Ctxt.EAddr, {nohex=}true);\n       for i := 0 to framescount - 1 do // append pre-computed stack trace",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17301\n+17302",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17301'\r\n+'2.4.17302'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6b486e00b182cf114ef7f44e4dc7b385fa2e8c22",
+      "short_sha": "6b486e00",
+      "subject": "core: fixed Exception diseappearing in logs on multi-thread process :(",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T10:05:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6b486e00b182cf114ef7f44e4dc7b385fa2e8c22",
+      "parents": [
+        "0a512f588b405951e5ddfa52785ea0d2d13dfec6"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 17,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 3,
+          "patch": "@@ -3115,10 +3115,13 @@   TSynLogExceptionContext = record\n \r\n   /// the global function signature expected by RawExceptionIntercept()\r\n   // - assigned e.g. to SynLogException() in mormot.core.log.pas\r\n+  // - warning: the function should ignore any potential nested call, as\r\n+  // SynLogException() does with PerThreadInfo.ExceptionIgnore\r\n   TOnRawLogException = procedure(const Ctxt: TSynLogExceptionContext);\r\n \r\n /// setup Exception interception for the whole process\r\n // - the first to call this procedure will be elected until the process ending\r\n+// - RawExceptionIntercept(nil) would disable any existing interception function\r\n // - returns true on success, false if there is already an handler\r\n function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\r\n \r\n@@ -8786,9 +8789,6 @@ procedure SynRaiseProc(Obj: TObject; Addr: CodePointer;\n       ctxt.EStack := pointer(Frame);\r\n       ctxt.EStackCount := FrameCount;\r\n       _RawLogException(ctxt); // e.g. SynLogException() from mormot.core.log\r\n-      // note that SynLogException() will use PerThreadInfo.ExceptionIgnore\r\n-      // to avoid recursive exception loggin: _RawLogException should not be set\r\n-      // to nil or exceptions on concurrent threads would not be logged\r\n     except\r\n       { ignore any nested exception }\r\n     end;\r\n@@ -8803,6 +8803,10 @@ procedure SynRaiseProc(Obj: TObject; Addr: CodePointer;\n var\r\n   RawExceptionIntercepted: boolean; // single global Exception interception\r\n \r\n+// note that SynLogException() will use PerThreadInfo.ExceptionIgnore to avoid\r\n+// recursive exception logging: global _RawLogException should not be set\r\n+// temporarly to nil or exceptions on concurrent threads would not be logged\r\n+\r\n function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\r\n begin\r\n   result := false;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1658,9 +1658,9 @@ end;\n var\r\n   _RawLogException: TOnRawLogException;\r\n \r\n-// FPC: intercept via the RaiseProc global variable\r\n+// FPC: intercept via the RaiseProc global variable; Delphi: nothing yet\r\n {$define WITH_RAISEPROC}\r\n-// RaiseProc redirection is implemented in main mormot.core.os.pas\r\n+// RaiseProc redirection is implemented in the main mormot.core.os.pas\r\n \r\n {$endif NOEXCEPTIONINTERCEPT}\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 8,
+          "patch": "@@ -1928,7 +1928,9 @@ var\n {$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\r\n {$endif KEEP_STACKFRAMES}\r\n \r\n-{$ifndef WITH_RAISEPROC}\r\n+{$ifdef WITH_RAISEPROC}\r\n+  // RaiseProc redirection is implemented in the main mormot.core.os.pas\r\n+{$else}\r\n \r\n type\r\n   PExceptionRecord = ^TExceptionRecord;\r\n@@ -1958,14 +1960,11 @@ procedure LogExcept(stack: PPtrUInt; const Exc: TExceptionRecord);\n var\r\n   ctxt: TSynLogExceptionContext;\r\n   backuplasterror: DWord;\r\n-  backuphandler: TOnRawLogException;\r\n begin\r\n-  if Exc.ExceptionCode = cSetThreadNameException then\r\n+  if (Exc.ExceptionCode = cSetThreadNameException) or\r\n+     not Assigned(_RawLogException) then\r\n     exit;\r\n   backuplasterror := GetLastError;\r\n-  backuphandler := _RawLogException;\r\n-  _RawLogException := nil; // disable nested exception at API level\r\n-  if Assigned(backuphandler) then // paranoid check (tested before calling)\r\n   try\r\n     ctxt.EStack := pointer(stack); // for manual unwinding on Delphi x86\r\n     ctxt.EStackCount := 0;\r\n@@ -2005,11 +2004,10 @@ begin\n       ctxt.EAddr := Exc.ExceptionAddress;\r\n     end;\r\n     ctxt.ETimestamp := UnixTimeUtc; // the fastest API call possible\r\n-    backuphandler(ctxt);\r\n+    _RawLogException(ctxt);\r\n   except\r\n     { ignore any nested exception }\r\n   end;\r\n-  _RawLogException := backuphandler;\r\n   SetLastError(backuplasterror); // code above could have changed this\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17300\n+17301",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17300'\r\n+'2.4.17301'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -7091,9 +7091,8 @@ procedure TRunCase.Execute;\n   raw: PCCERT_CONTEXT;\r\n   connected: boolean;\r\n   log: ISynLog;\r\n-  l: TSynLog;\r\n begin\r\n-  l := TSynLog.EnterLocal(log, 'Execute %', [Port], self);\r\n+  TSynLog.EnterLocal(log, 'Execute %', [Port], self);\r\n   cafile := '';\r\n   keyfile := '';\r\n   raw := nil;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0a512f588b405951e5ddfa52785ea0d2d13dfec6",
+      "short_sha": "0a512f58",
+      "subject": "core: fixed duplicate Exception logging on Delphi Win32",
+      "body": "- use the Delphi 2009+ global variable interceptor",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T09:24:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0a512f588b405951e5ddfa52785ea0d2d13dfec6",
+      "parents": [
+        "b60779e1dfa74111a3130de094f3f45ba4c6cb7e"
+      ],
+      "stats": {
+        "additions": 51,
+        "deletions": 23,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 4,
+          "patch": "@@ -8813,8 +8813,7 @@ function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\n        not Assigned(Handler) then\r\n       exit;\r\n     RawExceptionIntercepted := true; // intercept once\r\n-    {$ifdef WITH_RAISEPROC}\r\n-    // FPC RTL redirection function\r\n+    {$ifdef WITH_RAISEPROC} // FPC RTL redirection function\r\n     if not Assigned(OldRaiseProc) then\r\n     begin\r\n       OldRaiseProc := RaiseProc;\r\n@@ -8830,15 +8829,22 @@ function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\n       result := true;\r\n     end;\r\n     {$endif WITH_VECTOREXCEPT}\r\n-    {$ifdef WITH_RTLUNWINDPROC}\r\n-    // Delphi x86 RTL redirection function\r\n+    {$ifdef WITH_RTLUNWINDPROC} // oldest Delphi x86 RTL redirection function\r\n     if not Assigned(OldUnWindProc) then\r\n     begin\r\n       OldUnWindProc := RTLUnwindProc;\r\n       RTLUnwindProc := @SynRtlUnwind;\r\n       result := true;\r\n     end;\r\n     {$endif WITH_RTLUNWINDPROC}\r\n+    {$ifdef WITH_RAISEEXCEPTOBJPROC} // Delphi 2009+ Win32 redirection function\r\n+    if not Assigned(OldRaiseExceptObjProc) then\r\n+    begin\r\n+      OldRaiseExceptObjProc := RaiseExceptObjProc;\r\n+      RaiseExceptObjProc := @SynRaiseExceptObj;\r\n+      result := true;\r\n+    end;\r\n+    {$endif WITH_RAISEEXCEPTOBJPROC}\r\n   finally\r\n     GlobalUnLock;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 17,
+          "patch": "@@ -1907,24 +1907,22 @@ end;\n var\r\n   _RawLogException: TOnRawLogException;\r\n \r\n-{$ifdef FPC}\r\n-  {$ifdef WIN64}\r\n-    {$define WITH_VECTOREXCEPT} // use AddVectoredExceptionHandler Win64 API\r\n-  {$else}\r\n+{$ifdef CPU64}\r\n+  {$define WITH_VECTOREXCEPT} // Win64 SEH AddVectoredExceptionHandler API\r\n+{$else}\r\n+  {$ifdef FPC}\r\n     {$ifdef FPC_USE_WIN32_SEH}\r\n-      {$define WITH_VECTOREXCEPT} // new since FPC 3.2\r\n-    {$else}\r\n-      // Win32, Linux: intercept via the RaiseProc global variable\r\n-      {$define WITH_RAISEPROC} // RaiseProc is set in main mormot.core.os.pas\r\n+      {$define WITH_VECTOREXCEPT} // Win32 SEH since FPC 3.2\r\n+    {$else}                       // Win32 < FPC 3.2, Linux/POSIX\r\n+      {$define WITH_RAISEPROC}    // RaiseProc is set in main mormot.core.os.pas\r\n     {$endif FPC_USE_WIN32_SEH}\r\n-  {$endif WIN64}\r\n-{$else}\r\n-  {$ifdef CPU64}\r\n-    {$define WITH_VECTOREXCEPT}\r\n   {$else}\r\n-    {$define WITH_RTLUNWINDPROC} //  use x86_64 asm on Delphi Win32\r\n-  {$endif CPU64}\r\n-{$endif FPC}\r\n+    {$define WITH_RTLUNWINDPROC}        // global raw i386 asm on Delphi Win32\r\n+    {$ifdef UNICODE}                    // Delphi 2009+ new global variable\r\n+      {$define WITH_RAISEEXCEPTOBJPROC} // cleaner support of Delphi exceptions\r\n+    {$endif UNICODE}\r\n+  {$endif FPC}\r\n+{$endif CPU64}\r\n \r\n {$ifndef KEEP_STACKFRAMES}\r\n {$STACKFRAMES ON} // we need {$W+} stack frame for the backtrace API calls below\r\n@@ -2047,7 +2045,7 @@ end;\n {$STACKFRAMES OFF} // back to {$W-} normal state, as in mormot.defines.inc\r\n {$endif KEEP_STACKFRAMES}\r\n \r\n-{$ifdef WITH_RTLUNWINDPROC}\r\n+{$ifdef WITH_RTLUNWINDPROC} // Delphi Win32 general exception interceptor\r\n \r\n var\r\n   OldUnWindProc: pointer;\r\n@@ -2058,16 +2056,40 @@ asm\n         cmp     dword ptr _RawLogException, 0\r\n         jz      @old\r\n         pushad\r\n+        mov     edx, ExceptionRecord\r\n+        test    edx, edx\r\n+        jz      @done\r\n+        {$ifdef WITH_RAISEEXCEPTOBJPROC}\r\n+        cmp     dword ptr [edx].TExceptionRecord.ExceptionCode, cRtlException\r\n+        je      @done // RaiseExceptObjProc did handle Delphi exceptions\r\n+        {$endif WITH_RAISEEXCEPTOBJPROC}\r\n         mov     eax, TargetFrame\r\n         mov     edx, ExceptionRecord\r\n         call    LogExcept\r\n-        popad\r\n+@done:  popad\r\n @old:   pop     ebp // hidden push ebp at asm level\r\n         jmp     OldUnWindProc\r\n end;\r\n \r\n {$endif WITH_RTLUNWINDPROC}\r\n \r\n+{$ifdef WITH_RAISEEXCEPTOBJPROC} // Delphi 2009+ Delphi Exceptions interceptor\r\n+\r\n+var\r\n+  OldRaiseExceptObjProc: procedure(P: PExceptionRecord);\r\n+\r\n+procedure SynRaiseExceptObj(P: PExceptionRecord);\r\n+begin\r\n+  // preserve SysUtils.Exception.RaisingException(), third-party hooks, etc.\r\n+  if Assigned(OldRaiseExceptObjProc) then\r\n+    OldRaiseExceptObjProc(P);\r\n+  if Assigned(_RawLogException) and\r\n+     (P <> nil) then\r\n+    LogExcept(nil, P^);\r\n+end;\r\n+\r\n+{$endif WITH_RAISEEXCEPTOBJPROC}\r\n+\r\n {$endif WITH_RAISEPROC}\r\n \r\n {$endif NOEXCEPTIONINTERCEPT}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17299\n+17300",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17299'\r\n+'2.4.17300'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c0f6defb447687f1a80cbba22fdf1a919e6f7bc5",
+      "short_sha": "c0f6defb",
+      "subject": "test: new TNetworkProtocols._TWebSocketAsyncServer regression test",
+      "body": "- broadcast to clients which reset their connection, as in the WebSocketBroadcast deadlock\n- a deadlock is reported as a failed assertion, and the wedged server is leaked on purpose",
+      "author": "je",
+      "date": "2026-10-01T09:21:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c0f6defb447687f1a80cbba22fdf1a919e6f7bc5",
+      "parents": [
+        "a1c8844a2817c2950119760dbc645b560d967121"
+      ],
+      "stats": {
+        "additions": 83,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 83,
+          "deletions": 0,
+          "patch": "@@ -57,6 +57,7 @@ interface\n   mormot.net.server,\r\n   mormot.net.async,\r\n   mormot.net.ws.core,\r\n+  mormot.net.ws.async,\r\n   mormot.net.openapi,\r\n   mormot.net.ldap,\r\n   mormot.net.dns,\r\n@@ -191,6 +192,8 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure RTSPOverHTTP;\r\n     /// RTSP over HTTP, with always temporary buffering\r\n     procedure RTSPOverHTTPBufferedWrite;\r\n+    /// validate TWebSocketAsyncServer.WebSocketBroadcast with closing peers\r\n+    procedure _TWebSocketAsyncServer;\r\n     /// validate IP processing functions\r\n     procedure IPAddresses;\r\n     /// validate mormot.net.openapi unit\r\n@@ -1019,6 +1022,86 @@ procedure TNetworkProtocols.RTSPOverHTTPBufferedWrite;\n   DoRtspOverHttp(ASYNC_OPTION + [acoWritePollOnly]);\r\n end;\r\n \r\n+type\r\n+  // broadcast frames to all connections, from a background thread\r\n+  TWebSocketBroadcastThread = class(TThread)\r\n+  protected\r\n+    fServer: TWebSocketAsyncServer;\r\n+    fSent: integer;\r\n+    procedure Execute; override;\r\n+  end;\r\n+\r\n+procedure TWebSocketBroadcastThread.Execute;\r\n+var\r\n+  frame: TWebSocketFrame;\r\n+begin\r\n+  frame.opcode := focText;\r\n+  frame.content := [];\r\n+  frame.tix := 0;\r\n+  frame.payload := '{\"ping\":1}';\r\n+  while not Terminated do\r\n+    inc(fSent, fServer.WebSocketBroadcast(frame, nil, 50));\r\n+end;\r\n+\r\n+procedure TNetworkProtocols._TWebSocketAsyncServer;\r\n+var\r\n+  server: TWebSocketAsyncServerRest;\r\n+  bcast: TWebSocketBroadcastThread;\r\n+  client: TCrtSocket;\r\n+  i: PtrInt;\r\n+  wedged: boolean;\r\n+  status: RawUtf8;\r\n+begin\r\n+  // WebSocketBroadcast() used to deadlock when Write() failed on a reset peer\r\n+  server := TWebSocketAsyncServerRest.Create('8897', nil, nil, 'wsbroadcast',\r\n+    2, '', '', {ajax=}true, [], TSynLog);\r\n+  bcast := TWebSocketBroadcastThread.Create({suspended=}true);\r\n+  bcast.fServer := server;\r\n+  wedged := false;\r\n+  try\r\n+    server.WaitStarted(10);\r\n+    bcast.Start;\r\n+    for i := 1 to 50 do\r\n+    begin\r\n+      client := TCrtSocket.Open('127.0.0.1', '8897', nlTcp, 5000);\r\n+      try\r\n+        client.SockSend([ // SockSend() appends the final CRLF\r\n+          'GET / HTTP/1.1'#13#10'Host: 127.0.0.1'#13#10,\r\n+          'Upgrade: websocket'#13#10'Connection: Upgrade'#13#10,\r\n+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=='#13#10,\r\n+          'Sec-WebSocket-Version: 13'#13#10,\r\n+          'Sec-WebSocket-Protocol: synopsejson'#13#10]);\r\n+        client.SockSendFlush;\r\n+        // a deadlocked server would not answer any new connection\r\n+        try\r\n+          client.SockRecvLn(status); // ENetSock after 5 seconds if wedged\r\n+        except\r\n+          on E: ENetSock do\r\n+          begin\r\n+            wedged := E.LastError = nrTimeout; // can't release a wedged server\r\n+            StringToUtf8(E.Message, status);\r\n+          end;\r\n+        end;\r\n+        if not CheckUtf8(IdemPChar(pointer(status), 'HTTP/1.1 101'),\r\n+                 'upgrade %', [status]) then\r\n+          break;\r\n+        // close with unread frames: RST so that the next server Write() fails\r\n+        client.SockReceivePending(1000); // wait for a broadcasted frame\r\n+        client.Sock.SetLinger(0);\r\n+      finally\r\n+        client.Free;\r\n+      end;\r\n+    end;\r\n+    Check(bcast.fSent > 0, 'sent');\r\n+  finally\r\n+    if not wedged then\r\n+    begin\r\n+      bcast.Free; // Terminate + WaitFor\r\n+      server.Free;\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n function TNetworkProtocols.DoRequest_(Ctxt: THttpServerRequestAbstract): cardinal;\r\n begin\r\n   reqone := Ctxt['one'];\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a1c8844a2817c2950119760dbc645b560d967121",
+      "short_sha": "a1c8844a",
+      "subject": "net: fixed TPostConnection.OnRead holding ConnectionLock during WriteString()",
+      "body": "- same deadlock pattern as WebSocketBroadcast: use ConnectionFind() instead of ConnectionFindAndLock()",
+      "author": "je",
+      "date": "2026-10-01T09:21:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a1c8844a2817c2950119760dbc645b560d967121",
+      "parents": [
+        "fd8b176fc64b71f6a308365e7465d3778175d878"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.rtsphttp.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -174,14 +174,13 @@ function TPostConnection.OnRead: TPollAsyncSocketOnReadWrite;\n   if decoded = '' then\r\n     exit; // maybe some pending command chars - retry later\r\n   fRd.Reset;\r\n-  rtsp := fOwner.ConnectionFindAndLock(fRtspTag, cReadOnly);\r\n+  // no ConnectionLock here: a failing WriteString() calls ConnectionDelete()\r\n+  rtsp := fOwner.ConnectionFind(fRtspTag);\r\n   if rtsp <> nil then\r\n-  try\r\n+  begin\r\n     fOwner.WriteString(rtsp, decoded); // async sending to RTSP server\r\n     fOwner.LogClass.Add.Log(sllDebug, 'OnRead % POST forwarded RTSP command [%]',\r\n       [Handle, decoded], self);\r\n-  finally\r\n-    fOwner.ConnectionLock.ReadOnlyUnLock;\r\n   end\r\n   else\r\n   begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.rtsphttp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fd8b176fc64b71f6a308365e7465d3778175d878",
+      "short_sha": "fd8b176f",
+      "subject": "net: fixed TWebSocketAsyncServer.WebSocketBroadcast deadlock when a send fails",
+      "body": "- the connection handles are now retrieved within ConnectionLock, and the frames are sent outside of it via ConnectionFind()\n- a failing Write() calls ConnectionDelete() and its WriteLock on the same TRWLock, which can't be upgraded from a ReadOnlyLock\n- document this constraint on ConnectionFindAndLock(), Connection[] and SendDirect()",
+      "author": "je",
+      "date": "2026-10-01T09:21:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fd8b176fc64b71f6a308365e7465d3778175d878",
+      "parents": [
+        "840beac7f3176d1bd64933807847071b1f73f0d7"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 15,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -684,6 +684,7 @@   TAsyncConnections = class(TLoggedThread)\n     // - returns nil if the handle was not found\r\n     // - returns the maching instance, and caller should release the main lock as:\r\n     // ! try ... finally UnLock(aLock); end;\r\n+    // - never Write() within a cReadOnly lock: it may need ConnectionDelete()\r\n     function ConnectionFindAndLock(aHandle: TConnectionAsyncHandle;\r\n       aLock: TRWLockContext; aIndex: PInteger = nil): TAsyncConnection;\r\n     /// high-level access to a connection instance, from its handle\r\n@@ -758,6 +759,7 @@   TAsyncConnections = class(TLoggedThread)\n     // ConnectionFindAndLock() high-level function, ot via manual\r\n     // ! ConnectionLock.ReadOnlyLock;\r\n     // ! try ... finally ConnectionLock.ReadOnlyUnLock; end;\r\n+    // - never Write() within ReadOnlyLock: it may need ConnectionDelete()\r\n     property Connection: TAsyncConnectionDynArray\r\n       read fConnection;\r\n     /// access to the R/W lock protecting the Connection[] array\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.async.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 15,
+          "patch": "@@ -102,6 +102,7 @@   TWebSocketAsyncConnection = class(THttpAsyncServerConnection)\n     // called every 10 seconds to check against HeartbeatDelay and send ping\r\n     function OnLastOperationIdle(nowsec: TAsyncConnectionSec): boolean; override;\r\n     // used e.g. by TWebSocketAsyncServer.WebSocketBroadcast\r\n+    // - never called within ConnectionLock: Write() may call ConnectionDelete()\r\n     function SendDirect(const tmp: TSynTempBuffer;\r\n       opcode: TWebSocketFrameOpCode; timeout: integer): boolean;\r\n   public\r\n@@ -378,7 +379,6 @@ function TWebSocketAsyncConnection.SendDirect(const tmp: TSynTempBuffer;\n     result := false\r\n   else\r\n   begin\r\n-    // use timeout=0 since WebSocketBroadcast() has a connection lock\r\n     result := fOwner.Write(self, tmp.buf, tmp.len, timeout);\r\n     if result and\r\n        (opcode = focConnectionClose) then\r\n@@ -699,31 +699,39 @@ function TWebSocketAsyncServer.WebSocketBroadcast(const aFrame: TWebSocketFrame;\n   const aClientsConnectionID: THttpServerConnectionIDDynArray;\r\n   aTimeOut: integer): integer;\r\n var\r\n-  i: PtrInt;\r\n+  i, n: PtrInt;\r\n   tmp: TSynTempBuffer;\r\n+  ids: THttpServerConnectionIDDynArray;\r\n begin\r\n   result := 0;\r\n   if Terminated or\r\n      (fAsync = nil) or\r\n      not (aFrame.opcode in [focText, focBinary, focConnectionClose]) then\r\n     exit;\r\n+  ids := aClientsConnectionID;\r\n+  if ids = nil then\r\n+  begin\r\n+    // broadcast to all connected clients: get their handles within the lock\r\n+    fAsync.ConnectionLock.ReadOnlyLock;\r\n+    try\r\n+      n := fAsync.ConnectionCount;\r\n+      SetLength(ids, n);\r\n+      for i := 0 to n - 1 do\r\n+        ids[i] := fAsync.Connection[i].Handle;\r\n+    finally\r\n+      fAsync.ConnectionLock.ReadOnlyUnLock;\r\n+    end;\r\n+  end;\r\n+  if ids = nil then\r\n+    exit; // no connection\r\n+  // send outside the lock: a failing Write() calls ConnectionDelete() -> WriteLock\r\n   FrameSendEncode(aFrame, {mask=}0, tmp);\r\n-  fAsync.ConnectionLock.ReadOnlyLock;\r\n   try\r\n     // use TWebSocketAsyncConnection.SendDirect for non-blocking socket sending\r\n-    if aClientsConnectionID = nil then\r\n-      // broadcast to all connected clients\r\n-      for i := 0 to fAsync.ConnectionCount - 1 do\r\n-        inc(result, ord(TWebSocketAsyncConnection(fAsync.Connection[i]).\r\n-           SendDirect(tmp, aFrame.opcode, aTimeOut)))\r\n-    else\r\n-      // broadcast to some specified connected clients, using O(log(n)) search\r\n-      for i := 0 to length(aClientsConnectionID) - 1 do\r\n-        inc(result, ord(TWebSocketAsyncConnection(\r\n-          fAsync.LockedConnectionSearch(aClientsConnectionID[i])).\r\n-            SendDirect(tmp, aFrame.opcode, aTimeOut)));\r\n+    for i := 0 to length(ids) - 1 do\r\n+      inc(result, ord(TWebSocketAsyncConnection(fAsync.ConnectionFind(ids[i])).\r\n+        SendDirect(tmp, aFrame.opcode, aTimeOut))); // O(log(n)) search\r\n   finally\r\n-    fAsync.ConnectionLock.ReadOnlyUnLock;\r\n     tmp.Done;\r\n   end;\r\n end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.ws.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b60779e1dfa74111a3130de094f3f45ba4c6cb7e",
+      "short_sha": "b60779e1",
+      "subject": "net: hardened THttpClientWebSockets shutdown",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T08:56:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b60779e1dfa74111a3130de094f3f45ba4c6cb7e",
+      "parents": [
+        "e7c2a1fb1874237d123c1e6bfcb816a8344714b2"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17298\n+17299",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17298'\r\n+'2.4.17299'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -973,13 +973,13 @@ procedure TTunnelLocal.ClosePort;\n         end;\r\n       except\r\n       end;\r\n+    fClosed := true; // before UnLock and SetEvent\r\n   finally\r\n     fSendSafe.UnLock;\r\n   end;\r\n   if Assigned(log) then\r\n     log.Log(sllTrace, 'ClosePort: %', [self]); // final statistics\r\n   fPort := 0;\r\n-  fClosed := true; // before SetEvent\r\n   if fHandshakeEvent <> nil then\r\n     fHandshakeEvent.SetEvent; // release a possible WaitForHandshake()\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -453,7 +453,7 @@ function TWebSocketProcessClient.ComputeContext(\n   RequestProcess := ws.fOnCallbackRequestProcess;\r\n   if Assigned(RequestProcess) then\r\n     result := THttpServerRequest.Create(\r\n-      nil, 0, fOwnerThread, 0, ws.fProcess.Protocol.ConnectionFlags, nil)\r\n+      nil, 0, fOwnerThread, 0, fProtocol.ConnectionFlags, nil)\r\n   else\r\n     result := nil;\r\n end;\r\n@@ -597,7 +597,7 @@ class function THttpClientWebSockets.WebSocketsConnect(const aUri: RawUtf8;\n \r\n destructor THttpClientWebSockets.Destroy;\r\n begin\r\n-  FreeAndNil(fProcess);\r\n+  FreeAndNilSafe(fProcess); // prefer Safe variant here\r\n   inherited;\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel",
+        "mormot.net.ws.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e7c2a1fb1874237d123c1e6bfcb816a8344714b2",
+      "short_sha": "e7c2a1fb",
+      "subject": "net: hardened TTunnelLocal.ClosePort",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T08:49:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e7c2a1fb1874237d123c1e6bfcb816a8344714b2",
+      "parents": [
+        "cc95a9eb117387fa89e2d8e9445a8ca616490cab"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17297\n+17298",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17297'\r\n+'2.4.17298'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -941,8 +941,6 @@ procedure TTunnelLocal.ClosePort;\n begin\r\n   if self = nil then\r\n     exit;\r\n-  if fHandshakeEvent <> nil then\r\n-    fHandshakeEvent.SetEvent; // release a possible WaitForHandshake()\r\n   fLogClass.EnterLocal(log, 'ClosePort %', [fPort], self);\r\n   fSendSafe.Lock; // protect fHandshake+fThread\r\n   try\r\n@@ -981,7 +979,9 @@ procedure TTunnelLocal.ClosePort;\n   if Assigned(log) then\r\n     log.Log(sllTrace, 'ClosePort: %', [self]); // final statistics\r\n   fPort := 0;\r\n-  fClosed := true;\r\n+  fClosed := true; // before SetEvent\r\n+  if fHandshakeEvent <> nil then\r\n+    fHandshakeEvent.SetEvent; // release a possible WaitForHandshake()\r\n end;\r\n \r\n procedure TTunnelLocal.TunnelSend(const aFrame: RawByteString);\r\n@@ -1006,9 +1006,9 @@ procedure TTunnelLocal.TunnelSend(const aFrame: RawByteString);\n       begin\r\n         // received frame with only session (and no payload) to notify as closed\r\n         include(fFlags, fClosePortNotified);\r\n+        fClosed := true; // before SetEvent\r\n         if fHandshakeEvent <> nil then\r\n           fHandshakeEvent.SetEvent;\r\n-        fClosed := true;\r\n         exit;\r\n       end;\r\n       fLogClass.Add.Log(sllTrace, 'TunnelSend: into Handshake queue', self);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cc95a9eb117387fa89e2d8e9445a8ca616490cab",
+      "short_sha": "cc95a9eb",
+      "subject": "test: hardened error catching for SChannel/OpenSSL mTLS",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T08:08:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cc95a9eb117387fa89e2d8e9445a8ca616490cab",
+      "parents": [
+        "840beac7f3176d1bd64933807847071b1f73f0d7"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 14,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -1447,7 +1447,6 @@   TSynLog = class(TObject, ISynLog)\n     // - expects/requires the ISynLog to be a void (=nil) variable on stack\n     // - slightly more efficient - especially on FPC - than plain Enter()\n     // - optionally return the TSynLog instance (or nil) for direct usage\n-    // - optionally return the TSynLog instance (or nil) for direct call\n     // - typical usage is the following, very close to TSynLog.Enter:\n     // ! var logger: ISynLog;\n     // ! begin",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17294\n+17297",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17294'\r\n+'2.4.17297'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 11,
+          "patch": "@@ -74,14 +74,6 @@ interface\n   SYNOPSE_IP = '82.67.73.95'; // the mormot's home in the French mountains :)\r\n \r\n type\r\n-  {$ifdef SCHANNEL_VERIFY}\r\n-  TSChannelTestTrust = (\r\n-    sttFile, sttRaw, sttDefault, sttSystem);\r\n-  TSChannelTestFlags = set of (\r\n-   stfExpected, stfCallbacks, stfRejectEach, stfDisableTls13, stfOneWayTls,\r\n-   stfOpenSslServer, stfEachInvalid);\r\n-  {$endif SCHANNEL_VERIFY}\r\n-\r\n   /// this test case will validate several low-level protocols\r\n   TNetworkProtocols = class(TSynTestCase)\r\n   protected\r\n@@ -6945,6 +6937,13 @@ procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\n {$ifdef SCHANNEL_VERIFY}\r\n \r\n type\r\n+  TSChannelTestTrust = (\r\n+    sttFile, sttRaw, sttDefault, sttSystem);\r\n+\r\n+  TSChannelTestFlags = set of (\r\n+   stfExpected, stfCallbacks, stfRejectEach, stfDisableTls13, stfOneWayTls,\r\n+   stfOpenSslServer, stfEachInvalid);\r\n+\r\n   TRunCase = class\r\n   public\r\n     Test: TSynTestCase;\r\n@@ -7062,9 +7061,22 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n end;\r\n \r\n class procedure TRunCase.DoRunCase(Sender: TObject);\r\n+var\r\n+  runcase: TRunCase;\r\n begin\r\n   try\r\n-    (Sender as TRunCase).Execute;\r\n+    runcase := nil;\r\n+    try\r\n+      runcase := Sender as TRunCase;\r\n+      runcase.Execute;\r\n+    except\r\n+      on E: Exception do\r\n+      begin\r\n+        TSynLog.Add.Log(sllDebug, 'Execute raised %', [E.ClassType]);\r\n+        if Assigned(runcase) then\r\n+          runcase.Test.CheckUtf8(PClass(E)^ = ENetSock, 'Raised %', [E]);\r\n+      end;\r\n+    end;\r\n   finally\r\n     Sender.Free;\r\n   end;\r\n@@ -7078,7 +7090,10 @@ procedure TRunCase.Execute;\n   der: RawByteString;\r\n   raw: PCCERT_CONTEXT;\r\n   connected: boolean;\r\n+  log: ISynLog;\r\n+  l: TSynLog;\r\n begin\r\n+  l := TSynLog.EnterLocal(log, 'Execute %', [Port], self);\r\n   cafile := '';\r\n   keyfile := '';\r\n   raw := nil;\r\n@@ -7128,8 +7143,8 @@ procedure TRunCase.Execute;\n     sttSystem:\r\n       tls.CASystemStores := [scsRoot];\r\n   end;\r\n-  http := THttpAsyncServer.Create(Port, nil, nil, 'schannel-mtls',\r\n-    2, 5000, [hsoEnableTls]);\r\n+  http := THttpAsyncServer.Create(Port, nil, nil, Join(['mtls-', Port]),\r\n+    {threads=}1, 5000, [hsoEnableTls], TSynLog);\r\n   try\r\n     if Trust = sttRaw then\r\n     begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "840beac7f3176d1bd64933807847071b1f73f0d7",
+      "short_sha": "840beac7",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T06:41:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/840beac7f3176d1bd64933807847071b1f73f0d7",
+      "parents": [
+        "ad2f17e3d7d584f6774d118ab8e4525b647bf368",
+        "de8d47ea7122b30aa81296a1e5e899a3909e34b1"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "packages/lazarus/mormot2.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -39,11 +39,12 @@ interface\n   mormot.db.rad.ui.sql, mormot.net.tftp.client, mormot.net.tftp.server, \n   mormot.lib.gdiplus, mormot.net.acme, mormot.db.rad.ui.cds, \n   mormot.core.os.mac, mormot.app.agl, mormot.misc.pecoff, mormot.lib.pkcs11, \n-  mormot.net.ldap, mormot.core.fpclibcmm, mormot.net.dns, mormot.lib.win7zip,\n-  mormot.crypt.rsa, mormot.crypt.x509, mormot.crypt.pkcs11, mormot.net.openapi,\n-  mormot.core.os.security, mormot.tools.mget, mormot.core.mvc, mormot.crypt.other,\n-  mormot.net.dhcp, mormot.core.fmt, mormot.core.os.delphi, mormot.core.i18n,\n-  mormot.lib.uniscribe;\n+  mormot.net.ldap, mormot.core.fpclibcmm, mormot.net.dns, mormot.lib.win7zip, \n+  mormot.crypt.rsa, mormot.crypt.x509, mormot.crypt.pkcs11, \n+  mormot.net.openapi, mormot.core.os.security, mormot.tools.mget, \n+  mormot.core.mvc, mormot.crypt.other, mormot.net.dhcp, mormot.core.fmt, \n+  mormot.core.os.delphi, mormot.core.i18n, mormot.lib.uniscribe, \n+  mormot.crypt.win;\n \n implementation\n ",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Packages"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "ad2f17e3d7d584f6774d118ab8e4525b647bf368",
+      "short_sha": "ad2f17e3",
+      "subject": "crypt: RSA generation timeout auto adaptation",
+      "body": "- weak CPU had troubles e.g. with 3072",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-01T06:41:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ad2f17e3d7d584f6774d118ab8e4525b647bf368",
+      "parents": [
+        "9a2fec3f44f4841904d1be3bb22c436e6bad6a4a"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 1,
+          "patch": "@@ -338,7 +338,7 @@   TRsaContext = class(TSynPersistent)\n   // - TBigInt.FillPrime will ensure FIPS 186-5 minimum iteration is always used\r\n   RSA_DEFAULT_GENERATION_ITERATIONS = 0;\r\n \r\n-  /// generates RSA keypairs in a time-coherent fashion\r\n+  /// generates RSA keypairs in a time-coherent fashion - for RSA-2048 size\r\n   {$ifdef CPUARM3264}\r\n   // - we have seen some weak Raspberry PI timeout so 30 seconds seems fair\r\n   // - CPUARM3264 and not CPUARM, which FPC only defines on 32-bit ARM: aarch64\r\n@@ -2627,6 +2627,13 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n      {$endif OSWINDOWS}\r\n      (TimeOutMS <= 0) then\r\n     TimeOutMS := MilliSecsPerMin; // blocking 1 minute seems fair enough\r\n+  if TimeoutMS = RSA_DEFAULT_GENERATION_TIMEOUTMS then // calibrated for 2048\r\n+    if Bits >= 7680 then\r\n+      TimeoutMS := TimeoutMS * 64\r\n+    else if Bits >= 4096 then\r\n+      TimeoutMS := TimeoutMS * 16\r\n+    else if Bits >= 3072 then\r\n+      TimeoutMS := TimeoutMS * 4;\r\n   endtix := GetTickCount64 + TimeOutMS;\r\n   // setup local variables\r\n   fModulusBits := Bits;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17293\n+17294",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17293'\r\n+'2.4.17294'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6941a143a1f580a0f662ab9e86a319449e2e7b35",
+      "short_sha": "6941a143",
+      "subject": "core: introducing IntelAvx512 to detect AVX-512 support enabled by the OS",
+      "body": "CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even if\nthe OS does not save the opmask/ZMM registers at context switch (e.g. on old\nWindows or within some VMs): executing any EVEX opcode then triggers #UD.\nUnlike AVX/AVX2, there was no XCR0 check for the AVX-512 state.\n\n- new IsZmmOSEnabled asm on x86 and x64, checking XCR0 bits 1-2 and 5-7\n- new IntelAvx512 function, returning CpuFeatures * CPUAVX512FEATURES, or []\n  if the OS did not enable the whole AVX-512 state\n- new CPUAVX512FEATURES and CPUAVX512X64V4 (x86-64-v4 level) constants\n- new cpuAVX512 flag in X64CpuFeatures, set at x86-64-v4 level\n\nCpuFeatures itself is not modified, since it is part of the GetComputerUuid\nhash: clearing its AVX-512 bits would change the computer UUID on such\nsystems.\n\nValidated on Intel i7-1255U (no AVX-512, XCR0=$07) and AMD Ryzen 9 8945HS\n(Zen 4 under Hyper-V, XCR0=$E7) with Win32 and Win64 executables actually\nrunning a vpaddd zmm opcode, and TTestCoreBase passing on Win64.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-01T04:03:06Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6941a143a1f580a0f662ab9e86a319449e2e7b35",
+      "parents": [
+        "de8d47ea7122b30aa81296a1e5e899a3909e34b1"
+      ],
+      "stats": {
+        "additions": 56,
+        "deletions": 2,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -4386,6 +4386,16 @@ function IsXmmYmmOSEnabled: boolean;\n         sete    al        // true if OS enabled both XMM and YMM\r\n end;\r\n \r\n+function IsZmmOSEnabled: boolean;\r\n+{$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n+// AVX-512 requires the OS to save opmask and ZMM registers at context switch\r\n+        xor     ecx, ecx  // specify control register XCR0=XFEATURE_ENABLED_MASK\r\n+        db $0f, $01, $d0  // XGETBV opcode reads XCR0 into EDX:EAX\r\n+        and     eax, $e6\r\n+        cmp     al, $e6   // XMM+YMM (bits 1-2) + opmask/ZMM_Hi256/Hi16_ZMM (5-7)\r\n+        sete    al        // true if OS enabled the whole AVX-512 state\r\n+end;\r\n+\r\n procedure _GetCpuid(cpueax, cpuecx: cardinal; var regs: TIntelRegisters);\r\n {$ifdef FPC}nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         mov     eax, cpueax\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -2587,6 +2587,16 @@ asm // see https://software.intel.com/en-us/blogs/2011/04/14/is-avx-enabled\n         sete    al\r\n end;\r\n \r\n+function IsZmmOSEnabled: boolean;\r\n+{$ifdef FPC}nostackframe; assembler;{$endif}\r\n+asm // AVX-512 requires the OS to save opmask and ZMM registers\r\n+        xor     ecx, ecx  // get control register XCR0 = XFEATURE_ENABLED_MASK\r\n+        db  $0f, $01, $d0 // XGETBV reads XCR0 into EDX:EAX\r\n+        and     eax, $e6  // XMM+YMM (bits 1-2) + opmask/ZMM_Hi256/Hi16_ZMM (5-7)\r\n+        cmp     al, $e6\r\n+        sete    al\r\n+end;\r\n+\r\n procedure _GetCpuid(cpueax, cpuecx: cardinal; var Registers: TIntelRegisters);\r\n {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 1,
+          "patch": "@@ -2876,6 +2876,17 @@ procedure UnSetBit64(var Bits: Int64; aIndex: PtrInt);\n   /// all CPU features flags, as retrieved from an Intel/AMD CPU\r\n   TIntelCpuFeatures = set of TIntelCpuFeature;\r\n \r\n+const\r\n+  /// all AVX-512 CPUID flags, as filtered by IntelAvx512()\r\n+  CPUAVX512FEATURES = [cfAVX512F, cfAVX512DQ, cfAVX512IFMA, cfAVX512PF, cfAVX512ER,\r\n+    cfAVX512CD, cfAVX512BW, cfAVX512VL, cfAVX512VBMI, cfAVX512VBMI2,\r\n+    cfAVX512NNI, cfAVX512BITALG, cfAVX512VPC, cfAVX512NNIW, cfAVX512MAPS,\r\n+    cfAVX512VP2I, cfAVX512FP16, cfAVX512BF16];\r\n+  /// the AVX-512 subset expected by x86-64-v4, i.e. Skylake-X/Zen4 level\r\n+  CPUAVX512X64V4 = [cfAVX512F, cfAVX512BW, cfAVX512CD, cfAVX512DQ, cfAVX512VL];\r\n+\r\n+type\r\n+\r\n   /// recognize the main Intel/AMD CPU manufacturers\r\n   TIntelCpuManufacturer = (icmOther, icmIntel, icmAmd);\r\n \r\n@@ -2990,6 +3001,14 @@ function IntelHypervisor: RawUtf8;\n // - only set if cfAVX10 is part of CpuFeatures - returns 0 otherwise\r\n function IntelAvx10: cardinal;\r\n \r\n+/// the AVX-512 features of this CPU which can actually be used\r\n+// - CpuFeatures reflects the raw CPUID bits, so AVX-512 flags may be set even\r\n+// if the OS does not save the opmask/ZMM registers at context switch (e.g. on\r\n+// old Windows or within some VMs) - this function also checks XCR0 via XGETBV\r\n+// - returns CpuFeatures * CPUAVX512FEATURES, or [] if AVX-512 is not enabled by the OS\r\n+// - e.g. CPUAVX512X64V4 - IntelAvx512 = [] identifies x86-64-v4 support\r\n+function IntelAvx512: TIntelCpuFeatures;\r\n+\r\n /// compute 32-bit random number generated by modern Intel CPU hardware\r\n // - using NIST SP 800-90A and FIPS 140-2 compliant RDRAND Intel x86/x64 opcode\r\n // - caller should ensure that cfSSE42 is included in CpuFeatures flags\r\n@@ -3116,8 +3135,9 @@ function BSRqword(const q: Qword): cardinal;\n   // - cpuHaswell identifies Intel/AMD AVX2+BMI support at Haswell level\r\n   // as expected e.g. by IsValidUtf8Avx2/Base64EncodeAvx2 dedicated asm\r\n   // - won't include ERMSB flag because it is not propagated within some VMs\r\n+  // - cpuAVX512 identifies x86-64-v4 AVX-512 support, also enabled by the OS\r\n   TX64CpuFeatures = set of (\r\n-    cpuAVX, cpuAVX2, cpuHaswell);\r\n+    cpuAVX, cpuAVX2, cpuHaswell, cpuAVX512);\r\n \r\n var\r\n   /// internal flags used by FillCharFast - easier from asm that CpuFeatures\r\n@@ -10859,6 +10879,15 @@ function IntelAvx10: cardinal;\n   result := ToByte(regs.ebx);\r\n end; // no \"vector width\" bits any more: AVX10 means 128-, 256- and 512-bit\r\n \r\n+function IntelAvx512: TIntelCpuFeatures;\r\n+begin\r\n+  result := CpuFeatures * CPUAVX512FEATURES;\r\n+  if (result <> []) and\r\n+     not ((cfOSXS in CpuFeatures) and\r\n+          IsZmmOSEnabled) then // XGETBV is only valid with OSXSAVE\r\n+    result := [];\r\n+end;\r\n+\r\n procedure TestCpuFeatures;\r\n var\r\n   regs: TIntelRegisters;\r\n@@ -10999,6 +11028,8 @@ procedure TestCpuFeatures;\n       include(X64CpuFeatures, cpuAVX2);\r\n     if CpuFeatures * CPUAVX2HASWELL = CPUAVX2HASWELL then\r\n       include(X64CpuFeatures, cpuHaswell);\r\n+    if IntelAvx512 * CPUAVX512X64V4 = CPUAVX512X64V4 then\r\n+      include(X64CpuFeatures, cpuAVX512);\r\n   end;\r\n   {$endif ASMX64NOTPIC}\r\n   // redirect some CPU-aware functions\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -2855,7 +2855,10 @@ procedure TTestCoreBase.CustomRTLSlow(Sender: TObject);\n   SetLength(buf, 16 shl 20); // 16MB\r\n   {$ifdef ASMX64NOTPIC} // activate and validate SSE2 + AVX branches\r\n   bak := X64CpuFeatures;\r\n-  cpu := bak - [cpuHaswell, cpuAvx2];\r\n+  Check(IntelAvx512 - CpuFeatures * CPUAVX512FEATURES = [], 'avx512');\r\n+  Check(not (cpuAVX512 in bak) or\r\n+        (CPUAVX512X64V4 - IntelAvx512 = []), 'x86-64-v4');\r\n+  cpu := bak - [cpuHaswell, cpuAvx2, cpuAVX512];\r\n   X64CpuFeatures := []; // default SSE2 128-bit process\r\n   Validate({rtl=}false);\r\n   {$ifdef ASMX64AVX1} // oldest Delphi doesn't support AVX asm\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
