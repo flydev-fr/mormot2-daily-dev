@@ -1,0 +1,564 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-03",
+  "edition_title": {
+    "en": "AES-GCM authentication is restored while Tunnel and queue lifetimes are rebuilt",
+    "fr": "L’authentification AES-GCM revient, Tunnel et les files sont reconstruits",
+    "zh": "AES-GCM 认证恢复，Tunnel 与队列生命周期重构",
+    "ru": "Проверка AES-GCM восстановлена, Tunnel и очереди переработаны"
+  },
+  "intro": {
+    "en": "The most urgent fix restores GMAC verification in the AVX AES-GCM decrypt path, which could accept forged ciphertext, tags or associated data on eligible x86-64 systems. Tunnel lifetime, handshake and shutdown code is rebuilt to keep external calls outside locks and give the owner deterministic thread control. Queue and thread-pool waits gain OS futexes and new APIs, followed by fixes required for Delphi, Win8+ and Linux.",
+    "fr": "Le correctif le plus urgent restaure la vérification GMAC dans le chemin AVX de déchiffrement AES-GCM, qui pouvait accepter un ciphertext, un tag ou des associated data falsifiés sur les systèmes x86-64 éligibles. Le cycle de vie, le handshake et l’arrêt de Tunnel sont reconstruits pour sortir les appels externes des verrous et donner au propriétaire un contrôle déterministe du thread. Les attentes des files et thread pools gagnent les futex OS et de nouvelles API, puis les correctifs requis pour Delphi, Win8+ et Linux.",
+    "zh": "最紧急的修复为 AES-GCM 解密的 AVX 路径恢复 GMAC 校验；在符合条件的 x86-64 系统上，该路径此前可能接受伪造的 ciphertext、tag 或 associated data。Tunnel 的生命周期、handshake 与关闭流程被重构，使外部调用离开锁区，并由 owner 确定性管理 thread。队列和 thread pool 的等待路径加入 OS futex 与新 API，随后补齐 Delphi、Win8+ 和 Linux 所需修复。",
+    "ru": "Самое срочное исправление возвращает проверку GMAC в AVX-путь расшифровки AES-GCM, который на подходящих x86-64 системах мог принимать поддельные ciphertext, tag или associated data. Жизненный цикл, handshake и shutdown Tunnel переработаны: внешние вызовы вынесены из блокировок, а владелец детерминированно управляет thread. Ожидание очередей и thread pool получает OS futex и новые API, затем обязательные исправления для Delphi, Win8+ и Linux."
+  },
+  "tldr": {
+    "en": [
+      "Land on build 2.4.17356 at 1f7febd219f9cb54175a1f87620e6862e4e670b8.",
+      "TAesGcmEngine.Decrypt now verifies GMAC after the AVX single-pass path; tests reject forged ciphertext, tags and AAD.",
+      "TTunnelLocal now owns and joins its worker, transfers sockets explicitly and performs relay callbacks outside its state lock.",
+      "TSynQueue uses OS futexes where available and adds WaitPopReset and Waiters while compared waits retain polling semantics.",
+      "TSynThreadTasks, PendingTasks and WaitFor add managed task execution and completion waits; the final fixes cover Delphi, Win8+ and Linux.",
+      "In-memory ZIP data descriptors, REST WebSocket callback teardown and THttpApiServer startup each receive production fixes."
+    ],
+    "fr": [
+      "Visez la build 2.4.17356 au commit 1f7febd219f9cb54175a1f87620e6862e4e670b8.",
+      "TAesGcmEngine.Decrypt vérifie désormais GMAC après le chemin AVX single-pass ; les tests rejettent ciphertext, tags et AAD falsifiés.",
+      "TTunnelLocal possède et joint son worker, transfère explicitement les sockets et exécute les callbacks de relay hors du state lock.",
+      "TSynQueue utilise les futex OS disponibles et ajoute WaitPopReset et Waiters ; les attentes comparées gardent leur polling.",
+      "TSynThreadTasks, PendingTasks et WaitFor ajoutent l’exécution gérée et l’attente de fin ; les correctifs finaux couvrent Delphi, Win8+ et Linux.",
+      "Les data descriptors ZIP en mémoire, la finalisation des callbacks REST WebSocket et le démarrage THttpApiServer sont réparés."
+    ],
+    "zh": [
+      "应采用 build 2.4.17356 的 1f7febd219f9cb54175a1f87620e6862e4e670b8。",
+      "TAesGcmEngine.Decrypt 现在会在 AVX single-pass 路径后校验 GMAC；测试会拒绝伪造的 ciphertext、tag 与 AAD。",
+      "TTunnelLocal 现在拥有并 join worker，显式转移 socket，并在 state lock 外执行 relay callback。",
+      "TSynQueue 在可用时采用 OS futex，并新增 WaitPopReset 与 Waiters；带比较条件的等待仍使用 polling。",
+      "TSynThreadTasks、PendingTasks 与 WaitFor 增加托管任务执行和完成等待；最终修复覆盖 Delphi、Win8+ 与 Linux。",
+      "内存 ZIP data descriptor、REST WebSocket callback 清理和 THttpApiServer 启动均获得生产修复。"
+    ],
+    "ru": [
+      "Переходите на build 2.4.17356 в 1f7febd219f9cb54175a1f87620e6862e4e670b8.",
+      "TAesGcmEngine.Decrypt теперь проверяет GMAC после AVX single-pass; тесты отклоняют поддельные ciphertext, tag и AAD.",
+      "TTunnelLocal владеет worker и выполняет join, явно передаёт socket и вызывает relay callback вне state lock.",
+      "TSynQueue использует OS futex, добавляет WaitPopReset и Waiters, а ожидание с сравнением сохраняет polling.",
+      "TSynThreadTasks, PendingTasks и WaitFor добавляют управляемые задачи и ожидание завершения; финальные исправления охватывают Delphi, Win8+ и Linux.",
+      "Исправлены data descriptor ZIP в памяти, завершение REST WebSocket callback и запуск THttpApiServer."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Take the complete build 2.4.17356. Upgrade promptly when AES-GCM may use the x86-64 AVX path, when Tunnel or REST WebSocket clients shut down concurrently, or when THttpApiServer is used. Retest forged AES-GCM inputs, repeated Tunnel open/close cycles, queue finalization/reset, thread-pool WaitFor timeouts and HTTP.sys startup. The raw payload has no superseded_by markers, so no formal avoid range is asserted; do not cherry-pick the intermediate Tunnel or WaitFor commits.",
+    "fr": "Prenez la build complète 2.4.17356. Mettez à jour rapidement si AES-GCM peut utiliser le chemin AVX x86-64, si Tunnel ou les clients REST WebSocket s’arrêtent en concurrence, ou si THttpApiServer est utilisé. Retestez les entrées AES-GCM falsifiées, les cycles Tunnel open/close, queue finalize/reset, les timeouts WaitFor et le démarrage HTTP.sys. Aucun superseded_by n’est présent : aucune plage formelle n’est déclarée et les commits Tunnel ou WaitFor intermédiaires ne doivent pas être isolés.",
+    "zh": "采用完整的 build 2.4.17356。若 AES-GCM 可能使用 x86-64 AVX 路径、Tunnel 或 REST WebSocket client 会并发关闭，或项目使用 THttpApiServer，应尽快升级。请复测伪造 AES-GCM 输入、Tunnel 反复 open/close、queue finalize/reset、thread-pool WaitFor timeout 与 HTTP.sys 启动。原始数据没有 superseded_by，因此不声明正式规避范围，也不要单独挑取中间 Tunnel 或 WaitFor commit。",
+    "ru": "Берите полный build 2.4.17356. Обновляйтесь быстро, если AES-GCM может использовать x86-64 AVX, Tunnel или REST WebSocket client завершаются конкурентно либо применяется THttpApiServer. Повторите тесты поддельных AES-GCM данных, циклов Tunnel open/close, queue finalize/reset, timeout в thread-pool WaitFor и запуска HTTP.sys. В raw payload нет superseded_by, поэтому формальный avoid range не заявлен; промежуточные Tunnel и WaitFor commits нельзя брать отдельно."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "AVX AES-GCM authentication is made mandatory again",
+        "fr": "L’authentification AVX AES-GCM redevient obligatoire",
+        "zh": "AVX AES-GCM 再次强制执行认证",
+        "ru": "Проверка AVX AES-GCM снова обязательна"
+      },
+      "summary": {
+        "en": "The AVX single-pass decrypt path now computes and compares the final GMAC. New tests corrupt ciphertext, the tag and AAD across all message lengths, while reusable hardware-capability helpers centralize AVX selection.",
+        "fr": "Le chemin AVX single-pass calcule et compare maintenant le GMAC final. Les nouveaux tests altèrent ciphertext, tag et AAD pour toutes les longueurs, tandis que des helpers centralisent la sélection hardware AVX.",
+        "zh": "AVX single-pass 解密路径现在计算并比较最终 GMAC。新测试针对所有消息长度破坏 ciphertext、tag 与 AAD，通用硬件能力 helper 则集中管理 AVX 选择。",
+        "ru": "AVX single-pass расшифровка теперь вычисляет и сравнивает итоговый GMAC. Тесты портят ciphertext, tag и AAD на всех длинах, а общие helpers централизуют выбор AVX."
+      },
+      "shas": [
+        "3c395af5cd47b07482ab12dc002dd33c1683f34d",
+        "5f4644236344eeca8187eb037e4991809f6cc47a",
+        "7ee3b216d650d35c03fb1b443f8e57f45544d701",
+        "f9ad68c8a686223198006d60b19b196f46189bd1"
+      ]
+    },
+    {
+      "title": {
+        "en": "Tunnel ownership and shutdown become deterministic",
+        "fr": "Ownership et arrêt de Tunnel deviennent déterministes",
+        "zh": "Tunnel 所有权与关闭流程变得确定",
+        "ru": "Владение и shutdown Tunnel стали детерминированными"
+      },
+      "summary": {
+        "en": "The parent owns a suspended worker, publishes it before Start, aborts sockets before join and never calls transport interfaces while holding its state lock. Handshake frames, closure notifications and transferred sockets now have explicit state and ownership transitions.",
+        "fr": "Le parent possède un worker suspendu, le publie avant Start, interrompt les sockets avant join et n’appelle jamais les interfaces transport sous le state lock. Les frames de handshake, notifications de fermeture et sockets transférés ont des transitions explicites.",
+        "zh": "parent 拥有 suspended worker，在 Start 前发布它，在 join 前中止 socket，并且不会在持有 state lock 时调用 transport interface。handshake frame、关闭通知与转移 socket 现在都有明确的状态和所有权转换。",
+        "ru": "Parent владеет suspended worker, публикует его до Start, прерывает socket до join и не вызывает transport interface под state lock. Handshake frame, уведомления закрытия и переданные socket получили явные переходы состояния и владения."
+      },
+      "shas": [
+        "be0c71361126be983499c75cb86f8c22cebcd601",
+        "7d9ec6c6fa96889d74bc8672a147f51af932678b",
+        "bd4626d43e0e87e6d32b3d0f928187ef068d72af",
+        "d60cc6e8035d296e60eb86df4d930b9c91c7a791",
+        "1f37f3a44bef4f9c2f935b9d3a11855b50a7fe86",
+        "0900c1f2911c0b7121232f2508810a9ff84ba0b3",
+        "311e29ede3a379d59a86f9f7ca4158880268e3f6",
+        "2ad1823e89a1098e07eca2669614cc12e0978c41"
+      ]
+    },
+    {
+      "title": {
+        "en": "Queues and thread pools gain blocking completion primitives",
+        "fr": "Files et thread pools gagnent des primitives d’attente",
+        "zh": "队列与 thread pool 新增阻塞式完成原语",
+        "ru": "Очереди и thread pool получили блокирующее ожидание"
+      },
+      "summary": {
+        "en": "TSynQueue can block on OS wait primitives and be reset after finalization. TSynThreadTasks owns task objects, while TSynThreadPool counts pending work and exposes WaitFor; follow-ups repair platform compilation and futex wake-up flow.",
+        "fr": "TSynQueue peut bloquer sur les primitives OS et être réactivée après finalization. TSynThreadTasks possède les objets task ; TSynThreadPool compte le travail pending et expose WaitFor, avec des correctifs de compilation et de wake-up futex.",
+        "zh": "TSynQueue 可阻塞于 OS wait primitive，并在 finalization 后重新启用。TSynThreadTasks 拥有 task object，TSynThreadPool 统计 pending work 并公开 WaitFor；后续提交修复平台编译与 futex wake-up 流程。",
+        "ru": "TSynQueue блокируется на OS wait primitives и может быть активирована после finalization. TSynThreadTasks владеет task objects, TSynThreadPool считает pending work и предоставляет WaitFor; последующие commits исправляют компиляцию и futex wake-up."
+      },
+      "shas": [
+        "ac7c87e4f4d445b41b693504877f4da97ab6d8d4",
+        "53ff22a2060e36636c15d090e400da3f407e80d7",
+        "808c57b279a9e4a96b3439a41197d14e3c2cee1f",
+        "27d2e21b84eb6323996b56f654024dafda70b4d0",
+        "f54b3fa0d0ea39aeb7d94a9fd2e5cb46dc45aff1",
+        "c7512a04d78af0d3707505a672037d4108b9f8f4",
+        "5541a4f1e824d5d4e9d6159cd066009cc20dfa54",
+        "b7a92cc16b78dd888c1ada74868db519ce8edb3a",
+        "fc943be2d5a121a98186a5bb70c001d647b9a476"
+      ]
+    },
+    {
+      "title": {
+        "en": "Independent shutdown and parsing faults are closed",
+        "fr": "Des défauts indépendants de shutdown et parsing sont fermés",
+        "zh": "独立的关闭与解析故障得到修复",
+        "ru": "Устранены отдельные сбои shutdown и parsing"
+      },
+      "summary": {
+        "en": "TZipRead no longer dereferences a nil source for the last in-memory data-descriptor entry. REST WebSocket callbacks are released before inherited destruction, and THttpApiServer no longer suppresses its automatic post-construction start.",
+        "fr": "TZipRead ne déréférence plus une source nil pour la dernière entrée data-descriptor en mémoire. Les callbacks REST WebSocket sont libérés avant la destruction héritée et THttpApiServer ne bloque plus son démarrage post-construction automatique.",
+        "zh": "TZipRead 读取内存中最后一个 data-descriptor entry 时不再解引用 nil source。REST WebSocket callback 会在 inherited destruction 前释放，THttpApiServer 也不再抑制自动 post-construction start。",
+        "ru": "TZipRead больше не обращается к nil source для последней data-descriptor записи в памяти. REST WebSocket callback освобождаются до inherited destruction, а THttpApiServer не подавляет автоматический post-construction start."
+      },
+      "shas": [
+        "444fc47ea834c4f63ad017464a12fad0d6f7f886",
+        "376e6934831444a2521130e3d37d58a1ca4475b9",
+        "1f7febd219f9cb54175a1f87620e6862e4e670b8"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "3c395af5cd47b07482ab12dc002dd33c1683f34d",
+          "5f4644236344eeca8187eb037e4991809f6cc47a",
+          "7ee3b216d650d35c03fb1b443f8e57f45544d701",
+          "f9ad68c8a686223198006d60b19b196f46189bd1"
+        ],
+        "why": "Restore AVX GMAC verification, then take the forged-input coverage and final hardware-dispatch helpers."
+      },
+      {
+        "shas": [
+          "be0c71361126be983499c75cb86f8c22cebcd601",
+          "7d9ec6c6fa96889d74bc8672a147f51af932678b",
+          "bd4626d43e0e87e6d32b3d0f928187ef068d72af",
+          "d60cc6e8035d296e60eb86df4d930b9c91c7a791",
+          "1f37f3a44bef4f9c2f935b9d3a11855b50a7fe86",
+          "0900c1f2911c0b7121232f2508810a9ff84ba0b3"
+        ],
+        "why": "The Tunnel lifetime and locking repair is cumulative; take the final state rather than an intermediate ownership model."
+      },
+      {
+        "shas": [
+          "ac7c87e4f4d445b41b693504877f4da97ab6d8d4",
+          "53ff22a2060e36636c15d090e400da3f407e80d7",
+          "808c57b279a9e4a96b3439a41197d14e3c2cee1f"
+        ],
+        "why": "Apply the futex rewrite with its follow-up semantics and reset/waiter API."
+      },
+      {
+        "shas": [
+          "27d2e21b84eb6323996b56f654024dafda70b4d0",
+          "f54b3fa0d0ea39aeb7d94a9fd2e5cb46dc45aff1",
+          "c7512a04d78af0d3707505a672037d4108b9f8f4",
+          "5541a4f1e824d5d4e9d6159cd066009cc20dfa54",
+          "b7a92cc16b78dd888c1ada74868db519ce8edb3a",
+          "fc943be2d5a121a98186a5bb70c001d647b9a476"
+        ],
+        "why": "The new task pool and WaitFor API require the final Delphi, Win8+/Linux and waiter-counter fixes."
+      },
+      {
+        "shas": [
+          "444fc47ea834c4f63ad017464a12fad0d6f7f886",
+          "376e6934831444a2521130e3d37d58a1ca4475b9",
+          "1f7febd219f9cb54175a1f87620e6862e4e670b8"
+        ],
+        "why": "Take the independent ZIP, REST WebSocket shutdown and HTTP.sys startup fixes."
+      }
+    ],
+    "still_moving": []
+  },
+  "notes": {
+    "en": "Reviewed all 30 non-merge commits and excluded two merges. The total is 1,955 additions and 1,162 deletions after excluding mormot.commit.inc and mormot.commit-num.inc. Final source at 1f7febd219f9cb54175a1f87620e6862e4e670b8 was inspected. No commit carries superseded_by metadata.",
+    "fr": "Les 30 commits non-merge ont été examinés et deux merges exclus. Le total est de 1 955 ajouts et 1 162 suppressions hors mormot.commit.inc et mormot.commit-num.inc. La source finale en 1f7febd219f9cb54175a1f87620e6862e4e670b8 a été inspectée. Aucun commit ne contient superseded_by.",
+    "zh": "已审查全部 30 个非 merge commit，并排除两个 merge。去除 mormot.commit.inc 与 mormot.commit-num.inc 后，共 1,955 行新增、1,162 行删除。已检查 1f7febd219f9cb54175a1f87620e6862e4e670b8 的最终源码。没有 commit 带 superseded_by。",
+    "ru": "Проверены все 30 non-merge commits, два merge исключены. Без mormot.commit.inc и mormot.commit-num.inc итог составляет 1 955 добавлений и 1 162 удаления. Проверен финальный исходный код 1f7febd219f9cb54175a1f87620e6862e4e670b8. Ни один commit не содержит superseded_by."
+  },
+  "entries": [
+    {
+      "sha": "1f7febd219f9cb54175a1f87620e6862e4e670b8",
+      "headline": {"en": "HTTP.sys servers resume automatic startup after construction", "fr": "Les serveurs HTTP.sys redémarrent automatiquement après construction", "zh": "HTTP.sys server 恢复 construction 后自动启动", "ru": "HTTP.sys server снова автоматически запускается после construction"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "THttpApiServer.Create stops adding hsoCreateSuspended before calling THttpServerGeneric.Create. The base class can therefore set fStartAfterConstruction and start the server thread after the constructor chain completes.", "fr": "THttpApiServer.Create n’ajoute plus hsoCreateSuspended avant THttpServerGeneric.Create. La classe de base peut définir fStartAfterConstruction et démarrer le server thread après la chaîne de construction.", "zh": "THttpApiServer.Create 在调用 THttpServerGeneric.Create 前不再加入 hsoCreateSuspended。base class 因而可设置 fStartAfterConstruction，并在 constructor chain 完成后启动 server thread。", "ru": "THttpApiServer.Create больше не добавляет hsoCreateSuspended перед THttpServerGeneric.Create. Базовый класс устанавливает fStartAfterConstruction и запускает server thread после завершения constructor chain."},
+      "impact": {"en": "Windows HTTP.sys backends created with default options no longer remain suspended after initialization. Delphi and FPC socket-based servers are not on this path.", "fr": "Les backends Windows HTTP.sys créés avec les options par défaut ne restent plus suspendus après l’initialisation. Les serveurs socket Delphi et FPC ne suivent pas ce chemin.", "zh": "使用默认 option 创建的 Windows HTTP.sys backend 不再于初始化后保持 suspended。Delphi 与 FPC 的 socket-based server 不走此路径。", "ru": "Windows HTTP.sys backend с настройками по умолчанию больше не остаётся suspended после инициализации. Socket-based server Delphi и FPC этот путь не используют."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade to 2.4.17356 and verify that each THttpApiServer begins accepting requests immediately after construction.", "fr": "Passez à 2.4.17356 et vérifiez que chaque THttpApiServer accepte des requêtes juste après construction.", "zh": "升级至 2.4.17356，并确认每个 THttpApiServer 在 construction 后立即接受请求。", "ru": "Обновитесь до 2.4.17356 и проверьте, что каждый THttpApiServer принимает запросы сразу после construction."},
+      "units": ["mormot.net.server"],
+      "api_changes": [{"symbol": "THttpApiServer.Create", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fc943be2d5a121a98186a5bb70c001d647b9a476",
+      "headline": {"en": "Thread-pool completion waiters now match the futex lifecycle", "fr": "Les waiters de thread pool suivent désormais le cycle futex", "zh": "thread pool completion waiter 现在匹配 futex 生命周期", "ru": "Completion waiter thread pool теперь совпадает с жизненным циклом futex"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TSynThreadPool.WaitFor increments fWaiters before computing its deadline and keeps the counter around the exact wait loop. TaskAllDone uses that counter to decide whether OsWakeAllOnValue is required.", "fr": "TSynThreadPool.WaitFor incrémente fWaiters avant de calculer sa deadline et garde le compteur sur la boucle exacte. TaskAllDone s’en sert pour décider d’appeler OsWakeAllOnValue.", "zh": "TSynThreadPool.WaitFor 在计算 deadline 前递增 fWaiters，并让计数器精确覆盖 wait loop。TaskAllDone 据此决定是否调用 OsWakeAllOnValue。", "ru": "TSynThreadPool.WaitFor увеличивает fWaiters до расчёта deadline и удерживает счётчик точно вокруг wait loop. TaskAllDone по нему решает, нужен ли OsWakeAllOnValue."},
+      "impact": {"en": "Win8+ and Linux callers waiting for all work avoid a missed wake-up window. Other platforms continue using the one-millisecond fallback loop.", "fr": "Les appelants Win8+ et Linux attendant la fin de tout le travail évitent une fenêtre de wake-up perdu. Les autres plateformes gardent la boucle de secours d’une milliseconde.", "zh": "Win8+ 与 Linux 上等待全部工作完成的调用方避免 missed wake-up window。其他平台继续使用一毫秒 fallback loop。", "ru": "На Win8+ и Linux ожидание завершения всех задач избегает окна потерянного wake-up. Другие платформы сохраняют fallback loop в одну миллисекунду."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Use the final WaitFor implementation from 2.4.17356 and test finite and INFINITE waits under concurrent completion.", "fr": "Utilisez l’implémentation WaitFor finale de 2.4.17356 et testez les attentes finies et INFINITE en concurrence.", "zh": "使用 2.4.17356 的最终 WaitFor 实现，并在并发完成下测试有限与 INFINITE 等待。", "ru": "Используйте финальный WaitFor из 2.4.17356 и проверьте конечные и INFINITE ожидания при конкурентном завершении."},
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynThreadPool.WaitFor", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b7a92cc16b78dd888c1ada74868db519ce8edb3a",
+      "headline": {"en": "WaitFor now wakes on Win8+ and Linux task completion", "fr": "WaitFor se réveille à la fin des tâches sous Win8+ et Linux", "zh": "WaitFor 现在会在 Win8+ 与 Linux 任务完成时唤醒", "ru": "WaitFor теперь просыпается при завершении задач на Win8+ и Linux"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TSynThreadPool adds fWaiters around the futex wait, and TaskAllDone calls OsWakeAllOnValue when the final pending task completes.", "fr": "TSynThreadPool ajoute fWaiters autour de l’attente futex et TaskAllDone appelle OsWakeAllOnValue quand la dernière tâche se termine.", "zh": "TSynThreadPool 在 futex wait 周围加入 fWaiters，最后一个 pending task 完成时 TaskAllDone 调用 OsWakeAllOnValue。", "ru": "TSynThreadPool добавляет fWaiters вокруг futex wait, а TaskAllDone вызывает OsWakeAllOnValue при завершении последней pending task."},
+      "impact": {"en": "The newly added WaitFor no longer depends on timeout expiry after the pending count reaches zero on futex platforms. The following commit aligns the counter lifetime more precisely.", "fr": "Le nouveau WaitFor ne dépend plus de l’expiration du timeout après passage du compteur à zéro sur les plateformes futex. Le commit suivant précise encore le cycle du compteur.", "zh": "在 futex 平台上，新 WaitFor 不再于 pending count 归零后依赖 timeout 到期。后续 commit 进一步精确计数器生命周期。", "ru": "Новый WaitFor на futex-платформах больше не ждёт истечения timeout после обнуления pending count. Следующий commit точнее выравнивает жизненный цикл счётчика."},
+      "action": "none",
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynThreadPool.WaitFor", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5541a4f1e824d5d4e9d6159cd066009cc20dfa54",
+      "headline": {"en": "WaitFor becomes visible to Delphi IOCP builds", "fr": "WaitFor devient visible pour les builds Delphi IOCP", "zh": "WaitFor 对 Delphi IOCP build 可见", "ru": "WaitFor стал видимым для Delphi IOCP builds"},
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {"en": "The TSynThreadPool.WaitFor declaration moves outside the non-IOCP conditional section, matching its implementation and allowing Delphi Windows builds to compile.", "fr": "La déclaration TSynThreadPool.WaitFor sort de la section conditionnelle non-IOCP, rejoint son implémentation et permet la compilation Delphi Windows.", "zh": "TSynThreadPool.WaitFor 声明移出 non-IOCP 条件区，与实现一致，使 Delphi Windows build 可编译。", "ru": "Объявление TSynThreadPool.WaitFor вынесено из non-IOCP условного блока, соответствует реализации и позволяет компилировать Delphi Windows."},
+      "impact": {"en": "Intermediate builds with the new method could fail to compile for the Windows IOCP configuration. FPC and non-IOCP declarations were already visible.", "fr": "Les builds intermédiaires avec la nouvelle méthode pouvaient échouer sous Windows IOCP. Les déclarations FPC et non-IOCP étaient déjà visibles.", "zh": "带新方法的中间 build 可能无法为 Windows IOCP 配置编译。FPC 与 non-IOCP 声明原本已可见。", "ru": "Промежуточные builds с новым методом могли не собираться в конфигурации Windows IOCP. Для FPC и non-IOCP объявление уже было видно."},
+      "action": "none",
+      "units": ["mormot.core.threads", "test.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c7512a04d78af0d3707505a672037d4108b9f8f4",
+      "headline": {"en": "Thread pools can wait until every accepted task is finished", "fr": "Les thread pools peuvent attendre la fin de toutes les tâches acceptées", "zh": "thread pool 可等待所有已接受任务完成", "ru": "Thread pool может ждать завершения всех принятых задач"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en": "TSynThreadPool.WaitFor watches PendingTasks until zero, using OsWaitOnValue when available and a short sleep fallback elsewhere. It supports finite timeouts and INFINITE.", "fr": "TSynThreadPool.WaitFor surveille PendingTasks jusqu’à zéro via OsWaitOnValue si disponible, sinon un court sleep. Les timeouts finis et INFINITE sont supportés.", "zh": "TSynThreadPool.WaitFor 监视 PendingTasks 直至归零；可用时使用 OsWaitOnValue，否则使用短 sleep。它支持有限 timeout 与 INFINITE。", "ru": "TSynThreadPool.WaitFor следит за PendingTasks до нуля, используя OsWaitOnValue либо короткий sleep fallback. Поддерживаются конечный timeout и INFINITE."},
+      "impact": {"en": "Applications gain a completion barrier for accepted pool work. This first implementation needs the three following platform and wake-up fixes, so it should not be cherry-picked alone.", "fr": "Les applications gagnent une barrière de fin pour le travail accepté. Cette première implémentation exige les trois correctifs suivants et ne doit pas être isolée.", "zh": "应用获得已接受 pool work 的完成屏障。此初始实现需要后续三个平台与 wake-up 修复，不应单独挑取。", "ru": "Приложения получают completion barrier для принятой работы. Первая реализация требует трёх последующих исправлений и не должна браться отдельно."},
+      "action": "none",
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynThreadPool.WaitFor", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f54b3fa0d0ea39aeb7d94a9fd2e5cb46dc45aff1",
+      "headline": {"en": "Thread pools expose total work and a final-task hook", "fr": "Les thread pools exposent le travail total et un hook final", "zh": "thread pool 公开总工作量与最终任务 hook", "ru": "Thread pool предоставляет общий объём работы и hook последней задачи"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en": "TSynThreadPool tracks queued plus executing work in fPendingTasks, publishes PendingTasks, and calls the protected virtual TaskAllDone when the counter reaches zero after execution or abort.", "fr": "TSynThreadPool suit le travail queued et executing dans fPendingTasks, publie PendingTasks et appelle le virtual protégé TaskAllDone quand le compteur atteint zéro après exécution ou abort.", "zh": "TSynThreadPool 用 fPendingTasks 跟踪 queued 与 executing work，公开 PendingTasks，并在执行或 abort 后计数归零时调用 protected virtual TaskAllDone。", "ru": "TSynThreadPool отслеживает queued и executing work в fPendingTasks, публикует PendingTasks и вызывает protected virtual TaskAllDone при обнулении после выполнения или abort."},
+      "impact": {"en": "Monitoring can distinguish queued contexts from all outstanding work, and descendants can react when the pool becomes idle. Counter maintenance applies to IOCP and POSIX paths.", "fr": "Le monitoring distingue les contexts queued de tout le travail restant, et les descendants peuvent réagir quand le pool devient idle. Le compteur couvre IOCP et POSIX.", "zh": "监控可区分 queued context 与全部 outstanding work，descendant 可在 pool 变为 idle 时响应。计数维护覆盖 IOCP 与 POSIX 路径。", "ru": "Monitoring различает queued contexts и всю незавершённую работу, а descendants могут реагировать на idle. Счётчик работает в IOCP и POSIX путях."},
+      "action": "review",
+      "action_detail": {"en": "Review custom TSynThreadPool descendants that need idle notification and use the final 2.4.17356 counter semantics.", "fr": "Examinez les descendants TSynThreadPool nécessitant une notification idle et utilisez la sémantique finale de 2.4.17356.", "zh": "检查需要 idle notification 的自定义 TSynThreadPool descendant，并采用 2.4.17356 的最终计数语义。", "ru": "Проверьте custom descendants TSynThreadPool, которым нужна idle notification, и используйте финальную семантику 2.4.17356."},
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynThreadPool.PendingTasks", "change": "added"}, {"symbol": "TSynThreadPool.TaskAllDone", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c18eb6c553d8d3fe83e170e2033a378a058c17e3",
+      "headline": {"en": "Queue concurrency tests adopt the new owned-task pool", "fr": "Les tests concurrents de queue adoptent le nouveau pool de tâches", "zh": "队列并发测试采用新的 owned-task pool", "ru": "Конкурентные тесты queue перешли на новый owned-task pool"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "test.core.threads replaces dedicated push and wait thread classes with TSynThreadTask descendants executed by one TSynThreadTasks instance, preserving finalize, reset and multi-waiter coverage.", "fr": "test.core.threads remplace les classes thread dédiées push/wait par des descendants TSynThreadTask exécutés par une instance TSynThreadTasks, en gardant la couverture finalize, reset et multi-waiter.", "zh": "test.core.threads 用由单个 TSynThreadTasks 执行的 TSynThreadTask descendant 取代专用 push/wait thread class，并保留 finalize、reset 与 multi-waiter 覆盖。", "ru": "test.core.threads заменяет отдельные push/wait thread classes наследниками TSynThreadTask в одном TSynThreadTasks, сохраняя finalize, reset и multi-waiter coverage."},
+      "impact": {"en": "Application behavior is unchanged. The regression suite now exercises the new task-pool ownership model while validating TSynQueue concurrency.", "fr": "Le comportement applicatif ne change pas. La suite exerce le nouveau modèle ownership du task pool tout en validant la concurrence TSynQueue.", "zh": "应用行为不变。回归套件在验证 TSynQueue 并发时也覆盖新的 task-pool ownership model。", "ru": "Поведение приложений не меняется. Набор тестов проверяет новую модель владения task pool вместе с конкурентностью TSynQueue."},
+      "action": "none",
+      "units": ["test.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "27d2e21b84eb6323996b56f654024dafda70b4d0",
+      "headline": {"en": "A simple object-owning task pool joins the thread primitives", "fr": "Un task pool simple possédant ses objets rejoint les primitives thread", "zh": "新增拥有任务对象的简单 task pool", "ru": "Добавлен простой task pool, владеющий объектами задач"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en": "TSynThreadTask defines DoExecute, and TSynThreadTasks executes those objects through TSynThreadPool. Add always takes ownership, freeing rejected tasks and using TaskAbort for queued work during shutdown.", "fr": "TSynThreadTask définit DoExecute et TSynThreadTasks exécute ces objets via TSynThreadPool. Add prend toujours ownership, libère les tâches refusées et utilise TaskAbort au shutdown.", "zh": "TSynThreadTask 定义 DoExecute，TSynThreadTasks 通过 TSynThreadPool 执行这些对象。Add 始终接管 ownership，释放被拒任务，并在 shutdown 时通过 TaskAbort 清理 queued work。", "ru": "TSynThreadTask определяет DoExecute, а TSynThreadTasks выполняет объекты через TSynThreadPool. Add всегда принимает ownership, освобождает отклонённые задачи и использует TaskAbort при shutdown."},
+      "impact": {"en": "Delphi and FPC applications can submit heap-owned task objects without writing worker-thread plumbing. Callers must not free a task after passing it to Add, even when Add returns false.", "fr": "Les applications Delphi et FPC peuvent soumettre des objets task possédés sans écrire le plumbing worker. L’appelant ne doit jamais libérer une tâche passée à Add, même si Add renvoie false.", "zh": "Delphi 与 FPC 应用可提交 heap-owned task object，无需编写 worker-thread plumbing。将 task 传给 Add 后，即使返回 false，调用方也不得释放它。", "ru": "Delphi и FPC приложения могут передавать heap-owned task objects без собственной worker-thread обвязки. После Add вызывающий не должен освобождать task даже при false."},
+      "action": "review",
+      "action_detail": {"en": "When adopting TSynThreadTasks, remove caller-side Free calls after Add and implement DoExecute without assuming task reuse.", "fr": "Pour adopter TSynThreadTasks, supprimez les Free côté appelant après Add et implémentez DoExecute sans réutiliser la tâche.", "zh": "采用 TSynThreadTasks 时，移除 Add 后调用方的 Free，并实现不假设 task 可重用的 DoExecute。", "ru": "При переходе на TSynThreadTasks уберите Free после Add и реализуйте DoExecute без повторного использования task."},
+      "units": ["mormot.core.threads", "mormot.net.server"],
+      "api_changes": [{"symbol": "TSynThreadTask", "change": "added"}, {"symbol": "TSynThreadTasks", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "376e6934831444a2521130e3d37d58a1ca4475b9",
+      "headline": {"en": "REST WebSocket callbacks are released before their owner disappears", "fr": "Les callbacks REST WebSocket sont libérés avant leur owner", "zh": "REST WebSocket callback 在 owner 消失前释放", "ru": "REST WebSocket callback освобождаются до исчезновения owner"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TRestClientUri.Destroy moves FreeAndNilSafe(fFakeCallbacks) into the inner finally immediately after InternalClose and before inherited Destroy releases the REST model and services.", "fr": "TRestClientUri.Destroy déplace FreeAndNilSafe(fFakeCallbacks) dans le finally interne juste après InternalClose et avant inherited Destroy qui libère le modèle REST et les services.", "zh": "TRestClientUri.Destroy 将 FreeAndNilSafe(fFakeCallbacks) 移到 InternalClose 后的内部 finally，并置于释放 REST model 与 service 的 inherited Destroy 之前。", "ru": "TRestClientUri.Destroy переносит FreeAndNilSafe(fFakeCallbacks) во внутренний finally сразу после InternalClose и до inherited Destroy, освобождающего REST model и services."},
+      "impact": {"en": "Concurrent WebSocket shutdown no longer leaves callback storage referring to an owner already being destroyed. The fix applies to Delphi and FPC REST clients using WebSocket callbacks.", "fr": "Le shutdown WebSocket concurrent ne laisse plus le stockage callback référencer un owner déjà détruit. Le correctif touche les clients REST Delphi et FPC avec callbacks WebSocket.", "zh": "并发 WebSocket shutdown 不再让 callback storage 引用正在销毁的 owner。修复适用于使用 WebSocket callback 的 Delphi 与 FPC REST client。", "ru": "Конкурентный WebSocket shutdown больше не оставляет callback storage со ссылкой на уничтожаемый owner. Исправление касается REST clients Delphi и FPC с WebSocket callbacks."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade and stress repeated connect, callback registration, disconnect and TRestClientUri destruction from concurrent threads.", "fr": "Mettez à jour et testez connect, enregistrement callback, disconnect et destruction TRestClientUri répétés en concurrence.", "zh": "升级后并发压力测试反复 connect、callback registration、disconnect 与 TRestClientUri destruction。", "ru": "Обновитесь и нагрузочно проверьте повторные connect, регистрацию callback, disconnect и уничтожение TRestClientUri из конкурентных threads."},
+      "units": ["mormot.rest.client"],
+      "api_changes": [{"symbol": "TRestClientUri.Destroy", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "883ee3aee24e19911df199268058d47c218ffa8b",
+      "headline": {"en": "Internal atomic increments use one pointer-based helper", "fr": "Les incréments atomiques internes utilisent un helper unique", "zh": "内部原子递增统一使用 pointer-based helper", "ru": "Внутренние atomic increments используют единый pointer-based helper"},
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {"en": "Four InterlockedIncrement calls in sequence generation, thread-pool accounting, ECC reference counting and tests are replaced by LockedInc32 with explicit addresses.", "fr": "Quatre appels InterlockedIncrement dans les séquences, comptes thread pool, références ECC et tests sont remplacés par LockedInc32 avec adresses explicites.", "zh": "序列生成、thread-pool 计数、ECC 引用计数与测试中的四个 InterlockedIncrement 调用改为传入显式地址的 LockedInc32。", "ru": "Четыре вызова InterlockedIncrement в генерации последовательностей, thread-pool accounting, ECC refcount и тестах заменены на LockedInc32 с явными адресами."},
+      "impact": {"en": "Behavior is unchanged; the code uses the framework atomic wrapper consistently across Delphi and FPC targets.", "fr": "Le comportement ne change pas ; le code utilise uniformément le wrapper atomique du framework sur Delphi et FPC.", "zh": "行为不变；代码在 Delphi 与 FPC target 上统一使用 framework atomic wrapper。", "ru": "Поведение не меняется; код единообразно использует atomic wrapper framework на Delphi и FPC."},
+      "action": "none",
+      "units": ["mormot.core.base", "mormot.core.threads", "mormot.crypt.ecc", "test.net.proto"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3e909874c136481bea80bc5679fb3b4812e44d5e",
+      "headline": {"en": "Queue reset receives repeated multi-waiter regression coverage", "fr": "Le reset de queue reçoit une couverture multi-waiter répétée", "zh": "队列 reset 获得重复 multi-waiter 回归覆盖", "ru": "Reset queue получил повторное multi-waiter покрытие"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "test.core.threads adds finalize/reset cycles with eight waiting threads, verifies wake-one delivery after reset and confirms that a second finalization and reset leave the queue operational.", "fr": "test.core.threads ajoute des cycles finalize/reset avec huit waiting threads, vérifie wake-one après reset et confirme qu’un second cycle laisse la queue opérationnelle.", "zh": "test.core.threads 增加含八个 waiting thread 的 finalize/reset cycle，验证 reset 后 wake-one 交付，并确认第二轮 finalization/reset 后队列仍可用。", "ru": "test.core.threads добавляет циклы finalize/reset с восемью waiting threads, проверяет wake-one после reset и работу queue после второго цикла."},
+      "impact": {"en": "Application behavior is unchanged. The new WaitPopReset contract is exercised under concurrent sleepers instead of only sequential calls.", "fr": "Le comportement applicatif ne change pas. Le contrat WaitPopReset est exercé avec des sleepers concurrents et non seulement séquentiels.", "zh": "应用行为不变。新的 WaitPopReset contract 在并发 sleeper 下得到验证，而非仅顺序调用。", "ru": "Поведение приложений не меняется. Контракт WaitPopReset проверяется с конкурентными sleepers, а не только последовательными вызовами."},
+      "action": "none",
+      "units": ["test.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "808c57b279a9e4a96b3439a41197d14e3c2cee1f",
+      "headline": {"en": "Finalized queues can be reactivated and report waiting consumers", "fr": "Les queues finalisées peuvent être réactivées et compter leurs waiters", "zh": "finalized queue 可重新启用并报告等待消费者", "ru": "Finalized queue можно активировать и узнать число waiters"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en": "TSynQueue.WaitPopReset clears the destroying flag only after all prior WaitPop calls unregister. TSynQueue.Waiters returns the protected waiter count.", "fr": "TSynQueue.WaitPopReset efface le flag destroying seulement après le désenregistrement de tous les anciens WaitPop. TSynQueue.Waiters renvoie le nombre protégé de waiters.", "zh": "TSynQueue.WaitPopReset 仅在所有先前 WaitPop 调用注销后清除 destroying flag。TSynQueue.Waiters 返回受保护的 waiter count。", "ru": "TSynQueue.WaitPopReset очищает destroying flag только после выхода всех прежних WaitPop. TSynQueue.Waiters возвращает защищённое число waiters."},
+      "impact": {"en": "A queue stopped through WaitPopFinalize can be reused without reallocating stored items, provided reset succeeds. Monitoring can observe active consumers safely.", "fr": "Une queue arrêtée par WaitPopFinalize peut être réutilisée sans réallouer les items si reset réussit. Le monitoring peut lire les consommateurs actifs sûrement.", "zh": "通过 WaitPopFinalize 停止的队列可在 reset 成功后复用，且无需重新分配存储 item。监控可安全观察 active consumer。", "ru": "Queue после WaitPopFinalize можно использовать повторно без перераспределения items, если reset успешен. Monitoring безопасно видит активных consumers."},
+      "action": "review",
+      "action_detail": {"en": "Call WaitPopReset only after WaitPopFinalize returns and handle false while an earlier waiter is still terminating.", "fr": "Appelez WaitPopReset seulement après le retour de WaitPopFinalize et gérez false si un ancien waiter se termine encore.", "zh": "仅在 WaitPopFinalize 返回后调用 WaitPopReset；若旧 waiter 仍在终止，请处理 false。", "ru": "Вызывайте WaitPopReset только после возврата WaitPopFinalize и обрабатывайте false, пока прежний waiter ещё завершается."},
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynQueue.WaitPopReset", "change": "added"}, {"symbol": "TSynQueue.Waiters", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "db598d3bd40202f5db818902c78527d1ef1cb793",
+      "headline": {"en": "Queue futex paths gain concurrent wake and shutdown tests", "fr": "Les chemins futex de queue gagnent des tests wake et shutdown concurrents", "zh": "队列 futex 路径新增并发 wake 与 shutdown 测试", "ru": "Futex-пути queue получили конкурентные тесты wake и shutdown"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "test.core.threads adds delayed producers, eight simultaneous WaitPop consumers, WakeOne distribution, WaitPopFinalize WakeAll behavior and post-finalization rejection checks.", "fr": "test.core.threads ajoute producers différés, huit consommateurs WaitPop, distribution WakeOne, comportement WakeAll de WaitPopFinalize et rejet après finalization.", "zh": "test.core.threads 增加 delayed producer、八个并发 WaitPop consumer、WakeOne 分配、WaitPopFinalize 的 WakeAll 行为及 finalization 后拒绝检查。", "ru": "test.core.threads добавляет delayed producers, восемь WaitPop consumers, распределение WakeOne, WakeAll в WaitPopFinalize и проверки отказа после finalization."},
+      "impact": {"en": "No application code changes. Windows and Linux futex behavior is now exercised with actual concurrent waiters.", "fr": "Aucun changement applicatif. Le comportement futex Windows et Linux est désormais exercé avec de vrais waiters concurrents.", "zh": "应用代码不变。Windows 与 Linux futex 行为现在由真实并发 waiter 覆盖。", "ru": "Код приложений не меняется. Поведение futex на Windows и Linux проверяется настоящими конкурентными waiters."},
+      "action": "none",
+      "units": ["test.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2ad1823e89a1098e07eca2669614cc12e0978c41",
+      "headline": {"en": "Tunnel locking and ownership rules are documented beside the code", "fr": "Les règles de lock et ownership Tunnel sont documentées près du code", "zh": "Tunnel 锁与所有权规则记录于代码旁", "ru": "Правила lock и ownership Tunnel описаны рядом с кодом"},
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {"en": "mormot.net.tunnel records the concurrency rules used by the implementation: short state locks, no external calls under locks, owner-managed workers and two-phase shutdown. TTunnelLocalThread.Abort also tolerates a nil self reference.", "fr": "mormot.net.tunnel documente les règles de concurrence : state locks courts, aucun appel externe sous lock, workers gérés par l’owner et shutdown en deux phases. TTunnelLocalThread.Abort tolère aussi self=nil.", "zh": "mormot.net.tunnel 记录实现采用的并发规则：短 state lock、锁内不做外部调用、worker 由 owner 管理及两阶段 shutdown。TTunnelLocalThread.Abort 也允许 self=nil。", "ru": "mormot.net.tunnel фиксирует правила конкурентности: короткие state locks, никаких внешних вызовов под lock, workers у owner и двухфазный shutdown. TTunnelLocalThread.Abort также допускает self=nil."},
+      "impact": {"en": "The comments do not change application behavior. The nil guard makes internal shutdown calls defensive.", "fr": "Les commentaires ne changent pas le comportement applicatif. Le guard nil rend le shutdown interne défensif.", "zh": "注释不改变应用行为。nil guard 让内部 shutdown 调用更具防御性。", "ru": "Комментарии не меняют поведение приложений. Nil guard делает внутренний shutdown защитным."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "53ff22a2060e36636c15d090e400da3f407e80d7",
+      "headline": {"en": "Queue futex use is limited to true unfiltered consumers", "fr": "Le futex de queue se limite aux vrais consommateurs non filtrés", "zh": "队列 futex 仅用于真正的无过滤消费者", "ru": "Futex queue ограничен настоящими нефильтрованными consumers"},
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {"en": "TSynQueue avoids futex waits for PopEquals and WaitPeekLocked, preserves their polling semantics, prevents a zero sequence after overflow and resets the sequence after binary loading.", "fr": "TSynQueue évite les attentes futex pour PopEquals et WaitPeekLocked, conserve leur polling, empêche une séquence zéro après overflow et reset la séquence après chargement binaire.", "zh": "TSynQueue 不对 PopEquals 与 WaitPeekLocked 使用 futex wait，保留其 polling 语义，避免 sequence overflow 后变为零，并在 binary load 后重置 sequence。", "ru": "TSynQueue не применяет futex wait к PopEquals и WaitPeekLocked, сохраняет polling, предотвращает нулевую sequence после overflow и сбрасывает её после binary load."},
+      "impact": {"en": "Filtered waits do not sleep indefinitely when a nonmatching item is at the head, while ordinary WaitPop retains efficient OS blocking.", "fr": "Les attentes filtrées ne dorment pas indéfiniment devant un item non correspondant, tandis que WaitPop ordinaire garde le blocking OS efficace.", "zh": "当队首 item 不匹配时，filtered wait 不会无限睡眠；普通 WaitPop 仍保留高效 OS blocking。", "ru": "Filtered waits не засыпают бесконечно при неподходящем первом item, а обычный WaitPop сохраняет эффективную OS-блокировку."},
+      "action": "none",
+      "units": ["mormot.core.threads"],
+      "api_changes": [{"symbol": "TSynQueue.WaitPop", "change": "behaviour-changed"}, {"symbol": "TSynQueue.WaitPeekLocked", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d73f877cdd8a68412018923b7fb14fba4b941ece",
+      "headline": {"en": "Queue regression coverage moves into the thread test unit", "fr": "La couverture de queue rejoint l’unité de tests thread", "zh": "队列回归覆盖移至 thread 测试单元", "ru": "Покрытие queue перенесено в модуль тестов threads"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "The complete TSynQueue value, persistence and worker tests move from test.core.base into test.core.threads, next to the concurrency primitives they exercise.", "fr": "Les tests complets TSynQueue de valeurs, persistence et workers passent de test.core.base à test.core.threads, près des primitives de concurrence.", "zh": "完整的 TSynQueue 值、persistence 与 worker 测试从 test.core.base 移至 test.core.threads，靠近其覆盖的并发原语。", "ru": "Полные тесты TSynQueue для значений, persistence и workers перенесены из test.core.base в test.core.threads к проверяемым примитивам конкурентности."},
+      "impact": {"en": "Application behavior is unchanged; test organization now matches the implementation area.", "fr": "Le comportement applicatif ne change pas ; l’organisation des tests correspond maintenant à l’implémentation.", "zh": "应用行为不变；测试组织现在与实现领域一致。", "ru": "Поведение приложений не меняется; организация тестов теперь соответствует области реализации."},
+      "action": "none",
+      "units": ["test.core.base", "test.core.data", "test.core.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ac7c87e4f4d445b41b693504877f4da97ab6d8d4",
+      "headline": {"en": "Queue consumers block on native OS wait primitives", "fr": "Les consommateurs de queue bloquent sur les primitives OS natives", "zh": "队列消费者阻塞于原生 OS wait primitive", "ru": "Consumers queue блокируются на нативных OS wait primitives"},
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {"en": "TSynQueue adds a sequence counter and uses OsWaitOnValue, OsWakeOnValue and OsWakeAllOnValue on Win8+ and Linux. Push wakes one registered consumer; finalization and binary load wake all.", "fr": "TSynQueue ajoute un sequence counter et utilise OsWaitOnValue, OsWakeOnValue et OsWakeAllOnValue sous Win8+ et Linux. Push réveille un consommateur ; finalization et binary load réveillent tous.", "zh": "TSynQueue 增加 sequence counter，并在 Win8+ 与 Linux 上使用 OsWaitOnValue、OsWakeOnValue 和 OsWakeAllOnValue。Push 唤醒一个已注册 consumer；finalization 与 binary load 唤醒全部。", "ru": "TSynQueue добавляет sequence counter и использует OsWaitOnValue, OsWakeOnValue и OsWakeAllOnValue на Win8+ и Linux. Push будит одного consumer, finalization и binary load — всех."},
+      "impact": {"en": "Ordinary WaitPop no longer spins while idle on supported systems, reducing CPU use and wake latency. Unsupported platforms retain the existing SleepStep fallback.", "fr": "WaitPop ordinaire ne spin plus au repos sur les systèmes supportés, réduisant CPU et latence. Les autres plateformes gardent SleepStep.", "zh": "支持系统上的普通 WaitPop 在 idle 时不再 spin，降低 CPU 占用与 wake latency。不支持平台保留 SleepStep fallback。", "ru": "Обычный WaitPop больше не spin в idle на поддерживаемых системах, снижая CPU и wake latency. Остальные платформы сохраняют SleepStep fallback."},
+      "action": "none",
+      "units": ["mormot.core.threads", "mormot.net.tunnel"],
+      "api_changes": [{"symbol": "TSynQueue.WaitPop", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f9ad68c8a686223198006d60b19b196f46189bd1",
+      "headline": {"en": "Crypto tests select accelerated paths through public capability helpers", "fr": "Les tests crypto sélectionnent l’accélération via des helpers publics", "zh": "crypto 测试通过公开能力 helper 选择加速路径", "ru": "Crypto tests выбирают ускорение через публичные capability helpers"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "TTestCoreCrypto replaces compile-time AVX assumptions with HasKeccakAvx2 and HasAesGcmAvx, extends forged AES-GCM cases and verifies plaintext is not mistaken for authenticated output.", "fr": "TTestCoreCrypto remplace les hypothèses AVX de compilation par HasKeccakAvx2 et HasAesGcmAvx, étend les cas AES-GCM falsifiés et vérifie le plaintext non authentifié.", "zh": "TTestCoreCrypto 用 HasKeccakAvx2 与 HasAesGcmAvx 取代编译期 AVX 假设，扩展伪造 AES-GCM case，并验证未认证 plaintext 不会被误认为有效。", "ru": "TTestCoreCrypto заменяет compile-time предположения AVX на HasKeccakAvx2 и HasAesGcmAvx, расширяет поддельные AES-GCM cases и проверяет неаутентифицированный plaintext."},
+      "impact": {"en": "Application behavior is unchanged. Tests now exercise only acceleration supported by both hardware, OS state and DisabledAsm settings.", "fr": "Le comportement applicatif ne change pas. Les tests exercent seulement l’accélération supportée par hardware, OS et DisabledAsm.", "zh": "应用行为不变。测试现在仅运行硬件、OS state 与 DisabledAsm 共同支持的加速。", "ru": "Поведение приложений не меняется. Тесты запускают только ускорение, поддержанное hardware, OS state и DisabledAsm."},
+      "action": "none",
+      "units": ["test.core.crypt"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7ee3b216d650d35c03fb1b443f8e57f45544d701",
+      "headline": {"en": "Crypto acceleration checks become reusable runtime APIs", "fr": "Les checks d’accélération crypto deviennent des API runtime", "zh": "crypto 加速检查成为可复用 runtime API", "ru": "Проверки crypto acceleration стали повторно используемыми runtime API"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en": "TX64CpuFeatures gains cpuAESGCM, computed from CLMUL, SSE4.1 and AES-NI. HasAesGcmAvx and HasKeccakAvx2 also account for DisabledAsm before reporting an accelerated implementation.", "fr": "TX64CpuFeatures gagne cpuAESGCM, calculé depuis CLMUL, SSE4.1 et AES-NI. HasAesGcmAvx et HasKeccakAvx2 tiennent aussi compte de DisabledAsm.", "zh": "TX64CpuFeatures 新增由 CLMUL、SSE4.1 与 AES-NI 计算的 cpuAESGCM。HasAesGcmAvx 与 HasKeccakAvx2 在报告加速实现前也会考虑 DisabledAsm。", "ru": "TX64CpuFeatures получает cpuAESGCM, вычисляемый по CLMUL, SSE4.1 и AES-NI. HasAesGcmAvx и HasKeccakAvx2 также учитывают DisabledAsm."},
+      "impact": {"en": "Delphi and FPC x86-64 code can query the same final dispatch decision used by the crypto engine instead of duplicating CPU tests.", "fr": "Le code Delphi et FPC x86-64 peut interroger la même décision de dispatch que le moteur crypto sans dupliquer les tests CPU.", "zh": "Delphi 与 FPC x86-64 代码可查询 crypto engine 使用的同一最终 dispatch 决策，无需重复 CPU test。", "ru": "Код Delphi и FPC x86-64 может узнать то же решение dispatch, что использует crypto engine, без дублирования CPU tests."},
+      "action": "review",
+      "action_detail": {"en": "Use HasAesGcmAvx or HasKeccakAvx2 when diagnostics or tests must follow actual runtime dispatch.", "fr": "Utilisez HasAesGcmAvx ou HasKeccakAvx2 pour que diagnostics et tests suivent le dispatch runtime réel.", "zh": "当诊断或测试必须遵循实际 runtime dispatch 时，请使用 HasAesGcmAvx 或 HasKeccakAvx2。", "ru": "Используйте HasAesGcmAvx или HasKeccakAvx2, если diagnostics или tests должны следовать реальному runtime dispatch."},
+      "units": ["mormot.core.base", "mormot.crypt.core"],
+      "api_changes": [{"symbol": "cpuAESGCM", "change": "added"}, {"symbol": "HasAesGcmAvx", "change": "added"}, {"symbol": "HasKeccakAvx2", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fc0d975728168ddab432c05c891a3359f9d970b5",
+      "headline": {"en": "Regression tests report unexpected exceptions with structured details", "fr": "Les tests rapportent les exceptions inattendues avec détails structurés", "zh": "回归测试以结构化详情报告意外异常", "ru": "Regression tests сообщают неожиданные исключения структурированно"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "ZIP, network and ORM tests replace ad-hoc Check(false, E.Message) handlers with TSynTestCase.FailedRaised. The ZIP data-descriptor fixture is rewritten into a fixed temporary buffer.", "fr": "Les tests ZIP, réseau et ORM remplacent Check(false, E.Message) par TSynTestCase.FailedRaised. Le fixture ZIP data-descriptor utilise maintenant un buffer temporaire fixe.", "zh": "ZIP、network 与 ORM 测试用 TSynTestCase.FailedRaised 取代临时的 Check(false, E.Message) handler。ZIP data-descriptor fixture 改写为固定 temporary buffer。", "ru": "ZIP, network и ORM tests заменяют Check(false, E.Message) на TSynTestCase.FailedRaised. ZIP data-descriptor fixture переписан на фиксированный temporary buffer."},
+      "impact": {"en": "Application behavior is unchanged. Test failures retain exception class and structured fields, making regressions easier to diagnose.", "fr": "Le comportement applicatif ne change pas. Les échecs gardent la classe d’exception et ses champs structurés pour faciliter le diagnostic.", "zh": "应用行为不变。测试失败会保留 exception class 与结构化字段，更易诊断回归。", "ru": "Поведение приложений не меняется. Ошибки тестов сохраняют class исключения и структурированные поля для диагностики."},
+      "action": "none",
+      "units": ["mormot.core.test", "test.core.data", "test.net.proto", "test.orm.network", "test.orm.threads"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "311e29ede3a379d59a86f9f7ca4158880268e3f6",
+      "headline": {"en": "Test failures gain an exception-aware reporting helper", "fr": "Les échecs de test gagnent un helper conscient des exceptions", "zh": "测试失败新增 exception-aware 报告 helper", "ru": "Ошибки тестов получили exception-aware helper"},
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {"en": "TSynTestCase.FailedRaised formats an Exception through ObjectToJsonDebug before calling TestFailed. Stack-symbol filtering also removes mormot.core.log and mormot.core.test redirection frames.", "fr": "TSynTestCase.FailedRaised formate une Exception via ObjectToJsonDebug avant TestFailed. Le filtrage des symbols retire aussi les frames de redirection mormot.core.log et mormot.core.test.", "zh": "TSynTestCase.FailedRaised 通过 ObjectToJsonDebug 格式化 Exception 后调用 TestFailed。stack-symbol filter 也移除 mormot.core.log 与 mormot.core.test 的重定向 frame。", "ru": "TSynTestCase.FailedRaised форматирует Exception через ObjectToJsonDebug перед TestFailed. Фильтр stack symbols также убирает redirect frames mormot.core.log и mormot.core.test."},
+      "impact": {"en": "Custom mORMot test suites can report unexpected exceptions consistently, with cleaner caller locations. Production runtime paths are unchanged.", "fr": "Les suites de tests mORMot custom peuvent rapporter les exceptions de manière cohérente avec des locations plus propres. Le runtime de production ne change pas.", "zh": "自定义 mORMot 测试套件可一致报告意外异常，并获得更干净的 caller location。生产 runtime 路径不变。", "ru": "Custom mORMot test suites могут единообразно сообщать неожиданные исключения с более чистыми caller locations. Production runtime не меняется."},
+      "action": "none",
+      "units": ["mormot.core.log", "mormot.core.test", "mormot.net.tunnel"],
+      "api_changes": [{"symbol": "TSynTestCase.FailedRaised", "change": "added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5f4644236344eeca8187eb037e4991809f6cc47a",
+      "headline": {"en": "AES-GCM tests reject altered ciphertext, tags and associated data", "fr": "Les tests AES-GCM rejettent ciphertext, tags et données associées altérés", "zh": "AES-GCM 测试拒绝篡改的 ciphertext、tag 与 associated data", "ru": "AES-GCM tests отклоняют изменённые ciphertext, tag и associated data"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en": "_AES_GCM encrypts and verifies lengths 1 through 64 in scalar and available AVX modes, then independently modifies ciphertext, the authentication tag and AAD and requires each verification to fail.", "fr": "_AES_GCM chiffre et vérifie les longueurs 1 à 64 en modes scalar et AVX disponible, puis modifie séparément ciphertext, tag et AAD et exige l’échec de chaque vérification.", "zh": "_AES_GCM 在 scalar 与可用 AVX 模式下加密并验证长度 1 至 64，随后分别修改 ciphertext、authentication tag 与 AAD，并要求每次校验失败。", "ru": "_AES_GCM шифрует и проверяет длины 1–64 в scalar и доступном AVX режиме, затем отдельно меняет ciphertext, authentication tag и AAD и требует отказа проверки."},
+      "impact": {"en": "Application behavior is unchanged. The regression directly covers the authentication bypass fixed in the preceding commit.", "fr": "Le comportement applicatif ne change pas. La régression couvre directement le bypass d’authentification corrigé juste avant.", "zh": "应用行为不变。该回归直接覆盖前一 commit 修复的 authentication bypass。", "ru": "Поведение приложений не меняется. Regression напрямую покрывает authentication bypass из предыдущего commit."},
+      "action": "none",
+      "units": ["test.core.crypt"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3c395af5cd47b07482ab12dc002dd33c1683f34d",
+      "headline": {"en": "AVX AES-GCM decryption no longer accepts unauthenticated data", "fr": "Le déchiffrement AVX AES-GCM n’accepte plus de données non authentifiées", "zh": "AVX AES-GCM 解密不再接受未认证数据", "ru": "AVX AES-GCM больше не принимает неаутентифицированные данные"},
+      "category": "security",
+      "severity": "critical",
+      "what_changed": {"en": "TAesGcmEngine.Decrypt moves the final tag comparison after all single-pass branches, including AvxProcess. The dual-pass path marks an already verified tag so it is not checked twice.", "fr": "TAesGcmEngine.Decrypt déplace la comparaison finale du tag après tous les chemins single-pass, dont AvxProcess. Le chemin dual-pass marque le tag déjà vérifié pour éviter un double check.", "zh": "TAesGcmEngine.Decrypt 将最终 tag comparison 移至所有 single-pass branch（包括 AvxProcess）之后。dual-pass 路径会标记已验证 tag，避免重复检查。", "ru": "TAesGcmEngine.Decrypt переносит финальное сравнение tag после всех single-pass ветвей, включая AvxProcess. Dual-pass путь отмечает уже проверенный tag, чтобы не проверять дважды."},
+      "impact": {"en": "On eligible x86-64 systems using the AVX AES-GCM path, forged ciphertext, authentication tags or AAD could previously return success. Scalar and dual-pass paths already performed authentication.", "fr": "Sur les systèmes x86-64 utilisant le chemin AVX AES-GCM, ciphertext, tag ou AAD falsifiés pouvaient auparavant réussir. Les chemins scalar et dual-pass authentifiaient déjà.", "zh": "在使用 AVX AES-GCM 路径的符合条件 x86-64 系统上，伪造的 ciphertext、authentication tag 或 AAD 此前可能返回成功。scalar 与 dual-pass 路径原本已认证。", "ru": "На подходящих x86-64 системах с AVX AES-GCM поддельные ciphertext, authentication tag или AAD могли вернуть успех. Scalar и dual-pass пути уже выполняли проверку."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade immediately if TAesGcmEngine can dispatch to AVX, and add negative tests that alter ciphertext, tag and AAD.", "fr": "Mettez à jour immédiatement si TAesGcmEngine peut utiliser AVX et ajoutez des tests négatifs altérant ciphertext, tag et AAD.", "zh": "若 TAesGcmEngine 可能 dispatch 到 AVX，请立即升级，并添加修改 ciphertext、tag 与 AAD 的负向测试。", "ru": "Обновитесь немедленно, если TAesGcmEngine может выбрать AVX, и добавьте негативные тесты с изменением ciphertext, tag и AAD."},
+      "units": ["mormot.crypt.core"],
+      "api_changes": [{"symbol": "TAesGcmEngine.Decrypt", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0900c1f2911c0b7121232f2508810a9ff84ba0b3",
+      "headline": {"en": "Tunnel handshake waiting and close paths reach a stable lock model", "fr": "L’attente handshake et la fermeture Tunnel stabilisent leur modèle de lock", "zh": "Tunnel handshake 等待与关闭路径形成稳定锁模型", "ru": "Ожидание handshake и закрытие Tunnel получили стабильную модель lock"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TTunnelLocal replaces its reentrant lock with TOSLightLock, initializes and finalizes it explicitly, centralizes WaitForHandshake state retrieval and closes failed post-thread handshakes through ClosePort.", "fr": "TTunnelLocal remplace son lock réentrant par TOSLightLock, l’initialise/finalise explicitement, centralise l’état WaitForHandshake et ferme les handshakes échoués après création du thread via ClosePort.", "zh": "TTunnelLocal 用 TOSLightLock 替换 reentrant lock，显式初始化与完成它，集中 WaitForHandshake 状态获取，并通过 ClosePort 关闭 thread 创建后的失败 handshake。", "ru": "TTunnelLocal заменяет reentrant lock на TOSLightLock, явно инициализирует его, централизует состояние WaitForHandshake и закрывает неудачный handshake после создания thread через ClosePort."},
+      "impact": {"en": "Concurrent handshake arrival, timeout, closure and destruction no longer depend on recursive locking or nullable event checks. The final code applies to Delphi and FPC on all Tunnel-supported platforms.", "fr": "L’arrivée concurrente du handshake, timeout, fermeture et destruction ne dépendent plus d’un lock récursif ni d’events nil. Le code final touche Delphi et FPC sur toutes les plateformes Tunnel.", "zh": "并发 handshake 到达、timeout、关闭与销毁不再依赖递归锁或 nullable event check。最终代码适用于所有 Tunnel 支持平台的 Delphi 与 FPC。", "ru": "Конкурентные handshake, timeout, закрытие и уничтожение больше не зависят от рекурсивного lock или nullable event checks. Финальный код действует на всех Tunnel-платформах Delphi и FPC."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Take the complete Tunnel sequence through 0900c1f2 and stress early frames, remote close, timeout and destruction during handshake.", "fr": "Prenez toute la séquence Tunnel jusqu’à 0900c1f2 et testez early frames, remote close, timeout et destruction durant handshake.", "zh": "采用直至 0900c1f2 的完整 Tunnel 序列，并压力测试 early frame、remote close、timeout 与 handshake 中销毁。", "ru": "Берите всю последовательность Tunnel до 0900c1f2 и проверьте early frames, remote close, timeout и уничтожение во время handshake."},
+      "units": ["mormot.net.tunnel", "test.net.proto"],
+      "api_changes": [{"symbol": "TTunnelLocal.WaitForHandshake", "change": "behaviour-changed"}, {"symbol": "TTunnelLocal.ClosePort", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1f37f3a44bef4f9c2f935b9d3a11855b50a7fe86",
+      "headline": {"en": "Tunnel socket transfer and delayed frames become race-safe", "fr": "Le transfert socket et les frames retardées Tunnel deviennent race-safe", "zh": "Tunnel socket 转移与延迟 frame 变得 race-safe", "ru": "Передача socket и delayed frames Tunnel стали race-safe"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "OpenInternal takes its socket by var, clears it after thread ownership transfer, checks closure under the state lock and drains queued handshake frames outside the lock through RelayFrame.", "fr": "OpenInternal prend le socket par var, le vide après transfert au thread, vérifie la fermeture sous state lock et draine les frames handshake hors lock via RelayFrame.", "zh": "OpenInternal 以 var 接收 socket，转移给 thread 后清空它，在 state lock 下检查关闭，并通过 RelayFrame 在锁外排空 queued handshake frame。", "ru": "OpenInternal принимает socket по var, очищает его после передачи thread, проверяет закрытие под state lock и обрабатывает queued handshake frames вне lock через RelayFrame."},
+      "impact": {"en": "Open and OpenSocket avoid double-closing transferred sockets, and callbacks caused by delayed frames cannot re-enter while the parent state lock is held. Later Tunnel fixes complete this sequence.", "fr": "Open et OpenSocket évitent le double-close des sockets transférés, et les callbacks des frames retardées ne réentrent plus sous le state lock. Les correctifs suivants terminent la séquence.", "zh": "Open 与 OpenSocket 避免重复关闭已转移 socket，延迟 frame 引发的 callback 也不会在持有 parent state lock 时重入。后续 Tunnel 修复完成该序列。", "ru": "Open и OpenSocket избегают двойного закрытия переданных sockets, а callbacks delayed frames не входят повторно под state lock. Следующие Tunnel fixes завершают последовательность."},
+      "action": "none",
+      "units": ["mormot.core.threads", "mormot.net.tunnel"],
+      "api_changes": [{"symbol": "TTunnelLocal.OpenSocket", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d60cc6e8035d296e60eb86df4d930b9c91c7a791",
+      "headline": {"en": "Tunnel closure state is consolidated into one protected flag set", "fr": "L’état de fermeture Tunnel rejoint un seul ensemble de flags protégé", "zh": "Tunnel 关闭状态合并至单一受保护 flag set", "ru": "Состояние закрытия Tunnel собрано в одном защищённом наборе flags"},
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {"en": "The separate fClosed boolean is folded into TTunnelLocalFlags, and frame handling is split into handshake-state capture and RelayFrame processing. CallbackReleased maps remote release directly to ClosePort(FromNotify=true).", "fr": "Le boolean fClosed rejoint TTunnelLocalFlags, et le traitement des frames sépare capture d’état handshake et RelayFrame. CallbackReleased appelle directement ClosePort(FromNotify=true).", "zh": "独立 fClosed boolean 合并到 TTunnelLocalFlags，frame 处理拆分为 handshake state 捕获与 RelayFrame 处理。CallbackReleased 直接映射至 ClosePort(FromNotify=true)。", "ru": "Отдельный fClosed включён в TTunnelLocalFlags, обработка frames разделена на handshake-state capture и RelayFrame. CallbackReleased вызывает ClosePort(FromNotify=true)."},
+      "impact": {"en": "Closure state becomes atomic with the other protected flags and remote notification is idempotent. This is an intermediate refactor followed by additional race fixes.", "fr": "L’état de fermeture devient atomique avec les autres flags protégés et la notification distante idempotente. C’est un refactor intermédiaire suivi d’autres fixes.", "zh": "关闭状态与其他受保护 flag 保持原子一致，remote notification 变为幂等。此为后续更多 race fix 前的中间重构。", "ru": "Состояние закрытия атомарно с другими защищёнными flags, remote notification стала идемпотентной. Это промежуточный refactor перед следующими fixes."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bd4626d43e0e87e6d32b3d0f928187ef068d72af",
+      "headline": {"en": "Tunnel forwarding no longer holds its state lock during external work", "fr": "Le forwarding Tunnel ne garde plus son state lock pendant le travail externe", "zh": "Tunnel forwarding 不再于外部工作期间持有 state lock", "ru": "Tunnel forwarding больше не держит state lock во время внешней работы"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TunnelSend now uses the lock only for handshake and flag transitions, then forwards regular frames outside it. ClosePort captures notification state under the lock before aborting sockets and calling the transport.", "fr": "TunnelSend utilise le lock seulement pour les transitions handshake/flags puis forward les frames hors lock. ClosePort capture l’état sous lock avant d’interrompre les sockets et appeler le transport.", "zh": "TunnelSend 仅在 handshake 与 flag 转换时持锁，常规 frame 在锁外转发。ClosePort 在中止 socket 与调用 transport 前于锁下捕获 notification state。", "ru": "TunnelSend держит lock только для переходов handshake/flags и передаёт обычные frames вне него. ClosePort фиксирует состояние под lock до abort sockets и вызова transport."},
+      "impact": {"en": "Transport callbacks, socket shutdown and frame delivery cannot deadlock by re-entering TTunnelLocal while its state lock is held. The subsequent commits refine closure ownership further.", "fr": "Les callbacks transport, shutdown socket et livraison de frames ne peuvent plus deadlocker en réentrant TTunnelLocal sous state lock. Les commits suivants affinent encore ownership.", "zh": "transport callback、socket shutdown 与 frame delivery 不会在 TTunnelLocal 持有 state lock 时重入并造成 deadlock。后续 commit 进一步完善关闭 ownership。", "ru": "Transport callbacks, shutdown socket и доставка frames больше не вызывают deadlock при повторном входе в TTunnelLocal под state lock. Следующие commits уточняют ownership."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7d9ec6c6fa96889d74bc8672a147f51af932678b",
+      "headline": {"en": "Tunnel transport calls move outside the parent state lock", "fr": "Les appels transport Tunnel sortent du state lock parent", "zh": "Tunnel transport 调用移出 parent state lock", "ru": "Вызовы transport Tunnel вынесены из state lock родителя"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "The parent lock is renamed fStateSafe, SendFrame captures counters and closed state under it, and TTunnelLocalThread routes outgoing frames through the parent helper before calling ITunnelTransmit.TunnelSend outside the lock.", "fr": "Le lock parent devient fStateSafe, SendFrame capture compteurs et closed state sous lock, puis TTunnelLocalThread passe par ce helper avant ITunnelTransmit.TunnelSend hors lock.", "zh": "parent lock 更名为 fStateSafe；SendFrame 在锁下捕获计数与 closed state，TTunnelLocalThread 经由 parent helper 后在锁外调用 ITunnelTransmit.TunnelSend。", "ru": "Parent lock переименован в fStateSafe, SendFrame фиксирует counters и closed state под ним, а TTunnelLocalThread вызывает ITunnelTransmit.TunnelSend вне lock через helper родителя."},
+      "impact": {"en": "A transport implementation may block or re-enter without deadlocking the Tunnel state transition. This is an intermediate form later replaced by the final TOSLightLock design.", "fr": "Une implémentation transport peut bloquer ou réentrer sans deadlocker les transitions Tunnel. Cette forme intermédiaire est remplacée ensuite par TOSLightLock.", "zh": "transport 实现可阻塞或重入而不死锁 Tunnel state transition。此中间形式随后被最终 TOSLightLock 设计取代。", "ru": "Реализация transport может блокироваться или входить повторно без deadlock перехода Tunnel. Эта промежуточная форма затем заменена TOSLightLock."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "be0c71361126be983499c75cb86f8c22cebcd601",
+      "headline": {"en": "Tunnel workers become owned and joined by their parent", "fr": "Les workers Tunnel sont possédés et joints par leur parent", "zh": "Tunnel worker 由 parent 拥有并 join", "ru": "Tunnel workers теперь принадлежат parent и завершаются через join"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TTunnelLocalThread stops using FreeOnTerminate and a strong transmit reference. TTunnelLocal publishes a suspended worker, starts it explicitly, terminates it in ClosePort and frees it from the parent destructor after the inherited join.", "fr": "TTunnelLocalThread abandonne FreeOnTerminate et la référence forte transmit. TTunnelLocal publie un worker suspendu, le démarre explicitement, le termine dans ClosePort et le libère dans le destructeur parent après join.", "zh": "TTunnelLocalThread 不再使用 FreeOnTerminate 与强 transmit 引用。TTunnelLocal 发布 suspended worker、显式启动，在 ClosePort 中终止，并由 parent destructor 于 inherited join 后释放。", "ru": "TTunnelLocalThread больше не использует FreeOnTerminate и сильную ссылку transmit. TTunnelLocal публикует suspended worker, явно запускает, завершает в ClosePort и освобождает в destructor parent после join."},
+      "impact": {"en": "Worker lifetime no longer races parent destruction or clears the owner's thread reference from the worker. Later commits are required to finish external-call and handshake locking.", "fr": "Le cycle worker ne race plus la destruction du parent et ne vide plus sa référence depuis le worker. Les commits suivants restent requis pour les appels externes et handshake.", "zh": "worker 生命周期不再与 parent destruction 竞争，也不会从 worker 清除 owner 的 thread reference。仍需后续 commit 完成外部调用与 handshake locking。", "ru": "Жизненный цикл worker больше не конкурирует с уничтожением parent и не очищает ссылку owner из worker. Следующие commits нужны для внешних вызовов и handshake locking."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "444fc47ea834c4f63ad017464a12fad0d6f7f886",
+      "headline": {"en": "In-memory ZIP readers can extract a final data-descriptor entry", "fr": "Les lecteurs ZIP en mémoire extraient la dernière entrée data-descriptor", "zh": "内存 ZIP reader 可提取最后一个 data-descriptor entry", "ru": "ZIP reader в памяти извлекает последнюю data-descriptor запись"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en": "TZipRead.Create points the last in-memory local entry at the following central directory. SearchFromDataDescriptor can therefore search backward without falling into the disk branch and dereferencing a nil fSource.", "fr": "TZipRead.Create fait pointer la dernière entrée locale en mémoire vers le central directory suivant. SearchFromDataDescriptor cherche en arrière sans passer par le chemin disque ni déréférencer fSource=nil.", "zh": "TZipRead.Create 让最后一个内存 local entry 指向后续 central directory。SearchFromDataDescriptor 因而可向后搜索，不会落入 disk branch 并解引用 nil fSource。", "ru": "TZipRead.Create направляет последнюю локальную запись в памяти на следующий central directory. SearchFromDataDescriptor ищет назад без disk branch и обращения к nil fSource."},
+      "impact": {"en": "Opening a ZIP fully from memory no longer raises EAccessViolation when its last entry uses FLAG_DATADESCRIPTOR, a layout used by LibreOffice .xlsx and .ods files.", "fr": "L’ouverture d’un ZIP entièrement en mémoire ne lève plus EAccessViolation si la dernière entrée utilise FLAG_DATADESCRIPTOR, comme les .xlsx et .ods de LibreOffice.", "zh": "完全从内存打开 ZIP 时，若最后 entry 使用 LibreOffice .xlsx/.ods 常见的 FLAG_DATADESCRIPTOR，不再触发 EAccessViolation。", "ru": "Открытие ZIP целиком из памяти больше не вызывает EAccessViolation, если последняя запись использует FLAG_DATADESCRIPTOR, как .xlsx/.ods LibreOffice."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en": "Upgrade if ZIP, XLSX or ODS content is loaded into memory, and test extraction of the final archive entry.", "fr": "Mettez à jour si ZIP, XLSX ou ODS est chargé en mémoire et testez l’extraction de la dernière entrée.", "zh": "若 ZIP、XLSX 或 ODS 内容会载入内存，请升级并测试最后一个 archive entry 的提取。", "ru": "Обновитесь, если ZIP, XLSX или ODS загружается в память, и проверьте извлечение последней записи архива."},
+      "units": ["mormot.core.zip", "test.core.data"],
+      "api_changes": [{"symbol": "TZipRead.Create", "change": "behaviour-changed"}],
+      "confidence": "confirmed"
+    }
+  ]
+}
