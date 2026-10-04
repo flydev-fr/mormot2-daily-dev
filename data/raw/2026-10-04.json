@@ -1,0 +1,872 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-04",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-04T05:02:36Z",
+  "range": {
+    "since": "2026-10-03T01:03:04Z",
+    "until": "2026-10-04T05:02:36Z",
+    "head_sha": "913a072a26c0305bc468a79b658137de5f7d124b"
+  },
+  "version": {
+    "after": "2.4.17369",
+    "before": "2.4.17356"
+  },
+  "totals": {
+    "commits": 15,
+    "additions": 615,
+    "deletions": 528
+  },
+  "commits": [
+    {
+      "sha": "913a072a26c0305bc468a79b658137de5f7d124b",
+      "short_sha": "913a072a",
+      "subject": "Merge pull request #634 from dkounal/pgboundarrayfix",
+      "body": "db: fixed PostgreSQL array binding of over-allocated arrays and of trailing quotes",
+      "author": "ab",
+      "date": "2026-10-03T19:22:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/913a072a26c0305bc468a79b658137de5f7d124b",
+      "parents": [
+        "82960cd545fcb64ace5d1c27a42f332282f0ddee",
+        "d91c3a57dc156ba77a63d8fc99e94d6b3093b87f"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 9,
+          "patch": "@@ -3273,8 +3273,6 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n   s, d: PUtf8Char;\r\n   L, vl, n: PtrInt;\r\n   c: AnsiChar;\r\n-label\r\n-  _dq;\r\n begin\r\n   // fist compute the resulting length\r\n   n := length(Values);\r\n@@ -3297,10 +3295,13 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n           repeat\r\n             inc(s);\r\n             c := s^;\r\n-            if c = '''' then\r\n+            if (c = '''') and\r\n+               (vl > 1) and // s[1] = closing quote if vl = 1\r\n+               (s[1] = '''') then\r\n             begin\r\n-              if s[1] = '''' then\r\n-                dec(L); // double ' into single '\r\n+              dec(L); // double ' into single '\r\n+              inc(s);\r\n+              dec(vl);\r\n             end\r\n             else if (c = '\"') or\r\n                     (c = '\\') then\r\n@@ -3333,10 +3334,12 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n           repeat\r\n             inc(s);\r\n             c := s^;\r\n-            if c = '''' then\r\n+            if (c = '''') and\r\n+               (vl > 1) and // s[1] = closing quote if vl = 1\r\n+               (s[1] = '''') then\r\n             begin\r\n-              if s[1] = '''' then\r\n-                goto _dq; // double ' into single '\r\n+              inc(s); // double ' into single '\r\n+              dec(vl);\r\n             end\r\n             else if (c = '\"') or\r\n                     (c = '\\') then\r\n@@ -3346,7 +3349,7 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n             end;\r\n             d^ := c;\r\n             inc(d);\r\n-_dq:        dec(vl);\r\n+            dec(vl);\r\n           until vl = 0;\r\n         d^ := '\"';\r\n         inc(d);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -876,8 +876,16 @@ procedure TSqlDBPostgresStatement.BindParams;\n           fPGParamLengths[i] := length(p^.VData);\r\n         end\r\n         else\r\n+        begin\r\n           // p^.VData was not already set by BindArrayJson() -> convert now\r\n+          // - p^.VArray may have been over-allocated by the caller (e.g.\r\n+          // TRestStorageExternal.InternalBatchStop allocates the whole remaining\r\n+          // batch) and only the first p^.VInt64 = ValuesCount items are bound:\r\n+          // the trailing '' items would be serialized as ,,,, = invalid literal\r\n+          if length(p^.VArray) > p^.VInt64 then\r\n+            SetLength(p^.VArray, p^.VInt64); // local copy - caller untouched\r\n           BoundArrayToJsonArray(p^.VArray, RawUtf8(p^.VData)); // e.g. '{1,2,3}'\r\n+        end;\r\n     end\r\n     else\r\n       // single value parameter\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.postgres"
+      ],
+      "pr": 634,
+      "is_merge": true
+    },
+    {
+      "sha": "d91c3a57dc156ba77a63d8fc99e94d6b3093b87f",
+      "short_sha": "d91c3a57",
+      "subject": "db: fixed PostgreSQL array binding of over-allocated arrays and of trailing quotes",
+      "body": "- TSqlDBPostgresStatement.ExecutePrepared serialized the whole p^.VArray, but\n  TRestStorageExternal.InternalBatchStop allocates the arrays for the whole\n  remaining batch and binds only ValuesCount (= p^.VInt64) items: any batch with\n  several groups (e.g. Update then Add) sent {\"a\",\"b\",,,,} and PostgreSQL failed\n  with \"22P02 malformed array literal\" - now only the bound items are serialized\n- BoundArrayToJsonArray recognized '' also against the closing quote of the SQL\n  literal, so a value ending with ' (or with consecutive '') lost its quote(s)\n  silently: 'abc ''x''' gave \"abc 'x\" - now a doubled quote is consumed as a pair",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-03T18:45:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d91c3a57dc156ba77a63d8fc99e94d6b3093b87f",
+      "parents": [
+        "82960cd545fcb64ace5d1c27a42f332282f0ddee"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 9,
+          "patch": "@@ -3273,8 +3273,6 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n   s, d: PUtf8Char;\r\n   L, vl, n: PtrInt;\r\n   c: AnsiChar;\r\n-label\r\n-  _dq;\r\n begin\r\n   // fist compute the resulting length\r\n   n := length(Values);\r\n@@ -3297,10 +3295,13 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n           repeat\r\n             inc(s);\r\n             c := s^;\r\n-            if c = '''' then\r\n+            if (c = '''') and\r\n+               (vl > 1) and // s[1] = closing quote if vl = 1\r\n+               (s[1] = '''') then\r\n             begin\r\n-              if s[1] = '''' then\r\n-                dec(L); // double ' into single '\r\n+              dec(L); // double ' into single '\r\n+              inc(s);\r\n+              dec(vl);\r\n             end\r\n             else if (c = '\"') or\r\n                     (c = '\\') then\r\n@@ -3333,10 +3334,12 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n           repeat\r\n             inc(s);\r\n             c := s^;\r\n-            if c = '''' then\r\n+            if (c = '''') and\r\n+               (vl > 1) and // s[1] = closing quote if vl = 1\r\n+               (s[1] = '''') then\r\n             begin\r\n-              if s[1] = '''' then\r\n-                goto _dq; // double ' into single '\r\n+              inc(s); // double ' into single '\r\n+              dec(vl);\r\n             end\r\n             else if (c = '\"') or\r\n                     (c = '\\') then\r\n@@ -3346,7 +3349,7 @@ procedure BoundArrayToJsonArray(const Values: TRawUtf8DynArray;\n             end;\r\n             d^ := c;\r\n             inc(d);\r\n-_dq:        dec(vl);\r\n+            dec(vl);\r\n           until vl = 0;\r\n         d^ := '\"';\r\n         inc(d);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -876,8 +876,16 @@ procedure TSqlDBPostgresStatement.BindParams;\n           fPGParamLengths[i] := length(p^.VData);\r\n         end\r\n         else\r\n+        begin\r\n           // p^.VData was not already set by BindArrayJson() -> convert now\r\n+          // - p^.VArray may have been over-allocated by the caller (e.g.\r\n+          // TRestStorageExternal.InternalBatchStop allocates the whole remaining\r\n+          // batch) and only the first p^.VInt64 = ValuesCount items are bound:\r\n+          // the trailing '' items would be serialized as ,,,, = invalid literal\r\n+          if length(p^.VArray) > p^.VInt64 then\r\n+            SetLength(p^.VArray, p^.VInt64); // local copy - caller untouched\r\n           BoundArrayToJsonArray(p^.VArray, RawUtf8(p^.VData)); // e.g. '{1,2,3}'\r\n+        end;\r\n     end\r\n     else\r\n       // single value parameter\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.postgres"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "82960cd545fcb64ace5d1c27a42f332282f0ddee",
+      "short_sha": "82960cd5",
+      "subject": "core: fixed TPipeStream.Read",
+      "body": "when last block reached exactly the ending size",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T17:58:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/82960cd545fcb64ace5d1c27a42f332282f0ddee",
+      "parents": [
+        "aa663674feaadfe397e3a5e3eb8db99a96bcac4b"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "patch": "@@ -5469,6 +5469,10 @@ function TPipeStream.Read(var Buffer; Count: Longint): Longint;\n         result := DoClose(false);\r\n         exit;\r\n       end;\r\n+      if (fPending = 0) and\r\n+         (fSize >= 0) and\r\n+         (fPosition >= fSize) then\r\n+        break; // return with result = 0 if reached expected size\r\n       fCanRead.ResetEvent;\r\n       if fPending > 0 then\r\n       begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17368\n+17369",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17368'\r\n+'2.4.17369'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aa663674feaadfe397e3a5e3eb8db99a96bcac4b",
+      "short_sha": "aa663674",
+      "subject": "test: fixed TNetworkProtocols.RunPeerCacheDirect HTTP server startup",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T15:00:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aa663674feaadfe397e3a5e3eb8db99a96bcac4b",
+      "parents": [
+        "e2ef363c6cc413131d02b35a2aced0e34db98286"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 8,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17367\n+17368",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17367'\r\n+'2.4.17368'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -506,7 +506,7 @@ begin\n     err := 0;\r\n     result := poll(fds, nfds, timeout);\r\n     if result >= 0 then\r\n-      exit;             // some events(s)\r\n+      exit;             // some event(s)\r\n     err := cerrno;\r\n     if (err <> ESysEINTR) and\r\n        (err <> ESysEAGAIN) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -4566,6 +4566,7 @@ procedure TNetworkProtocols.RunPeerCacheDirect(Sender: TObject);\n     peercachedirect := hpc;\r\n     Check(hpc.State = [], 'hpcState1');\r\n     localserver.OnRequest := OnPeerCacheRequest; // return the URL\r\n+    localserver.WaitStarted; // ensure :8889 is bound\r\n     hpc.OnDirectOptions := OnPeerCacheDirect;\r\n     try\r\n       // validate all resources\r\n@@ -7340,11 +7341,11 @@ procedure TRunCase.Execute;\n         'unexpected CASystemStores');\r\n     end;\r\n     if stfHugeContent in Flags then\r\n-     begin\r\n-       http.OnRequest := DoHugeRequest;\r\n-       // otherwise the default maximum body size may interfere\r\n-       http.MaximumAllowedContentLength := length(Body) * 2;\r\n-     end;\r\n+    begin\r\n+      http.OnRequest := DoHugeRequest;\r\n+      // otherwise the default maximum body size may interfere\r\n+      http.MaximumAllowedContentLength := length(Body) * 2;\r\n+    end;\r\n     http.WaitStarted(10, @tls);\r\n     // AfterBind owns independent references/copies of all custom trust input.\r\n     if raw <> nil then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e2ef363c6cc413131d02b35a2aced0e34db98286",
+      "short_sha": "e2ef363c",
+      "subject": "net: properly fixed poll() usage in POSIX",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T14:49:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e2ef363c6cc413131d02b35a2aced0e34db98286",
+      "parents": [
+        "f3ea20edd50fda342d5d04c67c1942fc8b7b813c"
+      ],
+      "stats": {
+        "additions": 48,
+        "deletions": 56,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17366\n+17367",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17366'\r\n+'2.4.17367'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 31,
+          "patch": "@@ -3771,40 +3771,24 @@ function TNetSocketWrap.RecvWait(ms: integer;\n var\r\n   read: integer;\r\n   tmp: TBuffer64K; // use stack buffer to avoid RecvPending() syscall\r\n-  {$ifdef OSPOSIX}\r\n-  endtix: Int64;\r\n-  {$endif OSPOSIX}\r\n begin\r\n-  {$ifdef OSPOSIX} // on Windows, Select() is not expected to return earlier\r\n-  endtix := 0;\r\n-  if ms > 10 then\r\n-    endtix := mormot.core.os.GetTickCount64 + ms;\r\n-  repeat\r\n-  {$endif OSPOSIX}\r\n-    result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));\r\n+  result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));\r\n+  if Assigned(terminated) and\r\n+     terminated^ then\r\n+    result := nrClosed\r\n+  else if result = nrOk then\r\n+  begin\r\n+    read := SizeOf(tmp);\r\n+    result := Recv(@tmp, read);\r\n     if Assigned(terminated) and\r\n        terminated^ then\r\n-      result := nrClosed\r\n-    else if result = nrOk then\r\n-    begin\r\n-      read := SizeOf(tmp);\r\n-      result := Recv(@tmp, read);\r\n-      if Assigned(terminated) and\r\n-         terminated^ then\r\n-        result := nrClosed;\r\n-      if result = nrOK then\r\n-        if read <= 0 then\r\n-          result := nrUnknownError\r\n-        else\r\n-          FastSetRawByteString(data, @tmp, read);\r\n-    end;\r\n-  {$ifdef OSPOSIX}\r\n-    if (result <> nrRetry) or\r\n-       (endtix = 0) then\r\n-      break;\r\n-    ms := endtix - mormot.core.os.GetTickCount64;\r\n-  until ms <= 0;\r\n-  {$endif OSPOSIX}\r\n+      result := nrClosed;\r\n+    if result = nrOK then\r\n+      if read <= 0 then\r\n+        result := nrUnknownError\r\n+      else\r\n+        FastSetRawByteString(data, @tmp, read);\r\n+  end;\r\n end;\r\n \r\n function TNetSocketWrap.SendAll(Buf: PByte; len: integer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 23,
+          "patch": "@@ -493,25 +493,36 @@ begin\n         (cerrno <> ESysEINTR);\r\n end;\r\n \r\n-function PollNoEintr(fds: PPollFD; nfds, timeout: integer): integer;\r\n+function PollNoEintr(fds: PPollFD; nfds, timeout: integer; var err: integer): integer;\r\n var\r\n   endtix: Int64;\r\n begin\r\n-  // preserve the requested timeout across EINTR: restarting poll() with the\r\n-  // original timeout could otherwise extend the effective wait indefinitely\r\n+  // preserve the requested timeout across EINTR/EAGAIN: restarting poll() with\r\n+  // the original timeout could otherwise extend the effective wait indefinitely\r\n   endtix := 0;\r\n-  if timeout > 0 then\r\n-    endtix := GetTickCount64 + timeout;\r\n+  if timeout > 0 then // integer(INFINITE) = -1\r\n+    endtix := mormot.core.os.GetTickCount64 + timeout;\r\n   repeat\r\n+    err := 0;\r\n     result := poll(fds, nfds, timeout);\r\n-    if (result >= 0) or\r\n-       (cerrno <> ESysEINTR) then\r\n-      exit;\r\n-    if endtix = 0 then\r\n-      continue; // wait INFINITE\r\n-    result := 0;\r\n-    timeout := endtix - GetTickCount64;\r\n-  until timeout <= 0; // timeout eventually elapsed while being interrupted\r\n+    if result >= 0 then\r\n+      exit;             // some events(s)\r\n+    err := cerrno;\r\n+    if (err <> ESysEINTR) and\r\n+       (err <> ESysEAGAIN) then\r\n+      exit;             // fatal error\r\n+    if timeout = 0 then\r\n+      break;            // non-blocking poll: no retry budget\r\n+    if err = ESysEAGAIN then\r\n+      SleepHiRes(1);    // avoid burning a core on temporary resource exhaustion\r\n+    if timeout < 0 then\r\n+      continue;         // INFINITE\r\n+    timeout := endtix - mormot.core.os.GetTickCount64;\r\n+    if timeout <= 0 then\r\n+      break;            // timeout eventually elapsed while being interrupted\r\n+  until false;\r\n+  result := 0;          // notify timeout\r\n+  err := 0;\r\n end;\r\n \r\n \r\n@@ -859,7 +870,7 @@ end;\n function TNetSocketWrap.WaitFor(ms: integer; scope: TNetEvents;\r\n   loerr: PNetErrorInt): TNetEvents;\r\n var\r\n-  res: integer;\r\n+  res, err: integer;\r\n   p: TPollFD; // select() limits p.fd<FD_SETSIZE=1024 on POSIX -> use poll()\r\n   // https://moythreads.com/wordpress/2009/12/22/select-system-call-limitation\r\n begin\r\n@@ -876,15 +887,11 @@ begin\n     p.events := p.events or POLLOUT;\r\n   // POLLERR and POLLHUP are ignored in p.events: implicit [neError]\r\n   p.revents := 0;\r\n-  res := PollNoEintr(@p, 1, ms); // would indentify ESysEINTR within poll()\r\n+  res := PollNoEintr(@p, 1, ms, err); // would indentify ESysEINTR within poll()\r\n   if res < 0 then\r\n   begin\r\n-    res := cerrno;\r\n     if loerr <> nil then\r\n-      loerr^ := res;\r\n-    if res = ESysEAGAIN then\r\n-      // timeout, not a true error\r\n-      result := [];\r\n+      loerr^ := err;\r\n     exit;\r\n   end;\r\n   result := [];\r\n@@ -1785,13 +1792,14 @@ function TPollSocketPoll.WaitForModified(var results: TPollSocketResults;\n   timeoutMS: integer): boolean;\r\n var\r\n   n: PtrInt;\r\n+  err: integer;\r\n begin\r\n   result := false; // error\r\n   if (self = nil) or\r\n      (fCount = 0) then\r\n     exit;\r\n   // here fCount=0 would not permit next async subscription\r\n-  n := PollNoEintr(pointer(fFD), fFDCount, timeoutMS); // ignoring EINTR signals\r\n+  n := PollNoEintr(pointer(fFD), fFDCount, timeoutMS, err); // ignoring EINTR\r\n   results.Count := n;\r\n   if n <= 0 then\r\n     exit;\r\n@@ -1814,7 +1822,7 @@ end;\n function WaitForSeveral(const Sockets: TPollSocketsSubscribeDynArray;\r\n   var results: TPollSocketResults; timeoutMS: integer): boolean;\r\n var\r\n-  n, res: integer;\r\n+  n, res, err: integer;\r\n   fd: array of TPollFD;\r\n   s: PPollSocketsSubscribe;\r\n   p: PPollFD;\r\n@@ -1842,7 +1850,7 @@ begin\n   until n = 0;\r\n   if res = 0 then\r\n     exit; // no pseRead to check\r\n-  n := PollNoEintr(pointer(fd), res, timeoutMS); // ignoring EINTR signals\r\n+  n := PollNoEintr(pointer(fd), res, timeoutMS, err); // ignoring EINTR\r\n   if n <= 0 then\r\n     exit;\r\n   results.Count := n;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f3ea20edd50fda342d5d04c67c1942fc8b7b813c",
+      "short_sha": "f3ea20ed",
+      "subject": "net: fixed TNetSocketWrap.RecvWait on POSIX",
+      "body": "- poll() could return [] on POLLNVAL\n- check the real wallclock timeout value, not trusting poll() itself",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T13:50:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f3ea20edd50fda342d5d04c67c1942fc8b7b813c",
+      "parents": [
+        "1fc7cd6ef5e1ae37622e9d86a0a59ca88a6767e5"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 19,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17365\n+17366",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17365'\r\n+'2.4.17366'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 15,
+          "patch": "@@ -3771,24 +3771,40 @@ function TNetSocketWrap.RecvWait(ms: integer;\n var\r\n   read: integer;\r\n   tmp: TBuffer64K; // use stack buffer to avoid RecvPending() syscall\r\n+  {$ifdef OSPOSIX}\r\n+  endtix: Int64;\r\n+  {$endif OSPOSIX}\r\n begin\r\n-  result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));\r\n-  if Assigned(terminated) and\r\n-     terminated^ then\r\n-    result := nrClosed\r\n-  else if result = nrOk then\r\n-  begin\r\n-    read := SizeOf(tmp);\r\n-    result := Recv(@tmp, read);\r\n+  {$ifdef OSPOSIX} // on Windows, Select() is not expected to return earlier\r\n+  endtix := 0;\r\n+  if ms > 10 then\r\n+    endtix := mormot.core.os.GetTickCount64 + ms;\r\n+  repeat\r\n+  {$endif OSPOSIX}\r\n+    result := NetEventsToNetResult(WaitFor(ms, [neRead, neError]));\r\n     if Assigned(terminated) and\r\n        terminated^ then\r\n-      result := nrClosed;\r\n-    if result = nrOK then\r\n-      if read <= 0 then\r\n-        result := nrUnknownError\r\n-      else\r\n-        FastSetRawByteString(data, @tmp, read);\r\n-  end;\r\n+      result := nrClosed\r\n+    else if result = nrOk then\r\n+    begin\r\n+      read := SizeOf(tmp);\r\n+      result := Recv(@tmp, read);\r\n+      if Assigned(terminated) and\r\n+         terminated^ then\r\n+        result := nrClosed;\r\n+      if result = nrOK then\r\n+        if read <= 0 then\r\n+          result := nrUnknownError\r\n+        else\r\n+          FastSetRawByteString(data, @tmp, read);\r\n+    end;\r\n+  {$ifdef OSPOSIX}\r\n+    if (result <> nrRetry) or\r\n+       (endtix = 0) then\r\n+      break;\r\n+    ms := endtix - mormot.core.os.GetTickCount64;\r\n+  until ms <= 0;\r\n+  {$endif OSPOSIX}\r\n end;\r\n \r\n function TNetSocketWrap.SendAll(Buf: PByte; len: integer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -894,7 +894,7 @@ begin\n     include(result, neRead);\r\n   if p.revents and POLLOUT <> 0 then\r\n     include(result, neWrite);\r\n-  if p.revents and POLLERR <> 0 then\r\n+  if p.revents and (POLLERR or POLLNVAL) <> 0 then\r\n     include(result, neError);\r\n   if p.revents and POLLHUP <> 0 then\r\n     include(result, neClosed); // may return neClosed + neRead e.g. on HTTP/1.0\r\n@@ -1755,7 +1755,7 @@ begin\n       include(result, pseRead);\r\n     if r and POLLOUT <> 0 then\r\n       include(result, pseWrite);\r\n-    if r and POLLERR <> 0 then\r\n+    if r and (POLLERR or POLLNVAL) <> 0 then\r\n       include(result, pseError);\r\n     if r and POLLHUP <> 0 then\r\n       include(result, pseClosed);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1fc7cd6ef5e1ae37622e9d86a0a59ca88a6767e5",
+      "short_sha": "1fc7cd6e",
+      "subject": "test: fixed threads adaptation on PRISM",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T13:25:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1fc7cd6ef5e1ae37622e9d86a0a59ca88a6767e5",
+      "parents": [
+        "f858317763839f1eb2ca7e6d3ff257d9146764bf"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 24,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -1374,7 +1374,8 @@ function TSynTests.Tasks: TSynThreadTasks;\n     fSafe.UnLock;\r\n   end;\r\n   result := fTasks;\r\n-  DoLog(sllDebug, 'Tasks: initialized %', [result]);\r\n+  DoLog(sllDebug, 'Tasks: initialized shared % with % threads',\r\n+    [result.ClassType, result.WorkThreadCount]);\r\n end;\r\n \r\n procedure TSynTests.EndSaveToFileExternal;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17364\n+17365",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17364'\r\n+'2.4.17365'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 21,
+          "patch": "@@ -1301,9 +1301,6 @@ procedure TTestCoreThreads.TSynQueueSlow1(Sender: TObject);\n   end;\n end;\n \n-const\n-  WAITERS = 8;\n-\n type\n   TSynQueuePushTask = class(TSynThreadTask)\n   public\n@@ -1351,11 +1348,11 @@ procedure TSynQueueWaitTask.DoExecute(aCaller: TSynThreadPoolWorkThread);\n procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n var\n   i: PtrInt;\n-  j, v, expected, mask: integer;\n+  j, v, expected, mask, waiters: integer;\n   p: pointer;\n   q: TSynQueue;\n-  success: array[0 .. WAITERS - 1] of boolean;\n-  value: array[0 .. WAITERS - 1] of integer;\n+  success: array[0 .. 7] of boolean;\n+  value: array[0 .. 7] of integer;\n \n   procedure WaitForRegisteredWaiters(ExpectedCount: integer);\n   var\n@@ -1391,7 +1388,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     n: PtrInt;\n     task: TSynQueueWaitTask;\n   begin\n-    for n := 0 to WAITERS - 1 do\n+    for n := 0 to waiters - 1 do\n     begin\n       success[n] := false;\n       value[n] := 0;\n@@ -1404,7 +1401,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n       TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: added Wait(%)',\n         [aTimeoutMS], self);\n     end;\n-    WaitForRegisteredWaiters(WAITERS);\n+    WaitForRegisteredWaiters(waiters);\n   end;\n \n   procedure CleanupQueue;\n@@ -1414,6 +1411,10 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n   end;\n \n begin\n+  waiters := Owner.Tasks.WorkThreadCount; // may equal 4 on PRISM\n+  if waiters > length(success) then\n+    waiters := length(success);\n+  TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: waiters=%', [waiters], self);\n   // WaitPop notification\n   q := TSynQueue.Create(TypeInfo(TIntegerDynArray));\n   try\n@@ -1459,28 +1460,28 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     // Correctness must not depend on this delay - the sequence protects\n     // that race - but it makes the WakeOne path well exercised.\n     SleepHiRes(20);\n-    for i := 1 to WAITERS do\n+    for i := 1 to waiters do\n     begin\n       j := i;\n       q.Push(j);\n     end;\n     WaitTasks('multiple WaitPop workers');\n     mask := 0;\n-    for i := 0 to WAITERS - 1 do\n+    for i := 0 to waiters - 1 do\n     begin\n       Check(success[i], 'multiple WaitPop notification');\n       Check((value[i] >= 1) and\n-            (value[i] <= WAITERS),\n+            (value[i] <= waiters),\n         'multiple WaitPop value range');\n       if (value[i] >= 1) and\n-         (value[i] <= WAITERS) then\n+         (value[i] <= waiters) then\n       begin\n         j := 1 shl (value[i] - 1);\n         Check(mask and j = 0, 'duplicate WaitPop value');\n         mask := mask or j;\n       end;\n     end;\n-    CheckEqual(mask, (1 shl WAITERS) - 1,\n+    CheckEqual(mask, (1 shl waiters) - 1,\n       'all WaitPop values consumed');\n     CheckEqual(q.Count, 0);\n     CheckEqual(q.Waiters, 0);\n@@ -1502,7 +1503,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     CheckEqual(q.Waiters, 0,\n       'WaitPopFinalize should release all waiters');\n     WaitTasks('WaitPopFinalize workers');\n-    for i := 0 to WAITERS - 1 do\n+    for i := 0 to waiters - 1 do\n       Check(not success[i],\n         'WaitPopFinalize WaitPop result');\n     // Future WaitPop calls should return immediately and, importantly,\n@@ -1531,7 +1532,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     CheckEqual(q.Waiters, 0,\n       'WaitPopFinalize should release all waiters');\n     WaitTasks('WaitPopFinalize workers');\n-    for i := 0 to WAITERS - 1 do\n+    for i := 0 to waiters - 1 do\n       Check(not success[i],\n         'WaitPopFinalize WaitPop result');\n     // While finalized, new WaitPop() calls should not even register.\n@@ -1547,30 +1548,30 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     SleepHiRes(20);\n     // One Push() per waiter: validates that normal WakeOne behavior\n     // is working again after WaitPopReset().\n-    for i := 1 to WAITERS do\n+    for i := 1 to waiters do\n     begin\n       v := 100 + i;\n       q\n... [truncated, 1279 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f858317763839f1eb2ca7e6d3ff257d9146764bf",
+      "short_sha": "f8583177",
+      "subject": "tests: refined TTestCoreThreads.TSynQueueSlow2",
+      "body": "mainly to use the shared TSynTests thread pool",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T13:16:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f858317763839f1eb2ca7e6d3ff257d9146764bf",
+      "parents": [
+        "ba3f213534ebaca82721ef04318d6519215904b2"
+      ],
+      "stats": {
+        "additions": 179,
+        "deletions": 191,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17363\n+17364",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17363'\r\n+'2.4.17364'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "modified",
+          "additions": 177,
+          "deletions": 189,
+          "patch": "@@ -1354,7 +1354,6 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n   j, v, expected, mask: integer;\n   p: pointer;\n   q: TSynQueue;\n-  tasks: TSynThreadTasks;\n   success: array[0 .. WAITERS - 1] of boolean;\n   value: array[0 .. WAITERS - 1] of integer;\n \n@@ -1374,12 +1373,6 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n       [q.Waiters, ExpectedCount], self);\n   end;\n \n-  procedure WaitForTasks(const Msg: RawUtf8);\n-  begin\n-    TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: WaitForTasks %', [Msg], self);\n-    CheckUtf8(tasks.WaitFor(5000), Msg);\n-  end;\n-\n   procedure PushAsync(aValue: integer; aDelayMS: cardinal);\n   var\n     task: TSynQueuePushTask;\n@@ -1388,7 +1381,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     task.Queue := q;\n     task.Value := aValue;\n     task.DelayMS := aDelayMS;\n-    Check(tasks.Add(task), 'TSynQueue push task');\n+    Check(Owner.Tasks.Add(task), 'TSynQueue push task');\n     TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: added Push(%,%)',\n       [aValue, aDelayMS], self);\n   end;\n@@ -1407,7 +1400,7 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n       task.TimeoutMS := aTimeoutMS;\n       task.Success := @success[n];\n       task.Value := @value[n];\n-      Check(tasks.Add(task), 'TSynQueue WaitPop task');\n+      Check(Owner.Tasks.Add(task), 'TSynQueue WaitPop task');\n       TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: added Wait(%)',\n         [aTimeoutMS], self);\n     end;\n@@ -1417,198 +1410,193 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n   procedure CleanupQueue;\n   begin\n     q.WaitPopFinalize(1000);\n-    WaitForTasks('TSynQueue task cleanup');\n+    WaitTasks('TSynQueue task cleanup');\n   end;\n \n begin\n-  tasks := TSynThreadTasks.Create(WAITERS, 'queue');\n+  // WaitPop notification\n+  q := TSynQueue.Create(TypeInfo(TIntegerDynArray));\n   try\n-    // WaitPop notification\n-    q := TSynQueue.Create(TypeInfo(TIntegerDynArray));\n-    try\n-      // Push deliberately happens after WaitPop() has had enough time to\n-      // enter OsWaitOnValue() on supported platforms.\n-      PushAsync(123456, 50);\n-      v := 0;\n-      Check(q.WaitPop(2000, nil, v), 'WaitPop notification');\n-      CheckEqual(v, 123456, 'WaitPop notification value');\n-      WaitForTasks('WaitPop notification worker');\n-      CheckEqual(q.Count, 0);\n-      // WaitPeekLocked notification\n-      PushAsync(654321, 50);\n-      p := q.WaitPeekLocked(2000, nil);\n-      Check(p <> nil, 'WaitPeekLocked notification');\n-      if p <> nil then\n-      begin\n-        CheckEqual(PInteger(p)^, 654321,\n-          'WaitPeekLocked notification value');\n-        q.Safe.ReadWriteUnLock;\n-      end;\n-      WaitForTasks('WaitPeekLocked notification worker');\n-      v := 0;\n-      Check(q.Pop(v));\n-      CheckEqual(v, 654321);\n-      CheckEqual(q.Count, 0);\n-      // compared WaitPop keeps its polling semantics\n-      v := 11;\n-      q.Push(v);\n-      expected := 12;\n-      v := 0;\n-      Check(not q.WaitPop(20, nil, v, @expected),\n-        'WaitPop compared mismatch');\n-      CheckEqual(q.Count, 1);\n-      expected := 11;\n-      Check(q.WaitPop(20, nil, v, @expected),\n-        'WaitPop compared match');\n-      CheckEqual(v, 11);\n-      CheckEqual(q.Count, 0);\n-      // several concurrent waiters / WakeOne\n-      StartWaiters(5000);\n-      // Give registered consumers a chance to actually enter the OS wait.\n-      // Correctness must not depend on this delay - the sequence protects\n-      // that race - but it makes the WakeOne path well exercised.\n-      SleepHiRes(20);\n-      for i := 1 to WAITERS do\n-      begin\n-        j := i;\n-        q.Push(j);\n-      end;\n-      WaitForTasks('multiple WaitPop workers');\n-      mask := 0;\n-      for i := 0 to WAITERS - 1 do\n-      begin\n-        Check(success[i], 'multiple WaitPop notification');\n-        Check((value[i] >= 1) and\n-              (value[i] <= WAITERS),\n-          'multiple WaitPop value range');\n-        if (value[i] >= 1) an\n... [truncated, 10813 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ba3f213534ebaca82721ef04318d6519215904b2",
+      "short_sha": "ba3f2135",
+      "subject": "core: refined tests thread pool",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T13:14:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ba3f213534ebaca82721ef04318d6519215904b2",
+      "parents": [
+        "ac230852d7b002a992d8cff755e798d5978622da"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 7,
+          "patch": "@@ -310,7 +310,7 @@   TSynTestCase = class(TSynTest)\n     procedure RunTasks(const Worker: TNotifyEvent; Count: integer;\r\n       const Name: RawUtf8);\r\n     /// wait for background tasks started by RunTask/RunTasks() to finish\r\n-    procedure WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal);\r\n+    procedure WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal = 5000);\r\n     /// this method is triggered internally - e.g. by Check() - when a test failed\r\n     procedure TestFailed(const msg: string; notify: boolean = true); overload;\r\n     /// this method can be triggered directly - e.g. after CheckFailed() = true\r\n@@ -1157,7 +1157,7 @@ procedure TSynTestCase.Run(const OnTask: TNotifyEvent; Sender: TObject;\n       (not Threaded)) and\r\n      not ForcedThreaded then\r\n   begin\r\n-    fOwner.DoLog(sllDebug, 'Run(%)', [TaskName]);\r\n+    fOwner.DoLog(sllDebug, 'Run [%]', [TaskName]);\r\n     OnTask(Sender); // run in main thread\r\n   end\r\n   else\r\n@@ -1167,7 +1167,7 @@ procedure TSynTestCase.Run(const OnTask: TNotifyEvent; Sender: TObject;\n       fBackgroundRun := TLoggedWorker.Create(TSynLogTestLog);\r\n       fBackgroundRun.OnBeforeEachTask := OnBeforeEachBackgroundTask;\r\n     end;\r\n-    fOwner.DoLog(sllDebug, 'Run(%,%) using %',\r\n+    fOwner.DoLog(sllDebug, 'Run [%,%] using %',\r\n       [TaskName, ForcedThreaded, fBackgroundRun]);\r\n     fBackgroundRun.Run(OnTask, Sender, TaskName, ForcedThreaded);\r\n   end;\r\n@@ -1196,14 +1196,14 @@ procedure TSynTestCase.RunWait(NotifyThreadCount: boolean; TimeoutSec: integer;\n procedure TSynTestCase.RunTask(const Worker: TNotifyEvent;\r\n   const Name: RawUtf8);\r\n begin\r\n-  fOwner.DoLog(sllTrace, 'RunTask %', [Name]);\r\n+  fOwner.DoLog(sllTrace, 'RunTask [%]', [Name]);\r\n   CheckEqual(fOwner.Tasks.Add(self, Worker), 1, Name);\r\n end;\r\n \r\n procedure TSynTestCase.RunTasks(const Worker: TNotifyEvent;\r\n   Count: integer; const Name: RawUtf8);\r\n begin\r\n-  fOwner.DoLog(sllTrace, 'RunTasks(%) %', [Count, Name]);\r\n+  fOwner.DoLog(sllTrace, 'RunTasks count=% [%]', [Count, Name]);\r\n   CheckEqual(fOwner.Tasks.Add(self, Worker, Count), Count, Name);\r\n end;\r\n \r\n@@ -1213,7 +1213,7 @@ procedure TSynTestCase.WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal);\n begin\r\n   QueryPerformanceMicroSeconds(start);\r\n   CheckUtf8(fOwner.Tasks.WaitFor(TimeOutMS), Name);\r\n-  fOwner.DoLog(sllTrace, 'WaitTasks % in %', [Name, MicroSecFrom(start)]);\r\n+  fOwner.DoLog(sllTrace, 'WaitTasks [%] in %', [Name, MicroSecFrom(start)]);\r\n end;\r\n \r\n procedure TSynTestCase.TestFailed(const msg: string; notify: boolean);\r\n@@ -1356,14 +1356,20 @@ destructor TSynTests.Destroy;\n end;\r\n \r\n function TSynTests.Tasks: TSynThreadTasks;\r\n+var\r\n+  n: integer;\r\n begin\r\n   result := fTasks;\r\n   if result <> nil then\r\n     exit;\r\n   fSafe.Lock;\r\n   try\r\n     if fTasks = nil then\r\n-      fTasks := TSynThreadTasks.Create(16, 'testtask');\r\n+    begin\r\n+      n := 16;\r\n+      ThreadCountAdjust(n); // adapt to PRISM requirements\r\n+      fTasks := TSynThreadTasks.Create(n, 'testtask');\r\n+    end;\r\n   finally\r\n     fSafe.UnLock;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -1752,6 +1752,7 @@   TSynThreadPool = class\n     // ContentionAbortDelay ms and retry to queue the task\r\n     function Push(aContext: pointer; aWaitOnContention: boolean = false): boolean;\r\n     /// wait for PendingTasks to reach 0, i.e. all Push() be executed and done\r\n+    // - by design, this class accept multiple concurrent WaitFor() threads\r\n     function WaitFor(TimeOutMS: cardinal): boolean;\r\n     {$ifndef USE_THREADWINIOCP}\r\n     /// may be called after Push() returned false to see if queue was actually full\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17362\n+17363",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17362'\r\n+'2.4.17363'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test",
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ac230852d7b002a992d8cff755e798d5978622da",
+      "short_sha": "ac230852",
+      "subject": "test: let TTestCoreThreads use new sharead thread pool",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T12:49:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ac230852d7b002a992d8cff755e798d5978622da",
+      "parents": [
+        "a7ca54957c7e0c1f7358cd43931d635f15a63033"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 28,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17361\n+17362",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17361'\r\n+'2.4.17362'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 26,
+          "patch": "@@ -81,8 +81,6 @@   TRWStats = record\n   TTestCoreThreads = class(TSynTestCase)\n   protected\n     fProfile: TThreadTestProfile;\n-    // persistent task pool shared by the cross-thread tests\n-    fTasks: TSynThreadTasks;\n     // concrete lock storage - the active kind is selected by the enumerates\n     fExclusiveKind: TExclusiveLockKind;\n     fLight: TLightLock;\n@@ -111,10 +109,6 @@   TTestCoreThreads = class(TSynTestCase)\n     function TransitionIterations: integer;\n     function WaitMS: cardinal;\n     procedure ResetProbe;\n-    procedure RunTask(const Worker: TNotifyEvent; const Name: RawUtf8);\n-    procedure RunTasks(const Worker: TNotifyEvent; Count: integer;\n-      const Name: RawUtf8);\n-    procedure WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal);\n     // exclusive-lock dispatch\n     procedure ExclusiveInit;\n     procedure ExclusiveDone;\n@@ -274,7 +268,6 @@ procedure TTestCoreThreads.Setup;\n     fProfile := ttpFull\n   else\n     fProfile := ttpFast;\n-  fTasks := TSynThreadTasks.Create(WorkerCount, 'test');\n   fEntered := TSynEvent.Create;\n   fAcquired := TSynEvent.Create;\n   fGate := TSynEvent.Create;\n@@ -284,7 +277,6 @@ procedure TTestCoreThreads.Setup;\n procedure TTestCoreThreads.CleanUp;\n begin\n   // tasks reference this test case and its events, so release the pool first\n-  FreeAndNil(fTasks);\n   FreeAndNil(fDone);\n   FreeAndNil(fGate);\n   FreeAndNil(fAcquired);\n@@ -327,24 +319,6 @@ procedure TTestCoreThreads.ResetProbe;\n   fMainOwns := 0;\n end;\n \n-procedure TTestCoreThreads.RunTask(const Worker: TNotifyEvent;\n-  const Name: RawUtf8);\n-begin\n-  CheckEqual(fTasks.Add(self, Worker), 1, Name);\n-end;\n-\n-procedure TTestCoreThreads.RunTasks(const Worker: TNotifyEvent;\n-  Count: integer; const Name: RawUtf8);\n-begin\n-  CheckEqual(fTasks.Add(self, Worker, Count), Count, Name);\n-end;\n-\n-procedure TTestCoreThreads.WaitTasks(const Name: RawUtf8;\n-  TimeOutMS: cardinal);\n-begin\n-  CheckUtf8(fTasks.WaitFor(TimeOutMS), Name);\n-end;\n-\n \n { ************ exclusive-lock dispatch }\n ",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a7ca54957c7e0c1f7358cd43931d635f15a63033",
+      "short_sha": "a7ca5495",
+      "subject": "core: new TSynTestCase.RunTask/RunTasks/WaitTasks methods",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T12:48:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a7ca54957c7e0c1f7358cd43931d635f15a63033",
+      "parents": [
+        "feb9bf671a0da8f2b376a7f3edcd0b59211560a4"
+      ],
+      "stats": {
+        "additions": 81,
+        "deletions": 18,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 79,
+          "deletions": 16,
+          "patch": "@@ -292,7 +292,7 @@   TSynTestCase = class(TSynTest)\n       retry: integer = 3): RawByteString;\r\n     /// wait up to 5 seconds that a given file is deleted\r\n     function WaitDeleted(const fn: TFileName; const msg: ShortString): boolean;\r\n-    /// execute a method possibly in a dedicated TLoggedWorkThread\r\n+    /// execute a (slow) method possibly in a dedicated TLoggedWorkThread\r\n     // - OnTask() should take some time running, to be worth a thread execution\r\n     // - won't create more background threads than currently available CPU cores,\r\n     // to avoid resource exhaustion and unexpected timeouts on smaller computers,\r\n@@ -304,6 +304,13 @@   TSynTestCase = class(TSynTest)\n     /// wait for background thread started by Run() to finish\r\n     procedure RunWait(NotifyThreadCount: boolean = true; TimeoutSec: integer = 60;\r\n       CallSynchronize: boolean = true);\r\n+    /// execute a method in a shared TSynThreadTasks thread pool\r\n+    procedure RunTask(const Worker: TNotifyEvent; const Name: RawUtf8);\r\n+    /// execute a method several times in a shared TSynThreadTasks thread pool\r\n+    procedure RunTasks(const Worker: TNotifyEvent; Count: integer;\r\n+      const Name: RawUtf8);\r\n+    /// wait for background tasks started by RunTask/RunTasks() to finish\r\n+    procedure WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal);\r\n     /// this method is triggered internally - e.g. by Check() - when a test failed\r\n     procedure TestFailed(const msg: string; notify: boolean = true); overload;\r\n     /// this method can be triggered directly - e.g. after CheckFailed() = true\r\n@@ -377,18 +384,18 @@   TSynTestFailed = record\n   /// a class used to run a suit of test cases\r\n   TSynTests = class(TSynTest)\r\n   protected\r\n-    fAssertionsFailed: integer;\r\n     fSafe: TOSLock;\r\n     fTestCaseClass: array of TSynTestCaseClass;\r\n-    /// any number not null assigned to this field will display a \"../sec\" stat\r\n-    fRunConsoleOccurrenceNumber: cardinal;\r\n-    fMultiThread: boolean;\r\n+    fAssertionsFailed: integer;\r\n+    fRunConsoleOccurrenceNumber: cardinal; // <> 0 to display a \"../sec\" stat\r\n     fFailed: TSynTestFaileds;\r\n     fFailedCount: integer;\r\n     fNotifyProgressLineLen: integer;\r\n     fNotifyProgress: RawUtf8;\r\n     fSaveToFileBeforeExternal: THandle;\r\n+    fMultiThread: boolean;\r\n     fRestrict: TRawUtf8DynArray;\r\n+    fTasks: TSynThreadTasks;\r\n     procedure EndSaveToFileExternal;\r\n     function IsRestricted(const name: RawUtf8): boolean;\r\n     function GetFailedCount: integer;\r\n@@ -469,6 +476,8 @@   TSynTests = class(TSynTest)\n     // - example of use (code from a TSynTests published method):\r\n     // !  AddCase([TOneTestCase]);\r\n     procedure AddCase(const TestCase: array of TSynTestCaseClass); overload;\r\n+    /// access to a persistent task pool shared during all tests\r\n+    function Tasks: TSynThreadTasks;\r\n     /// call of this method will run all associated tests cases\r\n     // - function will return TRUE if all test passed\r\n     // - all failed test cases will be added to the Failed[] list - which is\r\n@@ -1147,7 +1156,10 @@ procedure TSynTestCase.Run(const OnTask: TNotifyEvent; Sender: TObject;\n   if ((not fOwner.fMultiThread) or // avoid timeout e.g. on slow VMs\r\n       (not Threaded)) and\r\n      not ForcedThreaded then\r\n-    OnTask(Sender) // run in main thread\r\n+  begin\r\n+    fOwner.DoLog(sllDebug, 'Run(%)', [TaskName]);\r\n+    OnTask(Sender); // run in main thread\r\n+  end\r\n   else\r\n   begin\r\n     if fBackgroundRun = nil then\r\n@@ -1176,7 +1188,32 @@ procedure TSynTestCase.RunWait(NotifyThreadCount: boolean; TimeoutSec: integer;\n   if not fBackgroundRun.RunWait(TimeoutSec, CallSynchronize) then\r\n     TestFailed(' error: timeout after % sec' + CRLF, [TimeoutSec])\r\n   else if NotifyThreadCount then\r\n-    NotifyProgress([timer.Stop]);\r\n+    NotifyProgress([timer.Stop])\r\n+  else\r\n+    fOwner.DoLog(sllDebug, 'RunWait in %', [timer.Stop]);\r\n+end;\r\n+\r\n+procedure TSynTestCase.RunTask(const Worker: TNotifyEvent;\r\n+  const Name: Raw\n... [truncated, 3066 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17360\n+17361",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17360'\r\n+'2.4.17361'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "feb9bf671a0da8f2b376a7f3edcd0b59211560a4",
+      "short_sha": "feb9bf67",
+      "subject": "test: persistent task pool shared by all cross-thread tests",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T12:13:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/feb9bf671a0da8f2b376a7f3edcd0b59211560a4",
+      "parents": [
+        "6fb9233f30120b3f8109646b8b949e1b9c0d9912"
+      ],
+      "stats": {
+        "additions": 52,
+        "deletions": 58,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17359\n+17360",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17359'\r\n+'2.4.17360'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "modified",
+          "additions": 50,
+          "deletions": 56,
+          "patch": "@@ -81,6 +81,8 @@   TRWStats = record\n   TTestCoreThreads = class(TSynTestCase)\n   protected\n     fProfile: TThreadTestProfile;\n+    // persistent task pool shared by the cross-thread tests\n+    fTasks: TSynThreadTasks;\n     // concrete lock storage - the active kind is selected by the enumerates\n     fExclusiveKind: TExclusiveLockKind;\n     fLight: TLightLock;\n@@ -109,10 +111,10 @@   TTestCoreThreads = class(TSynTestCase)\n     function TransitionIterations: integer;\n     function WaitMS: cardinal;\n     procedure ResetProbe;\n-    procedure RunWorker(const Worker: TNotifyEvent; const Name: RawUtf8;\n-      NotifyTask: boolean = false);\n-    procedure RunWorkers(const Worker: TNotifyEvent; Count: integer;\n+    procedure RunTask(const Worker: TNotifyEvent; const Name: RawUtf8);\n+    procedure RunTasks(const Worker: TNotifyEvent; Count: integer;\n       const Name: RawUtf8);\n+    procedure WaitTasks(const Name: RawUtf8; TimeOutMS: cardinal);\n     // exclusive-lock dispatch\n     procedure ExclusiveInit;\n     procedure ExclusiveDone;\n@@ -272,6 +274,7 @@ procedure TTestCoreThreads.Setup;\n     fProfile := ttpFull\n   else\n     fProfile := ttpFast;\n+  fTasks := TSynThreadTasks.Create(WorkerCount, 'test');\n   fEntered := TSynEvent.Create;\n   fAcquired := TSynEvent.Create;\n   fGate := TSynEvent.Create;\n@@ -280,6 +283,8 @@ procedure TTestCoreThreads.Setup;\n \n procedure TTestCoreThreads.CleanUp;\n begin\n+  // tasks reference this test case and its events, so release the pool first\n+  FreeAndNil(fTasks);\n   FreeAndNil(fDone);\n   FreeAndNil(fGate);\n   FreeAndNil(fAcquired);\n@@ -289,13 +294,12 @@ procedure TTestCoreThreads.CleanUp;\n \n function TTestCoreThreads.WorkerCount: integer;\n begin\n-  // TLoggedWorker itself limits simultaneous execution to CpuThreads and queues\n-  // forced jobs, so asking for more than CpuThreads also validates queue reuse.\n   result := CpuThreads * 2;\n   if result < 2 then\n     result := 2;\n   if result > PROFILE_WORKER_CAP[fProfile] then\n     result := PROFILE_WORKER_CAP[fProfile];\n+  ThreadCountAdjust(result); // e.g. WinARM PRISM\n end;\n \n function TTestCoreThreads.StressIterations: integer;\n@@ -323,22 +327,22 @@ procedure TTestCoreThreads.ResetProbe;\n   fMainOwns := 0;\n end;\n \n-procedure TTestCoreThreads.RunWorker(const Worker: TNotifyEvent;\n-  const Name: RawUtf8; NotifyTask: boolean);\n+procedure TTestCoreThreads.RunTask(const Worker: TNotifyEvent;\n+  const Name: RawUtf8);\n begin\n-  Run(Worker, self, Name,\n-    {Threaded=}true, NotifyTask, {ForcedThreaded=}true);\n+  CheckEqual(fTasks.Add(self, Worker), 1, Name);\n end;\n \n-\n-procedure TTestCoreThreads.RunWorkers(const Worker: TNotifyEvent;\n+procedure TTestCoreThreads.RunTasks(const Worker: TNotifyEvent;\n   Count: integer; const Name: RawUtf8);\n begin\n-  while Count > 0 do\n-  begin\n-    RunWorker(Worker, Name);\n-    dec(Count);\n-  end;\n+  CheckEqual(fTasks.Add(self, Worker, Count), Count, Name);\n+end;\n+\n+procedure TTestCoreThreads.WaitTasks(const Name: RawUtf8;\n+  TimeOutMS: cardinal);\n+begin\n+  CheckUtf8(fTasks.WaitFor(TimeOutMS), Name);\n end;\n \n \n@@ -441,7 +445,6 @@ procedure TTestCoreThreads.ExclusiveTryProbe(Sender: TObject);\n   end\n   else\n     fProbeResult := 0;\n-  fDone.SetEvent;\n end;\n \n procedure TTestCoreThreads.ExclusiveBlockingProbe(Sender: TObject);\n@@ -459,7 +462,6 @@ procedure TTestCoreThreads.ExclusiveBlockingProbe(Sender: TObject);\n     TestLockedDec(fExclusiveStats.Active);\n     ExclusiveUnLock;\n   end;\n-  fDone.SetEvent;\n end;\n \n procedure TTestCoreThreads.ExclusiveBlockingWorker(Sender: TObject);\n@@ -549,30 +551,28 @@ procedure TTestCoreThreads.TestExclusiveKind(Kind: TExclusiveLockKind);\n     ResetProbe;\n     ExclusiveLock;\n     try\n-      RunWorker(ExclusiveTryProbe, EXCLUSIVE_LOCK_NAME[Kind]);\n+      RunTask(ExclusiveTryProbe, EXCLUSIVE_LOCK_NAME[Kind]);\n       Check(fEntered.WaitFor(WaitMS), 'TryLock probe entered');\n-      Check(fDone.WaitFor(WaitMS), 'TryLock probe done');\n+      WaitTasks('TryLock probe done', WaitMS);\n       CheckEqual(fProb\n... [truncated, 8861 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6fb9233f30120b3f8109646b8b949e1b9c0d9912",
+      "short_sha": "6fb9233f",
+      "subject": "core: TSynThreadTasks.Add() overload redirecting to a TNotifyEvent",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T12:11:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6fb9233f30120b3f8109646b8b949e1b9c0d9912",
+      "parents": [
+        "e474d85c17e206a8ce98346d60fb69a24d5dcfa7"
+      ],
+      "stats": {
+        "additions": 50,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 48,
+          "deletions": 2,
+          "patch": "@@ -1813,11 +1813,24 @@   TSynThreadPool = class\n   // - inherit from this class and define any input/output parameters as fields\r\n   // - instances passed to TSynThreadTasks.Add() become owned by the thread pool\r\n   TSynThreadTask = class(TSynPersistent)\r\n-  public\r\n+  protected\r\n     /// execute this task in one TSynThreadTasks worker thread\r\n     procedure DoExecute(aCaller: TSynThreadPoolWorkThread); virtual; abstract;\r\n   end;\r\n \r\n+  /// TSynThreadTasks.Add() task instance redirecting to a TNotifyEvent\r\n+  TSynThreadEventTask = class(TSynThreadTask)\r\n+  protected\r\n+    procedure DoExecute(aCaller: TSynThreadPoolWorkThread); override;\r\n+  public\r\n+    Sender: TObject;\r\n+    Worker: TNotifyEvent;\r\n+    Tag: PtrUInt;\r\n+    /// prepare this TNotifyEvent execution instanc in TSynThreadTasks queue\r\n+    constructor Create(aSender: TObject; const aWorker: TNotifyEvent;\r\n+      aTag: PtrUInt = 0); reintroduce;\r\n+  end;\r\n+\r\n   /// execute TSynThreadTask instances in a persistent thread pool\r\n   // - Add() takes ownership of the supplied task instance\r\n   // - tasks are executed by the persistent TSynThreadPool worker threads\r\n@@ -1833,7 +1846,10 @@   TSynThreadTasks = class(TSynThreadPool)\n     /// add one owned task to the execution queue\r\n     // - always takes ownership of aTask, even when returning false\r\n     function Add(aTask: TSynThreadTask;\r\n-      aWaitOnContention: boolean = true): boolean;\r\n+      aWaitOnContention: boolean = true): boolean; overload;\r\n+    /// add one or severl owned TNotifyEvent task(s) to the execution queue\r\n+    function Add(Sender: TObject; const Worker: TNotifyEvent;\r\n+      Count: integer = 1; Tag: PtrUInt = 0): integer; overload;\r\n   end;\r\n \r\n   {$M-}\r\n@@ -5258,6 +5274,24 @@ procedure TSynThreadPoolWorkThread.NotifyThreadStart(Sender: TSynThread);\n end;\r\n \r\n \r\n+{ TSynThreadEventTask }\r\n+\r\n+procedure TSynThreadEventTask.DoExecute(aCaller: TSynThreadPoolWorkThread);\r\n+begin\r\n+  if Assigned(Worker) then\r\n+    Worker(Sender);\r\n+end;\r\n+\r\n+constructor TSynThreadEventTask.Create(aSender: TObject;\r\n+  const aWorker: TNotifyEvent; aTag: PtrUInt);\r\n+begin\r\n+  inherited Create;\r\n+  Sender := aSender;\r\n+  Worker := aWorker;\r\n+  Tag := aTag;\r\n+end;\r\n+\r\n+\r\n { TSynThreadTasks }\r\n \r\n constructor TSynThreadTasks.Create(NumberOfThreads: integer;\r\n@@ -5299,6 +5333,18 @@ function TSynThreadTasks.Add(aTask: TSynThreadTask;\n     aTask.Free;\r\n end;\r\n \r\n+function TSynThreadTasks.Add(Sender: TObject; const Worker: TNotifyEvent;\r\n+  Count: integer; Tag: PtrUInt): integer;\r\n+begin\r\n+  result := 0;\r\n+  while Count > 0 do\r\n+  begin\r\n+    if not Add(TSynThreadEventTask.Create(Sender, Worker, Tag)) then\r\n+      exit;\r\n+    inc(result);\r\n+    dec(Count);\r\n+  end;\r\n+end;\r\n \r\n procedure ThreadCountAdjust(var aThreadPoolCount: integer);\r\n begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17358\n+17359",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17358'\r\n+'2.4.17359'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e474d85c17e206a8ce98346d60fb69a24d5dcfa7",
+      "short_sha": "e474d85c",
+      "subject": "test: rewritten TTestCoreThreads.TSynQueueSlow2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T09:36:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e474d85c17e206a8ce98346d60fb69a24d5dcfa7",
+      "parents": [
+        "8b5a68ed79756fed1c920c2ba5fef068f8776d33"
+      ],
+      "stats": {
+        "additions": 42,
+        "deletions": 68,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17357\n+17358",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17357'\r\n+'2.4.17358'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.threads.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 66,
+          "patch": "@@ -1342,7 +1342,6 @@   TSynQueuePushTask = class(TSynThreadTask)\n     Queue: TSynQueue;\n     Value: integer;\n     DelayMS: cardinal;\n-    Done: PInteger;\n     procedure DoExecute(aCaller: TSynThreadPoolWorkThread); override;\n   end;\n \n@@ -1352,7 +1351,6 @@   TSynQueueWaitTask = class(TSynThreadTask)\n     TimeoutMS: integer;\n     Success: PBoolean;\n     Value: PInteger;\n-    Done: PInteger;\n     procedure DoExecute(aCaller: TSynThreadPoolWorkThread); override;\n   end;\n \n@@ -1361,14 +1359,10 @@   TSynQueueWaitTask = class(TSynThreadTask)\n \n procedure TSynQueuePushTask.DoExecute(aCaller: TSynThreadPoolWorkThread);\n begin\n-  try\n-    if DelayMS <> 0 then\n-      SleepHiRes(DelayMS);\n-    Queue.Push(Value);\n-  finally\n-    if Done <> nil then\n-      LockedInc32(Done);\n-  end;\n+  TSynLog.Add.Log(sllTrace, 'Queue.Push(%)', [Value], self);\n+  if DelayMS <> 0 then\n+    SleepHiRes(DelayMS);\n+  Queue.Push(Value);\n end;\n \n \n@@ -1378,14 +1372,11 @@ procedure TSynQueueWaitTask.DoExecute(aCaller: TSynThreadPoolWorkThread);\n var\n   v: integer;\n begin\n-  try\n-    v := 0;\n-    Success^ := Queue.WaitPop(TimeoutMS, nil, v);\n-    Value^ := v;\n-  finally\n-    if Done <> nil then\n-      LockedInc32(Done);\n-  end;\n+  TSynLog.Add.Log(sllTrace, 'Queue.WaitPop(%)', [TimeoutMS], self);\n+  v := 0;\n+  Success^ := Queue.WaitPop(TimeoutMS, nil, v);\n+  Value^ := v;\n+  TSynLog.Add.Log(sllTrace, 'Queue.WaitPop=%', [Success^], self);\n end;\n \n \n@@ -1396,8 +1387,6 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n   p: pointer;\n   q: TSynQueue;\n   tasks: TSynThreadTasks;\n-  done: cardinal;\n-  taskcount: integer;\n   success: array[0 .. WAITERS - 1] of boolean;\n   value: array[0 .. WAITERS - 1] of integer;\n \n@@ -1413,73 +1402,59 @@ procedure TTestCoreThreads.TSynQueueSlow2(Sender: TObject);\n     until mormot.core.os.GetTickCount64 > timeout;\n     CheckEqual(q.Waiters, ExpectedCount,\n       'TSynQueue WaitPop registration');\n+    TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: WaitForRegisteredWaiters %=%',\n+      [q.Waiters, ExpectedCount], self);\n   end;\n \n-  procedure WaitForTasks(ExpectedCount: integer; const Msg: RawUtf8);\n-  var\n-    timeout: Int64;\n+  procedure WaitForTasks(const Msg: RawUtf8);\n   begin\n-    timeout := mormot.core.os.GetTickCount64 + 2000;\n-    repeat\n-      if done = cardinal(ExpectedCount) then\n-      begin\n-        taskcount := 0;\n-        exit;\n-      end;\n-      SleepHiRes(1);\n-    until mormot.core.os.GetTickCount64 > timeout;\n-    CheckEqual(done, cardinal(ExpectedCount), Msg);\n-    if done = cardinal(ExpectedCount) then\n-      taskcount := 0;\n+    TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: WaitForTasks %', [Msg], self);\n+    Check(tasks.WaitFor(5000), Msg);\n   end;\n \n   procedure PushAsync(aValue: integer; aDelayMS: cardinal);\n   var\n-    push: TSynQueuePushTask;\n+    task: TSynQueuePushTask;\n   begin\n-    done := 0;\n-    taskcount := 1;\n-    push := TSynQueuePushTask.Create;\n-    push.Queue := q;\n-    push.Value := aValue;\n-    push.DelayMS := aDelayMS;\n-    push.Done := @done;\n-    Check(tasks.Add(push), 'TSynQueue push task');\n+    task := TSynQueuePushTask.Create;\n+    task.Queue := q;\n+    task.Value := aValue;\n+    task.DelayMS := aDelayMS;\n+    Check(tasks.Add(task), 'TSynQueue push task');\n+    TSynLog.Add.Log(sllTrace, 'TSynQueueSlow2: added Push(%,%)',\n+      [aValue, aDelayMS], self);\n   end;\n \n   procedure StartWaiters(aTimeoutMS: integer);\n   var\n     n: PtrInt;\n-    wait: TSynQueueWaitTask;\n+    task: TSynQueueWaitTask;\n   begin\n-    done := 0;\n-    taskcount := WAITERS;\n     for n := 0 to WAITERS - 1 do\n     begin\n       success[n] := false;\n       value[n] := 0;\n-      wait := TSynQueueWaitTask.Create;\n-      wait.Queue := q;\n-      wait.TimeoutMS := aTimeoutMS;\n-      wait.Success := @success[n];\n-      wait.Value := @value[n];\n-      wait.Done := @done;\n-      Check(tasks.Add(wait), 'TSynQueue WaitPop task');\n+      task := TSynQueueWaitTask.Create;\n+      task.Queue := q;\n+      task.TimeoutMS := aTimeoutMS;\n\n... [truncated, 3997 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8b5a68ed79756fed1c920c2ba5fef068f8776d33",
+      "short_sha": "8b5a68ed",
+      "subject": "core: fixed some potential races in TSynThreadPool",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-03T09:18:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8b5a68ed79756fed1c920c2ba5fef068f8776d33",
+      "parents": [
+        "1f7febd219f9cb54175a1f87620e6862e4e670b8"
+      ],
+      "stats": {
+        "additions": 29,
+        "deletions": 25,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 23,
+          "patch": "@@ -1722,6 +1722,7 @@   TSynThreadPool = class\n     /// finalize a queue item on Terminate - e.g. call Free/Dispose on aContext\r\n     procedure TaskAbort(aContext: pointer); virtual;\r\n     procedure TaskAllDone; virtual;\r\n+    procedure TaskDone;\r\n     procedure DoTask(aCaller: TSynThreadPoolWorkThread; aContext: pointer);\r\n     procedure DoTaskAbort(aContext: pointer);\r\n   public\r\n@@ -4887,11 +4888,13 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n   function Enqueue: boolean;\r\n   begin\r\n     // IOCP has its own queue\r\n-    result := IocpPostQueuedStatus(fRequestQueue, 0, nil, aContext);\r\n-    if not result then\r\n-      exit;\r\n     LockedInc32(@fPendingContextCount);\r\n     LockedInc32(@fPendingTasks);\r\n+    result := IocpPostQueuedStatus(fRequestQueue, 0, nil, aContext);\r\n+    if result then\r\n+      exit;\r\n+    LockedDec32(@fPendingContextCount);\r\n+    TaskDone;\r\n   end;\r\n \r\n {$else}\r\n@@ -4902,23 +4905,23 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n     found: TSynThreadPoolWorkThread;\r\n     thread: ^TSynThreadPoolWorkThread;\r\n   begin\r\n-    result := false; // queue is full\r\n+    result := false;                 // queue is full\r\n     fPendingSafe.Lock;\r\n     if fTerminated then\r\n     begin\r\n-      fPendingSafe.UnLock; // avoid any race at shutdown\r\n+      fPendingSafe.UnLock;           // avoid any race at shutdown\r\n       exit;\r\n     end;\r\n     thread := pointer(fWorkThread);\r\n     for n := 1 to fWorkThreadCount do\r\n       if thread^.fProcessingContext = nil then\r\n       begin\r\n-        inc(fPendingTasks);\r\n+        LockedInc32(@fPendingTasks); // atomic with DoTask/DoTaskAbort\r\n         found := thread^;\r\n         found.fProcessingContext := aContext;\r\n         fPendingSafe.UnLock;\r\n-        found.fEvent.SetEvent; // notify outside of the fSafe lock\r\n-        result := true;        // found one available thread\r\n+        found.fEvent.SetEvent;       // notify outside of the fSafe lock\r\n+        result := true;              // found one available thread\r\n         exit;\r\n       end\r\n       else\r\n@@ -4934,8 +4937,8 @@ function TSynThreadPool.Push(aContext: pointer; aWaitOnContention: boolean): boo\n       if fPendingLast = length(fPendingContext) then\r\n         fPendingLast := 0;\r\n       inc(fPendingContextCount);\r\n-      inc(fPendingTasks);\r\n-      result := true; // added in pending queue\r\n+      LockedInc32(@fPendingTasks);   // atomic with DoTask/DoTaskAbort\r\n+      result := true;                // added in pending queue\r\n     end;\r\n     fPendingSafe.UnLock;\r\n   end;\r\n@@ -5088,9 +5091,18 @@ procedure TSynThreadPool.TaskAbort(aContext: pointer);\n \r\n procedure TSynThreadPool.TaskAllDone;\r\n begin\r\n-  if fWaiters <> 0 then\r\n-    if Assigned(OsWakeAllOnValue) then\r\n-      OsWakeAllOnValue(PCardinal(@fPendingTasks));\r\n+end;\r\n+\r\n+procedure TSynThreadPool.TaskDone;\r\n+begin\r\n+  if InterlockedDecrement(fPendingTasks) = 0 then\r\n+    try\r\n+      if fWaiters <> 0 then\r\n+        if Assigned(OsWakeAllOnValue) then\r\n+          OsWakeAllOnValue(PCardinal(@fPendingTasks));\r\n+      TaskAllDone; // virtual method\r\n+    except\r\n+    end;\r\n end;\r\n \r\n procedure TSynThreadPool.DoTask(aCaller: TSynThreadPoolWorkThread; aContext: pointer);\r\n@@ -5103,11 +5115,7 @@ procedure TSynThreadPool.DoTask(aCaller: TSynThreadPoolWorkThread; aContext: poi\n     on Exception do  // intercept any exception and let the thread continue\r\n       inc(fExceptionsCount);\r\n   end;\r\n-  if InterlockedDecrement(fPendingTasks) = 0 then\r\n-    try\r\n-      TaskAllDone; // e.g. call OsWakeAllOnValue()\r\n-    except\r\n-    end;\r\n+  TaskDone;\r\n end;\r\n \r\n procedure TSynThreadPool.DoTaskAbort(aContext: pointer);\r\n@@ -5119,11 +5127,7 @@ procedure TSynThreadPool.DoTaskAbort(aContext: pointer);\n       TaskAbort(aContext);\r\n   except\r\n   end;\r\n-  if InterlockedDecrement(fPendingTasks) = 0 then\r\n-    try\r\n-      TaskAllDone; // e.g. call OsWakeAllOnValue()\r\n-    except\r\n-    end;\r\n+  TaskDone;\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17356\n+17357",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17356'\r\n+'2.4.17357'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
