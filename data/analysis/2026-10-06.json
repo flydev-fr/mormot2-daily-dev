@@ -1,0 +1,465 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-06",
+  "edition_title": {
+    "en": "Async shutdown closes leaks while HTTP timeouts split by phase",
+    "fr": "L’arrêt asynchrone ferme les fuites et les délais HTTP se séparent par phase",
+    "zh": "异步关闭修复泄漏，HTTP 超时按阶段拆分",
+    "ru": "Асинхронное завершение закрывает утечки, а HTTP-таймауты разделены по фазам"
+  },
+  "intro": {
+    "en": "This is a high-impact networking edition. Async servers, tunnels and RTSP-over-HTTP receive a coordinated ownership and shutdown repair, while TSynThreadPool closes a race that could leave queued work sleeping. HTTP clients gain separate connect, send and receive timeouts, and Kerberos server authentication is consolidated behind a cross-platform wrapper with one public method removal.",
+    "fr": "Cette édition réseau a un impact élevé. Les serveurs asynchrones, les tunnels et RTSP-over-HTTP reçoivent une correction coordonnée de la propriété et de l’arrêt, tandis que TSynThreadPool ferme une course pouvant laisser du travail en file d’attente endormi. Les clients HTTP gagnent des délais distincts pour la connexion, l’envoi et la réception, et l’authentification Kerberos côté serveur est regroupée derrière un wrapper multiplateforme avec la suppression d’une méthode publique.",
+    "zh": "这是一期影响较大的网络更新。异步服务器、隧道与 RTSP-over-HTTP 协同修复了所有权和关闭流程，TSynThreadPool 也消除了可能让排队任务一直休眠的竞争。HTTP 客户端新增独立的连接、发送和接收超时，Kerberos 服务端认证则统一到跨平台 wrapper，并移除一个公开方法。",
+    "ru": "Это значимый сетевой выпуск. Асинхронные серверы, туннели и RTSP-over-HTTP получили согласованное исправление владения и завершения, а TSynThreadPool устранил гонку, из-за которой работа в очереди могла остаться без пробуждения. HTTP-клиенты получили отдельные таймауты подключения, отправки и приёма, а серверная Kerberos-аутентификация объединена в кроссплатформенном wrapper с удалением одного публичного метода."
+  },
+  "risk_level": "act-now",
+  "tldr": [
+    "TSynThreadPool now clears a worker's processing state under the pending-queue lock, preventing a queued task from being stranded by a wake-up race.",
+    "Async socket, tunnel and RTSP-over-HTTP cleanup now closes file descriptors and transferred connections on failure and shutdown paths.",
+    "TCrtSocket and HTTP clients now expose separate connect, send and receive timeouts; use 0, not a negative value, when requesting legacy fallback on a live TCrtSocket.",
+    "TServerSspiKeyTab.ComputeServerHeader is removed; migrate direct callers to KerberosServerAuthHeader and prepare a POSIX keytab explicitly when required.",
+    "Delphi users should land on build 2.4.17398, which repairs compilation after the timeout constructor refactor."
+  ],
+  "upgrade_advice": {
+    "en": "Upgrade async-server, tunnel and RTSP deployments to the final build 2.4.17398 and exercise shutdown under idle, partial-request and pending-write traffic. Delphi users should not stop on 2.4.17393–2.4.17397. Grep for TServerSspiKeyTab.ComputeServerHeader before upgrading and replace direct calls with KerberosServerAuthHeader.",
+    "fr": "Mettez à niveau les déploiements de serveurs asynchrones, tunnels et RTSP vers le build final 2.4.17398, puis testez l’arrêt avec des connexions inactives, des requêtes partielles et des écritures en attente. Les utilisateurs Delphi ne doivent pas s’arrêter sur 2.4.17393–2.4.17397. Recherchez TServerSspiKeyTab.ComputeServerHeader et remplacez les appels directs par KerberosServerAuthHeader.",
+    "zh": "异步服务器、隧道和 RTSP 部署应升级到最终 build 2.4.17398，并覆盖空闲连接、部分请求和待发送数据下的关闭测试。Delphi 用户不要停在 2.4.17393–2.4.17397。升级前搜索 TServerSspiKeyTab.ComputeServerHeader，并把直接调用改为 KerberosServerAuthHeader。",
+    "ru": "Обновите асинхронные серверы, туннели и RTSP до финального build 2.4.17398 и проверьте завершение при idle-соединениях, частичных запросах и ожидающей записи. Пользователям Delphi не следует останавливаться на 2.4.17393–2.4.17397. Найдите TServerSspiKeyTab.ComputeServerHeader и замените прямые вызовы на KerberosServerAuthHeader."
+  },
+  "upgrade": {
+    "land_on": {
+      "sha": "fd5b34092fe67ef9564532c028ae2e2e45ff4e84",
+      "build": "2.4.17398",
+      "why": "It contains the complete async cleanup, thread-pool race fix, final Kerberos wrapper and the Delphi compilation repair for the per-phase timeout series."
+    },
+    "avoid": [
+      {
+        "from_build": "2.4.17373",
+        "to_build": "2.4.17377",
+        "why": "The socket and connection cleanup sequence was still incomplete before the broad async-server ownership and shutdown repair in build 2.4.17378."
+      },
+      {
+        "from_build": "2.4.17393",
+        "to_build": "2.4.17397",
+        "why": "The per-phase timeout series did not compile on Delphi until the constructor setup was moved to TCrtSocket.DoCreate in build 2.4.17398."
+      }
+    ],
+    "order": [
+      {
+        "shas": [
+          "4860cac1453ff7ba8aafc006f662150c324fc60d",
+          "c87c00aba3fd656db8dfd6b639349c4920e53e92",
+          "2b1b93ae0ee8854e8ac63bf1636bfbe4614f0dba"
+        ],
+        "why": "Take the thread-pool wake-up fix together with the final async ownership and shutdown changes."
+      },
+      {
+        "shas": [
+          "221f7715ca15dc301c7c0573382a816b5718efa3",
+          "9a5f322db1b09c2a9afab977978daca7b06afda3",
+          "29dc590af1a61f23d9553fbe31d96823d1932f80",
+          "ad936f42cc9216a501d2f31efda66410bf358abd",
+          "50ade795daa274f9288f3573755922e023bd00a6"
+        ],
+        "why": "The timeout work is a single staged API and behavior change; take the complete sequence plus the final Delphi repair."
+      }
+    ],
+    "still_moving": []
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Async ownership and shutdown",
+        "fr": "Propriété et arrêt asynchrones",
+        "zh": "异步所有权与关闭",
+        "ru": "Владение и завершение async"
+      },
+      "summary": {
+        "en": "Thirteen commits close raw sockets, transferred connections and tunnel endpoints across failure paths, then harden and accelerate server shutdown. The TSynThreadPool change closes a separate lock-order race that could strand pending work.",
+        "fr": "Treize commits ferment les sockets bruts, connexions transférées et endpoints de tunnel sur les chemins d’échec, puis renforcent et accélèrent l’arrêt du serveur. Le changement TSynThreadPool ferme une course d’ordre de verrouillage distincte qui pouvait bloquer du travail en attente.",
+        "zh": "十三个提交在失败路径中关闭原始 socket、已转移连接和隧道端点，并强化和加速服务器关闭。TSynThreadPool 的修改还消除了另一个锁顺序竞争，该竞争可能让待处理工作永久搁置。",
+        "ru": "Тринадцать коммитов закрывают raw sockets, переданные соединения и tunnel endpoints на путях ошибки, затем усиливают и ускоряют завершение сервера. Изменение TSynThreadPool устраняет отдельную гонку порядка блокировок, оставлявшую pending work без пробуждения."
+      },
+      "shas": [
+        "54de464720047e30d70288171ef62b32fdb3e40f",
+        "5707c8698051fe92bdf71d4445cc8985c4e59af0",
+        "3742e9a71cbc75554652348d79281442ad61f89c",
+        "213dd8c6426837c4b9b58e72ee8c37cc3214ae25",
+        "2eb90dbcd42180b75fc9156f3b270b36875602eb",
+        "fbb9dc6b813ec790e63b41d213238d349fbeab29",
+        "c87c00aba3fd656db8dfd6b639349c4920e53e92",
+        "02bd02a7893a63422c590ac2452b5e10893c036d",
+        "c7708e5519207350a372375b3a6106676ae50411",
+        "2b1b93ae0ee8854e8ac63bf1636bfbe4614f0dba",
+        "a84c77d19bebdc06b4c91cad28d6c3bac4b40b8c",
+        "4860cac1453ff7ba8aafc006f662150c324fc60d",
+        "2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc"
+      ]
+    },
+    {
+      "title": {
+        "en": "One cross-platform Kerberos path",
+        "fr": "Un seul chemin Kerberos multiplateforme",
+        "zh": "统一的跨平台 Kerberos 路径",
+        "ru": "Единый кроссплатформенный путь Kerberos"
+      },
+      "summary": {
+        "en": "The temporary ServerSspiAuthHeader helper becomes KerberosServerAuthHeader in mormot.net.client, server authorization uses it on Windows and POSIX, and REST authentication can select a POSIX keytab. The former TServerSspiKeyTab.ComputeServerHeader method is removed.",
+        "fr": "Le helper temporaire ServerSspiAuthHeader devient KerberosServerAuthHeader dans mormot.net.client, l’autorisation serveur l’utilise sous Windows et POSIX, et l’authentification REST peut choisir un keytab POSIX. L’ancienne méthode TServerSspiKeyTab.ComputeServerHeader est supprimée.",
+        "zh": "临时的 ServerSspiAuthHeader helper 最终成为 mormot.net.client 中的 KerberosServerAuthHeader，Windows 与 POSIX 服务端授权统一使用它，REST 认证也可选择 POSIX keytab。原 TServerSspiKeyTab.ComputeServerHeader 方法被移除。",
+        "ru": "Временный helper ServerSspiAuthHeader стал KerberosServerAuthHeader в mormot.net.client, серверная авторизация использует его на Windows и POSIX, а REST-аутентификация может выбирать POSIX keytab. Прежний метод TServerSspiKeyTab.ComputeServerHeader удалён."
+      },
+      "shas": [
+        "9029fa161384d97766c51ec3b9260ff19e23ec69",
+        "03373d425c8c925d9a8538754185110da31b3b2f",
+        "71011fb65f0ec4102cdc7e4e5146d7be4a640d76",
+        "be652e428d4c52ac1400f9ab63a3a051d721e189",
+        "0bc90ef677d934945195e04daed979cdd4fd232c"
+      ]
+    },
+    {
+      "title": {
+        "en": "Per-phase HTTP timeouts",
+        "fr": "Délais HTTP par phase",
+        "zh": "按阶段划分的 HTTP 超时",
+        "ru": "HTTP-таймауты по фазам"
+      },
+      "summary": {
+        "en": "TCrtSocket, THttpClientSocket, TRestHttpClientSocket and THttpRequestExtendedOptions now carry distinct connect, send and receive values. The sequence ends by moving subclass initialization to DoCreate so the final code compiles on Delphi.",
+        "fr": "TCrtSocket, THttpClientSocket, TRestHttpClientSocket et THttpRequestExtendedOptions portent désormais des valeurs distinctes de connexion, d’envoi et de réception. La série se termine en déplaçant l’initialisation des sous-classes vers DoCreate afin que le code final compile sous Delphi.",
+        "zh": "TCrtSocket、THttpClientSocket、TRestHttpClientSocket 与 THttpRequestExtendedOptions 现在分别保存连接、发送和接收超时。最后通过把子类初始化移到 DoCreate，使最终代码可在 Delphi 下编译。",
+        "ru": "TCrtSocket, THttpClientSocket, TRestHttpClientSocket и THttpRequestExtendedOptions теперь хранят отдельные значения подключения, отправки и приёма. Серия завершается переносом инициализации подкласса в DoCreate, чтобы финальный код компилировался в Delphi."
+      },
+      "shas": [
+        "221f7715ca15dc301c7c0573382a816b5718efa3",
+        "9a5f322db1b09c2a9afab977978daca7b06afda3",
+        "29dc590af1a61f23d9553fbe31d96823d1932f80",
+        "ad936f42cc9216a501d2f31efda66410bf358abd",
+        "50ade795daa274f9288f3573755922e023bd00a6",
+        "fd5b34092fe67ef9564532c028ae2e2e45ff4e84"
+      ]
+    }
+  ],
+  "notes": {
+    "en": "TCrtSocket documentation says negative phase timeouts restore TimeOut, but the final getters fall back only when the stored value is 0. This review therefore recommends 0 for live-socket fallback; the exact runtime effect of a negative value is backend-specific.",
+    "fr": "La documentation de TCrtSocket indique que des délais de phase négatifs restaurent TimeOut, mais les getters finaux ne font le fallback que lorsque la valeur stockée vaut 0. Cette revue recommande donc 0 pour le fallback d’un socket actif ; l’effet exact d’une valeur négative dépend du backend.",
+    "zh": "TCrtSocket 文档称负的阶段超时会回退到 TimeOut，但最终 getter 只在存储值为 0 时回退。因此本期建议活动 socket 使用 0 触发回退；负值的确切运行时效果取决于 backend。",
+    "ru": "Документация TCrtSocket утверждает, что отрицательные phase timeouts возвращают TimeOut, но финальные getters используют fallback только при значении 0. Поэтому для fallback у активного socket рекомендуется 0; точный эффект отрицательного значения зависит от backend."
+  },
+  "entries": [
+    {
+      "sha": "fd5b34092fe67ef9564532c028ae2e2e45ff4e84",
+      "headline": {"en":"Delphi compilation is restored after the HTTP timeout refactor","fr":"La compilation Delphi est rétablie après le refactoring des délais HTTP","zh":"HTTP 超时重构后的 Delphi 编译已恢复","ru":"Компиляция Delphi восстановлена после рефакторинга HTTP-таймаутов"},
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {"en":"TCrtSocket constructors now call a protected virtual DoCreate method, and THttpClientSocket overrides DoCreate instead of redeclaring Create. This preserves subclass initialization without the constructor conflict seen by Delphi.","fr":"Les constructeurs TCrtSocket appellent désormais une méthode virtuelle protégée DoCreate, et THttpClientSocket surcharge DoCreate au lieu de redéclarer Create. L’initialisation des sous-classes est préservée sans le conflit de constructeur rencontré par Delphi.","zh":"TCrtSocket 构造器现在调用受保护的虚方法 DoCreate，THttpClientSocket 则覆盖 DoCreate，不再重新声明 Create。这样保留了子类初始化，同时消除了 Delphi 的构造器冲突。","ru":"Конструкторы TCrtSocket теперь вызывают защищённый virtual DoCreate, а THttpClientSocket переопределяет DoCreate вместо повторного объявления Create. Инициализация подкласса сохраняется без конфликта конструктора в Delphi."},
+      "impact": {"en":"The completed timeout series builds again with Delphi. FPC follows the same initialization path but did not require an application-code change.","fr":"La série complète des délais compile de nouveau avec Delphi. FPC suit le même chemin d’initialisation sans exiger de changement du code applicatif.","zh":"完整的超时系列重新可在 Delphi 下编译。FPC 使用相同初始化路径，但应用代码无需修改。","ru":"Завершённая серия таймаутов снова компилируется в Delphi. FPC использует тот же путь инициализации, но изменения application code не требуются."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Use build 2.4.17398 or later if you took any of the new timeout commits.","fr":"Utilisez le build 2.4.17398 ou ultérieur si vous avez pris l’un des nouveaux commits de délai.","zh":"如果采用了任一新超时提交，请使用 build 2.4.17398 或更高版本。","ru":"Если вы взяли любой из новых timeout-коммитов, используйте build 2.4.17398 или новее."},
+      "units": ["mormot.net.client","mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "50ade795daa274f9288f3573755922e023bd00a6",
+      "headline": {"en":"REST socket clients apply phase timeouts consistently","fr":"Les clients REST socket appliquent les délais de phase de façon cohérente","zh":"REST socket 客户端统一应用分阶段超时","ru":"REST socket clients согласованно применяют таймауты фаз"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"TRestHttpClientSocket stores timeout values in fExtendedOptions, passes them through OpenOptions before connecting, and compares them when deciding whether a socket can be reused. TCrtSocket getters now use TimeOut only when the phase value is 0.","fr":"TRestHttpClientSocket stocke les délais dans fExtendedOptions, les transmet via OpenOptions avant la connexion et les compare pour décider si un socket peut être réutilisé. Les getters TCrtSocket n’utilisent désormais TimeOut que lorsque la valeur de phase vaut 0.","zh":"TRestHttpClientSocket 将超时保存到 fExtendedOptions，在连接前通过 OpenOptions 传递，并在判断 socket 是否可复用时比较这些值。TCrtSocket getter 现在仅在阶段值为 0 时使用 TimeOut。","ru":"TRestHttpClientSocket хранит таймауты в fExtendedOptions, передаёт их через OpenOptions до подключения и сравнивает при решении о повторном использовании socket. Getters TCrtSocket теперь используют TimeOut только при значении фазы 0."},
+      "impact": {"en":"REST clients can keep connection, send and receive policies distinct through reconnects. A negative live TCrtSocket phase value no longer selects the legacy fallback in the final implementation.","fr":"Les clients REST peuvent conserver des politiques distinctes de connexion, d’envoi et de réception lors des reconnexions. Une valeur de phase négative sur un TCrtSocket actif ne sélectionne plus le fallback historique dans l’implémentation finale.","zh":"REST 客户端可在重连过程中保持不同的连接、发送和接收策略。在最终实现中，活动 TCrtSocket 的负阶段值不再选择旧超时回退。","ru":"REST clients сохраняют отдельные политики подключения, отправки и приёма при переподключении. В финальной реализации отрицательное значение фазы активного TCrtSocket не выбирает legacy fallback."},
+      "action": "review",
+      "action_detail": {"en":"Use 0 for legacy fallback and test reconnect behavior where phase-specific values are configured.","fr":"Utilisez 0 pour le fallback historique et testez les reconnexions lorsque des valeurs par phase sont configurées.","zh":"请用 0 表示旧超时回退，并测试配置分阶段超时后的重连行为。","ru":"Используйте 0 для legacy fallback и проверьте переподключение при настроенных значениях фаз."},
+      "units": ["mormot.net.sock","mormot.rest.http.client"],
+      "confidence": "interpretation"
+    },
+    {
+      "sha": "ad936f42cc9216a501d2f31efda66410bf358abd",
+      "headline": {"en":"Extended HTTP options carry three independent timeout values","fr":"Les options HTTP étendues portent trois délais indépendants","zh":"扩展 HTTP 选项携带三个独立超时","ru":"Расширенные HTTP options несут три независимых таймаута"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"THttpRequestExtendedOptions adds ConnectTimeoutMS, SendTimeoutMS, ReceiveTimeoutMS and GetTimeouts. Serialization uses tm, tc, ts and tr fields, and HTTP backends consume the resolved values when opening requests.","fr":"THttpRequestExtendedOptions ajoute ConnectTimeoutMS, SendTimeoutMS, ReceiveTimeoutMS et GetTimeouts. La sérialisation utilise les champs tm, tc, ts et tr, et les backends HTTP consomment les valeurs résolues lors de l’ouverture des requêtes.","zh":"THttpRequestExtendedOptions 新增 ConnectTimeoutMS、SendTimeoutMS、ReceiveTimeoutMS 与 GetTimeouts。序列化使用 tm、tc、ts、tr 字段，HTTP backend 在打开请求时使用解析后的值。","ru":"THttpRequestExtendedOptions добавляет ConnectTimeoutMS, SendTimeoutMS, ReceiveTimeoutMS и GetTimeouts. Сериализация использует поля tm, tc, ts и tr, а HTTP backends применяют разрешённые значения при открытии запросов."},
+      "impact": {"en":"Delphi and FPC applications can configure request phases separately while existing zeroed records continue to fall back through CreateTimeoutMS and backend defaults.","fr":"Les applications Delphi et FPC peuvent configurer séparément les phases d’une requête, tandis que les enregistrements à zéro continuent leur fallback via CreateTimeoutMS et les valeurs par défaut du backend.","zh":"Delphi 与 FPC 应用可分别配置请求各阶段，已有的全零 record 仍通过 CreateTimeoutMS 与 backend 默认值回退。","ru":"Приложения Delphi и FPC могут настраивать фазы запроса отдельно, а существующие нулевые records продолжают fallback через CreateTimeoutMS и defaults backend."},
+      "action": "review",
+      "units": ["mormot.net.client"],
+      "api_changes": [
+        {"symbol":"THttpRequestExtendedOptions.ConnectTimeoutMS","change":"added"},
+        {"symbol":"THttpRequestExtendedOptions.SendTimeoutMS","change":"added"},
+        {"symbol":"THttpRequestExtendedOptions.ReceiveTimeoutMS","change":"added"},
+        {"symbol":"THttpRequestExtendedOptions.GetTimeouts","change":"added"}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "29dc590af1a61f23d9553fbe31d96823d1932f80",
+      "headline": {"en":"REST clients install timeout policy before connecting","fr":"Les clients REST installent les délais avant la connexion","zh":"REST 客户端在连接前设置超时策略","ru":"REST clients устанавливают timeout policy до подключения"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"TRestHttpClientSocket now creates and configures THttpClientSocket before Connect, so connect, proxy and TLS setup receive the intended timeouts instead of only later I/O.","fr":"TRestHttpClientSocket crée et configure désormais THttpClientSocket avant Connect, afin que la connexion, le proxy et l’établissement TLS reçoivent les délais voulus, pas seulement les E/S ultérieures.","zh":"TRestHttpClientSocket 现在在 Connect 前创建并配置 THttpClientSocket，因此连接、代理和 TLS 建立阶段都会使用指定超时，而不只是后续 I/O。","ru":"TRestHttpClientSocket теперь создаёт и настраивает THttpClientSocket до Connect, поэтому нужные таймауты применяются к подключению, proxy и TLS setup, а не только к последующему I/O."},
+      "impact": {"en":"REST connections can time out independently during connection establishment, writes and reads on both Delphi and FPC backends.","fr":"Les connexions REST peuvent expirer indépendamment pendant l’établissement, l’écriture et la lecture sur les backends Delphi et FPC.","zh":"Delphi 与 FPC backend 的 REST 连接现在可分别控制建连、写入和读取超时。","ru":"REST-соединения на Delphi и FPC backends могут независимо ограничивать установление, запись и чтение."},
+      "action": "review",
+      "units": ["mormot.rest.http.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9a5f322db1b09c2a9afab977978daca7b06afda3",
+      "headline": {"en":"HTTP sockets reuse the base socket timeout implementation","fr":"Les sockets HTTP réutilisent les délais de la socket de base","zh":"HTTP socket 复用基础 socket 的超时实现","ru":"HTTP sockets используют базовую реализацию таймаутов"},
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {"en":"THttpClientSocket removes duplicate timeout fields and setters and uses the inherited TCrtSocket timeout storage. Header waits now use ReceiveTimeout, while connection and TLS setup use ConnectTimeout.","fr":"THttpClientSocket supprime les champs et setters de délai dupliqués et utilise le stockage hérité de TCrtSocket. L’attente des en-têtes utilise ReceiveTimeout, tandis que la connexion et TLS utilisent ConnectTimeout.","zh":"THttpClientSocket 移除重复的超时字段和 setter，改用继承自 TCrtSocket 的超时存储。等待 header 使用 ReceiveTimeout，连接与 TLS 建立使用 ConnectTimeout。","ru":"THttpClientSocket удаляет дублирующие поля и setters таймаутов и использует хранилище TCrtSocket. Ожидание headers использует ReceiveTimeout, а подключение и TLS setup — ConnectTimeout."},
+      "impact": {"en":"Existing HTTP clients keep the same class surface while timeout reads and writes now share the base implementation. Applications that tune timeouts should exercise connection and response-header waits.","fr":"Les clients HTTP existants gardent la même surface de classe, mais la lecture et l’écriture des délais partagent désormais l’implémentation de base. Les applications qui règlent ces délais doivent tester la connexion et l’attente des en-têtes.","zh":"现有 HTTP 客户端保持相同类接口，但超时读写现在统一使用基础实现。调整超时的应用应测试连接与响应 header 等待。","ru":"Существующие HTTP clients сохраняют поверхность класса, но чтение и запись таймаутов теперь используют базовую реализацию. Приложениям с настройкой таймаутов стоит проверить подключение и ожидание response headers."},
+      "action": "review",
+      "units": ["mormot.net.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "221f7715ca15dc301c7c0573382a816b5718efa3",
+      "headline": {"en":"Sockets gain separate connect, send and receive timeouts","fr":"Les sockets gagnent des délais distincts de connexion, d’envoi et de réception","zh":"Socket 新增独立的连接、发送和接收超时","ru":"Sockets получили отдельные таймауты подключения, отправки и приёма"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"TCrtSocket adds SetTimeouts and ConnectTimeout, and makes SendTimeout and ReceiveTimeout readable as well as writable. Connect, proxy, TLS, send and receive paths select the relevant phase value.","fr":"TCrtSocket ajoute SetTimeouts et ConnectTimeout, et rend SendTimeout et ReceiveTimeout lisibles en plus d’être modifiables. Les chemins de connexion, proxy, TLS, envoi et réception choisissent la valeur de phase correspondante.","zh":"TCrtSocket 新增 SetTimeouts 与 ConnectTimeout，并让 SendTimeout 和 ReceiveTimeout 同时可读写。连接、代理、TLS、发送和接收路径分别选择对应阶段值。","ru":"TCrtSocket добавляет SetTimeouts и ConnectTimeout, а SendTimeout и ReceiveTimeout становятся доступными и для чтения. Пути подключения, proxy, TLS, отправки и приёма выбирают значение своей фазы."},
+      "impact": {"en":"Delphi and FPC code can tune slow connection setup separately from request and response I/O. Existing code using TimeOut continues to provide the default when phase values stay zero.","fr":"Le code Delphi et FPC peut régler séparément une connexion lente et les E/S de requête/réponse. Le code existant utilisant TimeOut continue de fournir la valeur par défaut lorsque les valeurs de phase restent à zéro.","zh":"Delphi 与 FPC 代码可将慢速建连与请求/响应 I/O 分开调节。阶段值保持 0 时，现有 TimeOut 代码继续提供默认值。","ru":"Код Delphi и FPC может отдельно настраивать медленное подключение и I/O запросов/ответов. Существующий TimeOut остаётся default, пока значения фаз равны нулю."},
+      "action": "review",
+      "units": ["mormot.net.sock"],
+      "api_changes": [
+        {"symbol":"TCrtSocket.SetTimeouts","change":"added"},
+        {"symbol":"TCrtSocket.ConnectTimeout","change":"added"},
+        {"symbol":"TCrtSocket.SendTimeout","change":"behaviour-changed","note":{"en":"The property is now readable as well as writable.","fr":"La propriété est désormais lisible en plus d’être modifiable.","zh":"该属性现在同时可读写。","ru":"Свойство теперь доступно и для чтения."}},
+        {"symbol":"TCrtSocket.ReceiveTimeout","change":"behaviour-changed","note":{"en":"The property is now readable as well as writable.","fr":"La propriété est désormais lisible en plus d’être modifiable.","zh":"该属性现在同时可读写。","ru":"Свойство теперь доступно и для чтения."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2ccea1a0e5d7be85bd3cf68e1fd70e9e603d09cc",
+      "headline": {"en":"Tunnel sends recheck the transmit callback before use","fr":"Les envois tunnel revérifient le callback de transmission","zh":"隧道发送前再次检查 transmit callback","ru":"Tunnel sends повторно проверяют transmit callback"},
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {"en":"TTunnelLocal.SendFrame now requires Assigned(fTransmit) before invoking the callback, including the closing-frame path.","fr":"TTunnelLocal.SendFrame exige désormais Assigned(fTransmit) avant d’invoquer le callback, y compris pour la trame de fermeture.","zh":"TTunnelLocal.SendFrame 现在在调用 callback 前要求 Assigned(fTransmit)，关闭帧路径也同样检查。","ru":"TTunnelLocal.SendFrame теперь требует Assigned(fTransmit) перед вызовом callback, включая путь closing frame."},
+      "impact": {"en":"A tunnel whose transmit callback has already been cleared avoids a nil callback invocation. No application-code change is required for Delphi or FPC.","fr":"Un tunnel dont le callback de transmission a déjà été effacé évite un appel nil. Aucun changement du code applicatif Delphi ou FPC n’est requis.","zh":"当隧道的 transmit callback 已被清除时，不再调用 nil callback。Delphi 或 FPC 应用代码无需修改。","ru":"Туннель с уже очищенным transmit callback не вызывает nil callback. Изменения application code для Delphi или FPC не требуются."},
+      "action": "none",
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4860cac1453ff7ba8aafc006f662150c324fc60d",
+      "headline": {"en":"Thread-pool wake-up race could strand queued work","fr":"Une course de réveil du pool pouvait bloquer du travail en file","zh":"线程池唤醒竞争可能让排队任务永久搁置","ru":"Гонка пробуждения thread pool могла оставить работу в очереди"},
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {"en":"TSynThreadPool.PopPendingContext now accepts the caller thread and clears its fProcessingContext while holding fPendingSafe. Queue inspection and worker-idle publication are therefore atomic with respect to Push.","fr":"TSynThreadPool.PopPendingContext accepte désormais le thread appelant et efface son fProcessingContext tout en gardant fPendingSafe. L’inspection de la file et la publication de l’état inactif du worker deviennent atomiques vis-à-vis de Push.","zh":"TSynThreadPool.PopPendingContext 现在接收调用线程，并在持有 fPendingSafe 时清除其 fProcessingContext。因此队列检查与 worker 空闲状态发布相对于 Push 成为原子操作。","ru":"TSynThreadPool.PopPendingContext теперь принимает вызывающий thread и очищает его fProcessingContext под fPendingSafe. Проверка очереди и публикация idle-состояния worker становятся атомарными относительно Push."},
+      "impact": {"en":"On non-IOCP thread-pool paths, Push can no longer enqueue behind a worker that is about to sleep without waking it. This prevents pending asynchronous work from stalling until some unrelated event arrives.","fr":"Sur les chemins du pool sans IOCP, Push ne peut plus placer une tâche derrière un worker sur le point de dormir sans le réveiller. Le travail asynchrone en attente ne reste plus bloqué jusqu’à un événement indépendant.","zh":"在非 IOCP 线程池路径上，Push 不会再把任务排到即将休眠且未被唤醒的 worker 后面。这避免了异步待处理任务一直停滞到无关事件到来。","ru":"На путях thread pool без IOCP Push больше не ставит задачу за worker, который собирается уснуть без пробуждения. Pending async work не зависает до появления несвязанного события."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Prioritize this update for POSIX and other non-IOCP asynchronous workloads, then stress queued work during worker idle transitions.","fr":"Priorisez cette mise à jour pour les charges asynchrones POSIX et autres chemins sans IOCP, puis stressez la file lors du passage des workers à l’état inactif.","zh":"POSIX 及其他非 IOCP 异步负载应优先升级，并在 worker 进入空闲状态时对排队任务做压力测试。","ru":"Приоритетно обновите POSIX и другие non-IOCP async workloads, затем нагрузочно проверьте очередь при переходе workers в idle."},
+      "units": ["mormot.core.threads","mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a84c77d19bebdc06b4c91cad28d6c3bac4b40b8c",
+      "headline": {"en":"Async shutdown tests cover idle, partial and pending traffic","fr":"Les tests d’arrêt asynchrone couvrent le trafic inactif, partiel et en attente","zh":"异步关闭测试覆盖空闲、部分与待处理流量","ru":"Тесты async shutdown охватывают idle, partial и pending traffic"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en":"test.net.proto expands async-process coverage for idle sockets, partial headers and bodies, large writes, slow clients and disabled connection tracking. TPollSockets.Pending is exposed for assertions, and TPollAsyncSockets.PollWrite is corrected to a read accessor.","fr":"test.net.proto étend la couverture async aux sockets inactifs, en-têtes et corps partiels, grandes écritures, clients lents et suivi de connexions désactivé. TPollSockets.Pending est exposé pour les assertions, et TPollAsyncSockets.PollWrite est corrigé en accesseur de lecture.","zh":"test.net.proto 扩展异步测试，覆盖空闲 socket、部分 header/body、大写入、慢客户端及禁用连接跟踪。TPollSockets.Pending 公开用于断言，TPollAsyncSockets.PollWrite 修正为读取访问器。","ru":"test.net.proto расширяет async coverage для idle sockets, частичных headers и bodies, больших записей, медленных клиентов и отключённого connection tracking. TPollSockets.Pending открыт для assertions, а TPollAsyncSockets.PollWrite исправлен на read accessor."},
+      "impact": {"en":"Production behavior is unchanged by the tests. Code that previously could not read PollWrite can now inspect it on non-IOCP builds.","fr":"Les tests ne changent pas le comportement en production. Le code qui ne pouvait pas lire PollWrite peut désormais l’inspecter sur les builds sans IOCP.","zh":"测试本身不改变生产行为。此前无法读取 PollWrite 的代码现在可在非 IOCP build 上检查它。","ru":"Тесты не меняют production behavior. Код, который раньше не мог читать PollWrite, теперь может проверять его в non-IOCP builds."},
+      "action": "none",
+      "units": ["mormot.net.async","mormot.net.sock","test.net.proto"],
+      "api_changes": [
+        {"symbol":"TPollSockets.Pending","change":"added"},
+        {"symbol":"TPollAsyncSockets.PollWrite","change":"behaviour-changed","note":{"en":"Its accessor is now read fWrite instead of write fWrite.","fr":"Son accesseur est désormais read fWrite au lieu de write fWrite.","zh":"其访问器由 write fWrite 改为 read fWrite。","ru":"Accessor теперь read fWrite вместо write fWrite."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2b1b93ae0ee8854e8ac63bf1636bfbe4614f0dba",
+      "headline": {"en":"Async servers wake poll loops as soon as shutdown begins","fr":"Les serveurs asynchrones réveillent les boucles de polling dès le début de l’arrêt","zh":"异步服务器在关闭开始时立即唤醒轮询循环","ru":"Async servers будят poll loops сразу при начале завершения"},
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {"en":"TAsyncConnections.Destroy marks fSockets terminated before waiting and wakes POSIX read and write pollers. Related HTTP and proxy shutdown paths stop waiting for normal poll timeouts.","fr":"TAsyncConnections.Destroy marque fSockets comme terminé avant l’attente et réveille les pollers POSIX de lecture et d’écriture. Les chemins d’arrêt HTTP et proxy associés n’attendent plus les délais normaux du polling.","zh":"TAsyncConnections.Destroy 在等待前先将 fSockets 标记为终止，并唤醒 POSIX 读写 poller。相关 HTTP 与代理关闭路径不再等待正常轮询超时。","ru":"TAsyncConnections.Destroy помечает fSockets terminated до ожидания и будит POSIX read/write pollers. Связанные HTTP и proxy shutdown paths больше не ждут обычных poll timeouts."},
+      "impact": {"en":"POSIX async servers and proxy clients should terminate faster and more predictably. Delphi Windows IOCP builds do not use these poll wake-up branches.","fr":"Les serveurs asynchrones et clients proxy POSIX devraient s’arrêter plus vite et de façon plus prévisible. Les builds Delphi Windows IOCP n’utilisent pas ces branches de réveil.","zh":"POSIX 异步服务器和代理客户端应能更快、更可预测地终止。Delphi Windows IOCP build 不使用这些轮询唤醒分支。","ru":"POSIX async servers и proxy clients должны завершаться быстрее и предсказуемее. Delphi Windows IOCP builds не используют эти ветви poll wake-up."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Retest POSIX server shutdown latency and confirm read and write pollers exit promptly.","fr":"Retestez la latence d’arrêt du serveur POSIX et confirmez que les pollers de lecture et d’écriture quittent rapidement.","zh":"重新测试 POSIX 服务器关闭延迟，并确认读写 poller 能迅速退出。","ru":"Повторно проверьте задержку shutdown POSIX server и убедитесь, что read/write pollers быстро завершаются."},
+      "units": ["mormot.net.async","mormot.net.client"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0bc90ef677d934945195e04daed979cdd4fd232c",
+      "headline": {"en":"One Kerberos HTTP helper now serves Windows and POSIX","fr":"Un seul helper HTTP Kerberos sert désormais Windows et POSIX","zh":"统一的 Kerberos HTTP helper 同时服务 Windows 与 POSIX","ru":"Единый Kerberos HTTP helper теперь работает на Windows и POSIX"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"KerberosServerAuthHeader moves the single-roundtrip Negotiate helper to mormot.net.client, rejects NTLM, and is used by server authorization on both SSPI and GSSAPI. NOKERBEROSCLIENT can exclude the helper.","fr":"KerberosServerAuthHeader déplace le helper Negotiate à un aller-retour dans mormot.net.client, rejette NTLM et sert à l’autorisation serveur avec SSPI et GSSAPI. NOKERBEROSCLIENT peut exclure le helper.","zh":"KerberosServerAuthHeader 将单轮 Negotiate helper 移到 mormot.net.client，拒绝 NTLM，并供 SSPI 与 GSSAPI 服务端授权共同使用。NOKERBEROSCLIENT 可排除该 helper。","ru":"KerberosServerAuthHeader переносит single-roundtrip Negotiate helper в mormot.net.client, отклоняет NTLM и используется серверной авторизацией через SSPI и GSSAPI. NOKERBEROSCLIENT позволяет исключить helper."},
+      "impact": {"en":"Custom Delphi and FPC HTTP servers can use one public helper across Windows and POSIX. It supports only a simple two-message Kerberos exchange, not NTLM or multi-round negotiation.","fr":"Les serveurs HTTP Delphi et FPC personnalisés peuvent utiliser un même helper public sous Windows et POSIX. Il ne prend en charge qu’un échange Kerberos simple en deux messages, pas NTLM ni une négociation multi-étapes.","zh":"自定义 Delphi 与 FPC HTTP 服务器可在 Windows 和 POSIX 上使用同一公开 helper。它仅支持简单的两消息 Kerberos 交换，不支持 NTLM 或多轮协商。","ru":"Пользовательские HTTP servers на Delphi и FPC могут использовать один public helper на Windows и POSIX. Поддерживается только простой двухсообщенческий Kerberos exchange, без NTLM и multi-round negotiation."},
+      "action": "review",
+      "units": ["mormot.lib.gssapi","mormot.lib.sspi","mormot.net.client","mormot.net.server"],
+      "api_changes": [
+        {"symbol":"KerberosServerAuthHeader","change":"added","note":{"en":"Final cross-platform name in mormot.net.client.","fr":"Nom multiplateforme final dans mormot.net.client.","zh":"mormot.net.client 中的最终跨平台名称。","ru":"Финальное кроссплатформенное имя в mormot.net.client."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "be652e428d4c52ac1400f9ab63a3a051d721e189",
+      "headline": {"en":"REST SSPI authentication can select a POSIX keytab","fr":"L’authentification REST SSPI peut choisir un keytab POSIX","zh":"REST SSPI 认证可选择 POSIX keytab","ru":"REST SSPI-аутентификация может выбрать POSIX keytab"},
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {"en":"On POSIX, TRestServerAuthenticationSspi adds a KeyTab property backed by TServerSspiKeyTab. Setting a valid file initializes GSSAPI credentials and Idle refreshes changed keytab files.","fr":"Sous POSIX, TRestServerAuthenticationSspi ajoute une propriété KeyTab basée sur TServerSspiKeyTab. Un fichier valide initialise les identifiants GSSAPI et Idle recharge les keytabs modifiés.","zh":"在 POSIX 上，TRestServerAuthenticationSspi 新增由 TServerSspiKeyTab 支持的 KeyTab 属性。设置有效文件会初始化 GSSAPI 凭据，Idle 会刷新已更改的 keytab。","ru":"На POSIX TRestServerAuthenticationSspi добавляет свойство KeyTab на базе TServerSspiKeyTab. Корректный файл инициализирует GSSAPI credentials, а Idle обновляет изменённые keytab files."},
+      "impact": {"en":"POSIX REST servers can use an explicit and hot-refreshable keytab instead of relying only on default GSSAPI credentials. Windows SSPI behavior is unchanged.","fr":"Les serveurs REST POSIX peuvent utiliser un keytab explicite et rechargeable à chaud au lieu de dépendre uniquement des identifiants GSSAPI par défaut. Le comportement SSPI Windows ne change pas.","zh":"POSIX REST 服务器可使用显式且可热刷新的 keytab，不必只依赖默认 GSSAPI 凭据。Windows SSPI 行为不变。","ru":"POSIX REST servers могут использовать явный и hot-refreshable keytab вместо зависимости только от default GSSAPI credentials. Поведение Windows SSPI не меняется."},
+      "action": "review",
+      "units": ["mormot.rest.server"],
+      "api_changes": [
+        {"symbol":"TRestServerAuthenticationSspi.KeyTab","change":"added","note":{"en":"Available on POSIX builds.","fr":"Disponible sur les builds POSIX.","zh":"仅在 POSIX build 中可用。","ru":"Доступно в POSIX builds."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "71011fb65f0ec4102cdc7e4e5146d7be4a640d76",
+      "headline": {"en":"HTTP Negotiate authorization delegates to the shared helper","fr":"L’autorisation HTTP Negotiate délègue au helper partagé","zh":"HTTP Negotiate 授权改用共享 helper","ru":"HTTP Negotiate authorization делегирует общему helper"},
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {"en":"THttpServerSocketGeneric.Authorization replaces its inline SSPI/GSSAPI parsing with the shared authentication-header helper and centralizes SspiKeyTab accessors.","fr":"THttpServerSocketGeneric.Authorization remplace son parsing SSPI/GSSAPI intégré par le helper partagé d’en-tête d’authentification et centralise les accesseurs SspiKeyTab.","zh":"THttpServerSocketGeneric.Authorization 用共享认证 header helper 替换内联 SSPI/GSSAPI 解析，并集中处理 SspiKeyTab 访问器。","ru":"THttpServerSocketGeneric.Authorization заменяет встроенный SSPI/GSSAPI parsing общим helper для authentication header и централизует accessors SspiKeyTab."},
+      "impact": {"en":"Built-in HTTP Negotiate behavior is consolidated without an application-code change. Windows and POSIX follow the same single-roundtrip decision path.","fr":"Le comportement HTTP Negotiate intégré est regroupé sans changement du code applicatif. Windows et POSIX suivent le même chemin de décision à un aller-retour.","zh":"内置 HTTP Negotiate 行为得到统一，应用代码无需修改。Windows 与 POSIX 使用相同的单轮决策路径。","ru":"Встроенное поведение HTTP Negotiate объединено без изменения application code. Windows и POSIX используют один single-roundtrip decision path."},
+      "action": "none",
+      "units": ["mormot.net.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "03373d425c8c925d9a8538754185110da31b3b2f",
+      "headline": {"en":"Direct keytab HTTP authentication method is removed","fr":"La méthode directe d’authentification HTTP par keytab est supprimée","zh":"直接 keytab HTTP 认证方法已移除","ru":"Прямой keytab-метод HTTP-аутентификации удалён"},
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {"en":"TServerSspiKeyTab.ComputeServerHeader is deleted. TServerSspiKeyTab gains FileSetter and a nil-safe KeyTab getter, while ServerSspiDataNtlm now checks for at least four input bytes before reading a cardinal.","fr":"TServerSspiKeyTab.ComputeServerHeader est supprimé. TServerSspiKeyTab gagne FileSetter et un getter KeyTab sûr sur nil, tandis que ServerSspiDataNtlm vérifie désormais au moins quatre octets avant de lire un cardinal.","zh":"TServerSspiKeyTab.ComputeServerHeader 被删除。TServerSspiKeyTab 新增 FileSetter 与 nil-safe KeyTab getter，ServerSspiDataNtlm 也会先确认输入至少有四字节再读取 cardinal。","ru":"TServerSspiKeyTab.ComputeServerHeader удалён. TServerSspiKeyTab получил FileSetter и nil-safe getter KeyTab, а ServerSspiDataNtlm теперь проверяет наличие минимум четырёх байтов перед чтением cardinal."},
+      "impact": {"en":"Applications that call ComputeServerHeader no longer compile. Short malformed SSPI/GSSAPI tokens are now rejected without an out-of-bounds cardinal read.","fr":"Les applications qui appellent ComputeServerHeader ne compilent plus. Les jetons SSPI/GSSAPI courts et mal formés sont désormais rejetés sans lecture cardinal hors limites.","zh":"调用 ComputeServerHeader 的应用将无法编译。短小的畸形 SSPI/GSSAPI token 现在会被拒绝，不再越界读取 cardinal。","ru":"Приложения с вызовом ComputeServerHeader больше не компилируются. Короткие malformed SSPI/GSSAPI tokens отклоняются без out-of-bounds чтения cardinal."},
+      "action": "migration-required",
+      "action_detail": {"en":"Grep for TServerSspiKeyTab.ComputeServerHeader. Call KerberosServerAuthHeader instead; on POSIX call PrepareKeyTab first when using a specific keytab.","fr":"Recherchez TServerSspiKeyTab.ComputeServerHeader. Appelez KerberosServerAuthHeader à la place ; sous POSIX, appelez d’abord PrepareKeyTab avec un keytab spécifique.","zh":"搜索 TServerSspiKeyTab.ComputeServerHeader，改为调用 KerberosServerAuthHeader；POSIX 使用特定 keytab 时先调用 PrepareKeyTab。","ru":"Найдите TServerSspiKeyTab.ComputeServerHeader. Используйте KerberosServerAuthHeader; на POSIX сначала вызовите PrepareKeyTab для конкретного keytab."},
+      "units": ["mormot.lib.gssapi","mormot.lib.sspi"],
+      "api_changes": [
+        {"symbol":"TServerSspiKeyTab.ComputeServerHeader","change":"removed","note":{"en":"Use KerberosServerAuthHeader from mormot.net.client.","fr":"Utilisez KerberosServerAuthHeader de mormot.net.client.","zh":"请使用 mormot.net.client 中的 KerberosServerAuthHeader。","ru":"Используйте KerberosServerAuthHeader из mormot.net.client."}},
+        {"symbol":"TServerSspiKeyTab.FileSetter","change":"added"}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9029fa161384d97766c51ec3b9260ff19e23ec69",
+      "headline": {"en":"Cross-platform Negotiate parsing is extracted from the HTTP server","fr":"Le parsing Negotiate multiplateforme est extrait du serveur HTTP","zh":"跨平台 Negotiate 解析从 HTTP 服务器中提取","ru":"Кроссплатформенный Negotiate parsing вынесен из HTTP server"},
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {"en":"A first ServerSspiAuthHeader implementation factors Authorization header parsing, Base64 decoding, NTLM rejection and SSPI/GSSAPI response generation out of THttpServerSocketGeneric.Authorization.","fr":"Une première implémentation ServerSspiAuthHeader extrait de THttpServerSocketGeneric.Authorization le parsing de l’en-tête Authorization, le décodage Base64, le rejet NTLM et la génération de réponse SSPI/GSSAPI.","zh":"首个 ServerSspiAuthHeader 实现从 THttpServerSocketGeneric.Authorization 中提取 Authorization header 解析、Base64 解码、NTLM 拒绝及 SSPI/GSSAPI 响应生成。","ru":"Первая реализация ServerSspiAuthHeader выносит из THttpServerSocketGeneric.Authorization parsing заголовка Authorization, Base64 decoding, отклонение NTLM и генерацию SSPI/GSSAPI response."},
+      "impact": {"en":"This is an intermediate public name in the same edition; the final API is KerberosServerAuthHeader in mormot.net.client. Applications should not adopt the temporary name.","fr":"Il s’agit d’un nom public intermédiaire dans la même édition ; l’API finale est KerberosServerAuthHeader dans mormot.net.client. Les applications ne doivent pas adopter le nom temporaire.","zh":"这是同一期中的临时公开名称；最终 API 是 mormot.net.client 中的 KerberosServerAuthHeader。应用不应采用临时名称。","ru":"Это промежуточное public name в том же выпуске; финальный API — KerberosServerAuthHeader в mormot.net.client. Приложениям не следует использовать временное имя."},
+      "action": "none",
+      "units": ["mormot.lib.gssapi","mormot.lib.sspi","mormot.net.server"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "066e5953445fd5554dedf0f2f31de89c692e71fa",
+      "headline": {"en":"Shared byte-indexed cardinal table replaces local aliases","fr":"Une table cardinal indexée par octet remplace les alias locaux","zh":"共享的按 byte 索引 cardinal 表替换局部别名","ru":"Общая byte-indexed cardinal table заменяет локальные aliases"},
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {"en":"mormot.core.base publishes TByteToCardinal and several formatting, Unicode, security, cryptography and HTTP routines reuse it. PurgeHeaders also checks P rather than the stale h pointer before reading header length.","fr":"mormot.core.base publie TByteToCardinal et plusieurs routines de formatage, Unicode, sécurité, cryptographie et HTTP la réutilisent. PurgeHeaders vérifie aussi P plutôt que l’ancien pointeur h avant de lire la longueur d’en-tête.","zh":"mormot.core.base 公开 TByteToCardinal，格式化、Unicode、安全、密码学与 HTTP 相关例程统一复用它。PurgeHeaders 读取 header 长度前也改为检查 P，而非陈旧的 h 指针。","ru":"mormot.core.base публикует TByteToCardinal, которую повторно используют routines форматирования, Unicode, security, cryptography и HTTP. PurgeHeaders также проверяет P вместо устаревшего указателя h перед чтением длины header."},
+      "impact": {"en":"Application behavior is unchanged apart from the small PurgeHeaders guard correction. The shared type is available to Delphi and FPC callers that need a 256-entry cardinal lookup table.","fr":"Le comportement applicatif reste inchangé hormis la petite correction de garde dans PurgeHeaders. Le type partagé est disponible aux appelants Delphi et FPC ayant besoin d’une table cardinal de 256 entrées.","zh":"除 PurgeHeaders 的小型保护修正外，应用行为不变。需要 256 项 cardinal 查找表的 Delphi 与 FPC 调用者可使用该共享类型。","ru":"Поведение приложений не меняется, кроме небольшой коррекции guard в PurgeHeaders. Общий тип доступен callers Delphi и FPC, которым нужна cardinal lookup table на 256 элементов."},
+      "action": "none",
+      "units": ["mormot.core.base","mormot.core.fmt","mormot.core.os.security","mormot.core.unicode","mormot.crypt.core","mormot.net.http","test.core.data"],
+      "api_changes": [{"symbol":"TByteToCardinal","change":"added"}],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c7708e5519207350a372375b3a6106676ae50411",
+      "headline": {"en":"Async connection flag now describes registration accurately","fr":"Le flag de connexion asynchrone décrit correctement l’enregistrement","zh":"异步连接 flag 现在准确描述注册状态","ru":"Флаг async connection теперь точно описывает регистрацию"},
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {"en":"The internal TPollAsyncConnectionFlags value fInList is renamed fRegistered, and all registration, removal and recycling checks use the new name.","fr":"La valeur interne TPollAsyncConnectionFlags fInList est renommée fRegistered, et tous les contrôles d’enregistrement, suppression et recyclage utilisent ce nouveau nom.","zh":"内部 TPollAsyncConnectionFlags 值 fInList 重命名为 fRegistered，所有注册、移除和回收检查都改用新名称。","ru":"Внутреннее значение TPollAsyncConnectionFlags fInList переименовано в fRegistered; все проверки регистрации, удаления и recycling используют новое имя."},
+      "impact": {"en":"No public API or runtime behavior changes. The rename makes connection ownership checks easier to audit in Delphi and FPC source builds.","fr":"Aucune API publique ni comportement d’exécution ne change. Le renommage facilite l’audit des contrôles de propriété des connexions dans les builds source Delphi et FPC.","zh":"公开 API 与运行时行为均不变。该重命名使 Delphi 与 FPC 源码 build 中的连接所有权检查更易审计。","ru":"Public API и runtime behavior не меняются. Переименование упрощает аудит ownership checks соединений в source builds Delphi и FPC."},
+      "action": "none",
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "02bd02a7893a63422c590ac2452b5e10893c036d",
+      "headline": {"en":"Issue 633 shutdown scenario becomes a regression test","fr":"Le scénario d’arrêt de l’issue 633 devient un test de régression","zh":"Issue 633 的关闭场景加入回归测试","ru":"Сценарий shutdown из issue 633 стал regression test"},
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {"en":"test.net.proto adds the reported asynchronous HTTP shutdown pattern and verifies that idle, slow and pending clients are closed when the server instance is freed.","fr":"test.net.proto ajoute le scénario d’arrêt HTTP asynchrone signalé et vérifie que les clients inactifs, lents et en attente sont fermés lors de la libération du serveur.","zh":"test.net.proto 加入已报告的异步 HTTP 关闭模式，并验证释放服务器实例时空闲、慢速及待处理客户端都会关闭。","ru":"test.net.proto добавляет сообщённый сценарий async HTTP shutdown и проверяет закрытие idle, slow и pending clients при освобождении server instance."},
+      "impact": {"en":"Production units and public APIs are unchanged. The test protects the preceding connection-leak repair on Delphi and FPC test runs.","fr":"Les unités de production et API publiques ne changent pas. Le test protège la correction précédente des fuites de connexion dans les exécutions Delphi et FPC.","zh":"生产单元与公开 API 不变。该测试在 Delphi 与 FPC 测试运行中保护前述连接泄漏修复。","ru":"Production units и public API не меняются. Тест защищает предыдущее исправление connection leaks в тестовых запусках Delphi и FPC."},
+      "action": "none",
+      "units": ["test.net.proto"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c87c00aba3fd656db8dfd6b639349c4920e53e92",
+      "headline": {"en":"Async server shutdown now owns every connection exit path","fr":"L’arrêt du serveur asynchrone maîtrise tous les chemins de sortie des connexions","zh":"异步服务器关闭现在覆盖所有连接退出路径","ru":"Async server shutdown теперь владеет всеми путями выхода соединений"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en":"TAsyncConnections closes pending reads, waits workers and accept loops, releases tracked connections, permits final GC insertion and fixes ConnectionDelete and EndConnection ordering. Client request failure paths now abort transferred connections consistently.","fr":"TAsyncConnections ferme les lectures en attente, attend les workers et boucles d’acceptation, libère les connexions suivies, autorise l’insertion finale dans le GC et corrige l’ordre de ConnectionDelete et EndConnection. Les échecs de requête client abandonnent désormais les connexions transférées de façon cohérente.","zh":"TAsyncConnections 现在关闭待处理读取、等待 worker 与 accept loop、释放已跟踪连接、允许最终 GC 插入，并修正 ConnectionDelete 与 EndConnection 顺序。客户端请求失败路径也会统一中止已转移连接。","ru":"TAsyncConnections закрывает pending reads, ждёт workers и accept loops, освобождает tracked connections, разрешает финальное добавление в GC и исправляет порядок ConnectionDelete и EndConnection. Пути ошибки client request теперь согласованно abort переданные соединения."},
+      "impact": {"en":"Long-running Delphi and FPC async servers avoid leaked connection objects and sockets during shutdown, failed accepts and client setup errors. Destruction waits for worker ownership to settle before freeing shared state.","fr":"Les serveurs asynchrones Delphi et FPC de longue durée évitent les fuites d’objets de connexion et de sockets lors de l’arrêt, des acceptations échouées et des erreurs de préparation client. La destruction attend la stabilisation de la propriété des workers avant de libérer l’état partagé.","zh":"长期运行的 Delphi 与 FPC 异步服务器在关闭、accept 失败和客户端设置错误时可避免连接对象与 socket 泄漏。销毁会先等待 worker 所有权稳定，再释放共享状态。","ru":"Долго работающие async servers Delphi и FPC избегают утечек connection objects и sockets при shutdown, failed accept и ошибках client setup. Destroy ждёт стабилизации ownership workers перед освобождением shared state."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Upgrade async servers and test destruction with idle clients, partial requests, pending writes and acoNoConnectionTrack.","fr":"Mettez à niveau les serveurs asynchrones et testez la destruction avec des clients inactifs, requêtes partielles, écritures en attente et acoNoConnectionTrack.","zh":"异步服务器应升级，并测试空闲客户端、部分请求、待发送数据及 acoNoConnectionTrack 下的销毁。","ru":"Обновите async servers и проверьте destroy с idle clients, partial requests, pending writes и acoNoConnectionTrack."},
+      "units": ["mormot.net.async","mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fbb9dc6b813ec790e63b41d213238d349fbeab29",
+      "headline": {"en":"Tunnel close no longer calls a missing transmit closure","fr":"La fermeture du tunnel n’appelle plus une closure de transmission absente","zh":"隧道关闭不再调用缺失的 transmit closure","ru":"Закрытие туннеля больше не вызывает отсутствующую transmit closure"},
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {"en":"TTunnelLocal.SendFrame checks that fTransmit is assigned before sending the closing frame when the tunnel is terminating.","fr":"TTunnelLocal.SendFrame vérifie que fTransmit est assigné avant d’envoyer la trame de fermeture lors de la terminaison du tunnel.","zh":"TTunnelLocal.SendFrame 在隧道终止时发送关闭帧前，会先检查 fTransmit 是否已赋值。","ru":"TTunnelLocal.SendFrame проверяет Assigned(fTransmit) перед отправкой closing frame при завершении туннеля."},
+      "impact": {"en":"Tunnel teardown avoids a nil closure call in both Delphi and FPC builds. No application-code migration is required.","fr":"La destruction du tunnel évite un appel de closure nil dans les builds Delphi et FPC. Aucune migration du code applicatif n’est requise.","zh":"Delphi 与 FPC build 的隧道拆除可避免调用 nil closure。应用代码无需迁移。","ru":"Tunnel teardown избегает вызова nil closure в builds Delphi и FPC. Миграция application code не требуется."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Take this fix with the surrounding tunnel cleanup commits before testing tunnel teardown.","fr":"Prenez cette correction avec les commits de nettoyage du tunnel avant de tester sa destruction.","zh":"请将此修复与相邻的隧道清理提交一起采用，再测试隧道拆除。","ru":"Возьмите исправление вместе с соседними tunnel cleanup-коммитами перед тестированием teardown."},
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2eb90dbcd42180b75fc9156f3b270b36875602eb",
+      "headline": {"en":"Tunnel failure paths close both endpoint sockets","fr":"Les chemins d’échec du tunnel ferment les deux sockets d’extrémité","zh":"隧道失败路径会关闭两端 socket","ru":"Пути ошибки туннеля закрывают оба endpoint sockets"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en":"TTunnelLocalThread.Destroy closes fServerSock and fClientSock, while TTunnelLocal.Open and OpenSocket use ShutdownAndClose and nil transferred sockets on exceptions and failed setup.","fr":"TTunnelLocalThread.Destroy ferme fServerSock et fClientSock, tandis que TTunnelLocal.Open et OpenSocket utilisent ShutdownAndClose et mettent à nil les sockets transférés lors des exceptions et échecs de préparation.","zh":"TTunnelLocalThread.Destroy 关闭 fServerSock 与 fClientSock；TTunnelLocal.Open 和 OpenSocket 在异常及设置失败时使用 ShutdownAndClose，并将已转移 socket 置 nil。","ru":"TTunnelLocalThread.Destroy закрывает fServerSock и fClientSock, а TTunnelLocal.Open и OpenSocket используют ShutdownAndClose и обнуляют переданные sockets при исключениях и failed setup."},
+      "impact": {"en":"Repeated failed tunnel openings no longer accumulate file descriptors or socket handles on POSIX, Delphi or FPC targets.","fr":"Les ouvertures de tunnel échouées répétées n’accumulent plus de descripteurs de fichiers ni de handles de socket sur les cibles POSIX, Delphi ou FPC.","zh":"反复失败的隧道打开不再在 POSIX、Delphi 或 FPC 目标上累积文件描述符或 socket handle。","ru":"Повторные failed tunnel opens больше не накапливают file descriptors или socket handles на целях POSIX, Delphi и FPC."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Stress failed Open and OpenSocket attempts and verify descriptor counts return to baseline.","fr":"Stressez les échecs de Open et OpenSocket et vérifiez que le nombre de descripteurs revient à sa valeur initiale.","zh":"对 Open 与 OpenSocket 失败路径做压力测试，并确认描述符数量恢复到基线。","ru":"Нагрузочно проверьте failed Open/OpenSocket и убедитесь, что число descriptors возвращается к baseline."},
+      "units": ["mormot.net.tunnel"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "213dd8c6426837c4b9b58e72ee8c37cc3214ae25",
+      "headline": {"en":"RTSP-over-HTTP setup cleans every partially owned connection","fr":"La préparation RTSP-over-HTTP nettoie chaque connexion partiellement acquise","zh":"RTSP-over-HTTP 设置会清理所有部分接管的连接","ru":"Настройка RTSP-over-HTTP очищает каждое частично принятое соединение"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en":"TRtspOverHttpServer.ConnectionCreate tracks GET, POST and RTSP connection ownership explicitly and releases each object or raw RTSP socket in its finally block unless ownership was transferred successfully.","fr":"TRtspOverHttpServer.ConnectionCreate suit explicitement la propriété des connexions GET, POST et RTSP et libère chaque objet ou socket RTSP brut dans finally, sauf si la propriété a été transférée avec succès.","zh":"TRtspOverHttpServer.ConnectionCreate 显式跟踪 GET、POST 与 RTSP 连接所有权，并在 finally 中释放每个对象或原始 RTSP socket，除非所有权已成功转移。","ru":"TRtspOverHttpServer.ConnectionCreate явно отслеживает ownership соединений GET, POST и RTSP и освобождает каждый object или raw RTSP socket в finally, если ownership не был успешно передан."},
+      "impact": {"en":"Failed or interrupted RTSP-over-HTTP pairing no longer leaks sockets and connection objects. Existing Delphi and FPC application APIs are unchanged.","fr":"Un appairage RTSP-over-HTTP échoué ou interrompu ne fuit plus de sockets ni d’objets de connexion. Les API applicatives Delphi et FPC ne changent pas.","zh":"失败或中断的 RTSP-over-HTTP 配对不再泄漏 socket 和连接对象。现有 Delphi 与 FPC 应用 API 不变。","ru":"Failed или interrupted pairing RTSP-over-HTTP больше не приводит к утечке sockets и connection objects. API приложений Delphi и FPC не меняются."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Exercise failed GET/POST pairing and interrupted RTSP setup while monitoring socket and object counts.","fr":"Testez l’échec d’appairage GET/POST et l’interruption de la préparation RTSP tout en surveillant le nombre de sockets et d’objets.","zh":"测试 GET/POST 配对失败与 RTSP 设置中断，并监控 socket 和对象数量。","ru":"Проверьте failed GET/POST pairing и interrupted RTSP setup, отслеживая число sockets и objects."},
+      "units": ["mormot.net.rtsphttp"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3742e9a71cbc75554652348d79281442ad61f89c",
+      "headline": {"en":"Async connection rollback is centralized before registration","fr":"Le rollback des connexions asynchrones est centralisé avant l’enregistrement","zh":"异步连接注册前的回滚逻辑得到集中","ru":"Rollback async connections централизован до регистрации"},
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {"en":"The protected TAsyncConnections.ConnectionAbortAndNil method now clears a caller reference, preserves caller-owned sockets, closes registered connections through fSockets and directly frees instances that never registered.","fr":"La méthode protégée TAsyncConnections.ConnectionAbortAndNil efface la référence de l’appelant, préserve les sockets appartenant à l’appelant, ferme les connexions enregistrées via fSockets et libère directement les instances jamais enregistrées.","zh":"受保护的 TAsyncConnections.ConnectionAbortAndNil 现在会清空调用者引用、保留调用者拥有的 socket，通过 fSockets 关闭已注册连接，并直接释放未注册实例。","ru":"Защищённый метод TAsyncConnections.ConnectionAbortAndNil очищает ссылку caller, сохраняет принадлежащие caller sockets, закрывает зарегистрированные соединения через fSockets и напрямую освобождает никогда не зарегистрированные instances."},
+      "impact": {"en":"Framework failure paths now use one ownership rule, reducing double-free and leak risks. The helper is protected and does not add a public application API.","fr":"Les chemins d’échec du framework utilisent désormais une seule règle de propriété, réduisant les risques de double libération et de fuite. Le helper est protégé et n’ajoute pas d’API applicative publique.","zh":"框架失败路径现在使用统一所有权规则，降低重复释放和泄漏风险。该 helper 为 protected，不新增公开应用 API。","ru":"Пути ошибки framework теперь используют единое правило ownership, снижая риск double-free и утечек. Helper защищённый и не добавляет public application API."},
+      "action": "none",
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5707c8698051fe92bdf71d4445cc8985c4e59af0",
+      "headline": {"en":"Async connection destruction closes sockets left by Stop","fr":"La destruction des connexions asynchrones ferme les sockets laissés par Stop","zh":"异步连接销毁会关闭 Stop 遗留的 socket","ru":"Destroy async connection закрывает sockets, оставшиеся после Stop"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en":"TPollAsyncConnection.Destroy now releases fSecure, sets linger to immediate close and calls ShutdownAndClose when fSocket remains assigned after Stop.","fr":"TPollAsyncConnection.Destroy libère désormais fSecure, règle linger pour une fermeture immédiate et appelle ShutdownAndClose lorsque fSocket reste assigné après Stop.","zh":"TPollAsyncConnection.Destroy 现在释放 fSecure，将 linger 设为立即关闭，并在 Stop 后 fSocket 仍有值时调用 ShutdownAndClose。","ru":"TPollAsyncConnection.Destroy освобождает fSecure, задаёт linger для немедленного закрытия и вызывает ShutdownAndClose, если fSocket остаётся assigned после Stop."},
+      "impact": {"en":"Destroying a partially stopped asynchronous connection no longer leaves its socket handle open. The fix applies to Delphi and FPC async backends.","fr":"La destruction d’une connexion asynchrone partiellement arrêtée ne laisse plus son handle de socket ouvert. La correction s’applique aux backends asynchrones Delphi et FPC.","zh":"销毁部分停止的异步连接时不再遗留打开的 socket handle。该修复适用于 Delphi 与 FPC 异步 backend。","ru":"Destroy частично остановленного async connection больше не оставляет socket handle открытым. Исправление применяется к async backends Delphi и FPC."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"Include this destructor fix when deploying the broader async ownership changes.","fr":"Incluez cette correction du destructeur lors du déploiement des changements plus larges de propriété asynchrone.","zh":"部署更广泛的异步所有权修改时，请包含此析构修复。","ru":"Включите это исправление destructor при развёртывании более широких async ownership changes."},
+      "units": ["mormot.net.async"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "54de464720047e30d70288171ef62b32fdb3e40f",
+      "headline": {"en":"Epoll unsubscribe closes sockets even when removal fails","fr":"La désinscription epoll ferme les sockets même si le retrait échoue","zh":"即使 epoll 移除失败，取消订阅也会关闭 socket","ru":"Epoll unsubscribe закрывает sockets даже при ошибке удаления"},
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {"en":"TPollSocketEpoll.Unsubscribe moves raw-socket closing outside the EPOLL_CTL_DEL success branch when fUnsubscribeShutdownSocket is set. It also closes when the epoll descriptor is already unavailable.","fr":"TPollSocketEpoll.Unsubscribe déplace la fermeture du socket brut hors de la branche de succès EPOLL_CTL_DEL lorsque fUnsubscribeShutdownSocket est actif. Il ferme aussi lorsque le descripteur epoll n’est déjà plus disponible.","zh":"当 fUnsubscribeShutdownSocket 启用时，TPollSocketEpoll.Unsubscribe 将原始 socket 的关闭移出 EPOLL_CTL_DEL 成功分支；即使 epoll 描述符已不可用也会关闭。","ru":"TPollSocketEpoll.Unsubscribe переносит закрытие raw socket за пределы ветви успеха EPOLL_CTL_DEL при fUnsubscribeShutdownSocket. Socket закрывается и когда epoll descriptor уже недоступен."},
+      "impact": {"en":"Linux and other epoll-based servers no longer leak file descriptors when unsubscribe races with teardown or EPOLL_CTL_DEL fails. Windows and non-epoll backends are unaffected.","fr":"Les serveurs Linux et autres backends epoll ne fuient plus de descripteurs lorsque la désinscription entre en course avec la destruction ou que EPOLL_CTL_DEL échoue. Windows et les backends sans epoll ne sont pas affectés.","zh":"Linux 及其他基于 epoll 的服务器在取消订阅与拆除竞争或 EPOLL_CTL_DEL 失败时不再泄漏文件描述符。Windows 与非 epoll backend 不受影响。","ru":"Linux и другие epoll-based servers больше не теряют file descriptors при гонке unsubscribe с teardown или ошибке EPOLL_CTL_DEL. Windows и non-epoll backends не затронуты."},
+      "action": "upgrade-recommended",
+      "action_detail": {"en":"On epoll deployments, monitor open file descriptors while repeatedly starting and stopping async services.","fr":"Sur les déploiements epoll, surveillez les descripteurs ouverts lors de démarrages et arrêts répétés des services asynchrones.","zh":"在 epoll 部署中，反复启动和停止异步服务时监控打开的文件描述符。","ru":"На epoll deployments отслеживайте open file descriptors при повторных стартах и остановках async services."},
+      "units": ["mormot.net.sock"],
+      "confidence": "confirmed"
+    }
+  ]
+}
