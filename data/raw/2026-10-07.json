@@ -1,0 +1,2173 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-07",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-07T03:44:44Z",
+  "range": {
+    "since": "2026-10-05T21:12:47Z",
+    "until": "2026-10-07T03:44:44Z",
+    "head_sha": "fe37927d4b7b7d2610d8b79f6538983043513609"
+  },
+  "version": {
+    "after": "2.4.17433",
+    "before": "2.4.17398"
+  },
+  "totals": {
+    "commits": 37,
+    "additions": 693,
+    "deletions": 650
+  },
+  "commits": [
+    {
+      "sha": "fe37927d4b7b7d2610d8b79f6538983043513609",
+      "short_sha": "fe37927d",
+      "subject": "Merge pull request #640 from AntoineGS/fix/unix-close-unlink",
+      "body": "net: TCrtSocket.Close only deletes a unix socket it owns",
+      "author": "ab",
+      "date": "2026-10-06T21:18:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fe37927d4b7b7d2610d8b79f6538983043513609",
+      "parents": [
+        "bdb952f314b7165d22f5ac71026d5bafbed15660",
+        "5b58dd541763a7106d589ecc23bd87f84f137995"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -7608,7 +7608,8 @@ procedure TCrtSocket.Close;\n   // don't reset fServer/fPort/fTls/fWasBind: caller may use them to reconnect\r\n   // (see e.g. THttpClientSocket.Request)\r\n   {$ifdef OSPOSIX}\r\n-  if fSocketLayer = nlUnix then\r\n+  if (fSocketLayer = nlUnix) and\r\n+     (fWasBind in fFlags) then // a client must not delete the server's file\r\n     fpunlink(pointer(fServer)); // 'unix:/path/to/myapp.socket' -> delete file\r\n   {$endif OSPOSIX}\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 1,
+          "patch": "@@ -7039,7 +7039,7 @@ procedure TNetworkProtocols.DoUnixDomainSocket(Sender: TObject);\n var\r\n   fn: TFileName;\r\n   un: RawUtf8;\r\n-  sock: TCrtSocket;\r\n+  sock, client: TCrtSocket;\r\n begin\r\n   // regression test for Unix domain socket server bind and stale file cleanup\r\n   // - on Delphi POSIX, the FpUnlink() called to remove a stale .socket file\r\n@@ -7071,6 +7071,22 @@ procedure TNetworkProtocols.DoUnixDomainSocket(Sender: TObject);\n     sock.Free;\r\n   end;\r\n   Check(not FileExists(fn), 'stale file cleaned on close');\r\n+  // 3. a client closing its connection must not delete the server .socket file\r\n+  sock := TCrtSocket.Bind(un);\r\n+  try\r\n+    // a plain path with explicit nlUnix, so that Close sees the actual file\r\n+    client := TCrtSocket.Open(StringToUtf8(fn), '', nlUnix);\r\n+    try\r\n+      Check(client.SockIsDefined, 'unix client');\r\n+      Check(client.SocketLayer = nlUnix, 'client nlUnix');\r\n+    finally\r\n+      client.Free;\r\n+    end;\r\n+    Check(FileExists(fn), 'client close kept the server socket file');\r\n+  finally\r\n+    sock.Free;\r\n+  end;\r\n+  Check(not FileExists(fn), 'server close removed its socket file');\r\n end;\r\n \r\n procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": 640,
+      "is_merge": true
+    },
+    {
+      "sha": "bdb952f314b7165d22f5ac71026d5bafbed15660",
+      "short_sha": "bdb952f3",
+      "subject": "net: some client/server HTTP state machine fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T19:41:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bdb952f314b7165d22f5ac71026d5bafbed15660",
+      "parents": [
+        "8a6da8b7a2cbb0b8f878c3c3f304f29073f1df0c"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 23,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17432\n+17433",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17432'\r\n+'2.4.17433'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 13,
+          "patch": "@@ -5308,19 +5308,18 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n   // now THttpAsyncServerConnection.OnRead can get the body\r\n   fServer.IncStat(grHeaderReceived);\r\n   result := soContinue;\r\n-  if fHttp.State in [hrsGetBodyChunkedHexFirst, hrsGetBodyContentLengthFirst] then\r\n-  begin\r\n-    // implement Expect: 100-Continue for a framed request body\r\n-    if hfExpect100 in fHttp.HeaderFlags then\r\n-      // client waits for the server to parse the headers and return 100\r\n-      // before sending the request body\r\n-      fServer.fAsync.fSockets.WriteString(self,\r\n-        'HTTP/1.1 100 Continue'#13#10#13#10);\r\n-    // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n-    if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n-       Assigned(fServer.fOnBodyDownload) then\r\n-      result := DoBodyDownload;\r\n-  end;\r\n+  if not (fHttp.State in [hrsGetBodyChunkedHexFirst, hrsGetBodyContentLengthFirst]) then\r\n+    exit;\r\n+  // implement Expect: 100-Continue for a framed request body\r\n+  if hfExpect100 in fHttp.HeaderFlags then\r\n+    // client waits for the server to parse the headers and return 100\r\n+    // before sending the request body\r\n+    fServer.fAsync.fSockets.WriteString(self,\r\n+      'HTTP/1.1 100 Continue'#13#10#13#10);\r\n+  // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n+  if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n+     Assigned(fServer.fOnBodyDownload) then\r\n+    result := DoBodyDownload;\r\n end;\r\n \r\n function THttpAsyncServerConnection.DoRequest: TPollAsyncSocketOnReadWrite;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 7,
+          "patch": "@@ -4050,6 +4050,7 @@ procedure THttpClientSocket.RequestInternal(var ctxt: THttpClientRequest);\n         // that its Size is known when Content-Length: is computed below\r\n         ctxt.InStream.Seek(0, soBeginning); // rewind\r\n       if (dat <> '') or\r\n+         (ctxt.InStream <> nil) or\r\n          (not IsGet(ctxt.Method) and // no message body len/type for GET/HEAD\r\n           not IsHead(ctxt.Method)) then\r\n         CompressDataAndWriteHeaders(ctxt.DataMimeType, dat, ctxt.InStream);\r\n@@ -4367,15 +4368,17 @@ function THttpClientSocket.Request(const url, method: RawUtf8;\n       u := ctxt.Url;\r\n       ctxt.Url := Http.HeaderGetValue('LOCATION');\r\n       AppendLine(fRequestContext, [ctxt.Status, ' into ', ctxt.Url]);\r\n-      case ctxt.Status of\r\n-        HTTP_MOVEDPERMANENTLY:\r\n+      if ((ctxt.Status = HTTP_MOVEDPERMANENTLY) and\r\n+          IsPost(ctxt.Method)) or\r\n           // historically allowed POST -> GET conversion for 301\r\n-          if IsPost(ctxt.Method) then\r\n-            ctxt.Method := 'GET';\r\n-        HTTP_SEEOTHER:\r\n+         ((ctxt.Status = HTTP_SEEOTHER) and\r\n+          not IsHead(ctxt.Method)) then\r\n           // 303 redirects to a GET request, but keep HEAD\r\n-          if not IsHead(ctxt.Method) then\r\n-            ctxt.Method := 'GET';\r\n+      begin\r\n+        ctxt.Method := 'GET'; // with no body\r\n+        ctxt.Data := '';\r\n+        ctxt.DataMimeType := '';\r\n+        ctxt.InStream := nil;\r\n         // HTTP_TEMPORARYREDIRECT and HTTP_PERMANENTREDIRECT preserve the method\r\n       end;\r\n       if (OutStream <> nil) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -5494,7 +5494,9 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n         end;\r\n     end;\r\n     // implement 'Expect: 100-Continue' Header\r\n-    if hfExpect100 in Http.HeaderFlags then\r\n+    if (hfExpect100 in Http.HeaderFlags) and\r\n+       ((Http.ContentLength > 0) or\r\n+        (hfTransferChunked in Http.HeaderFlags)) then\r\n       // client waits for the server to parse the headers and return 100\r\n       // before sending the request body\r\n       SockSendFlush('HTTP/1.1 100 Continue'#13#10#13#10);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.client",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8a6da8b7a2cbb0b8f878c3c3f304f29073f1df0c",
+      "short_sha": "8a6da8b7",
+      "subject": "net: other HTTP HEAD support related fixes",
+      "body": "- mostly on client side",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T19:30:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8a6da8b7a2cbb0b8f878c3c3f304f29073f1df0c",
+      "parents": [
+        "0e0af8c79860eae61f088386496a5c6d18543a18"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 12,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17431\n+17432",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17431'\r\n+'2.4.17432'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.acme.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1611,7 +1611,7 @@ function TAcmeLetsEncryptServer.OnHeaderParsed(\n       Request.SockSend('HTTP/1.0 404 Not Found')\r\n   else\r\n   begin\r\n-    // redirect GET or POST on port 80 to port 443 using 301 or 308 response\r\n+    // redirect HTTP to HTTPS using 301 for GET/HEAD, or preserve method with 308\r\n     if IsGet(Request.Http.CommandMethod) or\r\n        IsHead(Request.Http.CommandMethod) then\r\n       Request.SockSend('HTTP/1.0 301 Moved Permanently')\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 8,
+          "patch": "@@ -4368,13 +4368,15 @@ function THttpClientSocket.Request(const url, method: RawUtf8;\n       ctxt.Url := Http.HeaderGetValue('LOCATION');\r\n       AppendLine(fRequestContext, [ctxt.Status, ' into ', ctxt.Url]);\r\n       case ctxt.Status of\r\n-        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections\r\n-        HTTP_MOVEDPERMANENTLY,\r\n+        HTTP_MOVEDPERMANENTLY:\r\n+          // historically allowed POST -> GET conversion for 301\r\n+          if IsPost(ctxt.Method) then\r\n+            ctxt.Method := 'GET';\r\n         HTTP_SEEOTHER:\r\n-          if not (IsHead(Ctxt.Method) or\r\n-                  IsOptions(Ctxt.Method)) then // keep HEAD/OPTIONS\r\n-            ctxt.Method := 'GET'; // force e.g. POST/PUT into GET\r\n-        // HTTP_TEMPORARYREDIRECT HTTP_PERMANENTREDIRECT should keep the method\r\n+          // 303 redirects to a GET request, but keep HEAD\r\n+          if not IsHead(ctxt.Method) then\r\n+            ctxt.Method := 'GET';\r\n+        // HTTP_TEMPORARYREDIRECT and HTTP_PERMANENTREDIRECT preserve the method\r\n       end;\r\n       if (OutStream <> nil) and\r\n          // TStreamRedirect would have set bodystream := nil in RequestInternal\r\n@@ -7146,8 +7148,7 @@ procedure TJsonClient.RawRequest(const Method, Action,\n   h := fInHeaders; // pre-computed from Cookies and DefaultHeaders properties\r\n   if InHeaders <> '' then\r\n     AppendLine(h, [InHeaders]);\r\n-  if (InBody <> '') and\r\n-     not IsHead(Method) then\r\n+  if InBody <> '' then\r\n   begin\r\n     b := InBody;\r\n     t := InType;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -5244,7 +5244,8 @@ function THttpServerSocket.TaskProcessBody(aCaller: TSynThreadPoolWorkThread;\n           begin\r\n             // no Keep Alive = multi-connection -> process in the Thread Pool\r\n             if not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n-               not IsHead(Method) then // HEAD has no body\r\n+               ((Http.ContentLength > 0) or\r\n+                (hfTransferChunked in Http.HeaderFlags)) then\r\n             begin\r\n               DownloadBody; // we need to get it now\r\n               fServer.IncStat(grBodyReceived);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.acme",
+        "mormot.net.client",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0e0af8c79860eae61f088386496a5c6d18543a18",
+      "short_sha": "0e0af8c7",
+      "subject": "net: fixed body retrieval on HTTP servers logic",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T19:24:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0e0af8c79860eae61f088386496a5c6d18543a18",
+      "parents": [
+        "9cd6ccba16462099f9bcd215c67ebee9f5d13327"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 19,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17430\n+17431",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17430'\r\n+'2.4.17431'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 13,
+          "patch": "@@ -5307,23 +5307,17 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n   end;\r\n   // now THttpAsyncServerConnection.OnRead can get the body\r\n   fServer.IncStat(grHeaderReceived);\r\n-  if not (fHttp.State in [hrsWaitProcessing, hrsWaitAsyncProcessing, hrsUpgraded]) and\r\n-     IsHead(fHttp.CommandMethod) then // HEAD has Content-Length but no body\r\n+  result := soContinue;\r\n+  if fHttp.State in [hrsGetBodyChunkedHexFirst, hrsGetBodyContentLengthFirst] then\r\n   begin\r\n-    // implement Expect: 100-Continue Header\r\n+    // implement Expect: 100-Continue for a framed request body\r\n     if hfExpect100 in fHttp.HeaderFlags then\r\n       // client waits for the server to parse the headers and return 100\r\n       // before sending the request body\r\n-      fServer.fAsync.fSockets.WriteString(self, 'HTTP/1.1 100 Continue'#13#10#13#10);\r\n-    result := DoRequest;\r\n-  end\r\n-  else\r\n-  begin\r\n-    // allow OnBodyDownload callback to supply a stream for the body\r\n-    result := soContinue;\r\n-    if (fHttp.State in\r\n-         [hrsGetBodyChunkedHexFirst, hrsGetBodyContentLengthFirst]) and\r\n-       not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n+      fServer.fAsync.fSockets.WriteString(self,\r\n+        'HTTP/1.1 100 Continue'#13#10#13#10);\r\n+    // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n+    if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n        Assigned(fServer.fOnBodyDownload) then\r\n       result := DoBodyDownload;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 4,
+          "patch": "@@ -5481,10 +5481,9 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n           exit;\r\n         end;\r\n       end;\r\n-      // allow OnBodyDownload callback to supply a stream for the body\r\n+      // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n       if Assigned(fServer.OnBodyDownload) and\r\n          not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n-         not IsHead(Http.CommandMethod) and // HEAD has no body\r\n          ((Http.ContentLength > 0) or\r\n           (hfTransferChunked in Http.HeaderFlags)) then\r\n         if not DoOnBodyDownload then\r\n@@ -5502,7 +5501,8 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n     if withBody and\r\n        not (hfConnectionUpgrade in Http.HeaderFlags) then\r\n     begin\r\n-      if not IsHead(Http.CommandMethod) then\r\n+      if (Http.ContentLength > 0) or\r\n+         (hfTransferChunked in Http.HeaderFlags) then // even for HEAD\r\n         DownloadBody;\r\n       result := grBodyReceived;\r\n     end\r\n@@ -5734,7 +5734,8 @@ procedure THttpServerResp.Execute;\n       begin\r\n         // call from TSynThreadPoolTHttpServer -> handle first request\r\n         if not (fBodyRetrieved in fServerSock.fFlags) and\r\n-           not IsHead(fServerSock.Http.CommandMethod) then // HEAD has no body\r\n+           ((fServerSock.Http.ContentLength > 0) or\r\n+            (hfTransferChunked in fServerSock.Http.HeaderFlags)) then\r\n           fServerSock.DownloadBody;\r\n         fServer.Process(fServerSock, ConnectionID, self);\r\n         if (fServer <> nil) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9cd6ccba16462099f9bcd215c67ebee9f5d13327",
+      "short_sha": "9cd6ccba",
+      "subject": "net: fixed GET redirection on TAcmeLetsEncryptServer",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T19:17:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9cd6ccba16462099f9bcd215c67ebee9f5d13327",
+      "parents": [
+        "c8d7648afd39293bd409b8d44ce8c248bb595ed5"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17429\n+17430",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17429'\r\n+'2.4.17430'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.acme.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -1612,7 +1612,8 @@ function TAcmeLetsEncryptServer.OnHeaderParsed(\n   else\r\n   begin\r\n     // redirect GET or POST on port 80 to port 443 using 301 or 308 response\r\n-    if IsHead(Request.Http.CommandMethod) then\r\n+    if IsGet(Request.Http.CommandMethod) or\r\n+       IsHead(Request.Http.CommandMethod) then\r\n       Request.SockSend('HTTP/1.0 301 Moved Permanently')\r\n     else\r\n       Request.SockSend('HTTP/1.0 308 Permanent Redirect');\r\n@@ -1633,7 +1634,7 @@ function TAcmeLetsEncryptServer.OnHeaderParsed(\n       // redirect to the same URI but on HTTPS host\r\n       Request.SockSendLine([\r\n         'Location: https://', Request.Http.Host, Request.Http.CommandUri]);\r\n-    // 301 and 308 responses expect no body\r\n+    // no response body for these redirects\r\n   end;\r\n   // finalize the headers and send the response body\r\n   Request.SockSend([\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.acme"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5b58dd541763a7106d589ecc23bd87f84f137995",
+      "short_sha": "5b58dd54",
+      "subject": "net: TCrtSocket.Close only deletes a unix socket file it bound itself",
+      "body": "Close unlinked fServer for every nlUnix socket, so a client opened on a\nplain socket path with nlUnix deleted the server's .socket file when it\nclosed: the server kept running but could no longer be reached.\nUnlink only when fWasBind is set, and cover it in DoUnixDomainSocket.",
+      "author": "Antoine Gaudreau Simard",
+      "date": "2026-10-06T18:32:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5b58dd541763a7106d589ecc23bd87f84f137995",
+      "parents": [
+        "bdb952f314b7165d22f5ac71026d5bafbed15660"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -7608,7 +7608,8 @@ procedure TCrtSocket.Close;\n   // don't reset fServer/fPort/fTls/fWasBind: caller may use them to reconnect\r\n   // (see e.g. THttpClientSocket.Request)\r\n   {$ifdef OSPOSIX}\r\n-  if fSocketLayer = nlUnix then\r\n+  if (fSocketLayer = nlUnix) and\r\n+     (fWasBind in fFlags) then // a client must not delete the server's file\r\n     fpunlink(pointer(fServer)); // 'unix:/path/to/myapp.socket' -> delete file\r\n   {$endif OSPOSIX}\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 1,
+          "patch": "@@ -7039,7 +7039,7 @@ procedure TNetworkProtocols.DoUnixDomainSocket(Sender: TObject);\n var\r\n   fn: TFileName;\r\n   un: RawUtf8;\r\n-  sock: TCrtSocket;\r\n+  sock, client: TCrtSocket;\r\n begin\r\n   // regression test for Unix domain socket server bind and stale file cleanup\r\n   // - on Delphi POSIX, the FpUnlink() called to remove a stale .socket file\r\n@@ -7071,6 +7071,22 @@ procedure TNetworkProtocols.DoUnixDomainSocket(Sender: TObject);\n     sock.Free;\r\n   end;\r\n   Check(not FileExists(fn), 'stale file cleaned on close');\r\n+  // 3. a client closing its connection must not delete the server .socket file\r\n+  sock := TCrtSocket.Bind(un);\r\n+  try\r\n+    // a plain path with explicit nlUnix, so that Close sees the actual file\r\n+    client := TCrtSocket.Open(StringToUtf8(fn), '', nlUnix);\r\n+    try\r\n+      Check(client.SockIsDefined, 'unix client');\r\n+      Check(client.SocketLayer = nlUnix, 'client nlUnix');\r\n+    finally\r\n+      client.Free;\r\n+    end;\r\n+    Check(FileExists(fn), 'client close kept the server socket file');\r\n+  finally\r\n+    sock.Free;\r\n+  end;\r\n+  Check(not FileExists(fn), 'server close removed its socket file');\r\n end;\r\n \r\n procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c8d7648afd39293bd409b8d44ce8c248bb595ed5",
+      "short_sha": "c8d7648a",
+      "subject": "net: optimized memory allocation for http.sys #637 chunked input body",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T17:54:48Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c8d7648afd39293bd409b8d44ce8c248bb595ed5",
+      "parents": [
+        "7baf2887e515526b39db371e727d43c586a9bb61"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17428\n+17429",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17428'\r\n+'2.4.17429'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 3,
+          "patch": "@@ -8659,8 +8659,7 @@ procedure THttpApiServer.DoExecute;\n                   exit;\r\n                 if err = ERROR_HANDLE_EOF then\r\n                 begin\r\n-                  if bodyknown and\r\n-                     (incontlenread < length(ctxt.fInContent)) then\r\n+                  if incontlenread < length(ctxt.fInContent) then\r\n                     SetLength(ctxt.fInContent, incontlenread);\r\n                   err := NO_ERROR;\r\n                   break; // we reached the end of this body\r\n@@ -8683,8 +8682,15 @@ procedure THttpApiServer.DoExecute;\n                 end\r\n                 else if incontlenread > fMaximumAllowedContentLength then\r\n                   err := HTTP_PAYLOADTOOLARGE\r\n+                else if ctxt.fInContent = '' then // initial maybe-single chunk\r\n+                  FastSetRawByteString(ctxt.fInContent, bufread, bytesread)\r\n                 else\r\n-                  Append(ctxt.fInContent, bufread, bytesread); // good enough\r\n+                begin\r\n+                  if length(ctxt.fInContent) < incontlenread then\r\n+                    SetLength(ctxt.fInContent, NextGrow(incontlenread));\r\n+                  MoveFast(bufread^, PByteArray(ctxt.fInContent)[\r\n+                    incontlenread - PtrInt(bytesread)], bytesread);\r\n+                end;\r\n               until err <> NO_ERROR;\r\n               if err <> NO_ERROR then\r\n               begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": 637,
+      "is_merge": false
+    },
+    {
+      "sha": "7baf2887e515526b39db371e727d43c586a9bb61",
+      "short_sha": "7baf2887",
+      "subject": "net: let http.sys server support chunked input body",
+      "body": "- proper implementation of https://github.com/synopse/mORMot2/issues/637 issue",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T17:38:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7baf2887e515526b39db371e727d43c586a9bb61",
+      "parents": [
+        "37898a45d60569171e29de7a73a68bd571584636"
+      ],
+      "stats": {
+        "additions": 77,
+        "deletions": 54,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.winhttp.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2218,7 +2218,7 @@ procedure HTTP_RESPONSE.SetHeaders(P: PUtf8Char;\n     'ETAG:|LOCATION:|PROXY-AUTHENTICATE:|RETRY-AFTER:|SERVER:|SET-COOKIE:|' +\r\n     'VARY:|WWW-AUTHENTICATE:|';\r\n   MULTI_HEADERS = [reqConnection, respSetCookie,\r\n-    // need HTTP.sys API v2 HTTP_MULTIPLE_KNOWN_HEADERS for the next two:\r\n+    // todo: need HTTP.sys API v2 HTTP_MULTIPLE_KNOWN_HEADERS for those ?\r\n     respWwwAuthenticate, respProxyAuthenticate];\r\n \r\n function HTTP_RESPONSE.AddCustomHeader(P: PUtf8Char;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17427\n+17428",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17427'\r\n+'2.4.17428'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 74,
+          "deletions": 51,
+          "patch": "@@ -2148,7 +2148,7 @@   THttpApiServer = class(THttpServerGeneric)\n     procedure SetMaxConnections(aValue: cardinal);\r\n     function GetApiVersion: RawUtf8; override;\r\n     function Check(Api: THttpApiFunction; Error: integer;\r\n-      Level: TSynLogLevel = sllWarning): integer;\r\n+      Level: TSynLogLevel = sllWarning; ErrMsg: PRawUtf8 = nil): integer;\r\n     procedure Ensure(Api: THttpApiFunction; Error: integer);\r\n     procedure DoAfterResponse(Ctxt: THttpServerRequest; const Referer: RawUtf8;\r\n       StatusCode: cardinal; Elapsed, Received, Sent: QWord); virtual;\r\n@@ -8112,14 +8112,17 @@ function THttpApiServer.GetApiVersion: RawUtf8;\n end;\r\n \r\n function THttpApiServer.Check(Api: THttpApiFunction; Error: integer;\r\n-  Level: TSynLogLevel): integer;\r\n+  Level: TSynLogLevel; ErrMsg: PRawUtf8): integer;\r\n var\r\n   msg: RawUtf8;\r\n begin\r\n   result := Error;\r\n-  if Assigned(fLogClass) and\r\n-     not HttpApiSucceed(Api, msg, Error) then\r\n+  if HttpApiSucceed(Api, msg, Error) then\r\n+    exit;\r\n+  if Assigned(fLogClass) then\r\n     fLogClass.Add.Log(Level, msg, self);\r\n+  if ErrMsg <> nil then\r\n+    ErrMsg^ := msg;\r\n end;\r\n \r\n procedure THttpApiServer.Ensure(Api: THttpApiFunction; Error: integer);\r\n@@ -8327,19 +8330,20 @@ procedure THttpApiServer.DoExecute;\n var // lots of local variable so that this method is thread-safe\r\n   req: PHTTP_REQUEST;\r\n   resp: PHTTP_RESPONSE;\r\n-  reqbuf, respbuf, logbuf: TBytes;\r\n+  reqbuf, respbuf, logbuf, chunkbuf: TBytes;\r\n   reqid: HTTP_REQUEST_ID;\r\n   i: PtrInt;\r\n   bytesread, bytessent, flags: cardinal;\r\n   compressset: THttpSocketCompressSet;\r\n   comprec: PHttpSocketCompressRec;\r\n   err: HRESULT;\r\n-  incontlen, rangestart, rangelen: Qword;\r\n-  incontlenchunk, incontlenread: cardinal;\r\n-  incontenc, inaccept, host, range, referer: RawUtf8;\r\n+  incontlen, remain, rangestart, rangelen: Qword;\r\n+  chunk: cardinal;\r\n+  incontlenread: PtrInt;\r\n+  incontenc, inaccept, host, range, referer, errmsg: RawUtf8;\r\n   outstat, outmsg: RawUtf8;\r\n   outstatcode, afterstatcode: cardinal;\r\n-  respsent: boolean;\r\n+  respsent, bodyknown: boolean;\r\n   ctxt: THttpServerRequest;\r\n   filehandle: THandle;\r\n   bufread, V: PUtf8Char;\r\n@@ -8621,55 +8625,74 @@ procedure THttpApiServer.DoExecute;\n               end;\r\n             end;\r\n             // retrieve body\r\n-            if HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and req^.flags <> 0 then\r\n+            incontlenread := 0; // actual number of entity-body bytes received\r\n+            if (HTTP_REQUEST_FLAG_MORE_ENTITY_BODY_EXISTS and req^.flags) <> 0 then\r\n             begin\r\n+              errmsg := '';\r\n               with req^.headers.KnownHeaders[reqContentEncoding] do\r\n                 FastSetString(incontenc, pRawValue, RawValueLength);\r\n-              if incontlen <> 0 then\r\n+              bodyknown := (incontlen <> 0) and // transfer-encoding has precedence\r\n+                (req^.headers.KnownHeaders[reqTransferEncoding].RawValueLength = 0);\r\n+              if bodyknown then\r\n               begin\r\n-                // receive body chunks\r\n-                SetLength(ctxt.fInContent, incontlen);\r\n-                bufread := pointer(ctxt.InContent);\r\n-                incontlenread := 0;\r\n-                repeat\r\n-                  bytesread := 0;\r\n-                  if HasApi2 then\r\n-                    // speed optimization for Vista+\r\n-                    flags := HTTP_RECEIVE_REQUEST_ENTITY_BODY_FLAG_FILL_BUFFER\r\n-                  else\r\n-                    flags := 0;\r\n-                  incontlenchunk := incontlen - incontlenread;\r\n-                  if (fReceiveBufferSize >= 1024) and\r\n-                     (incontlenchunk > fReceiveBufferSize) then\r\n-                    incontlenchunk := fReceiveBufferSize;\r\n-                  err := Http.ReceiveRequestEntityBody(fReqQueue,\r\n-                    req^.RequestId, flags, bufread, incontlenchunk, bytesread);\r\n-                  if Terminated then\r\n-                    exit;\r\n-                  inc(incontlenread, by\n... [truncated, 4128 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.winhttp",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "37898a45d60569171e29de7a73a68bd571584636",
+      "short_sha": "37898a45",
+      "subject": "net: http.sys respWwwAuthenticate + respProxyAuthenticate multiple headers",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T15:18:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/37898a45d60569171e29de7a73a68bd571584636",
+      "parents": [
+        "a166d116d85596b963854bf83d79e36a8097f534"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.winhttp.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -2217,6 +2217,9 @@ procedure HTTP_RESPONSE.SetHeaders(P: PUtf8Char;\n     'CONTENT-MD5:|CONTENT-RANGE:|EXPIRES:|LAST-MODIFIED:|ACCEPT-RANGES:|AGE:|' +\r\n     'ETAG:|LOCATION:|PROXY-AUTHENTICATE:|RETRY-AFTER:|SERVER:|SET-COOKIE:|' +\r\n     'VARY:|WWW-AUTHENTICATE:|';\r\n+  MULTI_HEADERS = [reqConnection, respSetCookie,\r\n+    // need HTTP.sys API v2 HTTP_MULTIPLE_KNOWN_HEADERS for the next two:\r\n+    respWwwAuthenticate, respProxyAuthenticate];\r\n \r\n function HTTP_RESPONSE.AddCustomHeader(P: PUtf8Char;\r\n   var UnknownHeaders: HTTP_UNKNOWN_HEADERS;\r\n@@ -2234,7 +2237,7 @@ function HTTP_RESPONSE.AddCustomHeader(P: PUtf8Char;\n   if (i >= 0) and\r\n      // WebSockets require reqConnection / CONNECTION: as unknown header\r\n      // and there could be several respSetCookie / Set-Cookie: values\r\n-     not (THttpApiHeader(i) in [respSetCookie, reqConnection]) then\r\n+     not (THttpApiHeader(i) in MULTI_HEADERS) then\r\n   begin\r\n     while P^ <> ':' do\r\n       inc(P);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17426\n+17427",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17426'\r\n+'2.4.17427'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.winhttp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a166d116d85596b963854bf83d79e36a8097f534",
+      "short_sha": "a166d116",
+      "subject": "tests: remove HttpMethodWithNoBody() but use really used methods",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T15:12:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a166d116d85596b963854bf83d79e36a8097f534",
+      "parents": [
+        "f119fd8cba4fb4c1da9191c63e44f37439e3fd53"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17425\n+17426",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17425'\r\n+'2.4.17426'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 13,
+          "patch": "@@ -10714,19 +10714,35 @@ procedure TTestCoreBase.MimeTypes;\n   CheckEqual(DeleteHeader(Join([s, s, s, 'Auth: 2'#13#10, s]), 'auth'), Join([s, s, s, s]));\r\n   CheckEqual(DeleteHeader(Join([s, s, s, 'Auth: 2'#13#10, 'ab']), 'auth'), Join([s, s, s, 'ab']));\r\n   // some HTTP methods\r\n-  Check(HttpMethodWithNoBody('HEAD'));\r\n-  Check(HttpMethodWithNoBody('head'));\r\n-  Check(HttpMethodWithNoBody('HEADER'));\r\n-  Check(HttpMethodWithNoBody('OPTIONS'));\r\n-  Check(HttpMethodWithNoBody('options'));\r\n-  Check(HttpMethodWithNoBody('OPTION'));\r\n-  Check(HttpMethodWithNoBody('OPTI'));\r\n-  Check(not HttpMethodWithNoBody('toto'));\r\n-  Check(not HttpMethodWithNoBody('HE4D'));\r\n-  Check(not HttpMethodWithNoBody('GET'));\r\n-  Check(not HttpMethodWithNoBody('POST'));\r\n-  Check(not HttpMethodWithNoBody('PUT'));\r\n-  Check(not HttpMethodWithNoBody('OPT'));\r\n+  Check(IsGet('GET'));\r\n+  Check(not IsGet('GeT'));\r\n+  Check(not IsGet('GETS'));\r\n+  Check(IsPost('POST'));\r\n+  Check(not IsPost('PoST'));\r\n+  Check(not IsPost('P0ST'));\r\n+  Check(IsPut('PUT'));\r\n+  Check(not IsPut('PuT'));\r\n+  Check(not IsPut('PUTS'));\r\n+  Check(IsDelete('DELETE'));\r\n+  Check(IsDelete('DELE'));\r\n+  Check(not IsDelete('delete'));\r\n+  Check(IsHead('HEAD'));\r\n+  Check(not IsHead('head'));\r\n+  Check(IsHead('HEADER'));\r\n+  Check(IsOptions('OPTIONS'));\r\n+  Check(not IsOptions('options'));\r\n+  Check(IsOptions('OPTION'));\r\n+  Check(IsOptions('OPTI'));\r\n+  Check(not IsHead('toto'));\r\n+  Check(not IsOptions('toto'));\r\n+  Check(not IsHead('HE4D'));\r\n+  Check(not IsHead('GET'));\r\n+  Check(not IsHead('POST'));\r\n+  Check(not IsHead('PUT'));\r\n+  Check(not IsOptions('OPT'));\r\n+  Check(not IsOptions('GET'));\r\n+  Check(not IsOptions('POST'));\r\n+  Check(not IsOptions('PUT'));\r\n   // mime content types\r\n   CheckEqual(GetMimeContentType('', 'toto.h264'), 'video/H264');\r\n   CheckEqual(GetMimeContentType('', 'toto', 'def1'), 'def1');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f119fd8cba4fb4c1da9191c63e44f37439e3fd53",
+      "short_sha": "f119fd8c",
+      "subject": "net: only HEAD has no body - OPTIONS could",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T15:11:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f119fd8cba4fb4c1da9191c63e44f37439e3fd53",
+      "parents": [
+        "a65a05fa1b75db81a2586ddda9ae1a9fcb388f24"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 19,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17424\n+17425",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17424'\r\n+'2.4.17425'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.acme.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1612,7 +1612,7 @@ function TAcmeLetsEncryptServer.OnHeaderParsed(\n   else\r\n   begin\r\n     // redirect GET or POST on port 80 to port 443 using 301 or 308 response\r\n-    if HttpMethodWithNoBody(Request.Http.CommandMethod) then\r\n+    if IsHead(Request.Http.CommandMethod) then\r\n       Request.SockSend('HTTP/1.0 301 Moved Permanently')\r\n     else\r\n       Request.SockSend('HTTP/1.0 308 Permanent Redirect');\r\n@@ -1641,7 +1641,7 @@ function TAcmeLetsEncryptServer.OnHeaderParsed(\n     'Content-Length: ', length(body), #13#10 +\r\n     'Connection: Close'#13#10]);\r\n   if (body <> '') and\r\n-     HttpMethodWithNoBody(Request.Http.CommandMethod) then\r\n+     IsHead(Request.Http.CommandMethod) then\r\n     body := ''; // if the ACME server tries a HEAD (unlikely)\r\n   Request.SockSendFlush(body);\r\n   // no regular OnRequest() event: we have sent the response\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -4624,9 +4624,9 @@ function THttpAsyncClientConnection.OnRead: TPollAsyncSocketOnReadWrite;\n             break;\r\n           if fHttp.State = hrsWaitProcessing then\r\n             break;\r\n-          if HttpMethodWithNoBody(fHttp.CommandMethod) then\r\n+          if IsHead(fHttp.CommandMethod) then\r\n           begin\r\n-            // no body to wait for (e.g. HEAD request)\r\n+            // no body to wait for HEAD request (but OPTIONS may have one)\r\n             fHttp.State := hrsWaitProcessing;\r\n             break;\r\n           end;\r\n@@ -5308,8 +5308,7 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n   // now THttpAsyncServerConnection.OnRead can get the body\r\n   fServer.IncStat(grHeaderReceived);\r\n   if not (fHttp.State in [hrsWaitProcessing, hrsWaitAsyncProcessing, hrsUpgraded]) and\r\n-     // HEAD and OPTIONS are requests with Content-Length header but no body\r\n-     HttpMethodWithNoBody(fHttp.CommandMethod) then\r\n+     IsHead(fHttp.CommandMethod) then // HEAD has Content-Length but no body\r\n   begin\r\n     // implement Expect: 100-Continue Header\r\n     if hfExpect100 in fHttp.HeaderFlags then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 7,
+          "patch": "@@ -4147,8 +4147,7 @@ procedure THttpClientSocket.RequestInternal(var ctxt: THttpClientRequest);\n            (ctxt.Status <> HTTP_NOTMODIFIED)) or\r\n           (Http.ContentLength > 0) or // server bug of 204,304 with body\r\n           (hfTransferChunked in Http.HeaderFlags)) and\r\n-         // HEAD/OPTIONS\r\n-         not HttpMethodWithNoBody(ctxt.Method) then\r\n+         not IsHead(ctxt.Method) then // HEAD has no body\r\n       begin\r\n         // specific TStreamRedirect expectations\r\n         bodystream := ctxt.OutStream;\r\n@@ -4372,8 +4371,9 @@ function THttpClientSocket.Request(const url, method: RawUtf8;\n         // https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections\r\n         HTTP_MOVEDPERMANENTLY,\r\n         HTTP_SEEOTHER:\r\n-          if not HttpMethodWithNoBody(Ctxt.Method) then // keep HEAD/OPTIONS\r\n-            ctxt.Method := 'GET';        // but force e.g. POST/PUT into GET\r\n+          if not (IsHead(Ctxt.Method) or\r\n+                  IsOptions(Ctxt.Method)) then // keep HEAD/OPTIONS\r\n+            ctxt.Method := 'GET'; // force e.g. POST/PUT into GET\r\n         // HTTP_TEMPORARYREDIRECT HTTP_PERMANENTREDIRECT should keep the method\r\n       end;\r\n       if (OutStream <> nil) and\r\n@@ -6280,8 +6280,8 @@ procedure TCurlHttp.InternalSendRequest(const aMethod: RawUtf8;\n   curl.easy_setopt(fHandle, coXOAuth2Bearer, pointer(AuthToken));\r\n   curl.easy_setopt(fHandle, coHttpAuth, integer(WRA2CAU[AuthScheme]));\r\n   // 2. main request options\r\n-  // the only verbs which do not expect body in answer are HEAD and OPTIONS\r\n-  curl.easy_setopt(fHandle, coNoBody, ord(HttpMethodWithNoBody(fIn.Method)));\r\n+  // the only verb which do not expect body in answer is HEAD - OPTIONS could\r\n+  curl.easy_setopt(fHandle, coNoBody, ord(IsHead(fIn.Method)));\r\n   // see http://curl.haxx.se/libcurl/c/CURLOPT_CUSTOMREQUEST.html\r\n   curl.easy_setopt(fHandle, coCustomRequest, pointer(fIn.Method));\r\n   if aData <> '' then\r\n@@ -7147,7 +7147,7 @@ procedure TJsonClient.RawRequest(const Method, Action,\n   if InHeaders <> '' then\r\n     AppendLine(h, [InHeaders]);\r\n   if (InBody <> '') and\r\n-     not HttpMethodWithNoBody(Method) then\r\n+     not IsHead(Method) then\r\n   begin\r\n     b := InBody;\r\n     t := InType;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -5244,7 +5244,7 @@ function THttpServerSocket.TaskProcessBody(aCaller: TSynThreadPoolWorkThread;\n           begin\r\n             // no Keep Alive = multi-connection -> process in the Thread Pool\r\n             if not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n-               not HttpMethodWithNoBody(Method) then\r\n+               not IsHead(Method) then // HEAD has no body\r\n             begin\r\n               DownloadBody; // we need to get it now\r\n               fServer.IncStat(grBodyReceived);\r\n@@ -5484,7 +5484,7 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n       // allow OnBodyDownload callback to supply a stream for the body\r\n       if Assigned(fServer.OnBodyDownload) and\r\n          not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n-         not HttpMethodWithNoBody(Http.CommandMethod) and\r\n+         not IsHead(Http.CommandMethod) and // HEAD has no body\r\n          ((Http.ContentLength > 0) or\r\n           (hfTransferChunked in Http.HeaderFlags)) then\r\n         if not DoOnBodyDownload then\r\n@@ -5502,7 +5502,7 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n     if withBody and\r\n        not (hfConnectionUpgrade in Http.HeaderFlags) then\r\n     begin\r\n-      if not HttpMethodWithNoBody(Http.CommandMethod) then\r\n+      if not IsHead(Http.CommandMethod) then\r\n         DownloadBody;\r\n       result := grBodyReceived;\r\n     end\r\n@@ -5734,7 +5734,7 @@ procedure THttpServerResp.Execute;\n       begin\r\n         // call from TSynThreadPoolTHttpServer -> handle first request\r\n         if not (fBodyRetrieved in fServerSock.fFlags) and\r\n-           not HttpMethodWithNoBody(fServerSock.Http.CommandMethod) then\r\n+           not IsHead(fServerSock.Http.CommandMethod) then // HEAD has no body\r\n           fServerSock.DownloadBody;\r\n         fServer.Process(fServerSock, ConnectionID, self);\r\n         if (fServer <> nil) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.acme",
+        "mormot.net.async",
+        "mormot.net.client",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a65a05fa1b75db81a2586ddda9ae1a9fcb388f24",
+      "short_sha": "a65a05fa",
+      "subject": "net: marked HttpMethodWithNoBody() as deprecated",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T15:10:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a65a05fa1b75db81a2586ddda9ae1a9fcb388f24",
+      "parents": [
+        "ed828cab64ec47e5ec7a6b56758a3d620cc5204b"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17423\n+17424",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17423'\r\n+'2.4.17424'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 6,
+          "patch": "@@ -180,22 +180,20 @@ procedure GetHeaderInfo(const Headers: RawUtf8; out ContentLength: Int64;\n /// remove an HTTP header entry as specified by its name (e.g. 'Authorization')\r\n function DeleteHeader(const Headers, Name: RawUtf8): RawUtf8;\r\n \r\n-/// 'HEAD' and 'OPTIONS' methods would be detected and return true\r\n-// - will check only the first four chars for efficiency  - requires method <> ''\r\n-function HttpMethodWithNoBody(const method: RawUtf8): boolean;\r\n-  {$ifdef HASINLINE} inline; {$endif}\r\n+// deprecated ambiguous helper - DO NOT USE any more!\r\n+// - use IsHead() when deciding whether an HTTP response can have content\r\n+// - request content presence must be determined from message framing\r\n+function HttpMethodWithNoBody(const method: RawUtf8): boolean; deprecated;\r\n \r\n /// encode some text into a mime header compatible value\r\n // - see https://tools.ietf.org/html/rfc2047\r\n function MimeHeaderEncode(const header: RawUtf8): RawUtf8;\r\n \r\n /// quick check for case-sensitive 'GET' HTTP method name - requires method <> ''\r\n-// - see also HttpMethodWithNoBody()\r\n function IsGet(const method: RawUtf8): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n \r\n /// quick check for case-sensitive 'HEAD' HTTP method name - requires method <> ''\r\n-// - see also HttpMethodWithNoBody()\r\n function IsHead(const method: RawUtf8): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "deprecation",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ed828cab64ec47e5ec7a6b56758a3d620cc5204b",
+      "short_sha": "ed828cab",
+      "subject": "net: fixed several respSetCookie / Set-Cookie: values in http.sys",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T14:38:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ed828cab64ec47e5ec7a6b56758a3d620cc5204b",
+      "parents": [
+        "cf40c09d959b6ee6865f6424d015999fee5c001c"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.winhttp.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -2232,8 +2232,9 @@ function HTTP_RESPONSE.AddCustomHeader(P: PUtf8Char;\n   else\r\n     i := IdemPCharSep(P, KNOWNHEADERS);\r\n   if (i >= 0) and\r\n-     // WebSockets need reqConnection / CONNECTION: as unknown header\r\n-     (THttpApiHeader(i) <> reqConnection) then\r\n+     // WebSockets require reqConnection / CONNECTION: as unknown header\r\n+     // and there could be several respSetCookie / Set-Cookie: values\r\n+     not (THttpApiHeader(i) in [respSetCookie, reqConnection]) then\r\n   begin\r\n     while P^ <> ':' do\r\n       inc(P);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17422\n+17423",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17422'\r\n+'2.4.17423'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.winhttp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cf40c09d959b6ee6865f6424d015999fee5c001c",
+      "short_sha": "cf40c09d",
+      "subject": "net: several fixes to TCurlHttp options usage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T14:14:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cf40c09d959b6ee6865f6424d015999fee5c001c",
+      "parents": [
+        "165436646151d7498009c04d66b07a1312ee3121"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17421\n+17422",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17421'\r\n+'2.4.17422'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 13,
+          "patch": "@@ -6190,8 +6190,7 @@ procedure TCurlHttp.InternalCreateRequest(const aMethod, aUrl: RawUtf8);\n   NO_PROXY: AnsiChar = #0; // non-nil pointer to an empty C string\r\n begin\r\n   fIn.URL := Join([fRootURL, aUrl]);\r\n-  if fExtendedOptions.RedirectMax > 0 then // url redirection (as TWinHttp)\r\n-    curl.easy_setopt(fHandle, coFollowLocation, 1);\r\n+  curl.easy_setopt(fHandle, coFollowLocation, ord(fExtendedOptions.RedirectMax > 0));\r\n   //curl.easy_setopt(fHandle,coTCPNoDelay,0); // disable Nagle\r\n   if fLayer = nlUnix then\r\n     curl.easy_setopt(fHandle, coUnixSocketPath, pointer(fServer));\r\n@@ -6211,19 +6210,24 @@ procedure TCurlHttp.InternalCreateRequest(const aMethod, aUrl: RawUtf8);\n       //curl.easy_setopt(fHandle,coProxySSLVerifyPeer,0);\r\n       //curl.easy_setopt(fHandle,coProxySSLVerifyHost,0);\r\n     end\r\n-    else if fTls.CertFile <> '' then\r\n+    else\r\n     begin\r\n-      curl.easy_setopt(fHandle, coSSLCertType, pointer(CERT_PEM));\r\n-      curl.easy_setopt(fHandle, coSSLCert, pointer(fTls.CertFile));\r\n-      if fTls.PassPhrase <> '' then\r\n-        curl.easy_setopt(fHandle, coSSLCertPasswd, pointer(fTls.PassPhrase));\r\n-      curl.easy_setopt(fHandle, coSSLKeyType, nil);\r\n-      curl.easy_setopt(fHandle, coSSLKey, pointer(fTls.KeyName));\r\n-      curl.easy_setopt(fHandle, coCAInfo, pointer(fTls.CACertFile));\r\n       curl.easy_setopt(fHandle, coSSLVerifyPeer, 1);\r\n-    end\r\n-    else if fTls.CACertFile <> '' then\r\n-      curl.easy_setopt(fHandle, coCAInfo, pointer(fTls.CACertFile));\r\n+      curl.easy_setopt(fHandle, coSSLVerifyHost, 2);\r\n+      if fTls.CertFile <> '' then\r\n+      begin\r\n+        curl.easy_setopt(fHandle, coSSLCertType, pointer(CERT_PEM));\r\n+        curl.easy_setopt(fHandle, coSSLCert, pointer(fTls.CertFile));\r\n+        if fTls.PassPhrase <> '' then\r\n+          curl.easy_setopt(fHandle, coSSLCertPasswd, pointer(fTls.PassPhrase));\r\n+        curl.easy_setopt(fHandle, coSSLKeyType, nil);\r\n+        curl.easy_setopt(fHandle, coSSLKey, pointer(fTls.KeyName));\r\n+        curl.easy_setopt(fHandle, coCAInfo, pointer(fTls.CACertFile));\r\n+        curl.easy_setopt(fHandle, coSSLVerifyPeer, 1);\r\n+      end\r\n+      else if fTls.CACertFile <> '' then\r\n+        curl.easy_setopt(fHandle, coCAInfo, pointer(fTls.CACertFile));\r\n+    end;\r\n   curl.easy_setopt(fHandle, coUserAgent, pointer(fExtendedOptions.UserAgent));\r\n   curl.easy_setopt(fHandle, coWriteFunction, @CurlWriteRawByteString);\r\n   curl.easy_setopt(fHandle, coHeaderFunction, @CurlWriteRawByteString);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "165436646151d7498009c04d66b07a1312ee3121",
+      "short_sha": "16543664",
+      "subject": "net: TAsynConnection follow RemoteIPLocalHostAsVoidInServers",
+      "body": "- as reported by #639",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T14:11:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/165436646151d7498009c04d66b07a1312ee3121",
+      "parents": [
+        "68b62f05507ff7bc7e9bc3f2a06161803908e259"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17420\n+17421",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17420'\r\n+'2.4.17421'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -435,7 +435,7 @@   TAsyncConnection = class(TPollAsyncConnection)\n   protected\r\n     fLastOperation: TAsyncConnectionSec; // as 32-bit monotonic seconds\r\n     fRemoteIP4: cardinal; // may contain cLocalhost32 = 127.0.0.1\r\n-    fRemoteIP: RawUtf8;   // never contains '127.0.0.1'\r\n+    fRemoteIP: RawUtf8;   // follow RemoteIPLocalHostAsVoidInServers\r\n     fOwner: TAsyncConnections;\r\n     // called after TAsyncConnections.GetLastOperationIdleSeconds of no activity\r\n     // - Sender.Write() could be used to send e.g. a hearbeat frame\r\n@@ -2660,7 +2660,7 @@ constructor TAsyncConnection.Create(aOwner: TAsyncConnections;\n   // inherited Create; use AfterCreate instead\r\n   fFlags := [fWasActive]; // by definition\r\n   fRemoteIP4 := aRemoteIP.IP4;\r\n-  aRemoteIP.IP(fRemoteIP, {localasvoid=}true);\r\n+  aRemoteIP.IP(fRemoteIP, RemoteIPLocalHostAsVoidInServers);\r\n end;\r\n \r\n procedure TAsyncConnection.Recycle(const aRemoteIP: TNetAddr);\r\n@@ -2677,7 +2677,7 @@ procedure TAsyncConnection.Recycle(const aRemoteIP: TNetAddr);\n   fIocpSub := nil;\r\n   {$endif USE_WINIOCP}\r\n   fRemoteIP4 := aRemoteIP.IP4;\r\n-  aRemoteIP.IP(fRemoteIP, {localasvoid=}true);\r\n+  aRemoteIP.IP(fRemoteIP, RemoteIPLocalHostAsVoidInServers);\r\n end;\r\n \r\n function TAsyncConnection.OnLastOperationIdle(nowsec: TAsyncConnectionSec): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -547,7 +547,7 @@ function GetReachableNetAddr(const address, port: array of RawUtf8;\n   /// defines if a connection from the loopback should be reported as ''\r\n   // - with default true, loopback connection will have no RemoteIP address ('')\r\n   // - or it will be explicitly '127.0.0.1' - if equals false\r\n-  // - used by both TCrtSock.AcceptRequest and THttpApiServer.Execute servers\r\n+  // - used by TCrtSock.AcceptRequest and HTTP/async servers\r\n   RemoteIPLocalHostAsVoidInServers: boolean = true;\r\n \r\n   /// the TCP SetKeepAlive() value for a client (false) or server (true)\r\n@@ -6981,7 +6981,7 @@ procedure TCrtSocket.SetLinger(aLinger: integer);\n procedure TCrtSocket.SetTimeouts(aConn, aSend, aRecv: integer);\r\n begin\r\n   fConnectTimeout := aConn;\r\n-  SetSendTimeout(aSend);    // virtual setters\r\n+  SetSendTimeout(aSend); // virtual setters with ApplySocketTimeouts\r\n   SetReceiveTimeout(aRecv);\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "68b62f05507ff7bc7e9bc3f2a06161803908e259",
+      "short_sha": "68b62f05",
+      "subject": "net: fixed TCurlHttp proper 'none' proxy support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:54:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/68b62f05507ff7bc7e9bc3f2a06161803908e259",
+      "parents": [
+        "d8e97dc6c024326523e23fb72c8252801d84c0af"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17419\n+17420",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17419'\r\n+'2.4.17420'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 3,
+          "patch": "@@ -6187,6 +6187,7 @@ procedure TCurlHttp.UseClientCertificate(const aCertFile, aCACertFile, aKeyName,\n procedure TCurlHttp.InternalCreateRequest(const aMethod, aUrl: RawUtf8);\r\n const\r\n   CERT_PEM: RawUtf8 = 'PEM';\r\n+  NO_PROXY: AnsiChar = #0; // non-nil pointer to an empty C string\r\n begin\r\n   fIn.URL := Join([fRootURL, aUrl]);\r\n   if fExtendedOptions.RedirectMax > 0 then // url redirection (as TWinHttp)\r\n@@ -6195,9 +6196,11 @@ procedure TCurlHttp.InternalCreateRequest(const aMethod, aUrl: RawUtf8);\n   if fLayer = nlUnix then\r\n     curl.easy_setopt(fHandle, coUnixSocketPath, pointer(fServer));\r\n   curl.easy_setopt(fHandle, coURL, pointer(fIn.URL));\r\n-  if (fExtendedOptions.Proxy <> '') and\r\n-     not IsNone(fExtendedOptions.Proxy) then\r\n-    curl.easy_setopt(fHandle, coProxy, pointer(fExtendedOptions.Proxy));\r\n+  if fExtendedOptions.Proxy <> '' then              // '' will use default proxy\r\n+    if IsNone(fExtendedOptions.Proxy) then\r\n+      curl.easy_setopt(fHandle, coProxy, @NO_PROXY) // disable proxies\r\n+    else\r\n+      curl.easy_setopt(fHandle, coProxy, pointer(fExtendedOptions.Proxy));\r\n   if fHttps or\r\n      (fExtendedOptions.RedirectMax > 0) then // may redirect from http to https\r\n     // see https://curl.haxx.se/libcurl/c/simplessl.html\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d8e97dc6c024326523e23fb72c8252801d84c0af",
+      "short_sha": "d8e97dc6",
+      "subject": "net: fixed GetSystemProxyUri()",
+      "body": "- Proxy selection checked the URL path instead of the host",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:47:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d8e97dc6c024326523e23fb72c8252801d84c0af",
+      "parents": [
+        "ac6bc5d615f595d3644b6d5644aabc6ffafe81d4"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17418\n+17419",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17418'\r\n+'2.4.17419'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -3760,11 +3760,11 @@ function GetSystemProxyUri(const uri, proxy: RawUtf8; var temp: TUri): PUri;\n begin\r\n   if IsNone(proxy) or\r\n      (not temp.From(uri)) or\r\n-     (temp.Address = '') or\r\n+     (temp.Server = '') or\r\n      (not (temp.UriScheme in [usHttp, usHttps])) or\r\n-     IsLocalHost(pointer(temp.Address)) or // no proxy for \"127.x.x.x\"\r\n+     IsLocalHost(pointer(temp.Server)) or // no proxy for \"127.x.x.x\"\r\n      (DefaultHttpClientSocketProxyNotForIp4 and\r\n-      NetIsIP4(pointer(temp.Address))) then  // plain \"1.2.3.4\" IP has no proxy\r\n+      NetIsIP4(pointer(temp.Server))) then  // plain \"1.2.3.4\" IP has no proxy\r\n     result := nil\r\n   else if (proxy <> '') and\r\n           temp.From(proxy) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -6983,7 +6983,6 @@ procedure TCrtSocket.SetTimeouts(aConn, aSend, aRecv: integer);\n   fConnectTimeout := aConn;\r\n   SetSendTimeout(aSend);    // virtual setters\r\n   SetReceiveTimeout(aRecv);\r\n-  ApplySocketTimeouts;\r\n end;\r\n \r\n procedure TCrtSocket.SetLegacyTimeOut(Value: integer);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ac6bc5d615f595d3644b6d5644aabc6ffafe81d4",
+      "short_sha": "ac6bc5d6",
+      "subject": "net: fixed THttpRequestExtendedOptions.ProxyByPass serialization",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:43:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ac6bc5d615f595d3644b6d5644aabc6ffafe81d4",
+      "parents": [
+        "94043c0a267acefae4ce003d14b37171e3751ab2"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17417\n+17418",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17417'\r\n+'2.4.17418'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -5213,6 +5213,7 @@ function THttpRequestExtendedOptions.ToDocVariant(const Secret: RawByteString):\n   result := SaveNetTlsContext(TLS, Secret);\r\n   v.AddNameValuesToObject([\r\n     'p',  Proxy,\r\n+    'pb', ProxyByPass,\r\n     'as', ord(Auth.Scheme),\r\n     'au', Auth.UserName,\r\n     'ap', Auth.Password,\r\n@@ -5221,6 +5222,7 @@ function THttpRequestExtendedOptions.ToDocVariant(const Secret: RawByteString):\n     'tc', ConnectTimeoutMS,\r\n     'ts', SendTimeoutMS,\r\n     'tr', ReceiveTimeoutMS], {dontAddDefault=}true);\r\n+  // other fields (e.g. about Retry) are request-specific not per connection\r\n   if v.Count = 0 then\r\n     v.Clear;\r\n end;\r\n@@ -5244,6 +5246,7 @@ function THttpRequestExtendedOptions.InitFromDocVariant(const Value: variant;\n     exit;\r\n   LoadNetTlsContext(TLS, v^, Secret);\r\n   v^.GetAsRawUtf8('p', Proxy);\r\n+  v^.GetAsRawUtf8('pb', ProxyByPass);\r\n   if v^.GetAsInteger('as', s) and\r\n      (cardinal(s) <= cardinal(high(Auth.Scheme))) then\r\n     Auth.Scheme := THttpRequestAuthentication(s);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "94043c0a267acefae4ce003d14b37171e3751ab2",
+      "short_sha": "94043c0a",
+      "subject": "net: fixed TWinINet.InternalConnect timeouts setting",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:40:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/94043c0a267acefae4ce003d14b37171e3751ab2",
+      "parents": [
+        "930021929b641b74c4f19ce454224a0313aa6502"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17416\n+17417",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17416'\r\n+'2.4.17417'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 6,
+          "patch": "@@ -5964,12 +5964,15 @@ procedure TWinINet.InternalConnect;\n   fSession := InternetOpenW(pointer(ua), OpenType, pointer(pn), pointer(pb), 0);\r\n   if fSession = nil then\r\n     RaiseFromLastError('Open');\r\n-  InternetSetOption(fConnection, INTERNET_OPTION_CONNECT_TIMEOUT,\r\n-    @fExtendedOptions.ConnectTimeoutMS, SizeOf(fExtendedOptions.ConnectTimeoutMS));\r\n-  InternetSetOption(fConnection, INTERNET_OPTION_SEND_TIMEOUT,\r\n-    @fExtendedOptions.SendTimeoutMS, SizeOf(fExtendedOptions.SendTimeoutMS));\r\n-  InternetSetOption(fConnection, INTERNET_OPTION_RECEIVE_TIMEOUT,\r\n-    @fExtendedOptions.ReceiveTimeoutMS, SizeOf(fExtendedOptions.ReceiveTimeoutMS));\r\n+  if not InternetSetOption(fSession, INTERNET_OPTION_CONNECT_TIMEOUT,\r\n+     @fExtendedOptions.ConnectTimeoutMS, SizeOf(fExtendedOptions.ConnectTimeoutMS)) then\r\n+    RaiseFromLastError('SetConnectTimeout');\r\n+  if not InternetSetOption(fSession, INTERNET_OPTION_SEND_TIMEOUT,\r\n+     @fExtendedOptions.SendTimeoutMS, SizeOf(fExtendedOptions.SendTimeoutMS)) then\r\n+    RaiseFromLastError('SetSendTimeout');\r\n+  if not InternetSetOption(fSession, INTERNET_OPTION_RECEIVE_TIMEOUT,\r\n+     @fExtendedOptions.ReceiveTimeoutMS, SizeOf(fExtendedOptions.ReceiveTimeoutMS)) then\r\n+    RaiseFromLastError('SetReceiveTimeout');\r\n   fConnection := InternetConnectA(fSession, pointer(fServer), fPort,\r\n     nil, nil, INTERNET_SERVICE_HTTP, 0, 0);\r\n   if fConnection = nil then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "930021929b641b74c4f19ce454224a0313aa6502",
+      "short_sha": "93002192",
+      "subject": "net: fixed TCrtSocket virtual timeout setters call",
+      "body": "- e.g. WebSockets overriden methods were not called",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:36:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/930021929b641b74c4f19ce454224a0313aa6502",
+      "parents": [
+        "b466ee53155cda470f8720c931f2c5c9638ed38f"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 16,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17415\n+17416",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17415'\r\n+'2.4.17416'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 3,
+          "patch": "@@ -3855,9 +3855,8 @@ procedure THttpClientSocket.DoOpenOptions(const aUri: TUri;\n   else\r\n   begin\r\n     fExtendedOptions.ComputeTimeouts;\r\n-    fConnectTimeout := fExtendedOptions.ConnectTimeoutMS;\r\n-    fReceiveTimeout := fExtendedOptions.ReceiveTimeoutMS;\r\n-    fSendTimeout    := fExtendedOptions.SendTimeoutMS;\r\n+    SetTimeouts(fExtendedOptions.ConnectTimeoutMS,\r\n+      fExtendedOptions.SendTimeoutMS, fExtendedOptions.ReceiveTimeoutMS);\r\n   end;\r\n   if Assigned(aOnLog) then\r\n     OnLog := aOnLog; // allow to debug ASAP\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 11,
+          "patch": "@@ -2144,6 +2144,8 @@   TCrtSocket = class\n     // (e.g. TLS, Tunnel, THttpClientWebSockets.Settings) then call ConnectUri()\r\n     // - see also Open/OpenUri/Bind other constructors\r\n     constructor Create(aTimeOut: integer = 10000); reintroduce; virtual;\r\n+    /// set all three timeout properties at once\r\n+    procedure SetTimeouts(aConn, aSend, aRecv: integer);\r\n     /// copy the timeouts of another TCrtSocket instance\r\n     procedure SetTimeoutsFrom(aSock: TCrtSocket);\r\n     /// constructor to create a client connection to aServer:aPort\r\n@@ -6976,14 +6978,19 @@ procedure TCrtSocket.SetLinger(aLinger: integer);\n   fSock.SetLinger(aLinger);\r\n end;\r\n \r\n-procedure TCrtSocket.SetLegacyTimeOut(Value: integer);\r\n+procedure TCrtSocket.SetTimeouts(aConn, aSend, aRecv: integer);\r\n begin\r\n-  fConnectTimeout := Value;\r\n-  fReceiveTimeout := Value;\r\n-  fSendTimeout    := Value;\r\n+  fConnectTimeout := aConn;\r\n+  SetSendTimeout(aSend);    // virtual setters\r\n+  SetReceiveTimeout(aRecv);\r\n   ApplySocketTimeouts;\r\n end;\r\n \r\n+procedure TCrtSocket.SetLegacyTimeOut(Value: integer);\r\n+begin\r\n+  SetTimeouts(Value, Value, Value); // one timeout to rule them all\r\n+end;\r\n+\r\n procedure TCrtSocket.ApplySocketTimeouts;\r\n begin\r\n   if not SockIsDefined then\r\n@@ -7004,9 +7011,7 @@ procedure TCrtSocket.ApplySocketTimeouts;\n \r\n procedure TCrtSocket.SetTimeoutsFrom(aSock: TCrtSocket);\r\n begin\r\n-  fConnectTimeout := aSock.fConnectTimeout;\r\n-  fSendTimeout    := aSock.fSendTimeout;\r\n-  fReceiveTimeout := aSock.fReceiveTimeout;\r\n+  SetTimeouts(aSock.ConnectTimeout, aSock.SendTimeout, aSock.ReceiveTimeout);\r\n end;\r\n \r\n procedure TCrtSocket.SetSendTimeout(Value: integer);\r\n@@ -7051,12 +7056,10 @@ constructor TCrtSocket.Open(const aServer, aPort: RawUtf8;\n \r\n procedure TCrtSocket.DoCreate(aTimeOut: integer);\r\n begin\r\n-  fConnectTimeout := aTimeout; // inlined SetLegacyTimeOut() with no fSock\r\n-  fSendTimeout    := aTimeout;\r\n-  fReceiveTimeout := aTimeout;\r\n+  SetLegacyTimeOut(aTimeOut); // default value for all 3 timeouts\r\n   if Assigned(OnCrtSocketLog) and\r\n      not Assigned(OnLog) then\r\n-    OnLog := OnCrtSocketLog; // global hook for all classes\r\n+    OnLog := OnCrtSocketLog;  // global hook for all classes\r\n end;\r\n \r\n procedure TCrtSocket.DoRaise(const msg: string; const args: array of const;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b466ee53155cda470f8720c931f2c5c9638ed38f",
+      "short_sha": "b466ee53",
+      "subject": "net: fixed wrong memory access in THttpClientSocket.SameOpenOptions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:20:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b466ee53155cda470f8720c931f2c5c9638ed38f",
+      "parents": [
+        "9482ca1247b10270e837c2d7e82681d1fea9d281"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17414\n+17415",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17414'\r\n+'2.4.17415'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3903,7 +3903,7 @@ function THttpClientSocket.SameOpenOptions(const aUri: TUri;\n   result := (aUri.UriScheme in HTTP_SCHEME) and\r\n             aUri.Same(Server, Port, ServerTls) and\r\n             SameNetTlsContext(TLS, aOptions.TLS) and\r\n-            fExtendedOptions.SameAuth(@aOptions.Auth);\r\n+            fExtendedOptions.SameAuth(@aOptions);\r\n   if result then\r\n     if tun.From(aOptions.Proxy) then\r\n       result := tun.Same(Tunnel.Server, Tunnel.Port, Tunnel.Https)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9482ca1247b10270e837c2d7e82681d1fea9d281",
+      "short_sha": "9482ca12",
+      "subject": "net: fixed previous THttpRequest commit",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:14:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9482ca1247b10270e837c2d7e82681d1fea9d281",
+      "parents": [
+        "70951dd78c91f1a3095d3c2b501fbf07eddc5d62"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17413\n+17414",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17413'\r\n+'2.4.17414'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -5357,17 +5357,18 @@ procedure THttpRequest.DoInternalConnect(const aServer, aPort: RawUtf8;\n begin\r\n   fLayer := aLayer;\r\n   fServer := aServer;\r\n+  fHttps := aHttps;\r\n   fPort := GetCardinal(pointer(aPort));\r\n   if fLayer <> nlUnix then\r\n     if fPort = 0 then\r\n       if fHttps then\r\n         fPort := 443\r\n       else\r\n         fPort := 80;\r\n-  fHttps := aHttps;\r\n   if fExtendedOptions.UserAgent = '' then\r\n     fExtendedOptions.UserAgent := DefaultUserAgent(self);\r\n   fExtendedOptions.ComputeTimeouts;\r\n+  InternalConnect;\r\n end;\r\n \r\n constructor THttpRequest.Create(const aServer, aPort: RawUtf8; aHttps: boolean;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "70951dd78c91f1a3095d3c2b501fbf07eddc5d62",
+      "short_sha": "70951dd7",
+      "subject": "net: several fixes to THttpRequest.Create",
+      "body": "- and Curl + Delphi inherited classes",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T13:10:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/70951dd78c91f1a3095d3c2b501fbf07eddc5d62",
+      "parents": [
+        "7ceaa39cc2025be051d0a2ef60ddb497a76f7ace"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17412\n+17413",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17412'\r\n+'2.4.17413'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 27,
+          "patch": "@@ -1267,6 +1267,8 @@   THttpRequest = class\n       const data: RawByteString; const header: RawUtf8;\r\n       aIgnoreTlsCertificateErrors: boolean; timeout: integer; outHeaders: PRawUtf8;\r\n       outStatus: PInteger; outError: PString = nil): RawByteString;\r\n+    procedure DoInternalConnect(const aServer, aPort: RawUtf8;\r\n+      aHttps: boolean; aLayer: TNetLayer);\r\n     // inherited class should override those abstract methods\r\n     procedure InternalConnect; virtual; abstract;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); virtual; abstract;\r\n@@ -5350,35 +5352,36 @@ class function THttpRequest.InternalREST(const url, method: RawUtf8;\n     end;\r\n end;\r\n \r\n-constructor THttpRequest.Create(const aServer, aPort: RawUtf8; aHttps: boolean;\r\n-  const aProxyName, aProxyByPass: RawUtf8;\r\n-  ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal;\r\n-  aLayer: TNetLayer; const aUserAgent: RawUtf8);\r\n+procedure THttpRequest.DoInternalConnect(const aServer, aPort: RawUtf8;\r\n+  aHttps: boolean; aLayer: TNetLayer);\r\n begin\r\n   fLayer := aLayer;\r\n+  fServer := aServer;\r\n+  fPort := GetCardinal(pointer(aPort));\r\n   if fLayer <> nlUnix then\r\n-  begin\r\n-    fPort := GetCardinal(pointer(aPort));\r\n     if fPort = 0 then\r\n-      if aHttps then\r\n+      if fHttps then\r\n         fPort := 443\r\n       else\r\n         fPort := 80;\r\n-  end;\r\n-  fServer := aServer;\r\n   fHttps := aHttps;\r\n+  if fExtendedOptions.UserAgent = '' then\r\n+    fExtendedOptions.UserAgent := DefaultUserAgent(self);\r\n+  fExtendedOptions.ComputeTimeouts;\r\n+end;\r\n+\r\n+constructor THttpRequest.Create(const aServer, aPort: RawUtf8; aHttps: boolean;\r\n+  const aProxyName, aProxyByPass: RawUtf8;\r\n+  ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal;\r\n+  aLayer: TNetLayer; const aUserAgent: RawUtf8);\r\n+begin\r\n   fExtendedOptions.Proxy := aProxyName;\r\n   fExtendedOptions.ProxyByPass := aProxyByPass;\r\n-  if fExtendedOptions.UserAgent = '' then\r\n-    if aUserAgent <> '' then\r\n-      fExtendedOptions.UserAgent := aUserAgent\r\n-    else\r\n-      fExtendedOptions.UserAgent := DefaultUserAgent(self);\r\n   fExtendedOptions.ConnectTimeoutMS := ConnectionTimeOut;\r\n   fExtendedOptions.SendTimeoutMS    := SendTimeout;\r\n   fExtendedOptions.ReceiveTimeoutMS := ReceiveTimeout;\r\n-  fExtendedOptions.ComputeTimeouts;\r\n-  InternalConnect; // raise exception on error\r\n+  fExtendedOptions.UserAgent := aUserAgent;\r\n+  DoInternalConnect(aServer, aPort, aHttps, aLayer); // raise exception on error\r\n end;\r\n \r\n constructor THttpRequest.Create(const aUri, aProxyName, aProxyByPass: RawUtf8;\r\n@@ -5389,22 +5392,17 @@ constructor THttpRequest.Create(const aUri, aProxyName, aProxyByPass: RawUtf8;\n begin\r\n   if not uri.From(aUri) then\r\n     EHttpSocket.RaiseUtf8('%.Create: invalid url=%', [self, aUri]);\r\n-  IgnoreTlsCertificateErrors := aIgnoreTlsCertificateErrors;\r\n+  fExtendedOptions.Tls.IgnoreCertificateErrors := aIgnoreTlsCertificateErrors;\r\n   Create(uri.Server, uri.Port, uri.Https, aProxyName, aProxyByPass,\r\n     ConnectionTimeOut, SendTimeout, ReceiveTimeout, uri.Layer);\r\n end;\r\n \r\n constructor THttpRequest.Create(\r\n   const aUri: TUri; aOptions: PHttpRequestExtendedOptions);\r\n begin\r\n-  fLayer := aUri.Layer;\r\n-  fServer := aUri.Server;\r\n-  fPort := aUri.PortInt;\r\n-  fHttps := aUri.Https;\r\n   if aOptions <> nil then\r\n     fExtendedOptions := aOptions^; // to be set before Create=InternalConnect\r\n-  fExtendedOptions.ComputeTimeouts;\r\n-  InternalConnect; // raise exception on error\r\n+  DoInternalConnect(aUri.Server, aUri.Port, aUri.Https, aUri.Layer);\r\n end;\r\n \r\n destructor THttpRequest.Destroy;\r\n@@ -6143,7 +6141,7 @@ procedure TCurlHttp.InternalConnect;\n     curl.easy_setopt(fHandle, coShare, curl.globalShare);\r\n   curl.easy_setopt(fHandle, coConnectTimeoutMs,\r\n     fExtendedOptions.ConnectTimeOutMS); // default=300 !\r\n-  ms := MinPtrInt(fExtendedOptions.ReceiveTimeoutMS, fExtendedOptions.SendTimeoutMS);\r\n+  ms := MaxPtrInt(fExtendedOptions.ReceiveTimeoutMS, fExtendedOptions.SendTimeoutMS);\r\n... [truncated, 930 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7ceaa39cc2025be051d0a2ef60ddb497a76f7ace",
+      "short_sha": "7ceaa39c",
+      "subject": "net: fixed THttpClientWebSockets constructor",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T12:56:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7ceaa39cc2025be051d0a2ef60ddb497a76f7ace",
+      "parents": [
+        "9292c506a2b86468d3963e804fdecae177d02351"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17411\n+17412",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17411'\r\n+'2.4.17412'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.client.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 6,
+          "patch": "@@ -116,6 +116,7 @@   THttpClientWebSockets = class(THttpClientSocket)\n     fOnCallbackRequestProcess: TOnHttpServerRequest;\r\n     fOnBeforeIncomingFrame: TOnWebSocketProtocolIncomingFrame;\r\n     fOnWebSocketsClosed: TNotifyEvent;\r\n+    procedure DoCreate(aTimeOut: integer); override;\r\n     procedure SetReceiveTimeout(aReceiveTimeout: integer); override;\r\n   public\r\n     /// low-level client WebSockets connection factory for host and port\r\n@@ -134,9 +135,6 @@   THttpClientWebSockets = class(THttpClientSocket)\n       aProtocol: TWebSocketProtocol; aLog: TSynLogClass = nil;\r\n       const aLogContext: RawUtf8 = ''; const aCustomHeaders: RawUtf8 = '';\r\n       aTLSContext: PNetTlsContext = nil): THttpClientWebSockets; overload;\r\n-    /// common initialization of all constructors\r\n-    // - this overridden method will set the UserAgent with some default value\r\n-    constructor Create(aTimeOut: integer = 10000); override;\r\n     /// finalize the connection\r\n     destructor Destroy; override;\r\n     /// process low-level REST request, either on HTTP/1.1 or via WebSockets\r\n@@ -538,11 +536,11 @@ procedure TWebSocketProcessClientThread.DoExecute;\n \r\n { THttpClientWebSockets }\r\n \r\n-constructor THttpClientWebSockets.Create(aTimeOut: integer);\r\n+procedure THttpClientWebSockets.DoCreate(aTimeOut: integer);\r\n begin\r\n-  DoCreate(aTimeOut);\r\n+  inherited DoCreate(aTimeOut);\r\n   fSettings.SetDefaults;\r\n-  fSettings.CallbackAnswerTimeOutMS := aTimeOut;\r\n+  fSettings.CallbackAnswerTimeOutMS := fReceiveTimeout; // from aTimeOut\r\n end;\r\n \r\n class function THttpClientWebSockets.WebSocketsConnect(\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ws.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9292c506a2b86468d3963e804fdecae177d02351",
+      "short_sha": "9292c506",
+      "subject": "rest: fixed TRestHttpClientGeneric.RegisteredClassCreateFrom",
+      "body": "- REST definition parsing could loop indefinitely",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T12:52:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9292c506a2b86468d3963e804fdecae177d02351",
+      "parents": [
+        "bdfe38d5389fcaab9b19f298f67422250c876cf3"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 20,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -176,7 +176,8 @@   TSynConnectionDefinition = class(TObjectWithPassword)\n     /// the associated server name (or file, for SQLite3) to be connected to\r\n     property ServerName: RawUtf8\r\n       read fServerName write fServerName;\r\n-    /// the associated database name (if any), or additional options\r\n+    /// the associated database name (if any), or URI-encoded additional options\r\n+    // - e.g. TRestHttpClientGeneric.DefinitionTo() URI-encoded HTTP parameters\r\n     property DatabaseName: RawUtf8\r\n       read fDatabaseName write fDatabaseName;\r\n     /// the associated User Identifier (if any)\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17410\n+17411",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17410'\r\n+'2.4.17411'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.http.client.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 17,
+          "patch": "@@ -650,29 +650,35 @@ constructor TRestHttpClientGeneric.RegisteredClassCreateFrom(aModel: TOrmModel;\n   aDefinition: TSynConnectionDefinition; aServerHandleAuthentication: boolean);\r\n var\r\n   URI: TUri;\r\n-  P, next: PUtf8Char;\r\n-  V: cardinal;\r\n-  tmp: RawUtf8;\r\n+  P: PUtf8Char;\r\n+  n, v: RawUtf8;\r\n begin\r\n   URI.From(aDefinition.ServerName);\r\n   Create(URI.Server, URI.Port, aModel, URI.Https);\r\n   P := pointer(aDefinition.DataBaseName);\r\n   while P <> nil do\r\n   begin\r\n-    if UrlDecodeCardinal(P, 'CONNECTTIMEOUT=', V) then\r\n-      fExtendedOptions.ConnectTimeoutMS := V\r\n-    else if UrlDecodeCardinal(P, 'SENDTIMEOUT=', V) then\r\n-      fExtendedOptions.SendTimeoutMS := V\r\n-    else if UrlDecodeCardinal(P, 'RECEIVETIMEOUT=', V) then\r\n-      fExtendedOptions.ReceiveTimeoutMS := V\r\n-    else if UrlDecodeValue(P, 'PROXYNAME=', tmp) then\r\n-      fExtendedOptions.Proxy := tmp\r\n-    else if UrlDecodeValue(P, 'PROXYBYPASS=', tmp) then\r\n-      fExtendedOptions.ProxyByPass := tmp\r\n-    else if UrlDecodeCardinal(P, 'IGNORETLSCERTIFICATEERRORS=', V, @next) or\r\n-            UrlDecodeCardinal(P, 'IGNORESSLCERTIFICATEERRORS=', V, @next) then\r\n-      fExtendedOptions.TLS.IgnoreCertificateErrors := boolean(V);\r\n-    P := next;\r\n+    P := UrlDecodeNextNameValue(P, n, v);\r\n+    case FindPropName(['IgnoreTlsCertificateErrors', // 0\r\n+                       'IgnoreSslCertificateErrors', // 1\r\n+                       'ConnectTimeout',             // 2\r\n+                       'SendTimeout',                // 3\r\n+                       'ReceiveTimeout',             // 4\r\n+                       'ProxyName',                  // 5\r\n+                       'ProxyByPass'], n) of         // 6\r\n+      0, 1:\r\n+        fExtendedOptions.TLS.IgnoreCertificateErrors := GetBoolean(v);\r\n+      2:\r\n+        fExtendedOptions.ConnectTimeoutMS := GetCardinal(pointer(v));\r\n+      3:\r\n+        fExtendedOptions.SendTimeoutMS := GetCardinal(pointer(v));\r\n+      4:\r\n+        fExtendedOptions.ReceiveTimeoutMS := GetCardinal(pointer(v));\r\n+      5:\r\n+        fExtendedOptions.Proxy := v;\r\n+      6:\r\n+        fExtendedOptions.ProxyByPass := v;\r\n+    end;\r\n   end;\r\n   fExtendedOptions.ComputeTimeouts;\r\n   inherited RegisteredClassCreateFrom(aModel, aDefinition, false); // call SetUser()\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "REST",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.secure",
+        "mormot.rest.http.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bdfe38d5389fcaab9b19f298f67422250c876cf3",
+      "short_sha": "bdfe38d5",
+      "subject": "rest: removed TRestHttpClientRequest fProxyName/fProxyPass fields",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T12:34:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bdfe38d5389fcaab9b19f298f67422250c876cf3",
+      "parents": [
+        "edbd697ab93030a712380c6acc600149d03be8aa"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17409\n+17410",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17409'\r\n+'2.4.17410'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.http.client.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 12,
+          "patch": "@@ -114,7 +114,6 @@   TRestHttpClientGeneric = class(TRestClientUri)\n     /// connection parameters as set by Create()\r\n     fServer, fPort: RawUtf8;\r\n     fHttps: boolean;\r\n-    fProxyName, fProxyByPass: RawUtf8;\r\n     fExtendedOptions: THttpRequestExtendedOptions;\r\n     procedure SetCompression(Value: TRestHttpCompressions);\r\n     procedure SetKeepAliveMS(Value: cardinal);\r\n@@ -595,8 +594,8 @@ constructor TRestHttpClientGeneric.Create(const aServer, aPort: RawUtf8;\n   fExtendedOptions.SendTimeoutMS    := aSendTimeout;\r\n   fExtendedOptions.ReceiveTimeoutMS := aReceiveTimeout;\r\n   fExtendedOptions.ComputeTimeouts; // may use HTTP_DEFAULT_*TIMEOUT constants\r\n-  fProxyName := aProxyName;\r\n-  fProxyByPass := aProxyByPass;\r\n+  fExtendedOptions.Proxy := aProxyName;\r\n+  fExtendedOptions.ProxyByPass := aProxyByPass;\r\n end;\r\n \r\n constructor TRestHttpClientGeneric.CreateWithOwnModel(\r\n@@ -642,8 +641,9 @@ procedure TRestHttpClientGeneric.DefinitionTo(\n     'ConnectTimeout',             fExtendedOptions.ConnectTimeoutMS,\r\n     'SendTimeout',                fExtendedOptions.SendTimeoutMS,\r\n     'ReceiveTimeout',             fExtendedOptions.ReceiveTimeoutMS,\r\n-    'ProxyName',                  fProxyName,\r\n-    'ProxyByPass',                fProxyByPass], [ueTrimLeadingQuestionMark]);\r\n+    'ProxyName',                  fExtendedOptions.Proxy,\r\n+    'ProxyByPass',                fExtendedOptions.ProxyByPass],\r\n+    [ueTrimLeadingQuestionMark]);\r\n end;\r\n \r\n constructor TRestHttpClientGeneric.RegisteredClassCreateFrom(aModel: TOrmModel;\r\n@@ -666,9 +666,9 @@ constructor TRestHttpClientGeneric.RegisteredClassCreateFrom(aModel: TOrmModel;\n     else if UrlDecodeCardinal(P, 'RECEIVETIMEOUT=', V) then\r\n       fExtendedOptions.ReceiveTimeoutMS := V\r\n     else if UrlDecodeValue(P, 'PROXYNAME=', tmp) then\r\n-      fProxyName := tmp\r\n+      fExtendedOptions.Proxy := tmp\r\n     else if UrlDecodeValue(P, 'PROXYBYPASS=', tmp) then\r\n-      fProxyByPass := tmp\r\n+      fExtendedOptions.ProxyByPass := tmp\r\n     else if UrlDecodeCardinal(P, 'IGNORETLSCERTIFICATEERRORS=', V, @next) or\r\n             UrlDecodeCardinal(P, 'IGNORESSLCERTIFICATEERRORS=', V, @next) then\r\n       fExtendedOptions.TLS.IgnoreCertificateErrors := boolean(V);\r\n@@ -863,15 +863,17 @@ procedure TRestHttpClientRequest.InternalSetClass;\n end;\r\n \r\n procedure TRestHttpClientRequest.InternalOpen;\r\n+var\r\n+  t: TUri;\r\n begin\r\n   InternalSetClass;\r\n   if fRequestClass = nil then\r\n     ERestHttpClient.RaiseUtf8('Unsupported %.InternalOpen', [self]);\r\n-  fExtendedOptions.ComputeTimeouts;\r\n-  fRequest := fRequestClass.Create(fServer, fPort, fHttps, fProxyName,\r\n-    fProxyByPass, fExtendedOptions.ConnectTimeoutMS,\r\n-    fExtendedOptions.SendTimeoutMS, fExtendedOptions.ReceiveTimeoutMS);\r\n-  fRequest.ExtendedOptions := fExtendedOptions;\r\n+  t.Clear;\r\n+  t.Server := fServer;\r\n+  t.Port := fPort;\r\n+  t.Https := fHttps;\r\n+  fRequest := fRequestClass.Create(t, @fExtendedOptions);\r\n   // note that first registered algo will be the preferred one\r\n   {$ifndef PUREMORMOT2}\r\n   if hcSynShaAes in Compression then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "REST"
+      ],
+      "units": [
+        "mormot.rest.http.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "edbd697ab93030a712380c6acc600149d03be8aa",
+      "short_sha": "edbd697a",
+      "subject": "net: rewritten THttpRequest.InternalConnect method",
+      "body": "- we don't need any timeout parameters any more, since we got them directly from the extendend options",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T11:03:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/edbd697ab93030a712380c6acc600149d03be8aa",
+      "parents": [
+        "2febb8e316cb99dbf74911d720226c134fd4674e"
+      ],
+      "stats": {
+        "additions": 39,
+        "deletions": 43,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17408\n+17409",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17408'\r\n+'2.4.17409'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 37,
+          "deletions": 41,
+          "patch": "@@ -1268,7 +1268,7 @@   THttpRequest = class\n       aIgnoreTlsCertificateErrors: boolean; timeout: integer; outHeaders: PRawUtf8;\r\n       outStatus: PInteger; outError: PString = nil): RawByteString;\r\n     // inherited class should override those abstract methods\r\n-    procedure InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal); virtual; abstract;\r\n+    procedure InternalConnect; virtual; abstract;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); virtual; abstract;\r\n     procedure InternalSendRequest(const aMethod: RawUtf8; const aData:\r\n       RawByteString); virtual; abstract;\r\n@@ -1572,8 +1572,7 @@   TWinINet = class(TWinHttpApi)\n   protected\r\n     // those internal methods will raise an EWinINet exception on error\r\n     procedure RaiseFromLastError(const ctxt: ShortString);\r\n-    procedure InternalConnect(ConnectionTimeOut, SendTimeout,\r\n-      ReceiveTimeout: cardinal); override;\r\n+    procedure InternalConnect; override;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); override;\r\n     procedure InternalCloseRequest; override;\r\n     procedure InternalAddHeader(const hdr: RawUtf8); override;\r\n@@ -1623,8 +1622,7 @@   TWinHttp = class(TWinHttpApi)\n     // you can override this method e.g. to disable/enable some protocols\r\n     function InternalGetProtocols: cardinal; virtual;\r\n     // those internal methods will raise an EWinHttp exception on error\r\n-    procedure InternalConnect(ConnectionTimeOut, SendTimeout,\r\n-      ReceiveTimeout: cardinal); override;\r\n+    procedure InternalConnect; override;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); override;\r\n     procedure InternalCloseRequest; override;\r\n     procedure InternalAddHeader(const hdr: RawUtf8); override;\r\n@@ -1700,8 +1698,7 @@   TCurlHttp = class(THttpRequest)\n     fLast: record\r\n       dlTotal, dlNow, ulTotal, ulNow: Int64;\r\n     end;\r\n-    procedure InternalConnect(\r\n-      ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal); override;\r\n+    procedure InternalConnect; override;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); override;\r\n     procedure InternalSendRequest(const aMethod: RawUtf8;\r\n       const aData: RawByteString); override;\r\n@@ -1750,8 +1747,7 @@   TDelphiNetHttp = class(THttpRequest)\n     procedure DoValidateServerCertificate(const Sender: TObject;\r\n       const ARequest: TURLRequest; const Certificate: TCertificate;\r\n       var Accepted: boolean);\r\n-    procedure InternalConnect(\r\n-      ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal); override;\r\n+    procedure InternalConnect; override;\r\n     procedure InternalCreateRequest(const aMethod, aUrl: RawUtf8); override;\r\n     procedure InternalSendRequest(const aMethod: RawUtf8;\r\n       const aData: RawByteString); override;\r\n@@ -5378,13 +5374,11 @@ constructor THttpRequest.Create(const aServer, aPort: RawUtf8; aHttps: boolean;\n       fExtendedOptions.UserAgent := aUserAgent\r\n     else\r\n       fExtendedOptions.UserAgent := DefaultUserAgent(self);\r\n-  if ConnectionTimeOut = 0 then\r\n-    ConnectionTimeOut := HTTP_DEFAULT_CONNECTTIMEOUT;\r\n-  if SendTimeout = 0 then\r\n-    SendTimeout := HTTP_DEFAULT_SENDTIMEOUT;\r\n-  if ReceiveTimeout = 0 then\r\n-    ReceiveTimeout := HTTP_DEFAULT_RECEIVETIMEOUT;\r\n-  InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeout); // raise exception on error\r\n+  fExtendedOptions.ConnectTimeoutMS := ConnectionTimeOut;\r\n+  fExtendedOptions.SendTimeoutMS    := SendTimeout;\r\n+  fExtendedOptions.ReceiveTimeoutMS := ReceiveTimeout;\r\n+  fExtendedOptions.ComputeTimeouts;\r\n+  InternalConnect; // raise exception on error\r\n end;\r\n \r\n constructor THttpRequest.Create(const aUri, aProxyName, aProxyByPass: RawUtf8;\r\n@@ -5403,12 +5397,14 @@ constructor THttpRequest.Create(const aUri, aProxyName, aProxyByPass: RawUtf8;\n constructor THttpRequest.Create(\r\n   const aUri: TUri; aOptions: PHttpRequestExtendedOptions);\r\n begin\r\n+  fLayer := aUri.Layer;\r\n+  fServer := aUri.Se\n... [truncated, 5011 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2febb8e316cb99dbf74911d720226c134fd4674e",
+      "short_sha": "2febb8e3",
+      "subject": "net: introducing THttpRequestExtendedOptions.ProxyBypass field",
+      "body": "- so that we could get rid of redundant fields e.g. in THttpRequest",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T11:02:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2febb8e316cb99dbf74911d720226c134fd4674e",
+      "parents": [
+        "f54c3e1006e228175c54b7f6e7faa35f4634cb99"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 19,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17407\n+17408",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17407'\r\n+'2.4.17408'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 17,
+          "patch": "@@ -399,6 +399,8 @@   THttpRequestExtendedOptions = record\n     // - otherwise, will use this value as explicit proxy server name\r\n     // - used only during initial connection\r\n     Proxy: RawUtf8;\r\n+    /// optional Proxy by-pass list - as defined by Windows WinINet/WinHttp API\r\n+    ProxyByPass: RawUtf8;\r\n     /// legacy common timeout in milliseconds, as supplied to Create()\r\n     // - fallback for unspecified ConnectTimeoutMS/SendTimeoutMS/ReceiveTimeoutMS\r\n     // - 0 keeps the backend defaults; this is not a total request deadline\r\n@@ -1248,8 +1250,6 @@   THttpRequest = class;\n   THttpRequest = class\r\n   protected\r\n     fServer: RawUtf8;\r\n-    fProxyName: RawUtf8;\r\n-    fProxyByPass: RawUtf8;\r\n     fPort: TNetPort;\r\n     fLayer: TNetLayer;\r\n     fKeepAlive: cardinal;\r\n@@ -1436,11 +1436,11 @@   THttpRequest = class\n     /// the remote server optional proxy, as specified to the class constructor\r\n     // - you may set 'none' to disable any Proxy, or keep '' to use the OS proxy\r\n     property ProxyName: RawUtf8\r\n-      read fProxyName;\r\n+      read fExtendedOptions.Proxy;\r\n     /// the remote server optional proxy by-pass list, as specified to the class\r\n     // constructor\r\n     property ProxyByPass: RawUtf8\r\n-      read fProxyByPass;\r\n+      read fExtendedOptions.ProxyByPass;\r\n     /// called before and after Upload process\r\n     property OnUpload: TOnHttpRequest\r\n       read fOnUpload write fOnUpload;\r\n@@ -5371,8 +5371,8 @@ constructor THttpRequest.Create(const aServer, aPort: RawUtf8; aHttps: boolean;\n   end;\r\n   fServer := aServer;\r\n   fHttps := aHttps;\r\n-  fProxyName := aProxyName;\r\n-  fProxyByPass := aProxyByPass;\r\n+  fExtendedOptions.Proxy := aProxyName;\r\n+  fExtendedOptions.ProxyByPass := aProxyByPass;\r\n   if fExtendedOptions.UserAgent = '' then\r\n     if aUserAgent <> '' then\r\n       fExtendedOptions.UserAgent := aUserAgent\r\n@@ -5670,9 +5670,9 @@ procedure TWinHttp.InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeou\n begin\r\n   WinHttpApiInitialize;\r\n   Utf8ToSynUnicode(fExtendedOptions.UserAgent, ua);\r\n-  if IsNone(fProxyName) then\r\n+  if IsNone(fExtendedOptions.Proxy) then\r\n     access := WINHTTP_ACCESS_TYPE_NO_PROXY\r\n-  else if fProxyName = '' then\r\n+  else if fExtendedOptions.Proxy = '' then\r\n     if (OSVersion >= wEightOne) or\r\n        WinHttpForceProxyDetection then\r\n       access := WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY // Windows 8.1 and newer\r\n@@ -5682,8 +5682,8 @@ procedure TWinHttp.InternalConnect(ConnectionTimeOut, SendTimeout, ReceiveTimeou\n     access := WINHTTP_ACCESS_TYPE_NAMED_PROXY;\r\n   if access <> WINHTTP_ACCESS_TYPE_NO_PROXY then\r\n   begin\r\n-    Utf8ToSynUnicode(fProxyName, pn);\r\n-    Utf8ToSynUnicode(fProxyByPass, pb);\r\n+    Utf8ToSynUnicode(fExtendedOptions.Proxy, pn);\r\n+    Utf8ToSynUnicode(fExtendedOptions.ProxyByPass, pb);\r\n   end;\r\n   fSession := WinHttpApi.Open(pointer(ua), access, pointer(pn), pointer(pb), 0);\r\n   if (fSession = nil) and\r\n@@ -5958,15 +5958,15 @@ procedure TWinINet.InternalConnect(\n   OpenType: integer;\r\n   ua, pn, pb: SynUnicode;\r\n begin\r\n-  if IsNone(fProxyName) then\r\n+  if IsNone(fExtendedOptions.Proxy) then\r\n     OpenType := INTERNET_OPEN_TYPE_DIRECT\r\n-  else if fProxyName = '' then\r\n+  else if fExtendedOptions.Proxy = '' then\r\n     OpenType := INTERNET_OPEN_TYPE_PRECONFIG\r\n   else\r\n     OpenType := INTERNET_OPEN_TYPE_PROXY;\r\n   Utf8ToSynUnicode(fExtendedOptions.UserAgent, ua);\r\n-  Utf8ToSynUnicode(fProxyName, pn);\r\n-  Utf8ToSynUnicode(fProxyByPass, pb);\r\n+  Utf8ToSynUnicode(fExtendedOptions.Proxy, pn);\r\n+  Utf8ToSynUnicode(fExtendedOptions.ProxyByPass, pb);\r\n   fSession := InternetOpenW(pointer(ua), OpenType, pointer(pn), pointer(pb), 0);\r\n   if fSession = nil then\r\n     RaiseFromLastError('Open');\r\n@@ -6194,9 +6194,9 @@ procedure TCurlHttp.InternalCreateRequest(const aMethod, aUrl: RawUtf8);\n   if fLayer = nlUnix then\r\n     curl.easy_setopt(fHandle, coUnixSocketPath, pointer(fServer));\r\n   curl.easy_setopt(fHandle, coURL, pointer(fIn.URL));\r\n-  if (fProxyNa\n... [truncated, 434 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f54c3e1006e228175c54b7f6e7faa35f4634cb99",
+      "short_sha": "f54c3e10",
+      "subject": "rest: rewritten TRestHttpClient with latest changes",
+      "body": "- especially after the cleaner THttpRequestExtendedOptions refactoring",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:35:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f54c3e1006e228175c54b7f6e7faa35f4634cb99",
+      "parents": [
+        "3851e0900e8c25c575dc04ba55c22209552db105"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 37,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17406\n+17407",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17406'\r\n+'2.4.17407'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.http.client.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 35,
+          "patch": "@@ -591,18 +591,10 @@ constructor TRestHttpClientGeneric.Create(const aServer, aPort: RawUtf8;\n   fHttps := aHttps;\r\n   fKeepAliveMS := 20000; // 20 seconds connection keep alive by default\r\n   fCompression := []; // may add hcSynLZ or hcDeflate for AJAX clients\r\n-  if aConnectTimeout = 0 then\r\n-    fExtendedOptions.ConnectTimeoutMS := HTTP_DEFAULT_CONNECTTIMEOUT\r\n-  else\r\n-    fExtendedOptions.ConnectTimeoutMS := aConnectTimeout;\r\n-  if aSendTimeout = 0 then\r\n-    fExtendedOptions.SendTimeoutMS := HTTP_DEFAULT_SENDTIMEOUT\r\n-  else\r\n-    fExtendedOptions.SendTimeoutMS := aSendTimeout;\r\n-  if aReceiveTimeout = 0 then\r\n-    fExtendedOptions.ReceiveTimeoutMS := HTTP_DEFAULT_RECEIVETIMEOUT\r\n-  else\r\n-    fExtendedOptions.ReceiveTimeoutMS := aReceiveTimeout;\r\n+  fExtendedOptions.ConnectTimeoutMS := aConnectTimeout;\r\n+  fExtendedOptions.SendTimeoutMS    := aSendTimeout;\r\n+  fExtendedOptions.ReceiveTimeoutMS := aReceiveTimeout;\r\n+  fExtendedOptions.ComputeTimeouts; // may use HTTP_DEFAULT_*TIMEOUT constants\r\n   fProxyName := aProxyName;\r\n   fProxyByPass := aProxyByPass;\r\n end;\r\n@@ -668,32 +660,21 @@ constructor TRestHttpClientGeneric.RegisteredClassCreateFrom(aModel: TOrmModel;\n   while P <> nil do\r\n   begin\r\n     if UrlDecodeCardinal(P, 'CONNECTTIMEOUT=', V) then\r\n-    begin\r\n-      if V = 0 then\r\n-        V := HTTP_DEFAULT_CONNECTTIMEOUT;\r\n-      fExtendedOptions.ConnectTimeoutMS := V;\r\n-    end\r\n+      fExtendedOptions.ConnectTimeoutMS := V\r\n     else if UrlDecodeCardinal(P, 'SENDTIMEOUT=', V) then\r\n-    begin\r\n-      if V = 0 then\r\n-        V := HTTP_DEFAULT_SENDTIMEOUT;\r\n-      fExtendedOptions.SendTimeoutMS := V;\r\n-    end\r\n+      fExtendedOptions.SendTimeoutMS := V\r\n     else if UrlDecodeCardinal(P, 'RECEIVETIMEOUT=', V) then\r\n-    begin\r\n-      if V = 0 then\r\n-        V := HTTP_DEFAULT_RECEIVETIMEOUT;\r\n-      fExtendedOptions.ReceiveTimeoutMS := V;\r\n-    end\r\n+      fExtendedOptions.ReceiveTimeoutMS := V\r\n     else if UrlDecodeValue(P, 'PROXYNAME=', tmp) then\r\n-      fProxyName := CurrentAnsiConvert.Utf8ToAnsi(tmp)\r\n+      fProxyName := tmp\r\n     else if UrlDecodeValue(P, 'PROXYBYPASS=', tmp) then\r\n-      fProxyByPass := CurrentAnsiConvert.Utf8ToAnsi(tmp);\r\n-    if UrlDecodeCardinal(P, 'IGNORETLSCERTIFICATEERRORS=', V, @next) or\r\n-       UrlDecodeCardinal(P, 'IGNORESSLCERTIFICATEERRORS=', V, @next) then\r\n+      fProxyByPass := tmp\r\n+    else if UrlDecodeCardinal(P, 'IGNORETLSCERTIFICATEERRORS=', V, @next) or\r\n+            UrlDecodeCardinal(P, 'IGNORESSLCERTIFICATEERRORS=', V, @next) then\r\n       fExtendedOptions.TLS.IgnoreCertificateErrors := boolean(V);\r\n     P := next;\r\n   end;\r\n+  fExtendedOptions.ComputeTimeouts;\r\n   inherited RegisteredClassCreateFrom(aModel, aDefinition, false); // call SetUser()\r\n end;\r\n \r\n@@ -882,15 +863,14 @@ procedure TRestHttpClientRequest.InternalSetClass;\n end;\r\n \r\n procedure TRestHttpClientRequest.InternalOpen;\r\n-var\r\n-  connect, send, receive: integer;\r\n begin\r\n   InternalSetClass;\r\n   if fRequestClass = nil then\r\n     ERestHttpClient.RaiseUtf8('Unsupported %.InternalOpen', [self]);\r\n-  fExtendedOptions.GetTimeouts(connect, send, receive);\r\n+  fExtendedOptions.ComputeTimeouts;\r\n   fRequest := fRequestClass.Create(fServer, fPort, fHttps, fProxyName,\r\n-    fProxyByPass, connect, send, receive);\r\n+    fProxyByPass, fExtendedOptions.ConnectTimeoutMS,\r\n+    fExtendedOptions.SendTimeoutMS, fExtendedOptions.ReceiveTimeoutMS);\r\n   fRequest.ExtendedOptions := fExtendedOptions;\r\n   // note that first registered algo will be the preferred one\r\n   {$ifndef PUREMORMOT2}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "REST"
+      ],
+      "units": [
+        "mormot.rest.http.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3851e0900e8c25c575dc04ba55c22209552db105",
+      "short_sha": "3851e090",
+      "subject": "net: fixed TWinINet Unicode options support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:35:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3851e0900e8c25c575dc04ba55c22209552db105",
+      "parents": [
+        "b05f85227374d8b60e1e37f80f23813f7fc3b5c2"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17405\n+17406",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17405'\r\n+'2.4.17406'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 3,
+          "patch": "@@ -5956,15 +5956,18 @@ procedure TWinINet.InternalConnect(\n   ConnectionTimeOut, SendTimeout, ReceiveTimeout: cardinal);\r\n var\r\n   OpenType: integer;\r\n+  ua, pn, pb: SynUnicode;\r\n begin\r\n   if IsNone(fProxyName) then\r\n     OpenType := INTERNET_OPEN_TYPE_DIRECT\r\n   else if fProxyName = '' then\r\n     OpenType := INTERNET_OPEN_TYPE_PRECONFIG\r\n   else\r\n     OpenType := INTERNET_OPEN_TYPE_PROXY;\r\n-  fSession := InternetOpenA(pointer(fExtendedOptions.UserAgent), OpenType,\r\n-    pointer(fProxyName), pointer(fProxyByPass), 0);\r\n+  Utf8ToSynUnicode(fExtendedOptions.UserAgent, ua);\r\n+  Utf8ToSynUnicode(fProxyName, pn);\r\n+  Utf8ToSynUnicode(fProxyByPass, pb);\r\n+  fSession := InternetOpenW(pointer(ua), OpenType, pointer(pn), pointer(pb), 0);\r\n   if fSession = nil then\r\n     RaiseFromLastError('Open');\r\n   InternetSetOption(fConnection, INTERNET_OPTION_CONNECT_TIMEOUT,\r\n@@ -6398,7 +6401,7 @@ procedure TDelphiNetHttp.InternalConnect(\n     fClient.ResponseTimeout := ReceiveTimeout;\r\n   fClient.AllowCookies := false; // as the other THttpRequest classes\r\n   if (fProxyName <> '') and\r\n-     not IdemPropNameU(fProxyName, 'none') then\r\n+     not IsNone(fProxyName) then\r\n     fClient.ProxySettings := TProxySettings.Create(Utf8ToString(fProxyName));\r\n   fClient.OnValidateServerCertificate := DoValidateServerCertificate;\r\n   FormatUtf8('http%://%:%', [TLS_TEXT[fHttps], fServer, fPort], fRootUrl);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b05f85227374d8b60e1e37f80f23813f7fc3b5c2",
+      "short_sha": "b05f8522",
+      "subject": "net: rewritten TCrtSocket.TrySndLow timeout/wait logic",
+      "body": "- we better use GetTickCount64 for the timeout check as we do with TryRecvLow()",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:34:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b05f85227374d8b60e1e37f80f23813f7fc3b5c2",
+      "parents": [
+        "0f8d2fcd8164124f35fa1d8d78c9ab00b34a1c73"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17404\n+17405",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17404'\r\n+'2.4.17405'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 6,
+          "patch": "@@ -8338,9 +8338,11 @@ procedure TCrtSocket.SndLow(const Data: RawByteString);\n function TCrtSocket.TrySndLow(P: pointer; Len: integer; NetResult: PNetResult;\r\n   RawError: PNetErrorInt): boolean;\r\n var\r\n-  sent, timeout: integer;\r\n+  sent: integer; // not PtrInt\r\n   events: TNetEvents;\r\n   res: TNetResult;\r\n+  endtix: Int64;\r\n+  remaining: PtrInt;\r\n begin\r\n   if RawError <> nil then\r\n     RawError^ := NO_ERROR;\r\n@@ -8355,10 +8357,10 @@ function TCrtSocket.TrySndLow(P: pointer; Len: integer; NetResult: PNetResult;\n    res := nrInvalidParameter\r\n   else\r\n   begin\r\n-    timeout := GetSendTimeout;\r\n-    if fSocketConnecting then\r\n-      timeout := GetConnectTimeout;\r\n     repeat\r\n+      // fSendTimeout is for each Send() call, not for the whole buffer\r\n+      endtix := mormot.core.os.GetTickCount64 + fSendTimeout;\r\n+      // try direct sending to the OS buffers\r\n       sent := MinPtrInt(CrtSocketSendRecvMaxBytes, Len);\r\n       if fSecure <> nil then\r\n         res := fSecure.Send(P, sent)\r\n@@ -8372,13 +8374,15 @@ function TCrtSocket.TrySndLow(P: pointer; Len: integer; NetResult: PNetResult;\n           break; // all data successfully sent\r\n         inc(PByte(P), sent);\r\n         if res = nrOk then\r\n-          continue;\r\n+          continue; // a full chunk was sent: try another one immediately\r\n       end;\r\n       if GetAborted or\r\n          not (res in [nrOk, nrRetry]) then\r\n         break;\r\n+      // ensure we actually wait for fSendTimeout on the socket\r\n       inc(fRetryCount);\r\n-      events := fSock.WaitFor(TimeOut, [neWrite, neError]); // select() or poll()\r\n+      remaining := MaxPtrInt(0, endtix - mormot.core.os.GetTickCount64);\r\n+      events := fSock.WaitFor(remaining, [neWrite, neError]); // select/poll\r\n       res := nrUnknownError;\r\n       if neError in events then\r\n         break\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0f8d2fcd8164124f35fa1d8d78c9ab00b34a1c73",
+      "short_sha": "0f8d2fcd",
+      "subject": "net: rewritten TCrtSocket.TrySockRecv timeout logic",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:34:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0f8d2fcd8164124f35fa1d8d78c9ab00b34a1c73",
+      "parents": [
+        "057aff5618db2be7337e8a643f5f05c4705aec59"
+      ],
+      "stats": {
+        "additions": 15,
+        "deletions": 13,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17403\n+17404",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17403'\r\n+'2.4.17404'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 11,
+          "patch": "@@ -8207,10 +8207,11 @@ function TCrtSocket.SockReceiveStringAppend(var Buffer: RawByteString;\n function TCrtSocket.TrySockRecv(Buffer: pointer; var Length: integer;\r\n   StopBeforeLength: boolean; NetResult: PNetResult; RawError: PNetErrorInt): boolean;\r\n var\r\n-  expected, read, pending, timeout: integer;\r\n+  expected, read, pending: integer; // not PtrInt\r\n   events: TNetEvents;\r\n   res: TNetResult;\r\n-  endtix, remaining: Int64;\r\n+  endtix: Int64;\r\n+  remaining: PtrInt;\r\n begin\r\n   if RawError <> nil then\r\n     RawError^ := NO_ERROR;\r\n@@ -8222,14 +8223,15 @@ function TCrtSocket.TrySockRecv(Buffer: pointer; var Length: integer;\n   begin\r\n     expected := Length;\r\n     Length := 0;\r\n-    timeout := GetReceiveTimeout;\r\n-    if fSocketConnecting then\r\n-      timeout := GetConnectTimeout;\r\n     repeat\r\n-      // first check for any available data\r\n+      // fReceiveTimeout is for each Recv() call, not for the whole buffer\r\n+      if fSockInPending in fFlags then\r\n+        endtix := 0                    // force WaitFor(0) below\r\n+      else\r\n+        endtix := mormot.core.os.GetTickCount64 + fReceiveTimeout;\r\n+      // first check for any available data in the OS buffers\r\n       // - some may be available at fSecure/TLS level, but not from fSock/TCP\r\n       // - a blocking Recv() may itself wait up to SO_RCVTIMEO = ReceiveTimeout\r\n-      endtix := mormot.core.os.GetTickCount64 + timeout;\r\n       read := MinPtrInt(CrtSocketSendRecvMaxBytes, expected - Length);\r\n       if fSecure <> nil then\r\n         res := fSecure.Receive(Buffer, read)\r\n@@ -8274,10 +8276,10 @@ function TCrtSocket.TrySockRecv(Buffer: pointer; var Length: integer;\n         continue; // data is already available: no need to wait\r\n       if GetAborted then\r\n         break;\r\n-      remaining := endtix - mormot.core.os.GetTickCount64;\r\n-      if remaining < 0 then\r\n-        remaining := 0;\r\n-      events := fSock.WaitFor(remaining, [neRead, neError], RawError); // select/poll\r\n+      remaining := 0;\r\n+      if endtix <> 0 then\r\n+        remaining := endtix - mormot.core.os.GetTickCount64;\r\n+      events := fSock.WaitFor(MaxPtrInt(0, remaining), [neRead, neError], RawError);\r\n       if neError in events then\r\n       begin\r\n         res := nrUnknownError;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "057aff5618db2be7337e8a643f5f05c4705aec59",
+      "short_sha": "057aff56",
+      "subject": "net: fixed TCrtSocket.SockInPending from InputSock()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:33:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/057aff5618db2be7337e8a643f5f05c4705aec59",
+      "parents": [
+        "881d1c4e1b7af39ed45450230d5c7815de732952"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 9,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17402\n+17403",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17402'\r\n+'2.4.17403'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 7,
+          "patch": "@@ -2071,6 +2071,7 @@   TCrtSocketClass = class of TCrtSocket;\n     fWasBind,\r\n     fBodyRetrieved,\r\n     fServerTlsEnabled,\r\n+    fSockInPending,\r\n     fProxyConnect,\r\n     fProxyHttp);\r\n \r\n@@ -7780,8 +7781,8 @@ function TCrtSocket.SockInRead(Content: PAnsiChar; Length: PtrInt;\n         exit; // we got everything we wanted\r\n       if not UseOnlySockIn then\r\n         break;\r\n-      if GetReceiveTimeout = 0 then\r\n-        SleepHiRes(0); // don't burn 100% of CPU\r\n+      if fSockInPending in fFlags then // no wait from SockInPending()\r\n+        SleepHiRes(0);                 // don't burn 100% of CPU\r\n       DoInputSock(r, 'SockInRead', {notvoid=}false);\r\n     until GetAborted;\r\n   // direct receiving of the remaining bytes from socket\r\n@@ -7802,8 +7803,6 @@ function TCrtSocket.SockInRead(Length: integer; UseOnlySockIn: boolean): RawByte\n end;\r\n \r\n function TCrtSocket.SockInPending(aTimeOutMS: integer): integer;\r\n-var\r\n-  backup: PtrInt;\r\n begin\r\n   // first try in SockIn^.Buffer\r\n   result := 0;\r\n@@ -7819,8 +7818,7 @@ function TCrtSocket.SockInPending(aTimeOutMS: integer): integer;\n     cspDataAvailableOnClosedSocket:\r\n       if SockIn <> nil then\r\n       begin\r\n-        backup := fSocketReceiveTimeout;\r\n-        fSocketReceiveTimeout := -1; // suppress the retry wait, not SO_RCVTIMEO\r\n+        include(fFlags, fSockInPending); // no retry wait, but keep SO_RCVTIMEO\r\n         try\r\n           // call InputSock() to actually retrieve any pending data\r\n           if InputSock(PTextRec(SockIn)^) = NO_ERROR then\r\n@@ -7829,7 +7827,7 @@ function TCrtSocket.SockInPending(aTimeOutMS: integer): integer;\n           else\r\n             result := -1; // indicates broken socket\r\n         finally\r\n-          fSocketReceiveTimeout := backup;\r\n+          exclude(fFlags, fSockInPending);\r\n         end;\r\n       end\r\n       else\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "881d1c4e1b7af39ed45450230d5c7815de732952",
+      "short_sha": "881d1c4e",
+      "subject": "net: fixed THttpClientWebSockets with new timeouts",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:32:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/881d1c4e1b7af39ed45450230d5c7815de732952",
+      "parents": [
+        "7f8a625b2061b733a2e55ee2d196c864ff1272d9"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17401\n+17402",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17401'\r\n+'2.4.17402'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ws.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -540,7 +540,7 @@ procedure TWebSocketProcessClientThread.DoExecute;\n \r\n constructor THttpClientWebSockets.Create(aTimeOut: integer);\r\n begin\r\n-  inherited Create(aTimeOut);\r\n+  DoCreate(aTimeOut);\r\n   fSettings.SetDefaults;\r\n   fSettings.CallbackAnswerTimeOutMS := aTimeOut;\r\n end;\r\n@@ -662,7 +662,7 @@ function THttpClientWebSockets.Request(const url, method: RawUtf8;\n procedure THttpClientWebSockets.SetReceiveTimeout(aReceiveTimeout: integer);\r\n begin\r\n   inherited SetReceiveTimeout(aReceiveTimeout);\r\n-  fSettings.CallbackAnswerTimeOutMS := aReceiveTimeout;\r\n+  fSettings.CallbackAnswerTimeOutMS := fReceiveTimeout;\r\n end;\r\n \r\n function THttpClientWebSockets.Settings: PWebSocketProcessSettings;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ws.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7f8a625b2061b733a2e55ee2d196c864ff1272d9",
+      "short_sha": "7f8a625b",
+      "subject": "net: rewritten TCrtSocket timeouts implementation",
+      "body": "- yesterday's code was bloated and buggy",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:32:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7f8a625b2061b733a2e55ee2d196c864ff1272d9",
+      "parents": [
+        "3d81851d1f68c61430c73f5f52234fd1ff2553c6"
+      ],
+      "stats": {
+        "additions": 114,
+        "deletions": 155,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17400\n+17401",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17400'\r\n+'2.4.17401'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 112,
+          "deletions": 153,
+          "patch": "@@ -2097,9 +2097,8 @@   TCrtSocket = class\n     fFlags: TCrtSocketFlags;\r\n     fSocketLayer: TNetLayer;\r\n     fSocketFamily: TNetFamily;\r\n-    fSocketConnecting: boolean; // emulate a global TimeOut\r\n-    fTimeOut: integer; // legacy timeout, kept for existing descendants\r\n-    fSocketConnectTimeout, fSocketSendTimeout, fSocketReceiveTimeout: integer;\r\n+    fConnectTimeout, fSendTimeout, fReceiveTimeout: integer;\r\n+    fSendTimeoutCurrent, fReceiveTimeoutCurrent: integer; // last setsockopt()\r\n     fSockIn: PTextFile;    // allocated by CreateSockIn with its own buffer\r\n     fSndBufLen: PtrInt;    // updated by every SockSend() call\r\n     fSndBuf: RawByteString;\r\n@@ -2117,11 +2116,10 @@   TCrtSocket = class\n     procedure DoOpenTunnel(aTls: boolean);\r\n     procedure SetKeepAlive(aSeconds: integer); virtual;\r\n     procedure SetLinger(aLinger: integer); virtual;\r\n-    function GetConnectTimeout: integer; {$ifdef HASINLINE}inline;{$endif}\r\n-    function GetSendTimeout: integer;    {$ifdef HASINLINE}inline;{$endif}\r\n-    function GetReceiveTimeout: integer; {$ifdef HASINLINE}inline;{$endif}\r\n-    procedure SetReceiveTimeout(aReceiveTimeout: integer); virtual;\r\n-    procedure SetSendTimeout(aSendTimeout: integer); virtual;\r\n+    procedure SetReceiveTimeout(Value: integer); virtual;\r\n+    procedure SetSendTimeout(Value: integer); virtual;\r\n+    procedure SetLegacyTimeOut(Value: integer);\r\n+    procedure ApplySocketTimeouts;\r\n     procedure SetTcpNoDelay(aTcpNoDelay: boolean); virtual;\r\n     function GetAborted: boolean; virtual;\r\n     function EnsureSockSend(Len: PtrInt): PUtf8Char;\r\n@@ -2145,10 +2143,8 @@   TCrtSocket = class\n     // (e.g. TLS, Tunnel, THttpClientWebSockets.Settings) then call ConnectUri()\r\n     // - see also Open/OpenUri/Bind other constructors\r\n     constructor Create(aTimeOut: integer = 10000); reintroduce; virtual;\r\n-    /// set distinct connection, send and receive timeouts in milliseconds\r\n-    // - negative values use the legacy TimeOut value, including its 0 behavior\r\n-    // - can be called before opening the socket; TimeOut remains unchanged\r\n-    procedure SetTimeouts(aConnectTimeout, aSendTimeout, aReceiveTimeout: integer);\r\n+    /// copy the timeouts of another TCrtSocket instance\r\n+    procedure SetTimeoutsFrom(aSock: TCrtSocket);\r\n     /// constructor to create a client connection to aServer:aPort\r\n     // - see also SocketOpen() for a wrapper catching any connection exception\r\n     // - aTunnel could be populated by mormot.net.client GetSystemProxyUri()\r\n@@ -2198,7 +2194,7 @@   TCrtSocket = class\n     // - could be used to reestablish a broken or closed connection\r\n     // - return '' on success, or an error message on failure\r\n     // - could be overriden to customize the process\r\n-    function ReOpen(aTimeout: cardinal = 10000): string; virtual;\r\n+    function ReOpen: string; virtual;\r\n     /// initialize the instance with the supplied accepted socket\r\n     // - is called from a bound TCP Server, just after Accept()\r\n     procedure AcceptRequest(aClientSock: TNetSocket; aClientAddr: PNetAddr);\r\n@@ -2412,17 +2408,17 @@   TCrtSocket = class\n     // - applies to TCP connect and proxy/TLS setup I/O, not a total deadline\r\n     // - defaults to TimeOut; negative values restore this default\r\n     property ConnectTimeout: integer\r\n-      read GetConnectTimeout write fSocketConnectTimeout;\r\n+      read fConnectTimeout write fConnectTimeout;\r\n     /// send timeout in milliseconds for blocking calls and socket retry waits\r\n     // - defaults to TimeOut; negative values restore this default\r\n     // - see http://msdn.microsoft.com/en-us/library/windows/desktop/ms740476\r\n     property SendTimeout: integer\r\n-      read GetSendTimeout write SetSendTimeout;\r\n+      read fSendTimeout write SetSendTimeout;\r\n     /// receive timeout in milliseconds for blocking calls and socket retry waits\r\n     // - defaults to TimeOut; negative values restore this default\r\n     // - see http://msdn.microsoft.com/en-us/library/wind\n... [truncated, 13251 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3d81851d1f68c61430c73f5f52234fd1ff2553c6",
+      "short_sha": "3d81851d",
+      "subject": "net: fixed THttpClientSocket timeouts usage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:28:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3d81851d1f68c61430c73f5f52234fd1ff2553c6",
+      "parents": [
+        "8fc28980a6998730efd83ae990e69dc73b9b33f0"
+      ],
+      "stats": {
+        "additions": 42,
+        "deletions": 45,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17399\n+17400",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17399'\r\n+'2.4.17400'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 43,
+          "patch": "@@ -428,15 +428,12 @@   THttpRequestExtendedOptions = record\n     SendTimeoutMS: integer;\r\n     /// receive timeout in milliseconds, with the same fallback as ConnectTimeoutMS\r\n     ReceiveTimeoutMS: integer;\r\n-    /// resolve positive phase overrides over CreateTimeoutMS\r\n-    // - if CreateTimeoutMS is 0, use aDefaultTimeout (0 leaves backend defaults)\r\n-    // - socket clients pass their common default; native clients leave 0\r\n-    procedure GetTimeouts(out aConnectTimeout, aSendTimeout, aReceiveTimeout: integer;\r\n-      aDefaultTimeout: integer = 0);\r\n     /// may be used to initialize this record on stack with zeroed values\r\n     procedure Init;\r\n     /// may be used to initialize this record on stack with HTTP client values\r\n     procedure InitDefault;\r\n+    /// use CreateTimeoutMS to compute missing Connect/Send/ReceiveTimeoutMS\r\n+    procedure ComputeTimeouts;\r\n     /// reset this record, calling FillZero() on Password/Token SpiUtf8 values\r\n     procedure Clear;\r\n     /// setup web authentication using the Basic access algorithm\r\n@@ -3832,7 +3829,7 @@ constructor THttpClientSocket.OpenUri(const aUri: TUri; const aUriFull,\n   if not (aUri.UriScheme in [usHttp .. usUdp]) and\r\n      NetClientProtocols.FindAndCopy(aUri.Scheme, fOnProtocolRequest) then\r\n   begin\r\n-    Create(aTimeOut); // no socket involved - but keep Request() logic\r\n+    DoCreate(aTimeOut); // no socket involved - but keep Request() logic\r\n     fOpenUriFull := aUriFull;  // e.g. to call PatchCreateFromUrl() WinAPI\r\n   end\r\n   else\r\n@@ -3851,19 +3848,18 @@ procedure THttpClientSocket.DoOpenOptions(const aUri: TUri;\n var\r\n   temp: TUri;\r\n   pu: PUri;\r\n-  connect, send, receive: integer;\r\n begin\r\n   // setup the proper options before any connection\r\n   fExtendedOptions := aOptions;\r\n   DoCreate(fExtendedOptions.CreateTimeoutMS);\r\n   if aClient <> nil then\r\n-    SetTimeouts(aClient.ConnectTimeout, aClient.SendTimeout, aClient.ReceiveTimeout)\r\n-  else if (fExtendedOptions.ConnectTimeoutMS > 0) or\r\n-          (fExtendedOptions.SendTimeoutMS > 0) or\r\n-          (fExtendedOptions.ReceiveTimeoutMS > 0) then\r\n+    SetTimeoutsFrom(aClient)\r\n+  else\r\n   begin\r\n-    fExtendedOptions.GetTimeouts(connect, send, receive, TimeOut);\r\n-    SetTimeouts(connect, send, receive); // before proxy/TLS connection setup\r\n+    fExtendedOptions.ComputeTimeouts;\r\n+    fConnectTimeout := fExtendedOptions.ConnectTimeoutMS;\r\n+    fReceiveTimeout := fExtendedOptions.ReceiveTimeoutMS;\r\n+    fSendTimeout    := fExtendedOptions.SendTimeoutMS;\r\n   end;\r\n   if Assigned(aOnLog) then\r\n     OnLog := aOnLog; // allow to debug ASAP\r\n@@ -3905,16 +3901,11 @@ function THttpClientSocket.SameOpenOptions(const aUri: TUri;\n   const aOptions: THttpRequestExtendedOptions): boolean;\r\n var\r\n   tun: TUri;\r\n-  connect, send, receive: integer;\r\n-begin\r\n-  aOptions.GetTimeouts(connect, send, receive, HTTP_DEFAULT_RECEIVETIMEOUT);\r\n+begin // timeouts are not checked here because they don't need a reconnection\r\n   result := (aUri.UriScheme in HTTP_SCHEME) and\r\n             aUri.Same(Server, Port, ServerTls) and\r\n             SameNetTlsContext(TLS, aOptions.TLS) and\r\n-            fExtendedOptions.SameAuth(@aOptions.Auth) and\r\n-            (ConnectTimeout = connect) and\r\n-            (SendTimeout = send) and\r\n-            (ReceiveTimeout = receive);\r\n+            fExtendedOptions.SameAuth(@aOptions.Auth);\r\n   if result then\r\n     if tun.From(aOptions.Proxy) then\r\n       result := tun.Same(Tunnel.Server, Tunnel.Port, Tunnel.Https)\r\n@@ -4457,9 +4448,11 @@ function THttpClientSocket.Request(const url, method: RawUtf8;\n          (hfConnectionClose in Http.HeaderFlags) or\r\n          (hroForceReconnect in ctxt.RedirectOptions) then\r\n       begin\r\n-        Close; // relocated to another server -> reset the TCP connection\r\n         try\r\n+          // relocated to another server -> reset the TCP connection\r\n+          Close;\r\n           AppendLine(fRequestContext, ['ReOpen ', newuri.URI]);\r\n+          // will properly use the\n... [truncated, 2631 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8fc28980a6998730efd83ae990e69dc73b9b33f0",
+      "short_sha": "8fc28980",
+      "subject": "net: fixed TBasicAuthServerKerberos on Windows",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-06T10:25:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8fc28980a6998730efd83ae990e69dc73b9b33f0",
+      "parents": [
+        "fd5b34092fe67ef9564532c028ae2e2e45ff4e84"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17398\n+17399",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17398'\r\n+'2.4.17399'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -8529,13 +8529,14 @@ function TBasicAuthServerKerberos.KerberosAsk(const aUser: RawUtf8;\n   InvalidateSecContext(client);\r\n   try\r\n     try\r\n-      if (aFullUserName = nil)\r\n-         {$ifdef OSWINDOWS} and (fGroupSid = nil) {$endif} then\r\n+      {$ifdef OSPOSIX} // this 'onlypass' single pass trick is GSSAPI only\r\n+      if aFullUserName = nil then\r\n         // simple aUser/aPassword credential check needs no server side\r\n         // - see as reference mag_auth_basic() in NGINX's mod_auth_gssapi.c\r\n         result := ClientSspiAuthWithPassword(client, 'onlypass',\r\n                     aUser, aPassword, fKerberosSpn, dataout)\r\n       else\r\n+      {$endif OSPOSIX}\r\n       begin\r\n         // more user information currently requires a ServerSspiAuth() context\r\n         InvalidateSecContext(server);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -7861,7 +7861,7 @@ function TCrtSocket.SockInPending(aTimeOutMS: integer): integer;\n       if SockIn <> nil then\r\n       begin\r\n         backup := fSocketReceiveTimeout;\r\n-        fSocketReceiveTimeout := 0; // only suppress the retry wait, not SO_RCVTIMEO\r\n+        fSocketReceiveTimeout := -1; // suppress the retry wait, not SO_RCVTIMEO\r\n         try\r\n           // call InputSock() to actually retrieve any pending data\r\n           if InputSock(PTextRec(SockIn)^) = NO_ERROR then\r\n@@ -8272,7 +8272,7 @@ function TCrtSocket.TrySockRecv(Buffer: pointer; var Length: integer;\n       // first check for any available data\r\n       // - some may be available at fSecure/TLS level, but not from fSock/TCP\r\n       // - a blocking Recv() may itself wait up to SO_RCVTIMEO = ReceiveTimeout\r\n-      endtix := mormot.core.os.GetTickCount64 + TimeOut;\r\n+      endtix := mormot.core.os.GetTickCount64 + timeout;\r\n       read := MinPtrInt(CrtSocketSendRecvMaxBytes, expected - Length);\r\n       if fSecure <> nil then\r\n         res := fSecure.Receive(Buffer, read)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.ldap",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
