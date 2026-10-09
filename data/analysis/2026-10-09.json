@@ -1,0 +1,1274 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-09",
+  "edition_title": {
+    "en": "FPC ARM atomics regain ordering as HTTP.sys WebSockets are rebuilt",
+    "fr": "Les atomiques FPC ARM retrouvent leur ordre pendant la refonte des WebSockets HTTP.sys",
+    "zh": "FPC ARM 原子操作恢复内存顺序，HTTP.sys WebSocket 完成重构",
+    "ru": "Атомики FPC ARM получают порядок памяти, HTTP.sys WebSockets перестраиваются"
+  },
+  "intro": {
+    "en": "This edition repairs missing memory barriers in mORMot locks on FPC ARM and AArch64, where protected data could still race despite the lock word. On Windows, HTTP.sys request and WebSocket handling is extensively rebuilt, then stabilized across connection lifetime, overlapped I/O, sending, shutdown and ping paths. Direct users of low-level HTTP.sys wrappers and THttpApiWebSocketServerProtocol connection indexes have source migrations.",
+    "fr": "Cette édition répare les barrières mémoire absentes des verrous mORMot sous FPC ARM et AArch64, où les données protégées pouvaient encore subir des courses malgré le mot de verrouillage. Sous Windows, la gestion des requêtes et WebSockets HTTP.sys est largement refondue puis stabilisée sur le cycle de vie, les E/S overlapped, l’envoi, l’arrêt et le ping. Les utilisateurs directs des wrappers HTTP.sys bas niveau et des index de connexion THttpApiWebSocketServerProtocol doivent migrer leur code.",
+    "zh": "本期修复了 FPC ARM 与 AArch64 上 mORMot 锁缺失内存屏障的问题；此前即使锁字互斥，受保护数据仍可能发生竞态。Windows 的 HTTP.sys 请求与 WebSocket 处理被大幅重构，并连续修复连接生命周期、overlapped I/O、发送、关闭与 ping 路径。直接使用低层 HTTP.sys wrapper 或 THttpApiWebSocketServerProtocol 连接索引的代码需要迁移。",
+    "ru": "В выпуске исправлены отсутствующие барьеры памяти в блокировках mORMot для FPC ARM и AArch64: защищённые данные могли конфликтовать, хотя слово блокировки оставалось взаимно исключающим. В Windows обработка запросов и WebSocket в HTTP.sys существенно переписана и затем стабилизирована для жизненного цикла соединений, overlapped I/O, отправки, завершения и ping. Прямым пользователям низкоуровневых HTTP.sys wrappers и индексов соединений THttpApiWebSocketServerProtocol нужна миграция исходников."
+  },
+  "risk_level": "act-now",
+  "tldr": {
+    "en": [
+      "FPC ARM and AArch64 lock operations now impose full memory barriers; prior code could lose updates or corrupt shared state.",
+      "The HTTP.sys request engine now handles chunked unlimited bodies, disconnects unread-body failures and isolates per-request state.",
+      "HTTP.sys WebSocket connection management now uses TLockedList IDs, distinct receive/wake overlapped records and guarded shutdown.",
+      "THttpServerRequest.FullUrl is now RawUtf8, HttpApiRequest is removed, and several low-level HTTP.sys signatures changed.",
+      "optCleanMagicJson can strip JSON_BASE64_MAGIC from SOA responses; SetErrorText, HtmlEscapeShortVar and TLockedList.Find are new.",
+      "Land on build 2.4.17497; do not stop on the HTTP.sys transition builds 2.4.17464 through 2.4.17496."
+    ],
+    "fr": [
+      "Les verrous FPC ARM et AArch64 appliquent désormais des barrières mémoire complètes ; l’ancien code pouvait perdre des mises à jour ou corrompre l’état partagé.",
+      "Le moteur HTTP.sys traite les corps chunked sans limite, déconnecte les échecs laissant un corps non lu et isole l’état par requête.",
+      "Les connexions WebSocket HTTP.sys utilisent maintenant des ID TLockedList, des structures overlapped séparées pour lecture/réveil et un arrêt protégé.",
+      "THttpServerRequest.FullUrl devient RawUtf8, HttpApiRequest est supprimé et plusieurs signatures HTTP.sys bas niveau changent.",
+      "optCleanMagicJson peut retirer JSON_BASE64_MAGIC des réponses SOA ; SetErrorText, HtmlEscapeShortVar et TLockedList.Find sont nouveaux.",
+      "Adoptez le build 2.4.17497 ; ne restez pas sur les builds de transition HTTP.sys 2.4.17464 à 2.4.17496."
+    ],
+    "zh": [
+      "FPC ARM 与 AArch64 锁操作现在提供完整内存屏障；旧实现可能丢失更新或破坏共享状态。",
+      "HTTP.sys 请求引擎现在正确处理无限制的 chunked body，会断开留下未读 body 的失败连接，并隔离每个请求的状态。",
+      "HTTP.sys WebSocket 连接管理改用 TLockedList ID、独立的接收/唤醒 overlapped 记录和受保护的关闭流程。",
+      "THttpServerRequest.FullUrl 现为 RawUtf8，HttpApiRequest 已移除，多项低层 HTTP.sys 签名也已改变。",
+      "optCleanMagicJson 可从 SOA 响应移除 JSON_BASE64_MAGIC；新增 SetErrorText、HtmlEscapeShortVar 与 TLockedList.Find。",
+      "请落到 build 2.4.17497，不要停留在 HTTP.sys 过渡版本 2.4.17464–2.4.17496。"
+    ],
+    "ru": [
+      "Операции блокировок FPC ARM и AArch64 теперь задают полные барьеры памяти; прежний код мог терять обновления или повреждать общее состояние.",
+      "Движок HTTP.sys правильно принимает unlimited chunked bodies, разрывает соединения с непрочитанным телом после ошибки и изолирует состояние каждого запроса.",
+      "Управление HTTP.sys WebSocket теперь использует ID TLockedList, отдельные overlapped-записи чтения/пробуждения и защищённое завершение.",
+      "THttpServerRequest.FullUrl теперь RawUtf8, HttpApiRequest удалён, а несколько низкоуровневых HTTP.sys signatures изменены.",
+      "optCleanMagicJson удаляет JSON_BASE64_MAGIC из SOA-ответов; добавлены SetErrorText, HtmlEscapeShortVar и TLockedList.Find.",
+      "Переходите на build 2.4.17497; не оставайтесь на переходных HTTP.sys builds 2.4.17464–2.4.17496."
+    ]
+  },
+  "upgrade_advice": {
+    "en": "Land on final build 2.4.17497. FPC ARM/ARM64 deployments should upgrade for the memory-ordering repair and stress-test locks, thread pools and timers. Windows HTTP.sys/WebSocket deployments should avoid builds 2.4.17464–2.4.17496, migrate changed public symbols, then test chunked uploads, upgrades, concurrent send/close, client disconnects, shutdown and ping timeouts.",
+    "fr": "Adoptez le build final 2.4.17497. Les déploiements FPC ARM/ARM64 doivent mettre à niveau pour la correction d’ordre mémoire et tester sous charge verrous, pools de threads et timers. Les déploiements Windows HTTP.sys/WebSocket doivent éviter les builds 2.4.17464–2.4.17496, migrer les symboles publics modifiés, puis tester uploads chunked, upgrades, send/close concurrents, déconnexions, arrêt et timeouts de ping.",
+    "zh": "请采用最终 build 2.4.17497。FPC ARM/ARM64 部署应升级以获得内存顺序修复，并压力测试锁、线程池与定时器。Windows HTTP.sys/WebSocket 部署应避开 2.4.17464–2.4.17496，迁移已变化的公共符号，再测试 chunked 上传、upgrade、并发 send/close、客户端断开、关闭与 ping 超时。",
+    "ru": "Переходите на финальный build 2.4.17497. Развёртывания FPC ARM/ARM64 должны обновиться ради исправления порядка памяти и нагрузочно проверить locks, thread pools и timers. Для Windows HTTP.sys/WebSocket избегайте builds 2.4.17464–2.4.17496, перенесите изменённые публичные символы и проверьте chunked uploads, upgrades, конкурентные send/close, отключения, shutdown и ping timeouts."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "FPC ARM locks gain full memory ordering",
+        "fr": "Les verrous FPC ARM gagnent un ordre mémoire complet",
+        "zh": "FPC ARM 锁获得完整内存顺序",
+        "ru": "Блокировки FPC ARM получают полный порядок памяти"
+      },
+      "summary": {
+        "en": "Two commits add barrier-aware atomic wrappers for FPC non-Intel targets, including custom AArch64 paths, and route mORMot lock, async-count and reference-count operations through them. The change addresses observed lost work and heap corruption.",
+        "fr": "Deux commits ajoutent des wrappers atomiques avec barrières pour les cibles FPC non-Intel, dont des chemins AArch64 dédiés, puis y font passer verrous mORMot, compteurs async et références. La modification corrige des pertes de travail et corruptions de heap observées.",
+        "zh": "两个提交为 FPC 非 Intel 目标加入带屏障的原子 wrapper（含专用 AArch64 路径），并让 mORMot 锁、异步计数与引用计数使用它们，修复已观察到的工作丢失与 heap 损坏。",
+        "ru": "Два коммита добавляют атомарные wrappers с барьерами для FPC non-Intel, включая собственные пути AArch64, и переводят на них locks, async-счётчики и reference counts mORMot. Исправляются наблюдавшиеся потери работы и повреждение heap."
+      },
+      "shas": [
+        "b2b195da1e0580058672a88620ef71bb47283eb1",
+        "c1a131a8fd3f99346ef0d96975a5c1e3ea7e595c"
+      ]
+    },
+    {
+      "title": {
+        "en": "HTTP.sys request handling is rebuilt",
+        "fr": "La gestion des requêtes HTTP.sys est reconstruite",
+        "zh": "HTTP.sys 请求处理完成重构",
+        "ru": "Обработка запросов HTTP.sys перестроена"
+      },
+      "summary": {
+        "en": "Chunked-body limits, forced disconnects and error paths are corrected before the monolithic request procedure is split into per-request state. The sequence also hardens decompression and changes several public low-level wrapper signatures.",
+        "fr": "Les limites de corps chunked, déconnexions forcées et chemins d’erreur sont corrigés avant la séparation de la procédure monolithique en état par requête. La série durcit aussi la décompression et modifie plusieurs signatures publiques bas niveau.",
+        "zh": "该系列先修复 chunked body 限制、强制断开与错误路径，再把单体请求过程拆成每请求状态；同时强化解压并修改多项公共低层 wrapper 签名。",
+        "ru": "Исправлены лимиты chunked body, принудительные разрывы и error paths, затем монолитная процедура разделена на состояние каждого запроса. Также усилена распаковка и изменены несколько публичных низкоуровневых signatures."
+      },
+      "shas": [
+        "7b05e490e1699867fde395cd8f7f76cb1103cbe2",
+        "6a2970d5730b4996348a3f07c8d26f12f6100ca2",
+        "3b4da68d8b3b94f7854cda1d7a1788e5f69d636e",
+        "f1ec718b30182374b3f7e73d2d154c39404613a5",
+        "9c1491531bbbe6e160a90acab7458b3dd4758ddf",
+        "5adc88f8842dfda00f78f90ee7befab25ae82c76",
+        "6dfbaf341613f655992fe679c3373458d7dbd8c5"
+      ]
+    },
+    {
+      "title": {
+        "en": "HTTP.sys WebSockets settle on ID-based connections",
+        "fr": "Les WebSockets HTTP.sys adoptent des connexions par ID",
+        "zh": "HTTP.sys WebSocket 稳定为基于 ID 的连接",
+        "ru": "HTTP.sys WebSockets переходят на соединения по ID"
+      },
+      "summary": {
+        "en": "A long repair series replaces shared request state, corrects websocket.dll completion semantics, rebuilds connection storage on TLockedList IDs and separates receive from wake overlapped I/O. Follow-ups repair failed upgrades, short writes, receive completion, close echoes and ping failures.",
+        "fr": "Une longue série remplace l’état partagé, corrige la sémantique de completion de websocket.dll, reconstruit le stockage sur des ID TLockedList et sépare les E/S overlapped de lecture et réveil. Les suites réparent upgrades échoués, écritures courtes, fin de lecture, echo de close et échecs de ping.",
+        "zh": "一系列修复移除共享请求状态，纠正 websocket.dll completion 语义，使用 TLockedList ID 重建连接存储，并分离接收与唤醒 overlapped I/O；后续又修复 upgrade 失败、短写、接收完成、close 回应和 ping 失败。",
+        "ru": "Длинная серия устраняет общее состояние запросов, исправляет семантику completion websocket.dll, строит хранилище на ID TLockedList и разделяет overlapped I/O чтения и пробуждения. Последующие коммиты чинят неудачные upgrades, short writes, завершение чтения, echo close и ошибки ping."
+      },
+      "shas": [
+        "c852c8cfb474808417f1debfd60c09862de6baf6",
+        "6f0344bf903412a780d0eccf0de1cd52180a119b",
+        "4730c107022acd5aeebf78f0cd43908016eb769f",
+        "c9bcf0ea427e4efd55cb70fdd32a1c3e4f7fc037",
+        "91f43c695987d9008a891b82e079dc362ddf4d6c",
+        "1ff6986c7a3f15fe0b904f975fa0369aebbadb2e",
+        "22a415129e50f9f94565920bc3c02cc8fafa8dc0",
+        "3383af99cfd34ab2f3ba9f13d034d8993f2b1a9c",
+        "4824b5db5e53fafb4122fbe96d1c5311e6c6fa82",
+        "8bcdf7e79c30daedc289711851577ccf8f4ee693",
+        "97ab4cc46cfba5c82556ecc3b71c771638028f72",
+        "e795d9656311ae127edaa4361f4f91a41ffba7ac",
+        "072bba0e85e70728d4f1eacbd96baca6aa225561",
+        "21b62bc88737336d9a1928a748d5f0e6a2f319a7"
+      ]
+    },
+    {
+      "title": {
+        "en": "SOA output and core helpers expand",
+        "fr": "La sortie SOA et les helpers core s’étendent",
+        "zh": "SOA 输出与核心 helper 扩展",
+        "ru": "SOA-вывод и core helpers расширены"
+      },
+      "summary": {
+        "en": "SOA methods can request removal of JSON_BASE64_MAGIC, while the JSON scanner is rewritten for copy-on-write performance. New SetErrorText, HtmlEscapeShortVar and TLockedList.Find helpers expose reusable operations.",
+        "fr": "Les méthodes SOA peuvent demander le retrait de JSON_BASE64_MAGIC, tandis que le scanner JSON est réécrit pour les performances copy-on-write. Les nouveaux helpers SetErrorText, HtmlEscapeShortVar et TLockedList.Find exposent des opérations réutilisables.",
+        "zh": "SOA 方法可请求移除 JSON_BASE64_MAGIC，JSON 扫描器也为 copy-on-write 性能重写；新增 SetErrorText、HtmlEscapeShortVar 与 TLockedList.Find 可复用 helper。",
+        "ru": "SOA-методы могут удалять JSON_BASE64_MAGIC, а JSON-сканер переписан для производительности copy-on-write. Новые SetErrorText, HtmlEscapeShortVar и TLockedList.Find предоставляют переиспользуемые операции."
+      },
+      "shas": [
+        "2ff79bbd1b9699ccf66467dffbec97436df0dd65",
+        "367cdf5a12ccb8540c54acd992da128e56d55469",
+        "f47c802c1e6e798e6b28d1e321257610b350e165",
+        "5ec9601be914cea053c78029f50fb50d485c7680",
+        "4824b5db5e53fafb4122fbe96d1c5311e6c6fa82"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "21b62bc88737336d9a1928a748d5f0e6a2f319a7",
+      "headline": {
+        "en": "Ping failures no longer kill the WebSocket guard",
+        "fr": "Les échecs de ping n’arrêtent plus le guard WebSocket",
+        "zh": "ping 失败不再终止 WebSocket guard",
+        "ru": "Ошибки ping больше не завершают WebSocket guard"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpApiWebSocketConnection.CheckIsActive now ignores inactive states, closes expired peers before pinging again, and catches Ping exceptions to close only the affected connection.",
+        "fr": "THttpApiWebSocketConnection.CheckIsActive ignore désormais les états inactifs, ferme les peers expirés avant un nouveau ping et intercepte les exceptions Ping pour ne fermer que la connexion concernée.",
+        "zh": "THttpApiWebSocketConnection.CheckIsActive 现在忽略非活动状态，在再次 ping 前关闭超时 peer，并捕获 Ping 异常，仅关闭受影响连接。",
+        "ru": "THttpApiWebSocketConnection.CheckIsActive теперь игнорирует неактивные состояния, закрывает просроченные peers до нового ping и перехватывает исключения Ping, закрывая только затронутое соединение."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys WebSocket services retain their guard thread when a ping fails and avoid pinging connections already closing. Delphi and FPC application APIs are unchanged.",
+        "fr": "Les services WebSocket HTTP.sys Windows conservent leur thread guard après un échec de ping et ne pingent plus les connexions en fermeture. Les API applicatives Delphi et FPC ne changent pas.",
+        "zh": "Windows HTTP.sys WebSocket 服务在 ping 失败时会保留 guard 线程，也不会 ping 已在关闭的连接。Delphi/FPC 应用 API 不变。",
+        "ru": "Сервисы Windows HTTP.sys WebSocket сохраняют guard thread при ошибке ping и не пингуют уже закрывающиеся соединения. API приложений Delphi и FPC не меняется."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Use build 2.4.17497 and exercise ping timeout and shutdown paths.",
+        "fr": "Utilisez le build 2.4.17497 et testez les chemins de timeout de ping et d’arrêt.",
+        "zh": "使用 build 2.4.17497，并测试 ping 超时与关闭路径。",
+        "ru": "Используйте build 2.4.17497 и проверьте ping timeout и shutdown."
+      }
+    },
+    {
+      "sha": "072bba0e85e70728d4f1eacbd96baca6aa225561",
+      "headline": {
+        "en": "WebSocket writes and peer-close replies take the corrected paths",
+        "fr": "Les écritures WebSocket et réponses de fermeture suivent les bons chemins",
+        "zh": "WebSocket 写入与对端关闭回应走入正确路径",
+        "ru": "Запись WebSocket и ответ на закрытие идут по правильным путям"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "WriteData now reports success only for a complete HTTP.sys entity-body write, the send loop tests failure with the correct polarity, and a client close frame receives the matching server close reply.",
+        "fr": "WriteData ne réussit que pour une écriture complète du corps HTTP.sys, la boucle d’envoi teste l’échec avec la bonne polarité et une frame close cliente reçoit la réponse close correspondante.",
+        "zh": "WriteData 仅在 HTTP.sys entity-body 完整写入时成功，发送循环以正确条件判断失败，客户端 close frame 会收到对应的服务端 close 回应。",
+        "ru": "WriteData теперь успешен только при полной записи тела HTTP.sys, цикл отправки правильно проверяет ошибку, а close frame клиента получает соответствующий ответ сервера."
+      },
+      "impact": {
+        "en": "This corrects failures introduced during the WebSocket rewrite: builds before this fix could abort successful sends or mishandle close handshakes on Windows.",
+        "fr": "Cela corrige des régressions de la refonte WebSocket : les builds antérieurs pouvaient interrompre des envois réussis ou mal gérer le handshake de fermeture sous Windows.",
+        "zh": "这修复了 WebSocket 重构期间引入的问题：此前 build 可能中止成功发送或错误处理 Windows 上的关闭握手。",
+        "ru": "Исправлены регрессии переписывания WebSocket: прежние builds могли прерывать успешную отправку или неверно обрабатывать close handshake в Windows."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Do not deploy the intermediate send-path build; use 2.4.17497 and test send plus peer close.",
+        "fr": "Ne déployez pas le build intermédiaire du chemin d’envoi ; utilisez 2.4.17497 et testez send et fermeture du peer.",
+        "zh": "不要部署中间发送路径 build；使用 2.4.17497 并测试发送与对端关闭。",
+        "ru": "Не развёртывайте промежуточный build send-path; используйте 2.4.17497 и проверьте send и закрытие peer."
+      }
+    },
+    {
+      "sha": "e795d9656311ae127edaa4361f4f91a41ffba7ac",
+      "headline": {
+        "en": "HTTP.sys entity-body receive now matches the Windows API contract",
+        "fr": "La réception du corps HTTP.sys respecte le contrat de l’API Windows",
+        "zh": "HTTP.sys body 接收现在符合 Windows API 契约",
+        "ru": "Получение тела HTTP.sys соответствует контракту Windows API"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The ReceiveRequestEntityBody declaration changes pBytesReceived from var cardinal to PCardinal. Synchronous request reads pass @bytesread, overlapped WebSocket reads pass nil, and write errors explicitly clear their byte count.",
+        "fr": "La déclaration ReceiveRequestEntityBody remplace var cardinal par PCardinal pour pBytesReceived. Les lectures synchrones passent @bytesread, les lectures overlapped WebSocket nil, et les erreurs d’écriture remettent le compte à zéro.",
+        "zh": "ReceiveRequestEntityBody 的 pBytesReceived 从 var cardinal 改为 PCardinal；同步请求传 @bytesread，overlapped WebSocket 读取传 nil，写入错误会清零字节数。",
+        "ru": "В объявлении ReceiveRequestEntityBody pBytesReceived меняется с var cardinal на PCardinal. Синхронное чтение передаёт @bytesread, overlapped WebSocket — nil, ошибки записи обнуляют счётчик."
+      },
+      "impact": {
+        "en": "The wrapper now supports the null output pointer required for overlapped I/O. Direct callers of the function-pointer field must pass an address or nil; the same commit temporarily inverted a send test, fixed next.",
+        "fr": "Le wrapper accepte désormais le pointeur de sortie nul requis pour les E/S overlapped. Les appels directs au champ fonction doivent passer une adresse ou nil ; ce même commit a temporairement inversé un test d’envoi, corrigé juste après.",
+        "zh": "wrapper 现在支持 overlapped I/O 所需的空输出指针。直接调用函数指针字段时必须传地址或 nil；同一提交暂时反转了发送判断，下一提交已修复。",
+        "ru": "Wrapper теперь поддерживает null output pointer для overlapped I/O. Прямые вызовы поля функции должны передавать адрес или nil; этот же коммит временно инвертировал send-test, исправленный следующим."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.lib.winhttp",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Update direct ReceiveRequestEntityBody calls to pass @count or nil, and land on 2.4.17497 rather than this intermediate revision.",
+        "fr": "Mettez à jour les appels directs à ReceiveRequestEntityBody avec @count ou nil, et adoptez 2.4.17497 plutôt que cette révision intermédiaire.",
+        "zh": "把直接 ReceiveRequestEntityBody 调用改为传 @count 或 nil，并落到 2.4.17497，而非此中间版本。",
+        "ru": "Обновите прямые вызовы ReceiveRequestEntityBody на @count или nil и переходите на 2.4.17497, а не на эту промежуточную ревизию."
+      },
+      "api_changes": [
+        {
+          "symbol": "THttpApiFunction.ReceiveRequestEntityBody",
+          "change": "signature-changed"
+        }
+      ]
+    },
+    {
+      "sha": "97ab4cc46cfba5c82556ecc3b71c771638028f72",
+      "headline": {
+        "en": "Failed WebSocket upgrades and receives now drain safely",
+        "fr": "Les upgrades et lectures WebSocket échoués sont désormais drainés proprement",
+        "zh": "失败的 WebSocket upgrade 与接收现在可安全清理",
+        "ru": "Неудачные WebSocket upgrades и reads теперь безопасно завершаются"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The server finalizes failed upgrades, rejects new upgrades while stopping, validates complete writes, permits only one pending receive per connection, completes failed receive actions with zero bytes and delays recycling until pending I/O is gone.",
+        "fr": "Le serveur finalise les upgrades échoués, refuse les nouveaux upgrades pendant l’arrêt, valide les écritures complètes, limite chaque connexion à une lecture en attente, termine les lectures échouées avec zéro octet et attend la fin des E/S avant recyclage.",
+        "zh": "服务器会完成失败 upgrade 的清理，在停止时拒绝新 upgrade，校验完整写入，每连接只允许一个 pending receive，以零字节完成失败接收，并等待 I/O 清空后再回收。",
+        "ru": "Сервер завершает неудачные upgrades, отвергает новые при остановке, проверяет полную запись, допускает один pending receive на соединение, завершает ошибочный receive нулём байт и ждёт окончания I/O перед recycle."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys WebSocket error and shutdown paths no longer recycle records while completions may still arrive. No new source migration is introduced.",
+        "fr": "Les chemins d’erreur et d’arrêt WebSocket HTTP.sys Windows ne recyclent plus les enregistrements tant que des completions peuvent arriver. Aucune nouvelle migration source n’est introduite.",
+        "zh": "Windows HTTP.sys WebSocket 的错误与关闭路径不再在 completion 可能到达时回收记录；未新增源码迁移。",
+        "ru": "Error и shutdown paths Windows HTTP.sys WebSocket больше не перерабатывают записи при возможных completions. Новой миграции исходников нет."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade to the final build and test failed handshake, abrupt disconnect and server shutdown under load.",
+        "fr": "Passez au build final et testez handshake échoué, déconnexion brutale et arrêt serveur sous charge.",
+        "zh": "升级到最终 build，并在负载下测试握手失败、突然断开与服务器关闭。",
+        "ru": "Обновитесь до финального build и под нагрузкой проверьте failed handshake, резкое отключение и shutdown сервера."
+      }
+    },
+    {
+      "sha": "8bcdf7e79c30daedc289711851577ccf8f4ee693",
+      "headline": {
+        "en": "HTTP.sys WebSocket connections move from indexes to stable IDs",
+        "fr": "Les connexions WebSocket HTTP.sys passent des index aux ID stables",
+        "zh": "HTTP.sys WebSocket 连接从索引迁移到稳定 ID",
+        "ru": "Соединения HTTP.sys WebSocket переходят с индексов на стабильные ID"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpApiWebSocketServerProtocol stores connections in TLockedList, gives each THttpApiWebSocketConnection an ID, and makes Send and Close accept THttpApiWebSocketConnectionID. Separate read and wake overlapped records coordinate IOCP lifecycle and shutdown.",
+        "fr": "THttpApiWebSocketServerProtocol stocke les connexions dans TLockedList, attribue un ID à chaque THttpApiWebSocketConnection et fait accepter THttpApiWebSocketConnectionID à Send et Close. Des structures overlapped lecture/réveil séparées coordonnent IOCP et arrêt.",
+        "zh": "THttpApiWebSocketServerProtocol 改用 TLockedList 存储连接，为每个 THttpApiWebSocketConnection 提供 ID，并让 Send/Close 接收 THttpApiWebSocketConnectionID；独立读/唤醒 overlapped 记录协调 IOCP 生命周期与关闭。",
+        "ru": "THttpApiWebSocketServerProtocol хранит соединения в TLockedList, выдаёт каждому THttpApiWebSocketConnection ID, а Send и Close принимают THttpApiWebSocketConnectionID. Отдельные overlapped-записи чтения/пробуждения координируют IOCP и shutdown."
+      },
+      "impact": {
+        "en": "Code that retained an array index or called protocol Send/Close by integer must retain Conn.ID and pass that stable ID instead. The runtime gains ABA-resistant recycling and safer concurrent shutdown.",
+        "fr": "Le code qui conservait un index de tableau ou appelait Send/Close avec un integer doit garder Conn.ID et passer cet ID stable. Le runtime gagne un recyclage résistant à l’ABA et un arrêt concurrent plus sûr.",
+        "zh": "保存数组索引或以 integer 调用 protocol Send/Close 的代码必须改为保存 Conn.ID 并传稳定 ID；运行时获得抗 ABA 回收与更安全的并发关闭。",
+        "ru": "Код, сохранявший индекс массива или вызывавший Send/Close с integer, должен хранить Conn.ID и передавать стабильный ID. Runtime получает ABA-safe recycling и более безопасный concurrent shutdown."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for THttpApiWebSocketServerProtocol.Send/Close and stored connection indexes; capture THttpApiWebSocketConnection.ID in callbacks instead.",
+        "fr": "Recherchez THttpApiWebSocketServerProtocol.Send/Close et les index stockés ; capturez plutôt THttpApiWebSocketConnection.ID dans les callbacks.",
+        "zh": "搜索 THttpApiWebSocketServerProtocol.Send/Close 与保存的连接索引，改为在 callback 中记录 THttpApiWebSocketConnection.ID。",
+        "ru": "Найдите THttpApiWebSocketServerProtocol.Send/Close и сохранённые индексы; сохраняйте THttpApiWebSocketConnection.ID в callbacks."
+      },
+      "api_changes": [
+        {
+          "symbol": "THttpApiWebSocketConnectionID",
+          "change": "added"
+        },
+        {
+          "symbol": "THttpApiWebSocketConnection.ID",
+          "change": "added"
+        },
+        {
+          "symbol": "THttpApiWebSocketServerProtocol.Send",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "THttpApiWebSocketServerProtocol.Close",
+          "change": "signature-changed"
+        }
+      ]
+    },
+    {
+      "sha": "4824b5db5e53fafb4122fbe96d1c5311e6c6fa82",
+      "headline": {
+        "en": "Locked lists can resolve ABA-resistant sequence identifiers",
+        "fr": "Les listes verrouillées peuvent résoudre des identifiants résistants à l’ABA",
+        "zh": "锁定列表可解析抗 ABA 的序列标识符",
+        "ru": "Заблокированные списки находят ABA-resistant идентификаторы"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "A public TLockedListID alias types sequence fields and TLockedList.Find scans under the list lock for a nonzero ID. The 32-bit FPC LockedInc64 carry path also uses LockedInc32 for the required barrier.",
+        "fr": "Un alias public TLockedListID type les séquences et TLockedList.Find recherche un ID non nul sous le verrou de liste. Le carry de LockedInc64 sous FPC 32 bits utilise aussi LockedInc32 pour sa barrière.",
+        "zh": "公共 TLockedListID 为 sequence 字段提供类型，TLockedList.Find 在列表锁下搜索非零 ID；32 位 FPC 的 LockedInc64 进位路径也使用 LockedInc32 以获得屏障。",
+        "ru": "Публичный TLockedListID типизирует sequence, а TLockedList.Find ищет ненулевой ID под блокировкой списка. В 32-bit FPC перенос LockedInc64 использует LockedInc32 ради барьера."
+      },
+      "impact": {
+        "en": "Infrastructure can look up recycled list records without relying on unstable pointers. Existing Delphi/FPC callers are unaffected unless adopting the new helper.",
+        "fr": "L’infrastructure peut retrouver des entrées recyclées sans dépendre de pointeurs instables. Les appels Delphi/FPC existants ne changent pas sauf adoption du helper.",
+        "zh": "基础设施可查找回收列表记录而不依赖不稳定指针；现有 Delphi/FPC 调用方仅在采用新 helper 时受影响。",
+        "ru": "Инфраструктура может находить recycled records без нестабильных pointers. Существующие Delphi/FPC callers не меняются, если не используют helper."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TLockedListID",
+          "change": "added"
+        },
+        {
+          "symbol": "TLockedList.Find",
+          "change": "added"
+        }
+      ]
+    },
+    {
+      "sha": "c1a131a8fd3f99346ef0d96975a5c1e3ea7e595c",
+      "headline": {
+        "en": "ARM atomic wrappers centralize the memory-barrier repair",
+        "fr": "ARM centralise la correction des barrières dans les wrappers atomiques",
+        "zh": "ARM 原子 wrapper 集中实现内存屏障修复",
+        "ru": "ARM atomic wrappers централизуют исправление барьеров"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "The follow-up defines barrier-aware InterlockedIncrement and InterlockedDecrement wrappers for FPC weak-atomic targets, adds AArch64 assembly entry points, and routes lock, async connection and ECC reference counters through the corrected primitives.",
+        "fr": "Le suivi définit des wrappers InterlockedIncrement/InterlockedDecrement avec barrières pour les cibles FPC weak-atomic, ajoute des entrées assembleur AArch64 et redirige verrous, compteurs async et références ECC vers ces primitives.",
+        "zh": "后续提交为 FPC weak-atomic 目标定义带屏障的 InterlockedIncrement/InterlockedDecrement wrapper，加入 AArch64 汇编入口，并让锁、异步连接与 ECC 引用计数使用这些原语。",
+        "ru": "Следующий коммит задаёт barrier-aware wrappers InterlockedIncrement/InterlockedDecrement для FPC weak-atomic, добавляет AArch64 asm entry points и переводит locks, async connection и ECC reference counters на эти примитивы."
+      },
+      "impact": {
+        "en": "This is the stabilized implementation for FPC ARM32/ARM64 ordering. It protects concurrent backend state beyond the lock word and is especially important for thread pools, timers and reference-counted work.",
+        "fr": "C’est l’implémentation stabilisée de l’ordre mémoire FPC ARM32/ARM64. Elle protège l’état concurrent au-delà du mot de verrouillage, notamment pools de threads, timers et travail référencé.",
+        "zh": "这是 FPC ARM32/ARM64 内存顺序的稳定实现，可保护锁字之外的并发状态，尤其影响线程池、定时器与引用计数任务。",
+        "ru": "Это стабилизированная реализация порядка памяти FPC ARM32/ARM64. Она защищает concurrent state за пределами lock word, особенно thread pools, timers и reference-counted work."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.os",
+        "mormot.crypt.ecc",
+        "mormot.net.async",
+        "mormot.defines"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "FPC ARM/ARM64 production systems should move to 2.4.17497 and rerun concurrency and lifetime stress tests.",
+        "fr": "Les systèmes FPC ARM/ARM64 en production doivent passer à 2.4.17497 et rejouer les tests de concurrence et de durée de vie.",
+        "zh": "FPC ARM/ARM64 生产系统应升级至 2.4.17497，并重跑并发与生命周期压力测试。",
+        "ru": "Production-системам FPC ARM/ARM64 следует перейти на 2.4.17497 и повторить concurrency/lifetime stress tests."
+      }
+    },
+    {
+      "sha": "3383af99cfd34ab2f3ba9f13d034d8993f2b1a9c",
+      "headline": {
+        "en": "Concurrent WebSocket send and close operations are serialized",
+        "fr": "Les opérations WebSocket send et close concurrentes sont sérialisées",
+        "zh": "并发 WebSocket send 与 close 现已串行化",
+        "ru": "Конкурентные WebSocket send и close сериализованы"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpApiWebSocketServerProtocol now locks around connection Close and Send, and deletion from the pending-close array receives the count pointer rather than the array pointer.",
+        "fr": "THttpApiWebSocketServerProtocol verrouille désormais Close et Send, et la suppression du tableau pending-close reçoit le pointeur du compteur plutôt que celui du tableau.",
+        "zh": "THttpApiWebSocketServerProtocol 现在在连接 Close/Send 周围加锁，pending-close 数组删除也改为传计数指针而非数组指针。",
+        "ru": "THttpApiWebSocketServerProtocol теперь блокирует Close и Send, а удаление из pending-close получает указатель счётчика вместо указателя массива."
+      },
+      "impact": {
+        "en": "Windows WebSocket backends avoid races between application threads and protocol maintenance, plus memory corruption from updating the wrong pending count.",
+        "fr": "Les backends WebSocket Windows évitent les courses entre threads applicatifs et maintenance du protocole, ainsi que la corruption mémoire due au mauvais compteur pending.",
+        "zh": "Windows WebSocket 后端避免应用线程与协议维护间竞态，也避免因更新错误 pending 计数而导致的内存破坏。",
+        "ru": "Windows WebSocket backends избегают гонок между application threads и обслуживанием протокола, а также повреждения памяти из-за неверного pending count."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade rather than keeping the preceding connection-list refactor, and stress concurrent Send, Close and disconnect.",
+        "fr": "Mettez à niveau au lieu de conserver le refactor précédent et testez Send, Close et disconnect concurrents.",
+        "zh": "不要停留在前一个连接列表重构版本；升级并压力测试并发 Send、Close 与断开。",
+        "ru": "Обновитесь вместо сохранения предыдущего refactor и нагрузочно проверьте concurrent Send, Close и disconnect."
+      }
+    },
+    {
+      "sha": "22a415129e50f9f94565920bc3c02cc8fafa8dc0",
+      "headline": {
+        "en": "WebSocket connection records keep overlapped storage at offset zero",
+        "fr": "Les enregistrements de connexion gardent overlapped à l’offset zéro",
+        "zh": "WebSocket 连接记录保持 overlapped 位于零偏移",
+        "ru": "Записи WebSocket сохраняют overlapped по смещению ноль"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "Connections return to record/object storage with TOverlapped as the first field, while allocation, lookup and pending-close arrays are reorganized around pointers.",
+        "fr": "Les connexions reviennent à un stockage record/object avec TOverlapped en premier champ, tandis que l’allocation, la recherche et les tableaux pending-close sont réorganisés autour de pointeurs.",
+        "zh": "连接恢复为 record/object 存储并把 TOverlapped 放在首字段，同时围绕指针重组分配、查找与 pending-close 数组。",
+        "ru": "Соединения возвращены к record/object с TOverlapped первым полем, а allocation, lookup и pending-close arrays перестроены вокруг pointers."
+      },
+      "impact": {
+        "en": "This restores the layout required by IOCP callbacks after the reverted class attempt, but remains an intermediate architecture subsequently replaced by TLockedList.",
+        "fr": "Cela restaure le layout requis par les callbacks IOCP après la tentative class annulée, mais reste une architecture intermédiaire ensuite remplacée par TLockedList.",
+        "zh": "这在撤销 class 尝试后恢复了 IOCP callback 所需布局，但仍是随后被 TLockedList 替代的中间架构。",
+        "ru": "Восстановлен layout для IOCP callbacks после отменённой class-попытки, но это промежуточная архитектура, затем заменённая TLockedList."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1ff6986c7a3f15fe0b904f975fa0369aebbadb2e",
+      "headline": {
+        "en": "The unsafe WebSocket connection class rewrite is reverted",
+        "fr": "La refonte dangereuse des connexions WebSocket en classes est annulée",
+        "zh": "不安全的 WebSocket 连接 class 重写已撤销",
+        "ru": "Небезопасная переделка WebSocket-соединений в class отменена"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "This commit fully reverts the preceding class-based connection-list rewrite because TOverlapped must remain the first bytes of the structure passed through IOCP.",
+        "fr": "Ce commit annule entièrement la refonte class précédente car TOverlapped doit rester les premiers octets de la structure transmise à IOCP.",
+        "zh": "该提交完整撤销前一个基于 class 的连接列表重写，因为传给 IOCP 的结构必须以 TOverlapped 开头。",
+        "ru": "Коммит полностью отменяет предыдущее class-based переписывание, поскольку TOverlapped обязан оставаться первыми байтами структуры для IOCP."
+      },
+      "impact": {
+        "en": "It removes an invalid Windows runtime layout that could make completion callbacks interpret object metadata as TOverlapped. The later record and TLockedList work supersedes it.",
+        "fr": "Il supprime un layout Windows invalide pouvant faire interpréter les métadonnées d’objet comme TOverlapped. Les travaux record puis TLockedList le remplacent.",
+        "zh": "这移除了可能让 completion callback 把对象元数据当作 TOverlapped 的无效 Windows 运行时布局；之后 record 与 TLockedList 工作取代了它。",
+        "ru": "Удалён неверный Windows layout, при котором completion callback мог принять object metadata за TOverlapped. Последующие record и TLockedList изменения его заменяют."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Do not use the immediately preceding revision; land on the final build 2.4.17497.",
+        "fr": "N’utilisez pas la révision immédiatement précédente ; adoptez le build final 2.4.17497.",
+        "zh": "不要使用紧邻的前一版本；请落到最终 build 2.4.17497。",
+        "ru": "Не используйте непосредственно предыдущую ревизию; переходите на финальный build 2.4.17497."
+      }
+    },
+    {
+      "sha": "91f43c695987d9008a891b82e079dc362ddf4d6c",
+      "headline": {
+        "en": "A class-based WebSocket connection list introduces an invalid IOCP layout",
+        "fr": "Une liste de connexions WebSocket en classes introduit un layout IOCP invalide",
+        "zh": "基于 class 的 WebSocket 连接列表引入无效 IOCP 布局",
+        "ru": "Class-based список WebSocket вводит неверный IOCP layout"
+      },
+      "category": "refactor",
+      "severity": "critical",
+      "what_changed": {
+        "en": "The commit temporarily converts THttpApiWebSocketConnection from a TOverlapped-rooted record/object into a class and restructures protocol connection arrays. It is completely reverted by the next non-merge commit.",
+        "fr": "Le commit convertit temporairement THttpApiWebSocketConnection d’un record/object enraciné sur TOverlapped en class et restructure les tableaux du protocole. Le commit non-merge suivant l’annule entièrement.",
+        "zh": "该提交暂时把 THttpApiWebSocketConnection 从以 TOverlapped 开头的 record/object 改为 class，并重组协议连接数组；下一非 merge 提交完整撤销。",
+        "ru": "Коммит временно превращает THttpApiWebSocketConnection из TOverlapped-rooted record/object в class и перестраивает массивы протокола. Следующий non-merge коммит полностью его отменяет."
+      },
+      "impact": {
+        "en": "This revision must not be deployed: IOCP requires TOverlapped at offset zero, which a class instance does not provide. It has no lasting API effect after the revert.",
+        "fr": "Cette révision ne doit pas être déployée : IOCP exige TOverlapped à l’offset zéro, absent d’une instance class. Aucun effet API durable après l’annulation.",
+        "zh": "此版本不可部署：IOCP 要求 TOverlapped 位于零偏移，而 class 实例不满足；撤销后无持续 API 影响。",
+        "ru": "Эту ревизию нельзя развёртывать: IOCP требует TOverlapped по offset zero, чего class instance не даёт. После revert постоянного API-эффекта нет."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Skip this revision and use the final build 2.4.17497.",
+        "fr": "Ignorez cette révision et utilisez le build final 2.4.17497.",
+        "zh": "跳过此版本，使用最终 build 2.4.17497。",
+        "ru": "Пропустите эту ревизию и используйте финальный build 2.4.17497."
+      }
+    },
+    {
+      "sha": "c9bcf0ea427e4efd55cb70fdd32a1c3e4f7fc037",
+      "headline": {
+        "en": "The WebSocket send declaration catches up with its implementation",
+        "fr": "La déclaration d’envoi WebSocket rejoint son implémentation",
+        "zh": "WebSocket 发送声明与实现保持一致",
+        "ru": "Объявление WebSocket send синхронизировано с реализацией"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The missing mormot.net.server declaration update makes WriteData return success and the written count, removes obsolete shared-overlapped send use, and sends response entity bodies synchronously.",
+        "fr": "La mise à jour de déclaration manquante fait renvoyer à WriteData le succès et le nombre écrit, supprime l’ancien overlapped partagé pour send et envoie les corps de réponse en mode synchrone.",
+        "zh": "遗漏的 mormot.net.server 声明更新让 WriteData 返回成功状态与写入数，移除旧的共享 overlapped 发送，并同步发送 response entity body。",
+        "ru": "Недостающее объявление mormot.net.server заставляет WriteData возвращать успех и written count, удаляет старый общий overlapped для send и синхронно отправляет response entity body."
+      },
+      "impact": {
+        "en": "The previous commit was incomplete without this unit and could fail to compile or retain mismatched send behavior. No public application API changes.",
+        "fr": "Le commit précédent était incomplet sans cette unité et pouvait ne pas compiler ou conserver un comportement d’envoi incohérent. Aucune API applicative publique ne change.",
+        "zh": "前一提交缺少此 unit，可能无法编译或保留不一致发送行为；公共应用 API 不变。",
+        "ru": "Предыдущий коммит без этого unit был неполным и мог не собраться или сохранить несовпадающее send-поведение. Публичный application API не меняется."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Do not stop on the preceding revision; use the completed final series.",
+        "fr": "Ne vous arrêtez pas à la révision précédente ; utilisez la série finale complète.",
+        "zh": "不要停在前一版本；使用完整最终系列。",
+        "ru": "Не останавливайтесь на предыдущей ревизии; используйте завершённую финальную серию."
+      }
+    },
+    {
+      "sha": "4730c107022acd5aeebf78f0cd43908016eb769f",
+      "headline": {
+        "en": "WebSocket network sends report the bytes actually written",
+        "fr": "Les envois réseau WebSocket déclarent les octets réellement écrits",
+        "zh": "WebSocket 网络发送报告实际写入字节数",
+        "ru": "WebSocket network send сообщает фактически записанные байты"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "WEB_SOCKET_SEND_TO_NETWORK_ACTION now writes each websocket.dll buffer, accumulates the actual byte count for CompleteAction and disconnects when an HTTP.sys entity-body write fails.",
+        "fr": "WEB_SOCKET_SEND_TO_NETWORK_ACTION écrit désormais chaque buffer websocket.dll, cumule les octets réels pour CompleteAction et déconnecte lors d’un échec d’écriture HTTP.sys.",
+        "zh": "WEB_SOCKET_SEND_TO_NETWORK_ACTION 现在逐个写入 websocket.dll buffer，累计实际字节数传给 CompleteAction，并在 HTTP.sys body 写入失败时断开。",
+        "ru": "WEB_SOCKET_SEND_TO_NETWORK_ACTION теперь пишет каждый buffer websocket.dll, суммирует фактические байты для CompleteAction и отключается при ошибке записи HTTP.sys."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys WebSocket sends no longer claim the requested length when fewer bytes reached the network, improving failure detection and protocol state.",
+        "fr": "Les envois WebSocket HTTP.sys Windows ne déclarent plus la taille demandée si moins d’octets atteignent le réseau, améliorant la détection d’échec et l’état du protocole.",
+        "zh": "Windows HTTP.sys WebSocket 发送不再在实际写入较少时声称完整长度，从而改善失败检测与协议状态。",
+        "ru": "Windows HTTP.sys WebSocket больше не заявляет запрошенный размер, если в сеть ушло меньше байт, улучшая обнаружение ошибок и состояние протокола."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Use the final build and test large or fragmented sends plus forced disconnects.",
+        "fr": "Utilisez le build final et testez les envois volumineux ou fragmentés et les déconnexions forcées.",
+        "zh": "使用最终 build，并测试大包/分片发送与强制断开。",
+        "ru": "Используйте финальный build и проверьте крупные/fragmented sends и принудительные отключения."
+      }
+    },
+    {
+      "sha": "6f0344bf903412a780d0eccf0de1cd52180a119b",
+      "headline": {
+        "en": "websocket.dll completion is treated as a void operation",
+        "fr": "La completion websocket.dll est traitée comme une opération void",
+        "zh": "websocket.dll completion 按 void 操作处理",
+        "ru": "Completion websocket.dll обрабатывается как void"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "WebSocketApi.CompleteAction is corrected from an HRESULT-returning function to a procedure, result checks are removed, and receive processing starts only after the HTTP 101 switching-protocols response.",
+        "fr": "WebSocketApi.CompleteAction passe d’une fonction HRESULT à une procedure, les contrôles de résultat disparaissent et la réception ne démarre qu’après la réponse HTTP 101.",
+        "zh": "WebSocketApi.CompleteAction 从返回 HRESULT 的函数修正为 procedure，移除结果检查，并仅在 HTTP 101 切换协议响应后开始接收。",
+        "ru": "WebSocketApi.CompleteAction исправлен с функции HRESULT на procedure, проверки результата удалены, а receive начинается только после ответа HTTP 101."
+      },
+      "impact": {
+        "en": "The Windows declaration now matches websocket.dll and avoids consuming a nonexistent return value. Upgrade sequencing also stops reads before the HTTP handshake is committed.",
+        "fr": "La déclaration Windows correspond désormais à websocket.dll et ne lit plus un résultat inexistant. La séquence d’upgrade ne commence pas non plus la lecture avant la validation du handshake HTTP.",
+        "zh": "Windows 声明现在与 websocket.dll 一致，不再读取不存在的返回值；upgrade 顺序也避免在 HTTP 握手完成前读取。",
+        "ru": "Windows-объявление соответствует websocket.dll и не читает несуществующий result. Порядок upgrade также не начинает read до завершения HTTP handshake."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.lib.winhttp",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Use the corrected declaration and validate WebSocket upgrade success and failure.",
+        "fr": "Utilisez la déclaration corrigée et validez les upgrades WebSocket réussis et échoués.",
+        "zh": "使用修正声明，并验证 WebSocket upgrade 成功与失败路径。",
+        "ru": "Используйте исправленное объявление и проверьте успешный и неудачный WebSocket upgrade."
+      },
+      "api_changes": [
+        {
+          "symbol": "WebSocketApi.CompleteAction",
+          "change": "signature-changed"
+        }
+      ]
+    },
+    {
+      "sha": "c852c8cfb474808417f1debfd60c09862de6baf6",
+      "headline": {
+        "en": "Per-request WebSocket state replaces a shared last connection",
+        "fr": "Un état WebSocket par requête remplace la dernière connexion partagée",
+        "zh": "每请求 WebSocket 状态取代共享最后连接",
+        "ru": "Состояние WebSocket на запрос заменяет общий last connection"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpApiWebSocketServer stores the pending connection on THttpApiServerRequest instead of fLastConnection, making concurrent upgrades request-local. THttpServerRequest.FullUrl becomes virtual RawUtf8 and the public HttpApiRequest property is removed.",
+        "fr": "THttpApiWebSocketServer stocke la connexion en attente dans THttpApiServerRequest plutôt que fLastConnection, rendant les upgrades concurrents locaux à la requête. THttpServerRequest.FullUrl devient virtual RawUtf8 et la propriété publique HttpApiRequest est supprimée.",
+        "zh": "THttpApiWebSocketServer 把待处理连接存到 THttpApiServerRequest 而非 fLastConnection，使并发 upgrade 隔离到请求；THttpServerRequest.FullUrl 改为 virtual RawUtf8，公共 HttpApiRequest 被移除。",
+        "ru": "THttpApiWebSocketServer хранит pending connection в THttpApiServerRequest вместо fLastConnection, делая concurrent upgrades локальными запросу. THttpServerRequest.FullUrl становится virtual RawUtf8, публичное HttpApiRequest удалено."
+      },
+      "impact": {
+        "en": "The documented non-thread-safe shared state is removed. Code expecting FullUrl as SynUnicode must use RawUtf8, and code reading HttpApiRequest must move to supported request fields or an internal Windows-specific extension.",
+        "fr": "L’état partagé déclaré non thread-safe disparaît. Le code attendant FullUrl en SynUnicode doit utiliser RawUtf8 ; celui lisant HttpApiRequest doit employer les champs supportés ou une extension Windows interne.",
+        "zh": "已移除明确不具线程安全性的共享状态。把 FullUrl 当作 SynUnicode 的代码须改用 RawUtf8；读取 HttpApiRequest 的代码须改用受支持字段或内部 Windows 扩展。",
+        "ru": "Удалено явно thread-unsafe общее состояние. Код с FullUrl как SynUnicode должен перейти на RawUtf8, а чтение HttpApiRequest — на поддерживаемые поля или внутреннее Windows-расширение."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.lib.winhttp",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for FullUrl declarations/assignments and HttpApiRequest references; migrate before compiling, then test concurrent upgrades.",
+        "fr": "Recherchez les déclarations/affectations FullUrl et références HttpApiRequest ; migrez avant compilation puis testez les upgrades concurrents.",
+        "zh": "搜索 FullUrl 声明/赋值与 HttpApiRequest 引用，编译前迁移并测试并发 upgrade。",
+        "ru": "Найдите объявления/присваивания FullUrl и ссылки HttpApiRequest; мигрируйте до сборки и проверьте concurrent upgrades."
+      },
+      "api_changes": [
+        {
+          "symbol": "THttpServerRequest.FullUrl",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "THttpServerRequest.GetFullUrl",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "THttpServerRequest.HttpApiRequest",
+          "change": "removed"
+        }
+      ]
+    },
+    {
+      "sha": "6dfbaf341613f655992fe679c3373458d7dbd8c5",
+      "headline": {
+        "en": "The rewritten HTTP.sys request object receives a cleanup pass",
+        "fr": "L’objet de requête HTTP.sys réécrit reçoit un nettoyage",
+        "zh": "重写后的 HTTP.sys 请求对象完成清理",
+        "ru": "Переписанный объект запроса HTTP.sys очищен"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "The follow-up simplifies and formats the new THttpApiServerRequest implementation after the large request-processing rewrite without changing its intended behavior.",
+        "fr": "Le suivi simplifie et reformate la nouvelle implémentation THttpApiServerRequest après la grande refonte, sans modifier son comportement prévu.",
+        "zh": "后续提交简化并格式化大规模重构后的 THttpApiServerRequest 实现，不改变预期行为。",
+        "ru": "Следующий коммит упрощает и форматирует новую реализацию THttpApiServerRequest после крупного переписывания без изменения задуманного поведения."
+      },
+      "impact": {
+        "en": "No application-code impact is visible in the diff; it is maintenance within the Windows HTTP.sys implementation.",
+        "fr": "Aucun impact sur le code applicatif n’est visible ; il s’agit de maintenance interne à HTTP.sys Windows.",
+        "zh": "diff 中未见应用代码影响；这是 Windows HTTP.sys 实现内部维护。",
+        "ru": "В diff нет влияния на application code; это обслуживание внутренней реализации Windows HTTP.sys."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5adc88f8842dfda00f78f90ee7befab25ae82c76",
+      "headline": {
+        "en": "HTTP.sys request processing becomes a per-request object",
+        "fr": "Le traitement HTTP.sys devient un objet par requête",
+        "zh": "HTTP.sys 请求处理改为每请求对象",
+        "ru": "Обработка HTTP.sys становится объектом на запрос"
+      },
+      "category": "refactor",
+      "severity": "high",
+      "what_changed": {
+        "en": "The monolithic THttpApiServer.DoExecute path is split into a private THttpApiServerRequest with request, response, buffers, logging and send/error methods. Per-thread reuse remains, while response and exception state is made explicit.",
+        "fr": "Le chemin monolithique THttpApiServer.DoExecute est séparé en THttpApiServerRequest privé avec requête, réponse, buffers, logging et méthodes send/error. La réutilisation par thread demeure, mais l’état de réponse et d’exception devient explicite.",
+        "zh": "单体 THttpApiServer.DoExecute 被拆成私有 THttpApiServerRequest，封装请求、响应、buffer、日志和 send/error 方法；仍按线程复用，但响应与异常状态更明确。",
+        "ru": "Монолитный THttpApiServer.DoExecute разделён на private THttpApiServerRequest с request, response, buffers, logging и send/error methods. Переиспользование по thread сохранено, состояние ответа и исключений стало явным."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys backends gain clearer request isolation and error handling, but this is the start of a multi-commit rewrite and should not be treated as a standalone landing point.",
+        "fr": "Windows HTTP.sys gagne une meilleure isolation et gestion d’erreurs, mais ce commit ouvre une refonte multi-commit et ne doit pas être adopté seul.",
+        "zh": "Windows HTTP.sys 后端获得更清晰的请求隔离与错误处理，但这是多提交重构起点，不应单独采用。",
+        "ru": "Windows HTTP.sys получает более явную изоляцию запросов и error handling, но это начало multi-commit rewrite и не подходит как отдельная точка обновления."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9c1491531bbbe6e160a90acab7458b3dd4758ddf",
+      "headline": {
+        "en": "Low-level HTTP.sys helpers change their output contracts",
+        "fr": "Les helpers HTTP.sys bas niveau changent leurs contrats de sortie",
+        "zh": "低层 HTTP.sys helper 改变输出契约",
+        "ru": "Низкоуровневые HTTP.sys helpers меняют выходные контракты"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "HTTP_RESPONSE.SetStatus now returns PRawUtf8 instead of filling a var RawUtf8, RetrieveHeadersAndGetRemoteIPConnectionID becomes a procedure with var Headers, and public LookupTokenVar plus VERB_TEXT are added.",
+        "fr": "HTTP_RESPONSE.SetStatus renvoie désormais PRawUtf8 au lieu de remplir var RawUtf8, RetrieveHeadersAndGetRemoteIPConnectionID devient une procedure avec var Headers, et LookupTokenVar ainsi que VERB_TEXT sont ajoutés.",
+        "zh": "HTTP_RESPONSE.SetStatus 现在返回 PRawUtf8 而非填充 var RawUtf8；RetrieveHeadersAndGetRemoteIPConnectionID 改为带 var Headers 的 procedure；新增 LookupTokenVar 与 VERB_TEXT。",
+        "ru": "HTTP_RESPONSE.SetStatus теперь возвращает PRawUtf8 вместо заполнения var RawUtf8, RetrieveHeadersAndGetRemoteIPConnectionID становится procedure с var Headers, добавлены LookupTokenVar и VERB_TEXT."
+      },
+      "impact": {
+        "en": "Direct users of these low-level Windows wrappers will fail to compile until call sites adopt the new return and output parameters. Typical high-level THttpServer users are unaffected.",
+        "fr": "Les utilisateurs directs de ces wrappers Windows bas niveau ne compileront plus avant adaptation des paramètres de retour et sortie. Les utilisateurs de haut niveau THttpServer ne sont pas affectés.",
+        "zh": "直接使用这些 Windows 低层 wrapper 的代码在更新返回值与输出参数前会编译失败；典型高层 THttpServer 用户不受影响。",
+        "ru": "Прямые пользователи низкоуровневых Windows wrappers не соберутся до адаптации return/output parameters. Обычные high-level пользователи THttpServer не затронуты."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.core.os.security",
+        "mormot.lib.winhttp"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for SetStatus and RetrieveHeadersAndGetRemoteIPConnectionID calls, remove temporary status strings and pass a Headers variable.",
+        "fr": "Recherchez les appels SetStatus et RetrieveHeadersAndGetRemoteIPConnectionID, supprimez les chaînes status temporaires et passez une variable Headers.",
+        "zh": "搜索 SetStatus 与 RetrieveHeadersAndGetRemoteIPConnectionID 调用，移除临时 status 字符串并传入 Headers 变量。",
+        "ru": "Найдите вызовы SetStatus и RetrieveHeadersAndGetRemoteIPConnectionID, удалите временные status strings и передайте Headers."
+      },
+      "api_changes": [
+        {
+          "symbol": "HTTP_RESPONSE.SetStatus",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "RetrieveHeadersAndGetRemoteIPConnectionID",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "LookupTokenVar",
+          "change": "added"
+        },
+        {
+          "symbol": "VERB_TEXT",
+          "change": "added"
+        }
+      ]
+    },
+    {
+      "sha": "5ec9601be914cea053c78029f50fb50d485c7680",
+      "headline": {
+        "en": "HTML escaping can fill a caller-owned short string",
+        "fr": "L’échappement HTML peut remplir une short string fournie",
+        "zh": "HTML 转义可填充调用方持有的 short string",
+        "ru": "HTML escaping может заполнять short string вызывающего"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "The public HtmlEscapeShortVar procedure writes escaped RawUtf8 text into a ShortString with the selected format; HtmlEscapeShort now delegates to the wrapper.",
+        "fr": "La procedure publique HtmlEscapeShortVar écrit le RawUtf8 échappé dans une ShortString avec le format choisi ; HtmlEscapeShort délègue désormais au wrapper.",
+        "zh": "公共 HtmlEscapeShortVar procedure 按指定格式把转义后的 RawUtf8 写入 ShortString；HtmlEscapeShort 现委托给它。",
+        "ru": "Публичная procedure HtmlEscapeShortVar пишет escaped RawUtf8 в ShortString с выбранным format; HtmlEscapeShort теперь делегирует wrapper."
+      },
+      "impact": {
+        "en": "Delphi and FPC callers that already own the destination can avoid a function result temporary. Existing calls remain source-compatible.",
+        "fr": "Les appelants Delphi et FPC possédant déjà la destination peuvent éviter un résultat temporaire. Les appels existants restent compatibles.",
+        "zh": "已有目标变量的 Delphi/FPC 调用方可避免函数结果临时值；现有调用保持兼容。",
+        "ru": "Delphi/FPC callers с готовым destination могут избежать временного результата. Существующие вызовы совместимы."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.fmt"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "HtmlEscapeShortVar",
+          "change": "added"
+        }
+      ]
+    },
+    {
+      "sha": "f47c802c1e6e798e6b28d1e321257610b350e165",
+      "headline": {
+        "en": "System error text can be assigned directly into RawUtf8",
+        "fr": "Le texte d’erreur système peut être affecté directement à RawUtf8",
+        "zh": "系统错误文本可直接写入 RawUtf8",
+        "ru": "Текст системной ошибки можно записать прямо в RawUtf8"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "A public SetErrorText procedure fills an existing RawUtf8 from an OS error code, defaulting to the current error. GetErrorText delegates to it and HTTP code reuses the new helper.",
+        "fr": "Une procedure publique SetErrorText remplit un RawUtf8 existant depuis un code d’erreur OS, par défaut l’erreur courante. GetErrorText lui délègue et le code HTTP réutilise le helper.",
+        "zh": "公共 SetErrorText procedure 从 OS 错误码填充现有 RawUtf8，默认使用当前错误；GetErrorText 委托给它，HTTP 代码也复用该 helper。",
+        "ru": "Публичная procedure SetErrorText заполняет существующий RawUtf8 по OS error code, по умолчанию текущему. GetErrorText делегирует ей, HTTP-код переиспользует helper."
+      },
+      "impact": {
+        "en": "Callers can reuse a destination string and avoid a result temporary; existing GetErrorText code remains compatible across Delphi and FPC.",
+        "fr": "Les appelants peuvent réutiliser une chaîne destination et éviter un temporaire ; le code GetErrorText reste compatible sous Delphi et FPC.",
+        "zh": "调用方可复用目标字符串并避免结果临时值；现有 GetErrorText 代码在 Delphi/FPC 下保持兼容。",
+        "ru": "Callers могут переиспользовать destination string и избежать temporary; существующий GetErrorText остаётся совместимым в Delphi и FPC."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "SetErrorText",
+          "change": "added"
+        }
+      ]
+    },
+    {
+      "sha": "b2b195da1e0580058672a88620ef71bb47283eb1",
+      "headline": {
+        "en": "FPC non-Intel locks become full memory barriers",
+        "fr": "Les verrous FPC non-Intel deviennent des barrières mémoire complètes",
+        "zh": "FPC 非 Intel 锁成为完整内存屏障",
+        "ru": "FPC non-Intel locks становятся полными барьерами памяти"
+      },
+      "category": "fix",
+      "severity": "critical",
+      "what_changed": {
+        "en": "FPC_WEAKATOMICS marks non-Intel targets, custom AArch64 LDXR/STLXR paths add DMB ordering, and other FPC CPUs wrap RTL atomics with barriers across TLightLock, TRWLightLock, TRWLock, TMultiLightLock and TOSLightLock.",
+        "fr": "FPC_WEAKATOMICS marque les cibles non-Intel, les chemins AArch64 LDXR/STLXR ajoutent l’ordre DMB et les autres CPU FPC entourent les atomiques RTL de barrières dans TLightLock, TRWLightLock, TRWLock, TMultiLightLock et TOSLightLock.",
+        "zh": "FPC_WEAKATOMICS 标记非 Intel 目标，AArch64 LDXR/STLXR 路径加入 DMB 顺序，其他 FPC CPU 则在 TLightLock、TRWLightLock、TRWLock、TMultiLightLock 与 TOSLightLock 的 RTL 原子操作周围加屏障。",
+        "ru": "FPC_WEAKATOMICS помечает non-Intel targets, пути AArch64 LDXR/STLXR добавляют DMB ordering, остальные FPC CPU окружают RTL atomics барьерами в TLightLock, TRWLightLock, TRWLock, TMultiLightLock и TOSLightLock."
+      },
+      "impact": {
+        "en": "On FPC ARM and AArch64, lock-word exclusion previously did not order protected memory. The commit documents observed lost increments, lost TSynThreadPool contexts and TSynBackgroundTimer heap corruption.",
+        "fr": "Sous FPC ARM et AArch64, l’exclusion du mot de verrouillage n’ordonnait pas la mémoire protégée. Le commit documente des incréments et contextes TSynThreadPool perdus ainsi qu’une corruption heap TSynBackgroundTimer.",
+        "zh": "在 FPC ARM/AArch64 上，锁字互斥此前不会排序受保护内存；提交记录了计数丢失、TSynThreadPool context 丢失与 TSynBackgroundTimer heap 损坏。",
+        "ru": "В FPC ARM/AArch64 исключение lock word не упорядочивало защищённую память. Коммит документирует потерянные increments и TSynThreadPool contexts, а также heap corruption TSynBackgroundTimer."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.core.base",
+        "mormot.core.os",
+        "mormot.defines"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Treat this as mandatory for concurrent FPC ARM/ARM64 services, but use the final build containing the follow-up refactor.",
+        "fr": "Considérez la mise à niveau comme obligatoire pour les services FPC ARM/ARM64 concurrents, mais utilisez le build final contenant le refactor de suivi.",
+        "zh": "对并发 FPC ARM/ARM64 服务应视为必须升级，但请使用包含后续重构的最终 build。",
+        "ru": "Считайте обновление обязательным для concurrent FPC ARM/ARM64 services, но используйте финальный build с follow-up refactor."
+      }
+    },
+    {
+      "sha": "f1ec718b30182374b3f7e73d2d154c39404613a5",
+      "headline": {
+        "en": "Malformed compressed HTTP content no longer escapes as an exception",
+        "fr": "Un contenu HTTP compressé invalide ne remonte plus en exception",
+        "zh": "损坏的压缩 HTTP 内容不再抛出异常",
+        "ru": "Повреждённый сжатый HTTP-контент больше не выбрасывает исключение"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpSocketCompressList.UncompressContent wraps decompressor execution in try/except, clears the result and returns nil when a codec raises.",
+        "fr": "THttpSocketCompressList.UncompressContent entoure le décompresseur d’un try/except, efface le résultat et renvoie nil si le codec lève une exception.",
+        "zh": "THttpSocketCompressList.UncompressContent 用 try/except 包裹解压器；codec 抛异常时清空结果并返回 nil。",
+        "ru": "THttpSocketCompressList.UncompressContent оборачивает decompressor в try/except, очищает result и возвращает nil при исключении codec."
+      },
+      "impact": {
+        "en": "Malformed gzip/deflate input becomes a normal decompression failure instead of propagating into a Delphi/FPC HTTP request path. Callers should already handle nil.",
+        "fr": "Une entrée gzip/deflate invalide devient un échec normal au lieu de propager une exception dans le chemin HTTP Delphi/FPC. Les appelants doivent déjà gérer nil.",
+        "zh": "损坏的 gzip/deflate 输入会成为普通解压失败，不再把异常传播到 Delphi/FPC HTTP 请求路径；调用方应处理 nil。",
+        "ru": "Повреждённый gzip/deflate становится обычной ошибкой распаковки вместо исключения в Delphi/FPC HTTP path. Callers должны обрабатывать nil."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.http"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Verify that custom callers treat nil as invalid compressed content rather than relying on a codec exception.",
+        "fr": "Vérifiez que les appels personnalisés traitent nil comme contenu compressé invalide au lieu d’attendre une exception codec.",
+        "zh": "确认自定义调用把 nil 视为无效压缩内容，而非依赖 codec 异常。",
+        "ru": "Проверьте, что custom callers считают nil неверным compressed content, а не ожидают codec exception."
+      },
+      "api_changes": [
+        {
+          "symbol": "THttpSocketCompressList.UncompressContent",
+          "change": "behaviour-changed"
+        }
+      ]
+    },
+    {
+      "sha": "29b15f397680d0963f09df8292f9cfb43a0805df",
+      "headline": {
+        "en": "Async networking receives a non-functional cleanup",
+        "fr": "Le réseau async reçoit un nettoyage sans effet fonctionnel",
+        "zh": "异步网络进行无功能变化清理",
+        "ru": "Async networking получает нефункциональную очистку"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.net.async is reformatted and simplified without changing the executed branches or public declarations.",
+        "fr": "mormot.net.async est reformaté et simplifié sans modifier les branches exécutées ni les déclarations publiques.",
+        "zh": "mormot.net.async 进行格式化与简化，不改变执行分支或公共声明。",
+        "ru": "mormot.net.async отформатирован и упрощён без изменения исполняемых ветвей или публичных объявлений."
+      },
+      "impact": {
+        "en": "No impact on Delphi or FPC application code is expected from this cleanup.",
+        "fr": "Aucun impact n’est attendu sur le code applicatif Delphi ou FPC.",
+        "zh": "预计不会影响 Delphi/FPC 应用代码。",
+        "ru": "Влияния на application code Delphi или FPC не ожидается."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.async"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "367cdf5a12ccb8540c54acd992da128e56d55469",
+      "headline": {
+        "en": "JSON magic removal is rewritten as a faster copy-on-write scan",
+        "fr": "Le retrait du magic JSON devient un scan copy-on-write plus rapide",
+        "zh": "JSON magic 移除重写为更快的 copy-on-write 扫描",
+        "ru": "Удаление JSON magic переписано как быстрый copy-on-write scan"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "RemoveMagicFromJson now scans string boundaries first, detects JSON_BASE64_MAGIC prefixes and allocates a writable copy only when a marker must be removed.",
+        "fr": "RemoveMagicFromJson analyse d’abord les limites de chaînes, détecte les préfixes JSON_BASE64_MAGIC et n’alloue une copie modifiable que lorsqu’un marqueur doit être retiré.",
+        "zh": "RemoveMagicFromJson 先扫描字符串边界并检测 JSON_BASE64_MAGIC 前缀，仅在确需移除标记时分配可写副本。",
+        "ru": "RemoveMagicFromJson сначала сканирует границы строк и JSON_BASE64_MAGIC, выделяя writable copy только при фактическом удалении маркера."
+      },
+      "impact": {
+        "en": "SOA and direct callers keep the same public procedure but avoid copying ordinary JSON. Behavior remains focused on magic-prefixed JSON strings.",
+        "fr": "Les appels SOA et directs gardent la même procedure publique mais évitent de copier le JSON ordinaire. Le comportement reste limité aux chaînes préfixées magic.",
+        "zh": "SOA 与直接调用者保持相同公共 procedure，但普通 JSON 不再复制；行为仍只针对 magic 前缀 JSON 字符串。",
+        "ru": "SOA и прямые callers сохраняют public procedure, но обычный JSON не копируется. Поведение ограничено строками с magic prefix."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.json"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3b4da68d8b3b94f7854cda1d7a1788e5f69d636e",
+      "headline": {
+        "en": "HTTP.sys response state and Range failures are hardened",
+        "fr": "L’état de réponse HTTP.sys et les échecs Range sont durcis",
+        "zh": "HTTP.sys 响应状态与 Range 失败路径得到强化",
+        "ru": "Состояние ответа HTTP.sys и ошибки Range усилены"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The server marks responses before submission, exits after static-file open failure, returns 416 when a Range starts beyond the file, catches OnBeforeBody exceptions and cleans response state consistently.",
+        "fr": "Le serveur marque les réponses avant envoi, sort après l’échec d’ouverture d’un fichier statique, renvoie 416 pour un Range hors fichier, intercepte les exceptions OnBeforeBody et nettoie l’état de réponse.",
+        "zh": "服务器在提交前标记响应，静态文件打开失败后立即退出，Range 起点越界时返回 416，捕获 OnBeforeBody 异常并一致清理响应状态。",
+        "ru": "Сервер помечает response до отправки, выходит после ошибки открытия static file, возвращает 416 для Range за файлом, перехватывает OnBeforeBody exceptions и последовательно очищает state."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys applications avoid duplicate or continued response work after failures and produce the correct status for invalid byte ranges.",
+        "fr": "Les applications HTTP.sys Windows évitent de poursuivre ou doubler une réponse après erreur et renvoient le bon status pour les ranges invalides.",
+        "zh": "Windows HTTP.sys 应用避免在失败后继续或重复响应，并为无效 byte range 返回正确状态。",
+        "ru": "Windows HTTP.sys applications не продолжают и не дублируют response после ошибки и возвращают правильный status для неверного byte range."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade and retest static-file Range requests plus OnBeforeBody exception handling.",
+        "fr": "Mettez à niveau et retestez les Range de fichiers statiques ainsi que les exceptions OnBeforeBody.",
+        "zh": "升级并重新测试静态文件 Range 请求与 OnBeforeBody 异常处理。",
+        "ru": "Обновитесь и повторно проверьте static-file Range и обработку исключений OnBeforeBody."
+      }
+    },
+    {
+      "sha": "6a2970d5730b4996348a3f07c8d26f12f6100ca2",
+      "headline": {
+        "en": "HTTP.sys closes connections that still contain unread request bodies",
+        "fr": "HTTP.sys ferme les connexions dont le corps reste non lu",
+        "zh": "HTTP.sys 会关闭仍有未读请求 body 的连接",
+        "ru": "HTTP.sys закрывает соединения с непрочитанным телом запроса"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SendError can now add Connection: close and HTTP_SEND_RESPONSE_FLAG_DISCONNECT. Oversize bodies, bot rejection, OnBeforeBody aborts and entity-body read errors use that path.",
+        "fr": "SendError peut ajouter Connection: close et HTTP_SEND_RESPONSE_FLAG_DISCONNECT. Les corps trop grands, rejets de bot, abandons OnBeforeBody et erreurs de lecture utilisent ce chemin.",
+        "zh": "SendError 现在可加入 Connection: close 与 HTTP_SEND_RESPONSE_FLAG_DISCONNECT；超大 body、bot 拒绝、OnBeforeBody 中止及 body 读取错误都走此路径。",
+        "ru": "SendError может добавлять Connection: close и HTTP_SEND_RESPONSE_FLAG_DISCONNECT. Этот путь используется для oversized body, bot rejection, OnBeforeBody abort и read errors."
+      },
+      "impact": {
+        "en": "The server no longer reuses an HTTP.sys connection whose request body was not fully consumed, preventing the next request from inheriting a poisoned stream state.",
+        "fr": "Le serveur ne réutilise plus une connexion HTTP.sys dont le corps n’a pas été consommé, évitant de polluer la requête suivante.",
+        "zh": "服务器不再复用请求 body 未完全消费的 HTTP.sys 连接，避免下一请求继承污染的流状态。",
+        "ru": "Сервер больше не переиспользует HTTP.sys connection с непрочитанным телом, предотвращая повреждённое состояние следующего запроса."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest rejected uploads and keep-alive behavior after upgrading.",
+        "fr": "Retestez les uploads rejetés et keep-alive après mise à niveau.",
+        "zh": "升级后重新测试被拒上传与 keep-alive 行为。",
+        "ru": "После обновления проверьте rejected uploads и keep-alive."
+      }
+    },
+    {
+      "sha": "7b05e490e1699867fde395cd8f7f76cb1103cbe2",
+      "headline": {
+        "en": "Unlimited chunked HTTP.sys bodies no longer receive 413",
+        "fr": "Les corps chunked HTTP.sys illimités ne reçoivent plus 413",
+        "zh": "无限制 chunked HTTP.sys body 不再收到 413",
+        "ru": "Unlimited chunked HTTP.sys bodies больше не получают 413"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The content-length guard now enforces MaximumAllowedContentLength only when that limit is greater than zero, so zero retains its documented unlimited meaning for chunked bodies.",
+        "fr": "La garde de longueur n’applique MaximumAllowedContentLength que si la limite est supérieure à zéro ; zéro conserve donc son sens illimité pour les corps chunked.",
+        "zh": "长度检查仅在 MaximumAllowedContentLength 大于零时生效，因此零对 chunked body 继续表示无限制。",
+        "ru": "Проверка длины применяет MaximumAllowedContentLength только при значении больше нуля, поэтому ноль сохраняет смысл unlimited для chunked body."
+      },
+      "impact": {
+        "en": "Windows HTTP.sys endpoints configured with the default unlimited value accept chunked uploads instead of rejecting them with HTTP 413.",
+        "fr": "Les endpoints HTTP.sys Windows configurés sans limite acceptent les uploads chunked au lieu de répondre HTTP 413.",
+        "zh": "使用默认无限制配置的 Windows HTTP.sys endpoint 会接受 chunked 上传，而非返回 HTTP 413。",
+        "ru": "Windows HTTP.sys endpoints с default unlimited принимают chunked uploads вместо HTTP 413."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade if chunked requests use MaximumAllowedContentLength=0, and retest both limited and unlimited uploads.",
+        "fr": "Mettez à niveau si les requêtes chunked utilisent MaximumAllowedContentLength=0 et retestez les uploads limités et illimités.",
+        "zh": "若 chunked 请求使用 MaximumAllowedContentLength=0，请升级并重测有限与无限上传。",
+        "ru": "Обновитесь, если chunked requests используют MaximumAllowedContentLength=0, и проверьте limited/unlimited uploads."
+      }
+    },
+    {
+      "sha": "2ff79bbd1b9699ccf66467dffbec97436df0dd65",
+      "headline": {
+        "en": "SOA methods can return JSON without binary magic prefixes",
+        "fr": "Les méthodes SOA peuvent renvoyer du JSON sans préfixes binary magic",
+        "zh": "SOA 方法可返回不含 binary magic 前缀的 JSON",
+        "ru": "SOA-методы могут возвращать JSON без binary magic prefixes"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TInterfaceMethodOption gains optCleanMagicJson. TInterfaceFactoryServer.ExecuteJson invokes RemoveMagicFromJson on the response when the option is present.",
+        "fr": "TInterfaceMethodOption gagne optCleanMagicJson. TInterfaceFactoryServer.ExecuteJson appelle RemoveMagicFromJson sur la réponse lorsque l’option est présente.",
+        "zh": "TInterfaceMethodOption 新增 optCleanMagicJson；设置该选项时，TInterfaceFactoryServer.ExecuteJson 会对响应调用 RemoveMagicFromJson。",
+        "ru": "TInterfaceMethodOption получает optCleanMagicJson. TInterfaceFactoryServer.ExecuteJson вызывает RemoveMagicFromJson для ответа при наличии опции."
+      },
+      "impact": {
+        "en": "Selected interface methods can emit JSON strings without the internal JSON_BASE64_MAGIC prefix. Existing services retain their current output unless they opt in.",
+        "fr": "Les méthodes d’interface sélectionnées peuvent émettre des chaînes JSON sans le préfixe interne JSON_BASE64_MAGIC. Les services existants ne changent pas sans activation.",
+        "zh": "选定接口方法可输出不含内部 JSON_BASE64_MAGIC 前缀的 JSON 字符串；现有服务除非显式启用，否则行为不变。",
+        "ru": "Выбранные interface methods могут выдавать JSON-строки без внутреннего JSON_BASE64_MAGIC. Существующие services не меняются без opt-in."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.interfaces",
+        "mormot.soa.server"
+      ],
+      "confidence": "confirmed",
+      "api_changes": [
+        {
+          "symbol": "TInterfaceMethodOption.optCleanMagicJson",
+          "change": "added"
+        }
+      ]
+    },
+    {
+      "sha": "5b8569374991854017c092f7ce6260b161f13536",
+      "headline": {
+        "en": "Example build instructions and dependency lists are corrected",
+        "fr": "Les instructions de build et dépendances de l’exemple sont corrigées",
+        "zh": "示例构建说明与依赖列表得到修正",
+        "ru": "Инструкции сборки и зависимости примера исправлены"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "The recommended-patterns documentation removes stale build steps and aligns dependency lists with the reorganized example source tree.",
+        "fr": "La documentation recommended-patterns retire les étapes de build obsolètes et aligne les dépendances sur l’arborescence réorganisée.",
+        "zh": "recommended-patterns 文档移除过时构建步骤，并使依赖列表与重组后的源码树一致。",
+        "ru": "Документация recommended-patterns удаляет устаревшие build steps и синхронизирует dependencies с новым source tree."
+      },
+      "impact": {
+        "en": "No framework or application runtime changes; only developers building the example see corrected guidance.",
+        "fr": "Aucun changement de framework ou runtime ; seuls les développeurs construisant l’exemple voient des instructions corrigées.",
+        "zh": "无框架或应用运行时变化；仅构建示例的开发者获得正确说明。",
+        "ru": "Нет изменений framework или runtime; исправлены лишь инструкции для сборки примера."
+      },
+      "action": "none",
+      "units": [
+        "recommended-patterns documentation"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4ecaf74e716ab295efa07663f4634f7dab2475b3",
+      "headline": {
+        "en": "CQRS layout documentation incorporates review corrections",
+        "fr": "La documentation du layout CQRS intègre les corrections de revue",
+        "zh": "CQRS 布局文档纳入评审修正",
+        "ru": "Документация CQRS layout учитывает замечания ревью"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "Architecture and development documents clarify interface/implementation dependencies and adjust the example service references after review.",
+        "fr": "Les documents d’architecture et de développement clarifient les dépendances interface/implementation et ajustent les références du service exemple après revue.",
+        "zh": "架构与开发文档在评审后澄清 interface/implementation 依赖，并调整示例服务引用。",
+        "ru": "Документы архитектуры и разработки уточняют dependencies interface/implementation и ссылки example service после ревью."
+      },
+      "impact": {
+        "en": "No runtime or public framework API impact; the commit only improves the recommended-patterns explanation.",
+        "fr": "Aucun impact runtime ni API publique ; le commit améliore seulement l’explication recommended-patterns.",
+        "zh": "无运行时或公共框架 API 影响；该提交仅改进 recommended-patterns 说明。",
+        "ru": "Нет влияния на runtime или public framework API; улучшено только объяснение recommended-patterns."
+      },
+      "action": "none",
+      "units": [
+        "recommended-patterns documentation"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "76e144c0cdca02a3057d21a5179fbf1503093b7a",
+      "headline": {
+        "en": "The example documents its interface and implementation folders",
+        "fr": "L’exemple documente ses dossiers interface et implementation",
+        "zh": "示例记录 interface 与 implementation 目录结构",
+        "ru": "Пример документирует папки interface и implementation"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "The SAD, README and project guides describe the app/<entity>/interface and app/<entity>/implementation split, dependency direction and local-mode exception.",
+        "fr": "Le SAD, README et les guides décrivent la séparation app/<entity>/interface et app/<entity>/implementation, le sens des dépendances et l’exception du mode local.",
+        "zh": "SAD、README 与项目指南说明 app/<entity>/interface 和 app/<entity>/implementation 的拆分、依赖方向及 local-mode 例外。",
+        "ru": "SAD, README и project guides описывают разделение app/<entity>/interface и app/<entity>/implementation, направление dependencies и исключение local mode."
+      },
+      "impact": {
+        "en": "No mORMot runtime behavior changes; teams following the example receive clearer architectural guidance.",
+        "fr": "Le runtime mORMot ne change pas ; les équipes suivant l’exemple obtiennent un guide architectural plus clair.",
+        "zh": "mORMot 运行时行为不变；采用该示例的团队获得更清晰架构指导。",
+        "ru": "Runtime mORMot не меняется; команды, следующие примеру, получают более ясное архитектурное руководство."
+      },
+      "action": "none",
+      "units": [
+        "recommended-patterns documentation"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "323eb2c940816dcd1ebb3770cd0b067494e0f3dc",
+      "headline": {
+        "en": "The CQRS example separates contracts from implementations",
+        "fr": "L’exemple CQRS sépare contrats et implémentations",
+        "zh": "CQRS 示例分离契约与实现",
+        "ru": "CQRS-пример разделяет контракты и реализации"
+      },
+      "category": "chore",
+      "severity": "low",
+      "what_changed": {
+        "en": "Recommended-patterns query, command and DTO units move into app/<entity>/interface, while mappers and handlers move into implementation; Delphi and FPC project paths are updated.",
+        "fr": "Les unités query, command et DTO de recommended-patterns passent dans app/<entity>/interface, les mappers et handlers dans implementation ; les chemins Delphi et FPC sont mis à jour.",
+        "zh": "recommended-patterns 的 query、command 与 DTO unit 移到 app/<entity>/interface，mapper 与 handler 移到 implementation；Delphi/FPC 项目路径同步更新。",
+        "ru": "Query, command и DTO units recommended-patterns перемещены в app/<entity>/interface, mappers и handlers — в implementation; пути проектов Delphi и FPC обновлены."
+      },
+      "impact": {
+        "en": "Only the example project layout and its build paths change. Framework users and production backends are unaffected unless they copied this example structure.",
+        "fr": "Seuls le layout de l’exemple et ses chemins de build changent. Les utilisateurs du framework ne sont pas affectés sauf copie de cette structure.",
+        "zh": "仅示例项目布局与构建路径变化；框架用户和生产后端不受影响，除非复制了该示例结构。",
+        "ru": "Меняются только layout примера и build paths. Пользователи framework и production backends не затронуты, если не копировали структуру."
+      },
+      "action": "none",
+      "units": [
+        "recommended-patterns example"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
