@@ -1,0 +1,2115 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-13",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-13T10:51:51Z",
+  "range": {
+    "since": "2026-10-12T10:33:41Z",
+    "until": "2026-10-13T10:51:51Z",
+    "head_sha": "319cd63ea11765dd5760d17f85e311e5ed93db7f"
+  },
+  "version": {
+    "after": "2.4.17586",
+    "before": "2.4.17551"
+  },
+  "totals": {
+    "commits": 35,
+    "additions": 1759,
+    "deletions": 469
+  },
+  "commits": [
+    {
+      "sha": "319cd63ea11765dd5760d17f85e311e5ed93db7f",
+      "short_sha": "319cd63e",
+      "subject": "crypt: RSA Miller-Rabin witness selection as described in FIPS 186-5 B.3.1",
+      "body": "- use the full bits scale not truncated by one nibble",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T09:06:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/319cd63ea11765dd5760d17f85e311e5ed93db7f",
+      "parents": [
+        "9bce2b484e374277cfacfcc69a500bcda5809c52"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 18,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 13,
+          "patch": "@@ -1646,22 +1646,25 @@ function TBigInt.MatchKnownPrime(Extend: TBigIntSimplePrime): boolean;\n \r\n procedure TBigInt.FillMillerRabinWitness(Drbg: TAesPrngAbstract; W: PBigInt);\r\n var\r\n-  c: cardinal;\r\n+  c, bits, bytes, last, tail: integer;\r\n begin\r\n-  for c := 1 to 16 do // safeguard against DRBG regression\r\n+  // witness selection as described in FIPS 186-5 B.3.1\r\n+  bits := W.BitCount;\r\n+  bytes := (bits + 7) shr 3;\r\n+  last := bits and (HALF_BITS - 1);\r\n+  for c := 1 to 128 do // safeguard against a failing DRBG\r\n   begin\r\n-    if W.Size = 1 then\r\n-      Value[0] := Drbg.Random32(W.Value[0]) or 1 // odd a < w\r\n-    else\r\n-    begin\r\n-      Size := W.Size - 1; // ensure a < w\r\n-      Drbg.FillRandom(Value, Size * HALF_BYTES);\r\n-      Value[0] := Value[0] or 1; // odd\r\n-      Trim; // needed for Compare() to work with new size\r\n-    end;\r\n-    if (Compare(1) > 0) and // expects 1 < a < w\r\n+    Resize(W.Size, {nozero=}true); // reuse existing Value[] array\r\n+    Drbg.FillRandom(Value, bytes);\r\n+    tail := Size * HALF_BYTES - bytes;\r\n+    if tail <> 0 then\r\n+      FillCharFast(PAnsiChar(Value)[bytes], tail, 0);\r\n+    if last <> 0 then // truncate\r\n+      Value[Size - 1] := Value[Size - 1] and (high(HalfUInt) shr (HALF_BITS - last));\r\n+    Trim; // required by Compare()\r\n+    if (Compare(1) > 0) and\r\n        (Compare(W) < 0) then\r\n-      exit;\r\n+      exit; // uniform rejection sampling: 2 <= a <= candidate - 2\r\n   end;\r\n   ERsaException.RaiseUtf8('TBigInt.FillMillerRabinWitness failed with %', [Drbg]);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17585\n+17586",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17585'\r\n+'2.4.17586'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 3,
+          "patch": "@@ -5079,7 +5079,6 @@ procedure TTestCoreCrypto.RsaMillerRabin;\n var\r\n   c: TRsaContext;\r\n   m, t, mu, e, a, b: PBigInt;\r\n-  rnd: TLecuyer;\r\n   slot: TRsaModulo;\r\n   i, j, bak, active: integer;\r\n   hex: RawUtf8;\r\n@@ -5130,8 +5129,7 @@ procedure TTestCoreCrypto.RsaMillerRabin;\n         end;\r\n         bak := m^.RefCnt;\r\n         active := c.ActiveCount;\r\n-        rnd.SeedGenerator(123456789);\r\n-        Check(m^.IsPrime(bspFast, 10, @rnd) = PRIME[i], 'Miller-Rabin prime');\r\n+        Check(m^.IsPrime(bspFast, 10) = PRIME[i], 'Miller-Rabin prime');\r\n         CheckEqual(m^.RefCnt, bak, 'candidate references preserved');\r\n         CheckEqual(m^.ToHexa, hex, 'candidate value preserved');\r\n         CheckEqual(c.ActiveCount, active, 'Miller-Rabin temporaries released');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9bce2b484e374277cfacfcc69a500bcda5809c52",
+      "short_sha": "9bce2b48",
+      "subject": "crypt: enhanced RSA compliance with NIST recommandations",
+      "body": "- NIST FIPS 186-5 requires an approved DRBG for Miller–Rabin probing",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T08:41:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9bce2b484e374277cfacfcc69a500bcda5809c52",
+      "parents": [
+        "0f2aa1314fd2d54e079e0cde22b394c12909febd"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 18,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 16,
+          "patch": "@@ -109,7 +109,7 @@   TBigInt = record\n     function UsedBytes: integer;\r\n     procedure Resize(n: integer; nozero: boolean = false);\r\n     procedure XorStrongRandom(last32: PCardinal);\r\n-    procedure FillMillerRabinWitness(Lecuyer: PLecuyer; W: PBigInt);\r\n+    procedure FillMillerRabinWitness(Drbg: TAesPrngAbstract; W: PBigInt);\r\n   public\r\n     /// the associated Big Integer RSA context\r\n     // - used to store modulo constants, and maintain an internal instance cache\r\n@@ -243,9 +243,9 @@   TBigInt = record\n     function MatchKnownPrime(Extend: TBigIntSimplePrime): boolean;\r\n     /// check if the number is (likely to be) a prime following HAC 4.44\r\n     // - can set a known simple primes Extend and Miller-Rabin tests Iterations\r\n-    // - can reuse a TLecuyer instance between calls as probing random source\r\n+    // - can reuse a DRBG instance between calls as probing random source\r\n     function IsPrime(Extend: TBigIntSimplePrime = bspMost;\r\n-      Iterations: integer = 10; Lecuyer: PLecuyer = nil): boolean;\r\n+      Iterations: integer = 10; Drbg: TAesPrngAbstract = nil): boolean;\r\n     /// guess a random prime number of the exact current size\r\n     // - a secret is generated from audited sources (OS, cpu RdRand), then\r\n     // looped over TAesPrng.Fill and IsPrime method within a timeout period\r\n@@ -1644,26 +1644,26 @@ function TBigInt.MatchKnownPrime(Extend: TBigIntSimplePrime): boolean;\n   result := false;\r\n end;\r\n \r\n-procedure TBigInt.FillMillerRabinWitness(Lecuyer: PLecuyer; W: PBigInt);\r\n+procedure TBigInt.FillMillerRabinWitness(Drbg: TAesPrngAbstract; W: PBigInt);\r\n var\r\n   c: cardinal;\r\n begin\r\n-  for c := 1 to 16 do // safeguard against TLecuyer regression\r\n+  for c := 1 to 16 do // safeguard against DRBG regression\r\n   begin\r\n     if W.Size = 1 then\r\n-      Value[0] := Lecuyer^.Next(W.Value[0]) or 1 // odd a < w\r\n+      Value[0] := Drbg.Random32(W.Value[0]) or 1 // odd a < w\r\n     else\r\n     begin\r\n       Size := W.Size - 1; // ensure a < w\r\n-      Lecuyer^.Fill(Value, Size * HALF_BYTES);\r\n+      Drbg.FillRandom(Value, Size * HALF_BYTES);\r\n       Value[0] := Value[0] or 1; // odd\r\n       Trim; // needed for Compare() to work with new size\r\n     end;\r\n     if (Compare(1) > 0) and // expects 1 < a < w\r\n        (Compare(W) < 0) then\r\n       exit;\r\n   end;\r\n-  ERsaException.RaiseU('TBigInt.FillMillerRabinWitness failed');\r\n+  ERsaException.RaiseUtf8('TBigInt.FillMillerRabinWitness failed with %', [Drbg]);\r\n end;\r\n \r\n function TBigInt.Is65537: boolean;\r\n@@ -1673,7 +1673,7 @@ function TBigInt.Is65537: boolean;\n end;\r\n \r\n function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\r\n-  Lecuyer: PLecuyer): boolean;\r\n+  Drbg: TAesPrngAbstract): boolean;\r\n var\r\n   r, a, w, mu, t: PBigInt;\r\n   s, bak, bit: integer;\r\n@@ -1707,8 +1707,8 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n      MatchKnownPrime(Extend) then // detect most of the composite integers\r\n     exit;\r\n   // validate is a prime number using Miller-Rabin iterative tests (HAC 4.24)\r\n-  if Lecuyer = nil then      // gsl_rng_taus2 CSPRNG 88-bit uniform distribution\r\n-    Lecuyer := ThreadRandom; // if not supplied by caller\r\n+  if Drbg = nil then       // NIST FIPS 186-5 requires an approved DRBG\r\n+    Drbg := TAesPrng.Main; // if not supplied by caller\r\n   bak := RefCnt;\r\n   RefCnt := -1; // make permanent for use as modulo below\r\n   w := nil;\r\n@@ -1750,7 +1750,7 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n     begin\r\n       dec(Iterations);\r\n       // generate random 1 < a < value - 1\r\n-      a.FillMillerRabinWitness(Lecuyer, w);\r\n+      a.FillMillerRabinWitness(Drbg, w);\r\n       // search if a is composite\r\n       a := Owner.ModPower(a, r.Copy, @self, mu); // a = a^r mod value\r\n       if not StrongWitness then\r\n@@ -1814,7 +1814,7 @@ function TBigInt.FillPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n   min, bytes: integer;\r\n   last32: PCardinal;\r\n   rnd: RawByteString;\r\n-  lecu\n... [truncated, 1506 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17584\n+17585",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17584'\r\n+'2.4.17585'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0f2aa1314fd2d54e079e0cde22b394c12909febd",
+      "short_sha": "0f2aa131",
+      "subject": "crypt: compute p/q RSA primes in parallel in two CPU cores",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T08:09:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0f2aa1314fd2d54e079e0cde22b394c12909febd",
+      "parents": [
+        "4f07c5c32252e865f12449ad6a6754d395018c74"
+      ],
+      "stats": {
+        "additions": 103,
+        "deletions": 27,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 101,
+          "deletions": 25,
+          "patch": "@@ -679,6 +679,7 @@   TRsa = class(TRsaContext)\n     // - searching for proper random primes may take a lot of time on low-end\r\n     // CPU so a timeout period can be supplied (default 10 secs)\r\n     // - if Iterations value is too low, the FIPS recommendation will be forced\r\n+    // - creates a temporary background thread for parallel p/q prime computation\r\n     // - on a slow CPU or with a huge number of Bits, you can increase TimeOutMS\r\n     // - hint: consider using the TRsa.GenerateNew factory , which would properly\r\n     // handle rgrWeakBitsMayRetry result\r\n@@ -1624,7 +1625,12 @@ function TBigInt.MatchKnownPrime(Extend: TBigIntSimplePrime): boolean;\n begin\r\n   {$ifndef NOCOMPRESSEDTABLE}\r\n   if BIGINT_PRIMES[high(BIGINT_PRIMES)] = 0 then // should equal 17989\r\n-    ComputeAllPrimes; // delayed initialization - thread safe by design\r\n+  begin\r\n+    GlobalLock;\r\n+    if BIGINT_PRIMES[high(BIGINT_PRIMES)] = 0 then\r\n+      ComputeAllPrimes; // delayed thread safe initialization\r\n+    GlobalUnLock;\r\n+  end;\r\n   {$endif NOCOMPRESSEDTABLE}\r\n   if not IsZero then\r\n   begin\r\n@@ -2874,27 +2880,77 @@ class function TRsa.GenerateNew(Bits: integer; Extend: TBigIntSimplePrime;\n   // we force exponent = 65537 - FIPS 5.4 (e)\r\n   BIGINT_65537_BIN: RawByteString = #$01#$00#$01; // Size=2 on CPU32\r\n \r\n+type\r\n+  TRsaPrimeWorker = class(TThread) // no need of mormot.core.threads\r\n+  public\r\n+    PrimeBytes, Iterations: integer;\r\n+    EndTix: Int64;\r\n+    Extend: TBigIntSimplePrime;\r\n+    NewPrime: RawByteString; // saved as binary\r\n+    constructor Create(aPrimeBytes, aIterations: integer;\r\n+      aExtend: TBigIntSimplePrime; aEndTix: Int64); reintroduce;\r\n+    procedure Execute; override;\r\n+  end;\r\n+\r\n+constructor TRsaPrimeWorker.Create(aPrimeBytes, aIterations: integer;\r\n+  aExtend: TBigIntSimplePrime; aEndTix: Int64);\r\n+begin\r\n+  PrimeBytes := aPrimeBytes;\r\n+  Iterations := aIterations;\r\n+  Extend := aExtend;\r\n+  EndTix := aEndTix;\r\n+  inherited Create({suspended=}false);\r\n+end;\r\n+\r\n+procedure TRsaPrimeWorker.Execute;\r\n+var\r\n+  c: TRsaContext;\r\n+  e, p: PBigInt;\r\n+begin\r\n+  c := TRsaContext.Create; // each thread needs its own memory context\r\n+  try\r\n+    e := c.LoadPermanent(BIGINT_65537_BIN); // most common exponent = 65537\r\n+    p := c.Allocate(ValuesSize(PrimeBytes));\r\n+    try\r\n+      repeat\r\n+        if not p.FillPrime(Extend, Iterations, EndTix) then\r\n+          exit; // timed out\r\n+      until p.Modulo(e).Compare(1, {andrelease=}true) <> 0;\r\n+      // FIPS 186-4 B.3.1: ensure x mod e<>1 i.e. gcd(x-1,e)=1\r\n+      NewPrime := p.SaveFixed(PrimeBytes); // transfer bytes, not the instance\r\n+      if length(NewPrime) <> PrimeBytes then\r\n+        FillZero(NewPrime);\r\n+    finally\r\n+      p.Release;\r\n+      e.ResetPermanentAndRelease;\r\n+    end;\r\n+  finally\r\n+    c.Free;\r\n+  end;\r\n+end;\r\n+\r\n // see https://www.di-mgt.com.au/rsa_alg.html as reference\r\n \r\n function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\r\n   Iterations, TimeOutMS: integer): TRsaGenerateResult;\r\n var\r\n   _e, _p, _q, _d, _h, _tmp: PBigInt;\r\n-  comp: integer;\r\n+  comp, bytes: integer;\r\n+  wrk: TRsaPrimeWorker;\r\n   endtix: Int64;\r\n begin\r\n   // ensure we can actually generate such a RSA key\r\n   result := rgrIncorrectParams;\r\n   if HasPublicKey or\r\n      HasPrivateKey or\r\n-     ((Bits <> 512) and    // broken with average CPU power\r\n-      (Bits <> 1024) and   // considered weak, and rejected by browsers and NIST\r\n-      (Bits <> 2048) and   // 112-bit of security = RSA_DEFAULT_GENERATION_BITS\r\n-      (Bits <> 3072) and   // 128-bit of security (as ECC256): secure until 2030\r\n-      (Bits <> 4096) and   // not worth it\r\n-      (Bits <> 7680) and   // REALLY slow for only 192-bit of security\r\n+     ((Bits <> 512) and   // broken with average CPU power\r\n+      (Bits <> 1024) and  // considered weak, and rejected by browsers and NIST\r\n+      (Bits <> 2048) and  // 112-bit of security = RSA_DEFAULT_GENERATION_BITS\r\n+      (Bits <> 3072) and  // 128-bit of security \n... [truncated, 3194 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17583\n+17584",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17583'\r\n+'2.4.17584'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4f07c5c32252e865f12449ad6a6754d395018c74",
+      "short_sha": "4f07c5c3",
+      "subject": "crypt: optimize exponent common prime 65537",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T07:05:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4f07c5c32252e865f12449ad6a6754d395018c74",
+      "parents": [
+        "e1d2b232b4a14c0c16b2f7e3bb92f58015a311b2"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 10,
+          "patch": "@@ -105,6 +105,7 @@   TBigInt = record\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n     fNextFree: PBigInt; // next bigint in the Owner free instance cache\r\n+    function Is65537: boolean; {$ifdef HASINLINE} inline; {$endif}\r\n     function UsedBytes: integer;\r\n     procedure Resize(n: integer; nozero: boolean = false);\r\n     procedure XorStrongRandom(last32: PCardinal);\r\n@@ -1659,6 +1660,12 @@ procedure TBigInt.FillMillerRabinWitness(Lecuyer: PLecuyer; W: PBigInt);\n   ERsaException.RaiseU('TBigInt.FillMillerRabinWitness failed');\r\n end;\r\n \r\n+function TBigInt.Is65537: boolean;\r\n+begin\r\n+  result := (Size = (32 div HALF_BITS)) and\r\n+            (PCardinal(Value)^ = 65537); // common Exponent from FIPS 5.4 (e)\r\n+end;\r\n+\r\n function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\r\n   Lecuyer: PLecuyer): boolean;\r\n var\r\n@@ -1687,8 +1694,7 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n \r\n begin\r\n   // first check if not a factor of a well-known small prime\r\n-  result := (Size = (32 div HALF_BITS)) and\r\n-            (PCardinal(Value)^ = 65537); // common Exponent from FIPS 5.4 (e)\r\n+  result := Is65537;\r\n   if result or // result = true for common 65537 prime > BIGINT_PRIMES[]\r\n      IsZero or\r\n      (Iterations <= 0) or\r\n@@ -2455,24 +2461,20 @@ function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n   bits, i, j, lo, w: PtrInt;\r\n   powers: array[0 .. 7] of PBigInt; // base^1/3/5/7/9/11/13/15\r\n begin\r\n-  result := AllocateFrom(1);\r\n-  bits := exp.BitCount;\r\n   base := Reduce(b, m, BarrettMu);\r\n-  if (bits = 17) and\r\n-     exp.BitIsSet(0) and\r\n-     (exp.BitSetCount = 2) then\r\n+  if exp.Is65537 then\r\n   begin\r\n     // fast path for most common public exponent e = 65537 = 2^16 + 1\r\n-    result.Release;\r\n     result := base.Copy;\r\n     for j := 1 to 16 do\r\n       result := Reduce(result.Square, m, BarrettMu);\r\n-    result := Reduce(\r\n-      result.Multiply(base.Copy), m, BarrettMu);\r\n+    result := Reduce(result.Multiply(base.Copy), m, BarrettMu);\r\n     base.Release;\r\n     exp.Release;\r\n     exit;\r\n   end;\r\n+  result := AllocateFrom(1);\r\n+  bits := exp.BitCount;\r\n   if bits < 256 then\r\n   begin\r\n     // simple binary exponentiation\r\n@@ -2911,6 +2913,8 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n   fModulusBits := Bits;\r\n   fModulusLen := Bits shr 3;\r\n   _e := LoadPermanent(BIGINT_65537_BIN); // most common exponent = 65537\r\n+  if not _e.Is65537 then\r\n+    exit;\r\n   _p := Allocate(ValuesSize(ModulusLen shr 1)); // p,q size = half Bits\r\n   _q := Allocate(_p.Size);\r\n   _d := nil;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17582\n+17583",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17582'\r\n+'2.4.17583'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e1d2b232b4a14c0c16b2f7e3bb92f58015a311b2",
+      "short_sha": "e1d2b232",
+      "subject": "crypt: use 4-bit sliding window for TRsaContext.ModPower",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T07:04:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e1d2b232b4a14c0c16b2f7e3bb92f58015a311b2",
+      "parents": [
+        "5be3ad0ce82e5272c863d910ef9547c8ecb8e3ae"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -2452,8 +2452,8 @@ function TRsaContext.Reduce(b, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\r\n var\r\n   base, exponent, base2: PBigInt;\r\n-  powers: array[0..3] of PBigInt; // base^1, base^3, base^5, base^7\r\n   bits, i, j, lo, w: PtrInt;\r\n+  powers: array[0 .. 7] of PBigInt; // base^1/3/5/7/9/11/13/15\r\n begin\r\n   result := AllocateFrom(1);\r\n   bits := exp.BitCount;\r\n@@ -2491,7 +2491,7 @@ function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n     exponent.Release;\r\n     exit;\r\n   end;\r\n-  // 3-bit sliding window: precompute odd powers once\r\n+  // 4-bit sliding window: precompute odd powers once\r\n   powers[0] := base;\r\n   base2 := Reduce(base.Copy.Square, m, BarrettMu);\r\n   for j := 1 to high(powers) do\r\n@@ -2506,9 +2506,9 @@ function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n     end\r\n     else\r\n     begin\r\n-      lo := MaxPtrInt(0, i - 2);\r\n+      lo := MaxPtrInt(0, i - 3);\r\n       while not exp.BitIsSet(lo) do\r\n-        inc(lo); // choose an odd w of up to 3 bits\r\n+        inc(lo); // choose an odd w of up to 4 bits\r\n       w := 0;\r\n       for j := i downto lo do\r\n         w := (w shl 1) or ord(exp.BitIsSet(j));\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17581\n+17582",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17581'\r\n+'2.4.17582'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5be3ad0ce82e5272c863d910ef9547c8ecb8e3ae",
+      "short_sha": "5be3ad0c",
+      "subject": "crypt: faster TBigInt.IsPrime by using base-2 pretest",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T07:03:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5be3ad0ce82e5272c863d910ef9547c8ecb8e3ae",
+      "parents": [
+        "b4a210033da8f9e5f66c3719aedf1ff1b2eec2c1"
+      ],
+      "stats": {
+        "additions": 46,
+        "deletions": 18,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 44,
+          "deletions": 16,
+          "patch": "@@ -40,7 +40,7 @@ interface\n   - new pure pascal OOP design of BigInt computation optimized for RSA process\r\n   - garbage collection of BigInt instances, with proper anti-forensic wiping\r\n   - use half-registers (HalfUInt) for efficient computation on all CPUs\r\n-  - dedicated x86_64/i386 asm for core computation routines (noticeable speedup)\r\n+  - dedicated x86_64/i386/aarch64 asm for the core computation routines\r\n   - slower than OpenSSL, but likely the fastest FPC or Delphi native RSA library\r\n   - includes FIPS-level RSA keypair validation and generation\r\n   - features both RSASSA-PKCS1-v1_5 and RSASSA-PSS signature schemes\r\n@@ -1663,7 +1663,28 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n   Lecuyer: PLecuyer): boolean;\r\n var\r\n   r, a, w, mu, t: PBigInt;\r\n-  s, n, bak: integer;\r\n+  s, bak, bit: integer;\r\n+\r\n+  function StrongWitness: boolean;\r\n+  var\r\n+    j: integer;\r\n+  begin\r\n+    // a already contains witness^r mod self\r\n+    result := true;\r\n+    if (a.Compare(1) = 0) or\r\n+       (a.Compare(w) = 0) then\r\n+      exit;\r\n+    for j := 1 to s - 1 do\r\n+    begin\r\n+      a := Owner.Reduce(a.Square, @self, mu);\r\n+      if a.Compare(w) = 0 then\r\n+        exit;\r\n+      if a.Compare(1) = 0 then\r\n+        break;\r\n+    end;\r\n+    result := false;\r\n+  end;\r\n+\r\n begin\r\n   // first check if not a factor of a well-known small prime\r\n   result := (Size = (32 div HALF_BITS)) and\r\n@@ -1686,14 +1707,32 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n   try\r\n     w := Clone.IntSub(1); // w = value - 1\r\n     r := w.Clone;\r\n-    a := Owner.Allocate(Size, []);\r\n     // compute s = lsb(w) and r = w shr s\r\n     s := r.FindMinBit;\r\n     r.ShrBits(s);\r\n     // one Barrett reciprocal per candidate, shared by all witness rounds\r\n     // keep it local: IsPrime may run on an already initialized RSA context\r\n     t := Owner.AllocateFrom(1).LeftShift(2 * Size);\r\n     mu := t.Divide(@self);\r\n+    // fast strong probable-prime test for base 2\r\n+    a := Owner.AllocateFrom(2);\r\n+    // compute 2^r mod self - highest exponent bit is represented by a = 2\r\n+    for bit := r.BitCount - 2 downto 0 do\r\n+    begin\r\n+      a := Owner.Reduce(a.Square, @self, mu);\r\n+      if r.BitIsSet(bit) then\r\n+      begin\r\n+        // a = 2*a mod self, since 0 <= a < self\r\n+        a.ShlBits(1);\r\n+        if a.Compare(@self) >= 0 then\r\n+          a.Substract(Clone);\r\n+      end;\r\n+    end;\r\n+    if not StrongWitness then\r\n+      exit; // composite\r\n+    // need the original randomized Miller-Rabin algorithm\r\n+    a.Release;\r\n+    a := Owner.Allocate(Size, []);\r\n     Owner.Release([@t]);\r\n     while Iterations > 0 do\r\n     begin\r\n@@ -1702,19 +1741,8 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n       a.FillMillerRabinWitness(Lecuyer, w);\r\n       // search if a is composite\r\n       a := Owner.ModPower(a, r.Copy, @self, mu); // a = a^r mod value\r\n-      if (a.Compare(1) = 0) or\r\n-         (a.Compare(w) = 0) then\r\n-        continue; // this random is related: try outside the family\r\n-      for n := 1 to s - 1 do\r\n-      begin\r\n-        a := Owner.Reduce(a.Square, @self, mu); // a = (a*a) mod value\r\n-        if (a.Compare(w) = 0) or\r\n-           (a.Compare(1) = 0) then\r\n-          break;\r\n-      end;\r\n-      if (a.Compare(w) <> 0) or\r\n-         (a.Compare(1) = 0) then\r\n-        exit; // not a prime\r\n+      if not StrongWitness then\r\n+        exit; // composite\r\n     end;\r\n     result := true;\r\n   finally\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17580\n+17581",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17580'\r\n+'2.4.17581'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b4a210033da8f9e5f66c3719aedf1ff1b2eec2c1",
+      "short_sha": "b4a21003",
+      "subject": "crypt: ensure fixed-width RSA serialization",
+      "body": "- as requested by the standard",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T20:01:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b4a210033da8f9e5f66c3719aedf1ff1b2eec2c1",
+      "parents": [
+        "c21e6cfa2975678e23baaceeff6f193c3aa44e9e"
+      ],
+      "stats": {
+        "additions": 99,
+        "deletions": 33,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 90,
+          "deletions": 30,
+          "patch": "@@ -149,6 +149,10 @@   TBigInt = record\n     procedure Save(data: PByteArray; bytes: integer; andrelease: boolean); overload;\r\n     /// export a Big Integer value into a binary RawByteString\r\n     function Save(andrelease: boolean = false): RawByteString; overload;\r\n+    /// export exactly bytes big-endian bytes, padding with leading zeros\r\n+    // - returns '' if the value does not fit\r\n+    // - optionally releases self, like Save()\r\n+    function SaveFixed(bytes: integer; andrelease: boolean = false): RawByteString;\r\n     /// delete any meaningless leading zeros and return self\r\n     function Trim: PBigInt;\r\n       {$ifdef HASSAFEINLINE} inline; {$endif}\r\n@@ -1262,6 +1266,32 @@ function TBigInt.Save(andrelease: boolean): RawByteString;\n   Save(pointer(result), length(result), andrelease);\r\n end;\r\n \r\n+function TBigInt.SaveFixed(bytes: integer; andrelease: boolean): RawByteString;\r\n+var\r\n+  used: integer;\r\n+  p: PByteArray;\r\n+begin\r\n+  FastAssignNew(result);\r\n+  try\r\n+    if (@self = nil) or\r\n+       (bytes <= 0) then\r\n+      exit;\r\n+    used := 0; // number of significant bytes\r\n+    if Size > 0 then\r\n+      used := (BitCount + 7) shr 3;\r\n+    if used > bytes then // I2OSP requires to fit the requested width\r\n+      exit;\r\n+    p := FastNewString(bytes);\r\n+    pointer(result) := p;\r\n+    dec(bytes, used);\r\n+    FillCharFast(p^, bytes, 0);\r\n+    MoveSwap(@p[bytes], pointer(Value), used); // fill the actual data\r\n+  finally\r\n+    if andrelease then\r\n+      Release;\r\n+  end;\r\n+end;\r\n+\r\n function TBigInt.Add(b: PBigInt): PBigInt;\r\n var\r\n   n: integer;\r\n@@ -3215,15 +3245,21 @@ function TRsa.Pkcs1Decrypt(Input: pointer): RawByteString;\n   fSafe.Lock;\r\n   try\r\n     enc := Load(Input, fModulusLen);\r\n+    if enc.Compare(fM) >= 0 then // RFC 8017: ciphertext must be < n\r\n+    begin\r\n+      enc.Release;\r\n+      exit;\r\n+    end;\r\n     dec := ChineseRemainderTheorem(enc);\r\n     if dec = nil then\r\n       exit;\r\n-    exp := dec.Save({andrelease=}true);\r\n+    exp := dec.SaveFixed(fModulusLen, {andrelease=}true);\r\n   finally\r\n     fSafe.UnLock;\r\n   end;\r\n   // decode the result following proper padding (PKCS#1.5 with TRsa class)\r\n-  result := Pkcs1UnPad(pointer(exp), {verify=}false);\r\n+  if exp <> '' then\r\n+    result := Pkcs1UnPad(pointer(exp), {verify=}false);\r\n end;\r\n \r\n function TRsa.Pkcs1Verify(Input: pointer): RawByteString;\r\n@@ -3239,16 +3275,22 @@ function TRsa.Pkcs1Verify(Input: pointer): RawByteString;\n   fSafe.Lock;\r\n   try\r\n     enc := Load(Input, fModulusLen);\r\n+    if enc.Compare(fM) >= 0 then // reject noncanonical RSA signatures\r\n+    begin\r\n+      enc.Release;\r\n+      exit;\r\n+    end;\r\n     CurrentModulo := rmM; // for ModPower()\r\n     dec := ModPower(enc, fE, nil); // calls enc.Release\r\n     if dec = nil then\r\n       exit;\r\n-    exp := dec.Save({andrelease=}true);\r\n+    exp := dec.SaveFixed(fModulusLen, {andrelease=}true);\r\n   finally\r\n     fSafe.UnLock;\r\n   end;\r\n   // decode the result following proper padding (PKCS#1.5 with TRsa class)\r\n-  result := Pkcs1UnPad(pointer(exp), {verify=}true);\r\n+  if exp <> '' then\r\n+    result := Pkcs1UnPad(pointer(exp), {verify=}true);\r\n end;\r\n \r\n function TRsa.Pkcs1Encrypt(Input: pointer; InputLen: integer): RawByteString;\r\n@@ -3262,12 +3304,15 @@ function TRsa.Pkcs1Encrypt(Input: pointer; InputLen: integer): RawByteString;\n     exit;\r\n   // encode input using proper padding (PKCS#1.5 with TRsa class)\r\n   exp := Pkcs1Pad(Input, InputLen, {sign=}false);\r\n+  if exp = '' then\r\n+    exit;\r\n   // encrypt with the RSA public key\r\n   fSafe.Lock;\r\n   try\r\n     dec := Load(pointer(exp), fModulusLen);\r\n     CurrentModulo := rmM; // for ModPower()\r\n-    result := ModPower(dec, fE, nil).Save({andrelease=}true);\r\n+    result := ModPower(dec, fE, nil).\r\n+              SaveFixed(fModulusLen, {andrelease=}true);\r\n   finally\r\n     fSafe.UnLock;\r\n   end;\r\n@@ -3284,11 +3329,14 @@ function TRsa.Pkcs1Sign(Input: pointer; InputLen: integer): RawByteString;\n     exit;\r\n   // encode input using proper padding (P\n... [truncated, 3455 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17579\n+17580",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17579'\r\n+'2.4.17580'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 1,
+          "patch": "@@ -5401,7 +5401,7 @@ procedure TTestCoreCrypto._RSA;\n   rnd: HalfUInt; // truncated to 16-bit or 32-bit value\r\n   a, b, s, d, e, m, v: PBigInt;\r\n   cu, pem, txt: RawUtf8;\r\n-  bin, pub, hash, signed, encrypted: RawByteString;\r\n+  bin, pub, hash, signed, encrypted, exp: RawByteString;\r\n   pub1, pub2: TRsaPublicKey;\r\n   pri1, pri2: TRsaPrivateKey;\r\n   timer: TPrecisionTimer;\r\n@@ -5669,6 +5669,12 @@ procedure TTestCoreCrypto._RSA;\n     v.ResetPermanentAndRelease;\r\n     a.Release;\r\n     e.Release;\r\n+    a := c.AllocateFrom(1);\r\n+    exp := a.SaveFixed(256, true);\r\n+    CheckEqual(length(exp), 256);\r\n+    for i := 1 to 255 do\r\n+      CheckEqual(ord(exp[i]), 0);\r\n+    CheckEqual(ord(exp[256]), 1);\r\n   finally\r\n     c.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c21e6cfa2975678e23baaceeff6f193c3aa44e9e",
+      "short_sha": "c21e6cfa",
+      "subject": "crypt: several RSA fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T18:26:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c21e6cfa2975678e23baaceeff6f193c3aa44e9e",
+      "parents": [
+        "bc529ee65d361c2ad52bbaf1b8ca6cb07f4d2a65"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -1702,9 +1702,9 @@ function FipsMinIterations(bits: integer): integer;\n   // ensure 2^-112 error probability - see FIPS 186-5 appendix B.3 table B.1\r\n   if bits >= 1536  then\r\n     result := 4   // absolute allowed minimum, even with bits=8192\r\n-  else if bits >= 1024 shr HALF_SHR then\r\n+  else if bits >= 1024 then\r\n     result := 5\r\n-  else if bits >= 512 shr HALF_SHR then\r\n+  else if bits >= 512 then\r\n     result := 15  // not allowed by FIPS anyway\r\n   else\r\n     result := 51; // never used in practice for RSA\r\n@@ -3161,7 +3161,7 @@ function TRsa.Pkcs1UnPad(p: PByteArray; verify: boolean): RawByteString;\n     end;\r\n   end;\r\n   if (count = fModulusLen) or\r\n-     (padding = 8) or\r\n+     (padding < 8) or\r\n      (p[count] <> 0) then\r\n     exit; // invalid padding with ending zero\r\n   inc(count);\r\n@@ -3464,7 +3464,7 @@ function TRsaPss.Verify(Hash, Sig: pointer; HashAlgo: THashAlgo; SigLen: integer\n   hlen := HASH_SIZE[HashAlgo];\r\n   if (Hash = nil) or\r\n      (fModulusLen < hlen + 6) or\r\n-     (cardinal(fModulusLen - SigLen) > 1) or\r\n+     (SigLen <> fModulusLen) or\r\n      not HasPublicKey then\r\n     exit;\r\n   // decrypt the signature with the RSA Public Key\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17578\n+17579",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17578'\r\n+'2.4.17579'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bc529ee65d361c2ad52bbaf1b8ca6cb07f4d2a65",
+      "short_sha": "bc529ee6",
+      "subject": "crypt: optimized RSA Barret Reduction",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T18:02:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bc529ee65d361c2ad52bbaf1b8ca6cb07f4d2a65",
+      "parents": [
+        "7be82719c624807260c0c9204962014b16b8a48f"
+      ],
+      "stats": {
+        "additions": 36,
+        "deletions": 17,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 15,
+          "patch": "@@ -211,7 +211,6 @@   TBigInt = record\n     /// standard multiplication by itself\r\n     // - will allocate a new Big Integer value and release self\r\n     function Square: PBigint;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n     /// add an unsigned integer value\r\n     function IntAdd(b: HalfUInt): PBigInt;\r\n     /// substract an unsigned integer value\r\n@@ -2317,34 +2316,54 @@ procedure TRsaContext.ResetModulo(modulo: TRsaModulo);\n \r\n function BarrettReduce(x, modulus, mu: PBigInt): PBigInt;\r\n var\r\n-  k: integer;\r\n+  k, qlen, n, i, first: PtrInt;\r\n   q, r, r2: PBigInt;\r\n begin\r\n   k := modulus^.Size;\r\n-  // called only with x < B^(2*k) and a normalized, nonzero modulus\r\n+  // x < B^(2*k), with B = RSA_RADIX\r\n   if x^.Compare(modulus) < 0 then\r\n   begin\r\n     result := x^.Clone;\r\n     exit;\r\n   end;\r\n   // q1 = floor(x / B^(k-1))\r\n-  q := x^.Clone.RightShift(k - 1);\r\n-  // q2 = q1 * mu  and  q3 = floor(q2 / B^(k+1))\r\n-  q := q.Multiply(mu.Copy);\r\n-  q.RightShift(k + 1);\r\n+  qlen := x^.Size - k + 1;\r\n+  // Compute only the upper portion of q1 * mu.\r\n+  // Omit partial products at positions below k-1.\r\n+  // The discarded part is < B^(k+1) for RSA limb sizes,\r\n+  // so the resulting q3 may be at most one too small.\r\n+  n := qlen + mu^.Size - k + 1;\r\n+  q := x^.Owner.Allocate(n);\r\n+  for i := 0 to mu^.Size - 1 do\r\n+  begin\r\n+    first := k - 1 - i;\r\n+    if first < 0 then\r\n+      first := 0;\r\n+    if first < qlen then\r\n+      RawMultiply(\r\n+        @x^.Value[k - 1 + first],\r\n+        @q^.Value[i + first - k + 1],\r\n+        qlen - first, mu^.Value[i]);\r\n+  end;\r\n+  // q holds the partial product shifted by k-1 limbs.\r\n+  // Two more limbs give floor(q1 * mu / B^(k+1)),\r\n+  // possibly underestimated by one.\r\n+  q.RightShift(2);\r\n   // r2 = (q3 * modulus) mod B^(k+1)\r\n   r2 := q.MultiplyLow(modulus.Copy, k + 1);\r\n   // r1 = x mod B^(k+1)\r\n-  r := x^.Clone;\r\n-  if r^.Size > k + 1 then\r\n-    r^.Size := k + 1;\r\n-  // Important: preserve full k+1-limb width for the modular subtraction below\r\n-  r^.Resize(k + 1);\r\n+  // Copy only the needed low limbs, not all of x.\r\n+  r := x^.Owner.Allocate(k + 1);\r\n+  MoveFast(x^.Value[0], r^.Value[0], MinPtrInt(x^.Size, k + 1) * HALF_BYTES);\r\n   // r = (r1 - r2) mod B^(k+1)\r\n   result := r.Substract(r2);\r\n-  // at most two corrections for valid inputs\r\n-  if result^.Compare(modulus) >= 0 then\r\n-    result := result.Substract(modulus.Copy);\r\n+  // at most three corrections needed\r\n+  if result^.Compare(modulus) < 0 then\r\n+    exit;\r\n+  result := result.Substract(modulus.Copy);\r\n+  if result^.Compare(modulus) < 0 then\r\n+    exit;\r\n+  result := result.Substract(modulus.Copy);\r\n   if result^.Compare(modulus) >= 0 then\r\n     result := result.Substract(modulus.Copy);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17577\n+17578",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17577'\r\n+'2.4.17578'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7be82719c624807260c0c9204962014b16b8a48f",
+      "short_sha": "7be82719",
+      "subject": "crypt: dedicated TBigInt.Square method",
+      "body": "- using optimized algorithm",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:51:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7be82719c624807260c0c9204962014b16b8a48f",
+      "parents": [
+        "d283eedad49af592d89b5df547e5d6ffb5ac68ff"
+      ],
+      "stats": {
+        "additions": 39,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 37,
+          "deletions": 2,
+          "patch": "@@ -2068,9 +2068,44 @@ function TBigInt.MultiplyLow(b: PBigInt; LimbCount: integer): PBigInt;\n   result := r.Trim;\r\n end;\r\n \r\n-function TBigInt.Square: PBigint;\r\n+function TBigInt.Square: PBigInt;\r\n+var\r\n+  r: PBigInt;\r\n+  i, j, n: PtrInt;\r\n+  v, carry: PtrUInt;\r\n begin\r\n-  result := Multiply(Copy);\r\n+  n := Size;\r\n+  if n <= 2 then\r\n+  begin\r\n+    result := Multiply(Copy); // not worth any optimization\r\n+    exit;\r\n+  end;\r\n+  r := Owner.Allocate(n shl 1); // zeroed 2*n-limb result\r\n+  // compute off-diagonal products as r = sum(a[i] * a[j] * B^(i+j)), for j < i\r\n+  for i := 1 to n - 1 do\r\n+    RawMultiply(pointer(Value), @r^.Value[i], i, Value[i]);\r\n+  // double all off-diagonal products\r\n+  carry := 0;\r\n+  for i := 0 to (n shl 1) - 1 do\r\n+  begin\r\n+    v := (PtrUInt(r^.Value[i]) shl 1) + carry;\r\n+    r^.Value[i] := v;\r\n+    carry := v shr HALF_BITS;\r\n+  end;\r\n+  // add diagonal products a[i]^2 at positions 2*i, propagating the carry\r\n+  carry := 0;\r\n+  for i := 0 to n - 1 do\r\n+  begin\r\n+    j := i shl 1;\r\n+    v := PtrUInt(Value[i]) * Value[i] +\r\n+         r^.Value[j] + carry;\r\n+    r^.Value[j] := v;\r\n+    v := (v shr HALF_BITS) + r^.Value[j + 1];\r\n+    r^.Value[j + 1] := v;\r\n+    carry := v shr HALF_BITS;\r\n+  end;\r\n+  Release;\r\n+  result := r.Trim;\r\n end;\r\n \r\n function TBigInt.IntAdd(b: HalfUInt): PBigInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17576\n+17577",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17576'\r\n+'2.4.17577'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d283eedad49af592d89b5df547e5d6ffb5ac68ff",
+      "short_sha": "d283eeda",
+      "subject": "crypt: optimized RSA for exponent=65537",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:42:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d283eedad49af592d89b5df547e5d6ffb5ac68ff",
+      "parents": [
+        "9b9e71e35622cc04fa5f8ed45d8ecda8baa5c23e"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 0,
+          "patch": "@@ -2346,6 +2346,21 @@ function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n   result := AllocateFrom(1);\r\n   bits := exp.BitCount;\r\n   base := Reduce(b, m, BarrettMu);\r\n+  if (bits = 17) and\r\n+     exp.BitIsSet(0) and\r\n+     (exp.BitSetCount = 2) then\r\n+  begin\r\n+    // fast path for most common public exponent e = 65537 = 2^16 + 1\r\n+    result.Release;\r\n+    result := base.Copy;\r\n+    for j := 1 to 16 do\r\n+      result := Reduce(result.Square, m, BarrettMu);\r\n+    result := Reduce(\r\n+      result.Multiply(base.Copy), m, BarrettMu);\r\n+    base.Release;\r\n+    exp.Release;\r\n+    exit;\r\n+  end;\r\n   if bits < 256 then\r\n   begin\r\n     // simple binary exponentiation\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17575\n+17576",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17575'\r\n+'2.4.17576'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9b9e71e35622cc04fa5f8ed45d8ecda8baa5c23e",
+      "short_sha": "9b9e71e3",
+      "subject": "crypt: 3-bit sliding window for RSA ModPower",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:39:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9b9e71e35622cc04fa5f8ed45d8ecda8baa5c23e",
+      "parents": [
+        "260dd9cb5e09aafda265e45d57e1273130fec5ae"
+      ],
+      "stats": {
+        "additions": 51,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 49,
+          "deletions": 12,
+          "patch": "@@ -2339,23 +2339,60 @@ function TRsaContext.Reduce(b, m: PBigInt; BarrettMu: PBigInt): PBigInt;\n \r\n function TRsaContext.ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt): PBigInt;\r\n var\r\n-  base, exponent: PBigInt;\r\n+  base, exponent, base2: PBigInt;\r\n+  powers: array[0..3] of PBigInt; // base^1, base^3, base^5, base^7\r\n+  bits, i, j, lo, w: PtrInt;\r\n begin\r\n   result := AllocateFrom(1);\r\n-  exponent := exp.Clone;\r\n-  exp.Release;\r\n+  bits := exp.BitCount;\r\n   base := Reduce(b, m, BarrettMu);\r\n-  while not exponent.IsZero do\r\n+  if bits < 256 then\r\n   begin\r\n-    if exponent.IsOdd then\r\n-      result := Reduce(result.Multiply(base.Copy), m, BarrettMu);\r\n-    exponent.ShrBits;\r\n-    if exponent.IsZero then\r\n-      break;\r\n-    base := Reduce(base.Square, m, BarrettMu);\r\n+    // simple binary exponentiation\r\n+    exponent := exp.Clone;\r\n+    exp.Release;\r\n+    while not exponent.IsZero do\r\n+    begin\r\n+      if exponent.IsOdd then\r\n+        result := Reduce(result.Multiply(base.Copy), m, BarrettMu);\r\n+      exponent.ShrBits;\r\n+      if exponent.IsZero then\r\n+        break;\r\n+      base := Reduce(base.Square, m, BarrettMu);\r\n+    end;\r\n+    base.Release;\r\n+    exponent.Release;\r\n+    exit;\r\n   end;\r\n-  base.Release;\r\n-  exponent.Release;\r\n+  // 3-bit sliding window: precompute odd powers once\r\n+  powers[0] := base;\r\n+  base2 := Reduce(base.Copy.Square, m, BarrettMu);\r\n+  for j := 1 to high(powers) do\r\n+    powers[j] := Reduce(powers[j - 1].Copy.Multiply(base2.Copy), m, BarrettMu);\r\n+  base2.Release;\r\n+  i := bits - 1;\r\n+  while i >= 0 do\r\n+    if not exp.BitIsSet(i) then\r\n+    begin\r\n+      result := Reduce(result.Square, m, BarrettMu);\r\n+      dec(i);\r\n+    end\r\n+    else\r\n+    begin\r\n+      lo := MaxPtrInt(0, i - 2);\r\n+      while not exp.BitIsSet(lo) do\r\n+        inc(lo); // choose an odd w of up to 3 bits\r\n+      w := 0;\r\n+      for j := i downto lo do\r\n+        w := (w shl 1) or ord(exp.BitIsSet(j));\r\n+      for j := lo to i do\r\n+        result := Reduce(result.Square, m, BarrettMu);\r\n+      result := Reduce(result.Multiply(powers[(w - 1) shr 1].Copy), m, BarrettMu);\r\n+      i := lo - 1;\r\n+    end;\r\n+  for j := 0 to high(powers) do\r\n+    powers[j].Release;\r\n+  exp.Release;\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17574\n+17575",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17574'\r\n+'2.4.17575'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "260dd9cb5e09aafda265e45d57e1273130fec5ae",
+      "short_sha": "260dd9cb",
+      "subject": "crypt: minor TBigInt.IntDivMod10 refactoring/cleaning",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:14:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/260dd9cb5e09aafda265e45d57e1273130fec5ae",
+      "parents": [
+        "2791c66f340d8f86c4c32331f0c2c6c32ab3e5d5"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 14,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 12,
+          "patch": "@@ -1434,16 +1434,6 @@ function TBigInt.IntMod(b: HalfUInt): PtrUInt;\n end;\r\n \r\n function TBigInt.IntDivMod10: PtrUInt;\r\n-const\r\n-  {$ifdef CPU64} // use constant multiplication by reciprocal on all CPU\r\n-  RECIPROCAL = PtrUInt($cccccccd);\r\n-  RADIX_DIV10 = PtrUInt($19999999);\r\n-  RECIPROCAL_SHIFT = 35;\r\n-  {$else}\r\n-  RECIPROCAL = PtrUInt($cccd);\r\n-  RADIX_DIV10 = PtrUInt($1999);\r\n-  RECIPROCAL_SHIFT = 19;\r\n-  {$endif CPU64}\r\n var\r\n   v, d: PtrUInt;\r\n   i: PtrInt;\r\n@@ -1455,8 +1445,13 @@ function TBigInt.IntDivMod10: PtrUInt;\n   repeat\r\n     dec(i);\r\n     v := PtrUInt(Value[i]) + result * 6;\r\n-    d := (v * RECIPROCAL) shr RECIPROCAL_SHIFT;\r\n-    Value[i] := HalfUInt(result * RADIX_DIV10 + d);\r\n+    {$ifdef CPU32} // use constant multiplication by reciprocal on all CPUs\r\n+    d := (v * PtrUInt($cccd)) shr 19;\r\n+    Value[i] := HalfUInt(result * PtrUInt($1999) + d);\r\n+    {$else}\r\n+    d := (v * PtrUInt($cccccccd)) shr 35;\r\n+    Value[i] := HalfUInt(result * PtrUInt($19999999) + d);\r\n+    {$endif CPU32}\r\n     result := v - d * 10;\r\n   until i = 0;\r\n   if Value[Size - 1] = 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17573\n+17574",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17573'\r\n+'2.4.17574'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2791c66f340d8f86c4c32331f0c2c6c32ab3e5d5",
+      "short_sha": "2791c66f",
+      "subject": "crypt: huge performance boost of RSA generation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:13:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2791c66f340d8f86c4c32331f0c2c6c32ab3e5d5",
+      "parents": [
+        "b6fd1b2eee230c4f9f6a4bc921220b8daa576114"
+      ],
+      "stats": {
+        "additions": 127,
+        "deletions": 15,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 13,
+          "patch": "@@ -323,12 +323,15 @@   TRsaContext = class(TSynPersistent)\n     procedure ResetModulo(modulo: TRsaModulo);\r\n     /// compute the reduction of a Big Integer value in a given modulo\r\n     // - if m is nil, SetModulo() should have previously be called\r\n+    // - optional BarrettMu = floor(RSA_RADIX^(2*m.Size) / m) is borrowed\r\n+    // for an explicit nonzero trimmed m, without changing CurrentModulo\r\n     // - will eventually release the b instance\r\n-    function Reduce(b, m: PBigint): PBigInt;\r\n+    function Reduce(b, m: PBigint; BarrettMu: PBigInt = nil): PBigInt;\r\n     /// compute a modular exponentiation, i.e. b^exp mod m\r\n     // - if m is nil, SetModulo() should have previously be called\r\n+    // - optional BarrettMu is borrowed and reused for all reductions with m\r\n     // - will eventually release the b and exp instances\r\n-    function ModPower(b, exp, m: PBigInt): PBigInt;\r\n+    function ModPower(b, exp, m: PBigInt; BarrettMu: PBigInt = nil): PBigInt;\r\n   end;\r\n \r\n const\r\n@@ -1635,7 +1638,7 @@ procedure TBigInt.FillMillerRabinWitness(Lecuyer: PLecuyer; W: PBigInt);\n function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\r\n   Lecuyer: PLecuyer): boolean;\r\n var\r\n-  r, a, w: PBigInt;\r\n+  r, a, w, mu, t: PBigInt;\r\n   s, n, bak: integer;\r\n begin\r\n   // first check if not a factor of a well-known small prime\r\n@@ -1651,26 +1654,36 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n     Lecuyer := ThreadRandom; // if not supplied by caller\r\n   bak := RefCnt;\r\n   RefCnt := -1; // make permanent for use as modulo below\r\n-  w := Clone.IntSub(1); // w = value - 1\r\n-  r := w.Clone;\r\n-  a := Owner.Allocate(Size, []);\r\n+  w := nil;\r\n+  r := nil;\r\n+  a := nil;\r\n+  mu := nil;\r\n+  t := nil;\r\n   try\r\n+    w := Clone.IntSub(1); // w = value - 1\r\n+    r := w.Clone;\r\n+    a := Owner.Allocate(Size, []);\r\n     // compute s = lsb(w) and r = w shr s\r\n     s := r.FindMinBit;\r\n     r.ShrBits(s);\r\n+    // one Barrett reciprocal per candidate, shared by all witness rounds\r\n+    // keep it local: IsPrime may run on an already initialized RSA context\r\n+    t := Owner.AllocateFrom(1).LeftShift(2 * Size);\r\n+    mu := t.Divide(@self);\r\n+    Owner.Release([@t]);\r\n     while Iterations > 0 do\r\n     begin\r\n       dec(Iterations);\r\n       // generate random 1 < a < value - 1\r\n       a.FillMillerRabinWitness(Lecuyer, w);\r\n       // search if a is composite\r\n-      a := Owner.ModPower(a, r.Copy, @self); // a = a^r mod value\r\n+      a := Owner.ModPower(a, r.Copy, @self, mu); // a = a^r mod value\r\n       if (a.Compare(1) = 0) or\r\n          (a.Compare(w) = 0) then\r\n         continue; // this random is related: try outside the family\r\n       for n := 1 to s - 1 do\r\n       begin\r\n-        a := Owner.Reduce(a.Square, @self); // a = (a*a) mod value\r\n+        a := Owner.Reduce(a.Square, @self, mu); // a = (a*a) mod value\r\n         if (a.Compare(w) = 0) or\r\n            (a.Compare(1) = 0) then\r\n           break;\r\n@@ -1684,6 +1697,8 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n     a.Release;\r\n     r.Release;\r\n     w.Release;\r\n+    mu.Release;\r\n+    t.Release;\r\n     RefCnt := bak;\r\n   end;\r\n end;\r\n@@ -2304,7 +2319,7 @@ function BarrettReduce(x, modulus, mu: PBigInt): PBigInt;\n     result := result.Substract(modulus.Copy);\r\n end;\r\n \r\n-function TRsaContext.Reduce(b, m: PBigInt): PBigInt;\r\n+function TRsaContext.Reduce(b, m: PBigInt; BarrettMu: PBigInt): PBigInt;\r\n var\r\n   modvalue, mu: PBigInt;\r\n begin\r\n@@ -2318,28 +2333,31 @@ function TRsaContext.Reduce(b, m: PBigInt): PBigInt;\n     else\r\n       result := b^.Divide(modvalue, bidModNorm);\r\n   end\r\n+  else if (BarrettMu <> nil) and\r\n+          (b^.Size <= 2 * m^.Size) then\r\n+    result := BarrettReduce(b, m, BarrettMu)\r\n   else\r\n     // full slower modulo calculation of arbitrary modulus\r\n     result := b^.Divide(m, bidMod);\r\n   b^.Release;\r\n end;\r\n \r\n-function TRsaContext.ModPower(b, exp, m: PBigInt): PBigInt;\r\n+function TRsaContext.ModPower(b, exp,\n... [truncated, 626 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17572\n+17573",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17572'\r\n+'2.4.17573'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 94,
+          "deletions": 0,
+          "patch": "@@ -52,6 +52,7 @@   TTestCoreCrypto = class(TSynTestCase)\n     procedure RsaSlow(Context: TObject);\r\n     procedure CrcSlow(Context: TObject); // 32-bit, 64-bit and 128-bit hash\r\n     procedure RsaBarrett;\r\n+    procedure RsaMillerRabin;\r\n     procedure Rfc(a: TSignAlgo; const P, S: RawUtf8; c, l: integer;\r\n       const exp, msg: RawUtf8);\r\n     procedure Kdf(a: TSignAlgo; const key, exp, msg: RawUtf8;\r\n@@ -5010,6 +5011,7 @@ procedure TTestCoreCrypto.RsaSlow(Context: TObject);\n begin\r\n   // validate Barret Reduction algorithm\r\n   RsaBarrett;\r\n+  RsaMillerRabin;\r\n   // validate RSA key generation - in a background thread for this slow process\r\n   hash := HexToBin(_hash);\r\n   CheckEqual(length(hash), SizeOf(TSha256Digest));\r\n@@ -5062,6 +5064,98 @@ procedure TTestCoreCrypto.RsaSlow(Context: TObject);\n   end;\r\n end;\r\n \r\n+procedure TTestCoreCrypto.RsaMillerRabin;\r\n+const\r\n+  VALUES: array[0..7] of RawUtf8 = (\r\n+    '00010001', // common exponent: early return\r\n+    '00010003', // 65539\r\n+    '78000001', // 2013265921: many Miller-Rabin squarings (s = 27)\r\n+    '7fffffff', // 2^31 - 1\r\n+    '0000000100000001', // 641 * 6700417: passes bspFast sieve\r\n+    '1fffffffffffffff', // 2^61 - 1\r\n+    '3fffffff00000001', // (2^31 - 1)^2: passes even bspAll sieve\r\n+    '7fffffffffffffffffffffffffffffff'); // 2^127 - 1\r\n+  PRIME: array[0..7] of boolean = (true, true, true, true, false, true, false, true);\r\n+var\r\n+  c: TRsaContext;\r\n+  m, t, mu, e, a, b: PBigInt;\r\n+  rnd: TLecuyer;\r\n+  slot: TRsaModulo;\r\n+  i, j, bak, active: integer;\r\n+  hex: RawUtf8;\r\n+begin\r\n+  c := TRsaContext.Create;\r\n+  try\r\n+    // IsPrime must preserve all loaded RSA caches and CurrentModulo\r\n+    for slot := low(TRsaModulo) to high(TRsaModulo) do\r\n+      c.SetModulo(c.AllocateFrom(257 + ord(slot)).SetPermanent, slot);\r\n+    c.CurrentModulo := rmQ;\r\n+    for i := 0 to high(VALUES) do\r\n+    begin\r\n+      m := c.AllocateFromHex(VALUES[i]).Trim;\r\n+      hex := m^.ToHexa;\r\n+      // compare cached modular powers with the independent division path\r\n+      m^.SetPermanent;\r\n+      t := c.AllocateFrom(1).LeftShift(2 * m^.Size);\r\n+      mu := t^.Divide(m);\r\n+      t.Release;\r\n+      e := m^.Clone.IntSub(1);\r\n+      e^.ShrBits(e^.FindMinBit);\r\n+      for j := 1 to 3 do\r\n+      begin\r\n+        if j = 3 then // initial base outside Barrett's bound: division fallback\r\n+          t := c.AllocateFrom(1).LeftShift(2 * m^.Size)\r\n+        else\r\n+          t := c.AllocateFrom(j * 2 + 1);\r\n+        a := c.ModPower(t^.Copy, e^.Copy, m);\r\n+        b := c.ModPower(t, e^.Copy, m, mu);\r\n+        CheckEqual(a^.Compare(b), 0, 'Miller-Rabin Barrett vs division');\r\n+        CheckEqual(mu^.RefCnt, 1, 'borrowed Barrett reciprocal');\r\n+        a.Release;\r\n+        b.Release;\r\n+      end;\r\n+      e.Release;\r\n+      mu.Release;\r\n+      // successful and composite exits preserve normal, shared and permanent m\r\n+      for j := 0 to 2 do\r\n+      begin\r\n+        case j of\r\n+          0: m^.RefCnt := 1;\r\n+          1: m^.Copy;\r\n+          2:\r\n+            begin\r\n+              m.Release; // drop the shared reference before making permanent\r\n+              m^.SetPermanent;\r\n+            end;\r\n+        end;\r\n+        bak := m^.RefCnt;\r\n+        active := c.ActiveCount;\r\n+        rnd.SeedGenerator(123456789);\r\n+        Check(m^.IsPrime(bspFast, 10, @rnd) = PRIME[i], 'Miller-Rabin prime');\r\n+        CheckEqual(m^.RefCnt, bak, 'candidate references preserved');\r\n+        CheckEqual(m^.ToHexa, hex, 'candidate value preserved');\r\n+        CheckEqual(c.ActiveCount, active, 'Miller-Rabin temporaries released');\r\n+        Check(c.CurrentModulo = rmQ, 'current RSA modulus preserved');\r\n+      end;\r\n+      m^.ResetPermanentAndRelease;\r\n+      for slot := low(TRsaModulo) to high(TRsaModulo) do\r\n+      begin\r\n+        c.CurrentModulo := slot;\r\n+        a := c.Reduce(c.AllocateFrom(1000), nil);\r\n+        CheckEqual(a^.Compare(1000 mod (257 + ord(slot))), 0, 'RSA cache preserved');\r\n+        a.Release;\r\n+      end;\r\n+      \n... [truncated, 426 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b6fd1b2eee230c4f9f6a4bc921220b8daa576114",
+      "short_sha": "b6fd1b2e",
+      "subject": "crypt: restore asm for Delphi Intel targets",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:04:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b6fd1b2eee230c4f9f6a4bc921220b8daa576114",
+      "parents": [
+        "dec4ec58b6279936f2f4fb7018b20b434f90bfe7"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17571\n+17572",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17571'\r\n+'2.4.17572'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -646,6 +646,7 @@\n     {$ifdef CPUINTEL}\r\n       {$define ASMINTEL}\r\n       {$define ASMINTELARM}\r\n+      {$define ASMINTELARM64}\r\n     {$else}\r\n       {$ifdef CPU64BITS}  // handle non INTEL/AMD Delphi targets\r\n         {$define CPU64}\r\n@@ -660,6 +661,7 @@\n     {$define CPUX86}\r\n     {$define ASMINTEL}\r\n     {$define ASMINTELARM}\r\n+    {$define ASMINTELARM64}\r\n     {$define ASMX86}\r\n   {$ifend}\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Other"
+      ],
+      "units": [
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "dec4ec58b6279936f2f4fb7018b20b434f90bfe7",
+      "short_sha": "dec4ec58",
+      "subject": "crypt: optimized TBigInt.IntDivMod10 pascal code",
+      "body": "- should be faster on all targets",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T17:03:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dec4ec58b6279936f2f4fb7018b20b434f90bfe7",
+      "parents": [
+        "78fb3897c694c5e049b294f4393d23f30f0b3a32"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 17,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 15,
+          "patch": "@@ -1431,25 +1431,33 @@ function TBigInt.IntMod(b: HalfUInt): PtrUInt;\n end;\r\n \r\n function TBigInt.IntDivMod10: PtrUInt;\r\n+const\r\n+  {$ifdef CPU64} // use constant multiplication by reciprocal on all CPU\r\n+  RECIPROCAL = PtrUInt($cccccccd);\r\n+  RADIX_DIV10 = PtrUInt($19999999);\r\n+  RECIPROCAL_SHIFT = 35;\r\n+  {$else}\r\n+  RECIPROCAL = PtrUInt($cccd);\r\n+  RADIX_DIV10 = PtrUInt($1999);\r\n+  RECIPROCAL_SHIFT = 19;\r\n+  {$endif CPU64}\r\n var\r\n-  d: PtrUInt;\r\n+  v, d: PtrUInt;\r\n   i: PtrInt;\r\n begin\r\n-  i := Size - 1;\r\n-  result := Value[i];\r\n-  d := result div 10;\r\n-  if d = 0 then\r\n-    dec(Size); // auto trim\r\n-  Value[i] := d;\r\n-  dec(result, d * 10);\r\n-  while i <> 0 do // 16-bit or 32-bit per iteration\r\n-  begin\r\n+  result := 0;\r\n+  i := Size;\r\n+  if i = 0 then\r\n+    exit;\r\n+  repeat\r\n     dec(i);\r\n-    result := (result shl HALF_BITS) + Value[i];\r\n-    d := result div 10;  // fast multiplication by reciprocal on FPC\r\n-    Value[i] := d;\r\n-    dec(result, d * 10);\r\n-  end;\r\n+    v := PtrUInt(Value[i]) + result * 6;\r\n+    d := (v * RECIPROCAL) shr RECIPROCAL_SHIFT;\r\n+    Value[i] := HalfUInt(result * RADIX_DIV10 + d);\r\n+    result := v - d * 10;\r\n+  until i = 0;\r\n+  if Value[Size - 1] = 0 then\r\n+    dec(Size);\r\n end;\r\n \r\n function TBigInt.ModInverse(m: PBigInt): PBigInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17570\n+17571",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17570'\r\n+'2.4.17571'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "78fb3897c694c5e049b294f4393d23f30f0b3a32",
+      "short_sha": "78fb3897",
+      "subject": "crypt: new aarch64 asm primitives for RSA computing",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T16:54:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/78fb3897c694c5e049b294f4393d23f30f0b3a32",
+      "parents": [
+        "c12db49f727042f87cbb9ee13ab8ea3b952bfa53"
+      ],
+      "stats": {
+        "additions": 518,
+        "deletions": 69,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmarm.inc",
+          "status": "modified",
+          "additions": 485,
+          "deletions": 53,
+          "patch": "@@ -2,29 +2,438 @@\n   This file is a part of the Open Source Synopse mORMot framework 2,\r\n   licensed under a MPL/GPL/LGPL three license - see LICENSE.md\r\n \r\n-   AARCH64 and ARMv7 assembly used by mormot.core.base.pas\r\n-}\r\n-\r\n-{\r\n-  Locked*() implementation notes:\r\n-  - FPC RTL InterlockedXXX() are plain LDXR/STXR loops on AARCH64, or\r\n-    LDREX/STREX loops on ARMv7, with no memory barrier, whereas Locked*() are\r\n-    expected to be full barriers, as the LOCK prefix on Intel - otherwise\r\n-    TLightLock/TRWLock & co don't protect data\r\n-  - on AARCH64, we use LDXR/STLXR loops followed by DMB ISH, which is how the\r\n-    Linux kernel implements its \"fully ordered\" atomics on arm64 - about twice\r\n-    faster than surrounding the RTL calls with two DMB ISH\r\n-  - ARMv7 has no store-release STLEX, so we surround LDREX/STREX loops with two\r\n-    DMB ISH, as the Linux kernel does on arm - about a third faster than\r\n-    surrounding the RTL calls with two ReadWriteBarrier calls\r\n-  - this ARMv7 asm requires CPUARM_HAS_DMB: older ARM CPUs use the RTL calls\r\n-    with ReadWriteBarrier\r\n-  - a failed compare-and-swap is a full barrier too, as LOCK CMPXCHG\r\n-  - \"dmb #11\" is \"dmb ish\" - FPC 3.2 assembler does not know the ish operand\r\n+   AARCH64 and ARMv7 assembly used by mormot.core.* and mormot.crypt.* units\r\n }\r\n \r\n {$ifdef FPC_CPUAARCH64}\r\n \r\n+// Fixed-size RSA primitives: HalfUInt arrays, packed two limbs per X register.\r\n+// Scalar LDR/STR accept 4-byte aligned buffers in normal user-space memory\r\n+// with unaligned accesses enabled, including the shifted RawMultiply rows.\r\n+// Exact Src = Dst / Value = Adds or Subs aliasing is supported. Partially\r\n+// overlapping buffers are not supported. Only caller-saved X registers are\r\n+// used; no stack frame, X18, SIMD or optional CPU extensions are required.\r\n+\r\n+// Process 1024 bits low to high; return carry/borrow as 0 or 1.\r\n+function _xasmadd(Value, Adds: pointer; Carry: PtrUInt): PtrUInt;\r\n+  assembler; nostackframe;\r\n+asm\r\n+  // x0 = Value, x1 = Adds, x2 = Carry (bit 0)\r\n+  and   x2, x2, #1\r\n+  cmp   x2, #1\r\n+  ldr   x3, [x0, #0]\r\n+  ldr   x4, [x1, #0]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #0]\r\n+  ldr   x3, [x0, #8]\r\n+  ldr   x4, [x1, #8]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #8]\r\n+  ldr   x3, [x0, #16]\r\n+  ldr   x4, [x1, #16]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #16]\r\n+  ldr   x3, [x0, #24]\r\n+  ldr   x4, [x1, #24]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #24]\r\n+  ldr   x3, [x0, #32]\r\n+  ldr   x4, [x1, #32]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #32]\r\n+  ldr   x3, [x0, #40]\r\n+  ldr   x4, [x1, #40]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #40]\r\n+  ldr   x3, [x0, #48]\r\n+  ldr   x4, [x1, #48]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #48]\r\n+  ldr   x3, [x0, #56]\r\n+  ldr   x4, [x1, #56]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #56]\r\n+  ldr   x3, [x0, #64]\r\n+  ldr   x4, [x1, #64]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #64]\r\n+  ldr   x3, [x0, #72]\r\n+  ldr   x4, [x1, #72]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #72]\r\n+  ldr   x3, [x0, #80]\r\n+  ldr   x4, [x1, #80]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #80]\r\n+  ldr   x3, [x0, #88]\r\n+  ldr   x4, [x1, #88]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #88]\r\n+  ldr   x3, [x0, #96]\r\n+  ldr   x4, [x1, #96]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #96]\r\n+  ldr   x3, [x0, #104]\r\n+  ldr   x4, [x1, #104]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #104]\r\n+  ldr   x3, [x0, #112]\r\n+  ldr   x4, [x1, #112]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #112]\r\n+  ldr   x3, [x0, #120]\r\n+  ldr   x4, [x1, #120]\r\n+  adcs  x3, x3, x4\r\n+  str   x3, [x0, #120]\r\n+  cset  x0, hs\r\n+end;\r\n+\r\n+// Process 1024 bits low to high; return carry/borrow as 0 or 1.\r\n+function _xasmsub(Value, Subs: pointer; Carry: PtrUInt): PtrUInt;\r\n+  assembler; nostackframe;\r\n+asm\r\n+  // x0 = Value, x1 = Subs, x2 = Carry (bit 0)\r\n+  and   x2, x2, #1\r\n+  cmp   xzr, x2\r\n+  ldr   x3, [x0, #0]\r\n+  ldr   x4, [x1, #0]\r\n+  sbcs  x3, x3, x4\r\n+  str   x3, [x0, #0]\r\n+  ldr   x3, [x0, #8]\r\n+  ldr   x4, [x1, #8]\r\n... [truncated, 11545 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 2,
+          "patch": "@@ -2716,6 +2716,19 @@ function _cmp256(const Left, Right: THash256Rec): integer;\n procedure _mult128(constref l, r: THash128Rec; out product: THash256Rec);\r\n procedure _mult256(out Output: THash512Rec; const Left, Right: THash256Rec);\r\n procedure _mmodP(out Output: THash256Rec; var Product: THash512Rec);\r\n+function _xasmadd(Value, Adds: pointer; Carry: PtrUInt): PtrUInt;\r\n+function _xasmsub(Value, Subs: pointer; Carry: PtrUInt): PtrUInt;\r\n+function _xasmmul(Src, Dst: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n+function _xasmmuladd(Src, Dst: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n+function _xasmdiv(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n+function _xasmmod(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n+const\r\n+  _xasmaddn    = SizeOf(pointer) * 16; // 1024 bits per call on CPU64\r\n+  _xasmsubn    = SizeOf(pointer) * 16;\r\n+  _xasmmuln    = SizeOf(pointer) * 8;  // 512 bits per call on CPU64\r\n+  _xasmmuladdn = SizeOf(pointer) * 8;\r\n+  _xasmdivn    = SizeOf(pointer) * 16;\r\n+  _xasmmodn    = SizeOf(pointer) * 16;\r\n {$endif ASMARM64}\r\n {$endif ASMINTEL}\r\n \r\n@@ -4336,9 +4349,9 @@ procedure DynArrayHashTableAdjust16(P: PWordArray; deleted: cardinal; count: Ptr\n   TSynVarData = packed record\r\n     case integer of\r\n       0: (\r\n-        VType: cardinal;\r\n+        VType: cardinal;{%H-}\r\n         case padding: cardinal of // access the most used TVarData value members\r\n-          varInteger:  (VInteger:  integer);\r\n+          varInteger:  (VInteger:  integer);{%H-}\r\n           varOleUInt:  (VCardinal: cardinal);\r\n           varOleInt:   (VPtrInt:   PtrInt);\r\n           varDouble:   (VDouble:   double);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "@@ -1274,7 +1274,7 @@ function TBigInt.Add(b: PBigInt): PBigInt;\n     pa := pointer(Value);\r\n     pb := pointer(b^.Value);\r\n     v := 0;\r\n-    {$ifdef ASMINTEL}\r\n+    {$ifdef ASMINTELARM64}\r\n     while n >= _xasmaddn div HALF_BYTES do // 512/1024-bit per iteration\r\n     begin\r\n       v := _xasmadd(pa, pb, v);\r\n@@ -1283,7 +1283,7 @@ function TBigInt.Add(b: PBigInt): PBigInt;\n       dec(n, _xasmaddn div HALF_BYTES);\r\n     end;\r\n     if n > 0 then\r\n-    {$endif ASMINTEL}\r\n+    {$endif ASMINTELARM64}\r\n       repeat\r\n         inc(v, PtrUInt(pa^) + pb^); // 16/32-bit per iteration\r\n         pa^ := v;\r\n@@ -1312,7 +1312,7 @@ function TBigInt.Substract(b: PBigInt; NegativeResult: PBoolean): PBigInt;\n     pa := pointer(Value);\r\n     pb := pointer(b^.Value);\r\n     v := 0;\r\n-    {$ifdef ASMINTEL}\r\n+    {$ifdef ASMINTELARM64}\r\n     while n >= _xasmsubn div HALF_BYTES do // 512/1024-bit per iteration\r\n     begin\r\n       v := _xasmsub(pa, pb, v);\r\n@@ -1321,7 +1321,7 @@ function TBigInt.Substract(b: PBigInt; NegativeResult: PBoolean): PBigInt;\n       dec(n, _xasmsubn div HALF_BYTES);\r\n     end;\r\n     if n > 0 then\r\n-    {$endif ASMINTEL}\r\n+    {$endif ASMINTELARM64}\r\n       repeat // 16/32-bit per iteration\r\n         v := PtrUInt(pa^) - pb^ - v;\r\n         pa^ := v;\r\n@@ -1350,7 +1350,7 @@ function TBigInt.IntMultiply(b: HalfUInt): PBigInt;\n   r := pointer(result^.Value);\r\n   v := 0;\r\n   n := Size;\r\n-  {$ifdef ASMINTEL}\r\n+  {$ifdef ASMINTELARM64}\r\n   while n >= _xasmmuln div HALF_BYTES do // 256/512-bit per iteration\r\n   begin\r\n     v := _xasmmul(a, r, b, v);\r\n@@ -1359,7 +1359,7 @@ function TBigInt.IntMultiply(b: HalfUInt): PBigInt;\n     dec(n, _xasmmuln div HALF_BYTES);\r\n   end;\r\n   if n > 0 then\r\n-  {$endif ASMINTEL}\r\n+  {$endif ASMINTELARM64}\r\n     repeat // 16/32-bit per iteration\r\n       inc(v, PtrUInt(a^) * b);\r\n       r^ := v;\r\n@@ -1382,15 +1382,15 @@ function TBigInt.IntDivide(b: HalfUInt; optmod: PHalfUInt): PBigInt;\n   n := Size;\r\n   a := @Value[n];\r\n   v := 0;\r\n-  {$ifdef ASMINTEL}\r\n+  {$ifdef ASMINTELARM64}\r\n   while n >= _xasmdivn div HALF_BYTES do // 512/1024-bit per iteration\r\n   begin\r\n     dec(PByte(a), _xasmdivn);\r\n     v := _xasmdiv(a, b, v);\r\n     dec(n, _xasmdivn div HALF_BYTES);\r\n   end;\r\n   if n > 0 then\r\n-  {$endif ASMINTEL}\r\n+  {$endif ASMINTELARM64}\r\n     repeat // 16/32-bit per iteration\r\n       dec(a);\r\n       v := (v shl HALF_BITS) + a^; // inject carry as high bits\r\n@@ -1414,15 +1414,15 @@ function TBigInt.IntMod(b: HalfUInt): PtrUInt;\n   n := Size;\r\n   v := @Value[n];\r\n   result := 0;\r\n-  {$ifdef ASMINTEL}\r\n+  {$ifdef ASMINTELARM64}\r\n   while n >= _xasmmodn div HALF_BYTES do // 512/1024-bit per iteration\r\n   begin\r\n     dec(PByte(v), _xasmmodn);\r\n     result := _xasmmod(v, bb, result);\r\n     dec(n, _xasmmodn div HALF_BYTES);\r\n   end;\r\n   if n > 0 then\r\n-  {$endif ASMINTEL}\r\n+  {$endif ASMINTELARM64}\r\n     repeat // 16/32-bit per iteration\r\n       dec(v);\r\n       result := ((result shl HALF_BITS) + v^) mod bb;\r\n@@ -1993,7 +1993,7 @@ procedure RawMultiply(src, dst: PHalfUInt; n: integer; factor: PtrUInt);\n   carry: PtrUInt;\r\n begin\r\n   carry := 0; // initial carry value\r\n-  {$ifdef ASMINTEL}\r\n+  {$ifdef ASMINTELARM64}\r\n   while n >= _xasmmuladdn div HALF_BYTES do // 256/512-bit per loop\r\n   begin\r\n     carry := _xasmmuladd(src, dst, factor, carry);\r\n@@ -2002,7 +2002,7 @@ procedure RawMultiply(src, dst: PHalfUInt; n: integer; factor: PtrUInt);\n     dec(n, _xasmmuladdn div HALF_BYTES);\r\n   end;\r\n   if n > 0 then\r\n-  {$endif ASMINTEL}\r\n+  {$endif ASMINTELARM64}\r\n     repeat // 16/32-bit per iteration\r\n       inc(carry, PtrUInt(dst^) + PtrUInt(src^) * factor);\r\n       dst^ := carry;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17569\n+17570",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17569'\r\n+'2.4.17570'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "patch": "@@ -387,6 +387,7 @@\n       {$define CPUINTEL}\r\n       {$define ASMINTEL}\r\n       {$define ASMINTELARM}\r\n+      {$define ASMINTELARM64}\r\n       {$define ASMX64}\r\n       {$define FPC_CODEALIGN}  // we can use {$CODEALIGN LOOP=16} conditional\r\n       {$define FPC_CPUX64}\r\n@@ -411,6 +412,7 @@\n       {$define ASMARM}         // Locked*() in mormot.core.base.asmarm.inc\r\n       {$define ASMARM64}\r\n       {$define ASMINTELARM}\r\n+      {$define ASMINTELARM64}\r\n       {$ifdef OSWINDOWS}       // aarch64-win64 compatibility\r\n         {$undef FPC_SINGLEABI}\r\n         {$define DISPINVOKE_NO_OLESTR} // avoid late binding _ := 'constant'\r\n@@ -424,6 +426,7 @@\n       {$ASMMODE INTEL}         // as Delphi requires\r\n       {$define ASMINTEL}\r\n       {$define ASMINTELARM}\r\n+      {$define ASMINTELARM64}\r\n       {$define ASMX86}\r\n       {$define CPUINTEL}\r\n       {.$define FPC_CODEALIGN} // no need of {$CODEALIGN LOOP=16} conditional\r\n@@ -957,6 +960,7 @@\n     {$undef ASMARM}\r\n     {$undef ASMARM64}\r\n     {$undef ASMINTELARM}\r\n+    {$undef ASMINTELARM64}\r\n     {$undef ASMSSE2}\r\n     {$undef ASMAESNI}\r\n     {$undef ASMX86}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Core",
+        "Other"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmarm",
+        "mormot.crypt.rsa",
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c12db49f727042f87cbb9ee13ab8ea3b952bfa53",
+      "short_sha": "c12db49f",
+      "subject": "crypt: optimized RSA barret reduction implementation",
+      "body": "- by using a dedicated multiplication function",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T15:50:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c12db49f727042f87cbb9ee13ab8ea3b952bfa53",
+      "parents": [
+        "8ea03422404ada5e0242a9e0607f6662ea1c36f2"
+      ],
+      "stats": {
+        "additions": 182,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 4,
+          "patch": "@@ -204,6 +204,10 @@   TBigInt = record\n     /// standard multiplication between two Big Integer values\r\n     // - will eventually release both self and b instances\r\n     function Multiply(b: PBigInt): PBigInt;\r\n+    /// multiplication modulo RSA_RADIX^LimbCount\r\n+    // - computes only the low LimbCount HalfUInt values (zero if LimbCount <= 0)\r\n+    // - will eventually release both self and b instances, like Multiply()\r\n+    function MultiplyLow(b: PBigInt; LimbCount: integer): PBigInt;\r\n     /// standard multiplication by itself\r\n     // - will allocate a new Big Integer value and release self\r\n     function Square: PBigint;\r\n@@ -2023,6 +2027,29 @@ function TBigInt.Multiply(b: PBigInt): PBigInt;\n   result := r.Trim;\r\n end;\r\n \r\n+function TBigInt.MultiplyLow(b: PBigInt; LimbCount: integer): PBigInt;\r\n+var\r\n+  r: PBigInt;\r\n+  i, n: PtrInt;\r\n+begin\r\n+  if LimbCount <= 0 then\r\n+    r := Owner.AllocateFrom(0)\r\n+  else\r\n+  begin\r\n+    n := MinPtrInt(LimbCount, Size + b^.Size);\r\n+    // RawMultiply writes one final carry: reserve a scratch limb even when\r\n+    // the row ends at the truncation boundary, then discard that carry\r\n+    r := Owner.Allocate(n + 1);\r\n+    for i := 0 to MinPtrInt(b^.Size, n) - 1 do\r\n+      RawMultiply(pointer(Value), @r^.Value[i],\r\n+        MinPtrInt(Size, n - i), b^.Value[i]);\r\n+    r^.Size := n;\r\n+  end;\r\n+  Release;\r\n+  b.Release;\r\n+  result := r.Trim;\r\n+end;\r\n+\r\n function TBigInt.Square: PBigint;\r\n begin\r\n   result := Multiply(Copy);\r\n@@ -2225,7 +2252,8 @@ procedure TRsaContext.SetModulo(b: PBigInt; modulo: TRsaModulo);\n     finally\r\n       t.Release;\r\n     end;\r\n-  end;end;\r\n+  end;\r\n+end;\r\n \r\n procedure TRsaContext.ResetModulo(modulo: TRsaModulo);\r\n begin\r\n@@ -2252,9 +2280,7 @@ function BarrettReduce(x, modulus, mu: PBigInt): PBigInt;\n   q := q.Multiply(mu.Copy);\r\n   q.RightShift(k + 1);\r\n   // r2 = (q3 * modulus) mod B^(k+1)\r\n-  r2 := q.Multiply(modulus.Copy);\r\n-  if r2^.Size > k + 1 then\r\n-    r2^.Size := k + 1;\r\n+  r2 := q.MultiplyLow(modulus.Copy, k + 1);\r\n   // r1 = x mod B^(k+1)\r\n   r := x^.Clone;\r\n   if r^.Size > k + 1 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17568\n+17569",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17568'\r\n+'2.4.17569'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 150,
+          "deletions": 0,
+          "patch": "@@ -51,6 +51,7 @@   TTestCoreCrypto = class(TSynTestCase)\n     procedure CatalogRunStore(Context: TObject);\r\n     procedure RsaSlow(Context: TObject);\r\n     procedure CrcSlow(Context: TObject); // 32-bit, 64-bit and 128-bit hash\r\n+    procedure RsaBarrett;\r\n     procedure Rfc(a: TSignAlgo; const P, S: RawUtf8; c, l: integer;\r\n       const exp, msg: RawUtf8);\r\n     procedure Kdf(a: TSignAlgo; const key, exp, msg: RawUtf8;\r\n@@ -5007,6 +5008,8 @@ procedure TTestCoreCrypto.RsaSlow(Context: TObject);\n   bin, hash, signed, encrypted: RawByteString;\r\n   timer: TPrecisionTimer;\r\n begin\r\n+  // validate Barret Reduction algorithm\r\n+  RsaBarrett;\r\n   // validate RSA key generation - in a background thread for this slow process\r\n   hash := HexToBin(_hash);\r\n   CheckEqual(length(hash), SizeOf(TSha256Digest));\r\n@@ -5059,6 +5062,153 @@ procedure TTestCoreCrypto.RsaSlow(Context: TObject);\n   end;\r\n end;\r\n \r\n+procedure TTestCoreCrypto.RsaBarrett;\r\n+const\r\n+  SIZES: array[0..10] of integer = (1, 2, 3, 15, 16, 17, 31, 32, 33, 64, 128);\r\n+var\r\n+  c: TRsaContext;\r\n+  a, b, m, full, expected, actual: PBigInt;\r\n+  seed: cardinal;\r\n+  si, sj, pattern, i, j, n, count: integer;\r\n+  slot: TRsaModulo;\r\n+\r\n+  function Number(limbs, kind: integer): PBigInt;\r\n+  var\r\n+    l: integer;\r\n+  begin\r\n+    result := c.Allocate(limbs);\r\n+    for l := 0 to limbs - 1 do\r\n+      case kind of\r\n+        0:\r\n+          result^.Value[l] := high(HalfUInt);\r\n+        1:\r\n+          if l and 1 = 0 then\r\n+            result^.Value[l] := high(HalfUInt);\r\n+        2:\r\n+          begin\r\n+            seed := seed xor (seed shl 13);\r\n+            seed := seed xor (seed shr 17);\r\n+            seed := seed xor (seed shl 5);\r\n+            result^.Value[l] := HalfUInt(seed);\r\n+          end;\r\n+      end;\r\n+    result^.Trim;\r\n+  end;\r\n+\r\n+  procedure CheckReduction(x: PBigInt);\r\n+  var\r\n+    e, r: PBigInt;\r\n+  begin\r\n+    e := x^.Divide(m^.Copy, bidMod);\r\n+    r := c.Reduce(x, nil); // consumes x\r\n+    CheckEqual(r^.Compare(e), 0, 'Barrett vs division');\r\n+    Check(r^.Compare(m) < 0, 'canonical remainder');\r\n+    r.Release;\r\n+    e.Release;\r\n+    CheckEqual(c.ActiveCount, 3, 'modulus and two cached constants');\r\n+  end;\r\n+\r\n+begin\r\n+  seed := $12345678;\r\n+  c := TRsaContext.Create;\r\n+  try\r\n+    for si := 0 to high(SIZES) do\r\n+      for sj := 0 to high(SIZES) do\r\n+        for pattern := 0 to 3 do\r\n+        begin\r\n+          a := Number(SIZES[si], pattern);\r\n+          b := Number(SIZES[sj], pattern);\r\n+          full := a^.Copy.Multiply(b^.Copy);\r\n+          for i := -1 to 7 do\r\n+          begin\r\n+            case i of\r\n+              -1, 0, 1: count := i;\r\n+              2: count := SIZES[si] - 1;\r\n+              3: count := SIZES[si];\r\n+              4: count := SIZES[si] + 1;\r\n+              5: count := SIZES[sj];\r\n+              6: count := a^.Size + b^.Size;\r\n+            else\r\n+              count := a^.Size + b^.Size + 1;\r\n+            end;\r\n+            expected := full^.Clone;\r\n+            if count <= 0 then\r\n+            begin\r\n+              expected^.Size := 1;\r\n+              expected^.Value[0] := 0;\r\n+            end\r\n+            else if expected^.Size > count then\r\n+              expected^.Size := count;\r\n+            expected^.Trim;\r\n+            actual := a^.Copy.MultiplyLow(b^.Copy, count);\r\n+            CheckEqual(actual^.Compare(expected), 0, 'MultiplyLow');\r\n+            CheckEqual(a^.RefCnt, 1, 'left retained');\r\n+            CheckEqual(b^.RefCnt, 1, 'right retained');\r\n+            actual.Release;\r\n+            expected.Release;\r\n+          end;\r\n+          full.Release;\r\n+          // aliased operands and permanent operands must survive unchanged\r\n+          expected := a^.Copy.Multiply(a^.Copy);\r\n+          actual := a^.Copy.MultiplyLow(a^.Copy, 2 * a^.Size);\r\n+          CheckEqual(actual^.Compare(expected), 0, 'MultiplyLow alias');\r\n+          actual.Release;\r\n+          expected.Release;\r\n+          a^.SetPermanent;\r\n+          actual := a^.MultiplyLow(b^.\n... [truncated, 2240 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8ea03422404ada5e0242a9e0607f6662ea1c36f2",
+      "short_sha": "8ea03422",
+      "subject": "crypt: fixed _xasmadd/sub x86/x64 asm carry propagation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T15:41:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8ea03422404ada5e0242a9e0607f6662ea1c36f2",
+      "parents": [
+        "bcdff3aca3d947faf20dd2b771bed0e16e2d21d6"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 10,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx64.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -2739,11 +2739,11 @@ function _xasmadd(Value, Adds: pointer; Carry: PtrUInt): PtrUInt;\n         // rcx/rdi=Value rdx/rsi=Adds r8/rdx=Carry\r\n         xor    eax, eax\r\n         mov    r9, qword ptr [Adds]\r\n-        add    r9, Carry\r\n+        bt     Carry, 0 // inject incoming carry without overflowing r9\r\n         mov    r8 , qword ptr [Adds + 8]\r\n         mov    r10, qword ptr [Adds + 8 * 2]\r\n         mov    r11, qword ptr [Adds + 8 * 3]\r\n-        add    qword ptr [Value], r9\r\n+        adc    qword ptr [Value], r9\r\n         adc    qword ptr [Value + 8], r8\r\n         adc    qword ptr [Value + 8 * 2], r10\r\n         adc    qword ptr [Value + 8 * 3], r11\r\n@@ -2780,11 +2780,11 @@ function _xasmsub(Value, Subs: pointer; Carry: PtrUInt): PtrUInt;\n         // rcx/rdi=Value rdx/rsi=Subs r8/rdx=Carry\r\n         xor    eax, eax\r\n         mov    r9,  qword ptr [Subs]\r\n-        add    r9, Carry\r\n+        bt     Carry, 0 // inject incoming carry without overflowing r9\r\n         mov    r8 , qword ptr [Subs + 8]\r\n         mov    r10, qword ptr [Subs + 8 * 2]\r\n         mov    r11, qword ptr [Subs + 8 * 3]\r\n-        sub    qword ptr [Value], r9\r\n+        sbb    qword ptr [Value], r9\r\n         sbb    qword ptr [Value + 8], r8\r\n         sbb    qword ptr [Value + 8 * 2], r10\r\n         sbb    qword ptr [Value + 8 * 3], r11\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx86.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -2091,11 +2091,11 @@ asm     // Value=eax Adds=edx Carry=ecx\n         push   esi\r\n         push   edi\r\n         mov    ebx, dword ptr [edx]\r\n-        add    ebx, ecx\r\n+        bt     ecx, 0 // inject incoming carry without overflowing ebx\r\n         mov    esi, dword ptr [edx + 4]\r\n         mov    edi, dword ptr [edx + 4 * 2]\r\n         mov    ecx, dword ptr [edx + 4 * 3]\r\n-        add    dword ptr [eax], ebx\r\n+        adc    dword ptr [eax], ebx\r\n         adc    dword ptr [eax + 4], esi\r\n         adc    dword ptr [eax + 4 * 2], edi\r\n         adc    dword ptr [eax + 4 * 3], ecx\r\n@@ -2138,11 +2138,11 @@ asm     // Value=eax Subs=edx Carry=ecx\n         push   esi\r\n         push   edi\r\n         mov    ebx, dword ptr [edx]\r\n-        add    ebx, ecx\r\n+        bt     ecx, 0 // inject incoming carry without overflowing ebx\r\n         mov    esi, dword ptr [edx + 4]\r\n         mov    edi, dword ptr [edx + 4 * 2]\r\n         mov    ecx, dword ptr [edx + 4 * 3]\r\n-        sub    dword ptr [eax], ebx\r\n+        sbb    dword ptr [eax], ebx\r\n         sbb    dword ptr [eax + 4], esi\r\n         sbb    dword ptr [eax + 4 * 2], edi\r\n         sbb    dword ptr [eax + 4 * 3], ecx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17567\n+17568",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17567'\r\n+'2.4.17568'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core.asmx64",
+        "mormot.crypt.core.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bcdff3aca3d947faf20dd2b771bed0e16e2d21d6",
+      "short_sha": "bcdff3ac",
+      "subject": "crypt: use Barret Reduction for TRsaContext.Reduce()",
+      "body": "- 30-40% speedup for verify/sign timing",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T15:19:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bcdff3aca3d947faf20dd2b771bed0e16e2d21d6",
+      "parents": [
+        "4d9c5730f508692d08f4a2c09fdb5c315de397de"
+      ],
+      "stats": {
+        "additions": 68,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 66,
+          "deletions": 5,
+          "patch": "@@ -284,6 +284,8 @@   TRsaContext = class(TSynPersistent)\n     fMod: TRsaModulos;\r\n     /// contains the normalized storage\r\n     fNormMod: TRsaModulos;\r\n+    /// contains some pre-computed values for BarretReduce()\r\n+    fBarrettMu: TRsaModulos;\r\n   public\r\n     /// the size of the sliding window\r\n     Window: integer;\r\n@@ -2207,25 +2209,84 @@ procedure TRsaContext.SetModulo(b: PBigInt; modulo: TRsaModulo);\n var\r\n   d: HalfUInt;\r\n   k: integer;\r\n+  t: PBigInt;\r\n begin\r\n   k := b^.Size;\r\n   fMod[modulo] := b;\r\n   d := RSA_RADIX div (PtrUInt(b^.Value[k - 1]) + 1);\r\n   fNormMod[modulo] := b.IntMultiply(d).SetPermanent;\r\n-end;\r\n+  // precompute Barrett reciprocal: mu = floor(B^(2*k) / modulus)\r\n+  if (b^.Value[k - 1] <> 0) and\r\n+     not b^.IsZero then\r\n+  begin\r\n+    t := AllocateFrom(1).LeftShift(2 * k);\r\n+    try\r\n+      fBarrettMu[modulo] := t.Divide(b.Copy).SetPermanent;\r\n+    finally\r\n+      t.Release;\r\n+    end;\r\n+  end;end;\r\n \r\n procedure TRsaContext.ResetModulo(modulo: TRsaModulo);\r\n begin\r\n   fMod[modulo].ResetPermanentAndRelease;\r\n   fNormMod[modulo].ResetPermanentAndRelease;\r\n+  fBarrettMu[modulo].ResetPermanentAndRelease;\r\n end;\r\n \r\n-function TRsaContext.Reduce(b, m: PBigint): PBigInt;\r\n+function BarrettReduce(x, modulus, mu: PBigInt): PBigInt;\r\n+var\r\n+  k: integer;\r\n+  q, r, r2: PBigInt;\r\n begin\r\n-  if m = nil then\r\n-    result := b^.Divide(fMod[CurrentModulo], bidModNorm)\r\n+  k := modulus^.Size;\r\n+  // called only with x < B^(2*k) and a normalized, nonzero modulus\r\n+  if x^.Compare(modulus) < 0 then\r\n+  begin\r\n+    result := x^.Clone;\r\n+    exit;\r\n+  end;\r\n+  // q1 = floor(x / B^(k-1))\r\n+  q := x^.Clone.RightShift(k - 1);\r\n+  // q2 = q1 * mu  and  q3 = floor(q2 / B^(k+1))\r\n+  q := q.Multiply(mu.Copy);\r\n+  q.RightShift(k + 1);\r\n+  // r2 = (q3 * modulus) mod B^(k+1)\r\n+  r2 := q.Multiply(modulus.Copy);\r\n+  if r2^.Size > k + 1 then\r\n+    r2^.Size := k + 1;\r\n+  // r1 = x mod B^(k+1)\r\n+  r := x^.Clone;\r\n+  if r^.Size > k + 1 then\r\n+    r^.Size := k + 1;\r\n+  // Important: preserve full k+1-limb width for the modular subtraction below\r\n+  r^.Resize(k + 1);\r\n+  // r = (r1 - r2) mod B^(k+1)\r\n+  result := r.Substract(r2);\r\n+  // at most two corrections for valid inputs\r\n+  if result^.Compare(modulus) >= 0 then\r\n+    result := result.Substract(modulus.Copy);\r\n+  if result^.Compare(modulus) >= 0 then\r\n+    result := result.Substract(modulus.Copy);\r\n+end;\r\n+\r\n+function TRsaContext.Reduce(b, m: PBigInt): PBigInt;\r\n+var\r\n+  modvalue, mu: PBigInt;\r\n+begin\r\n+  if m = nil then // use pre-computed constants\r\n+  begin\r\n+    modvalue := fMod[CurrentModulo];\r\n+    mu := fBarrettMu[CurrentModulo];\r\n+    if (mu <> nil) and\r\n+       (b^.Size <= 2 * modvalue^.Size) then\r\n+      result := BarrettReduce(b, modvalue, mu)\r\n+    else\r\n+      result := b^.Divide(modvalue, bidModNorm);\r\n+  end\r\n   else\r\n-    result := b^.Divide(m, bidMod); // custom modulo has no pre-computed const\r\n+    // full slower modulo calculation of arbitrary modulus\r\n+    result := b^.Divide(m, bidMod);\r\n   b^.Release;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17566\n+17567",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17566'\r\n+'2.4.17567'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4d9c5730f508692d08f4a2c09fdb5c315de397de",
+      "short_sha": "4d9c5730",
+      "subject": "crypt: minor refactoring with no functional change",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T15:19:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4d9c5730f508692d08f4a2c09fdb5c315de397de",
+      "parents": [
+        "36e581ed45385a199414b1c26e67af46ac58e0ba"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 22,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 20,
+          "patch": "@@ -2877,17 +2877,16 @@ implementation\n const\r\n   // used by SHA-256\r\n   K256: TBlock2048 = (\r\n-    $428a2f98, $71374491, $b5c0fbcf, $e9b5dba5, $3956c25b, $59f111f1,\r\n-    $923f82a4, $ab1c5ed5, $d807aa98, $12835b01, $243185be, $550c7dc3,\r\n-    $72be5d74, $80deb1fe, $9bdc06a7, $c19bf174, $e49b69c1, $efbe4786,\r\n-    $0fc19dc6, $240ca1cc, $2de92c6f, $4a7484aa, $5cb0a9dc, $76f988da,\r\n-    $983e5152, $a831c66d, $b00327c8, $bf597fc7, $c6e00bf3, $d5a79147,\r\n-    $06ca6351, $14292967, $27b70a85, $2e1b2138, $4d2c6dfc, $53380d13,\r\n-    $650a7354, $766a0abb, $81c2c92e, $92722c85, $a2bfe8a1, $a81a664b,\r\n-    $c24b8b70, $c76c51a3, $d192e819, $d6990624, $f40e3585, $106aa070,\r\n-    $19a4c116, $1e376c08, $2748774c, $34b0bcb5, $391c0cb3, $4ed8aa4a,\r\n-    $5b9cca4f, $682e6ff3, $748f82ee, $78a5636f, $84c87814, $8cc70208,\r\n-    $90befffa, $a4506ceb, $bef9a3f7, $c67178f2);\r\n+    $428a2f98, $71374491, $b5c0fbcf, $e9b5dba5, $3956c25b, $59f111f1, $923f82a4,\r\n+    $ab1c5ed5, $d807aa98, $12835b01, $243185be, $550c7dc3, $72be5d74, $80deb1fe,\r\n+    $9bdc06a7, $c19bf174, $e49b69c1, $efbe4786, $0fc19dc6, $240ca1cc, $2de92c6f,\r\n+    $4a7484aa, $5cb0a9dc, $76f988da, $983e5152, $a831c66d, $b00327c8, $bf597fc7,\r\n+    $c6e00bf3, $d5a79147, $06ca6351, $14292967, $27b70a85, $2e1b2138, $4d2c6dfc,\r\n+    $53380d13, $650a7354, $766a0abb, $81c2c92e, $92722c85, $a2bfe8a1, $a81a664b,\r\n+    $c24b8b70, $c76c51a3, $d192e819, $d6990624, $f40e3585, $106aa070, $19a4c116,\r\n+    $1e376c08, $2748774c, $34b0bcb5, $391c0cb3, $4ed8aa4a, $5b9cca4f, $682e6ff3,\r\n+    $748f82ee, $78a5636f, $84c87814, $8cc70208, $90befffa, $a4506ceb, $bef9a3f7,\r\n+    $c67178f2);\r\n \r\n var\r\n   {$ifdef USEAESNIHASH}\r\n@@ -4781,8 +4780,8 @@ procedure TAesGcmEngine.AvxProcess(BufIn, BufOut: PByte; Count: cardinal;\n     TAesContext(aes).iv.c3 := bswap32(ctr);\r\n     if Encrypt then\r\n       GcmAvxAuth(@gf_t4k, BufOut, onepass, @state.txt_ghv); // encrypt: AAD last\r\n-    dec(Count, onepass);\r\n-    inc(BufIn, onepass);\r\n+    dec(Count,  onepass);\r\n+    inc(BufIn,  onepass);\r\n     inc(BufOut, onepass);\r\n   end;\r\n   if Count = 0 then // remaining 1..15 bytes\r\n@@ -5047,13 +5046,11 @@ function TAesGcmEngine.Add_AAD(pAAD: pointer; aLen: PtrInt): boolean;\n     result := false;\r\n     if (pAAD = nil) or\r\n        (flagFinalComputed in state.flags) or\r\n-       (state.atx_cnt.V <> 0) then\r\n+       (state.atx_cnt.V <> 0) then // too late: ciphertext has started\r\n       exit;\r\n     {$ifdef USEGCMAVX}\r\n     if flagAVX in state.flags then\r\n     begin\r\n-      if state.atx_cnt.V <> 0 then // too late: ciphertext has started\r\n-        exit;\r\n       used := state.aad_cnt.L and AesBlockMod;\r\n       inc(state.aad_cnt.V, aLen);\r\n       if used <> 0 then // complete partial AAD from earlier call\r\n@@ -10438,22 +10435,22 @@ procedure Random128(var Value: RawByteString);\n \r\n function RandomLecuyer(var rnd: TLecuyer): PLecuyer;\r\n begin\r\n-  Random128(@rnd);   // 88-bit seed from our CSPRNG\r\n-  rnd.SeedGenerator; // inlined TLecuyer.Seed\r\n+  Random128(@rnd);    // 88-bit seed from our CSPRNG\r\n+  rnd.SeedGenerator;  // inlined TLecuyer.Seed\r\n   result := @rnd;\r\n end;\r\n \r\n function Random9Digits: cardinal;\r\n var\r\n   rnd: THash128Rec;\r\n begin\r\n-  Random128(@rnd); // unpredictable\r\n+  Random128(@rnd);    // unpredictable\r\n   result := rnd.c0 mod 900000000;\r\n   if result = 0 then\r\n     result := rnd.c1 mod 900000000;\r\n   if result = 0 then\r\n     result := rnd.c2 mod 900000000;\r\n-  FillZero(rnd.b); // anti forensic\r\n+  FillZero(rnd.b);    // anti forensic\r\n   if result <> 0 then // only 1 in 7 x 10^26 probability\r\n     inc(result, 100000000);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17565\n+17566",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17565'\r\n+'2.4.17566'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "36e581ed45385a199414b1c26e67af46ac58e0ba",
+      "short_sha": "36e581ed",
+      "subject": "crypt: several fixes to TAesGcm",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T14:17:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/36e581ed45385a199414b1c26e67af46ac58e0ba",
+      "parents": [
+        "2d95c74a0d22d9faf0b1b5453e0a38d561478894"
+      ],
+      "stats": {
+        "additions": 22,
+        "deletions": 21,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 16,
+          "patch": "@@ -4725,7 +4725,7 @@ function TAesGcmEngine.aad_pending: PAesBlock;\n procedure TAesGcmEngine.AvxProcess(BufIn, BufOut: PByte; Count: cardinal;\r\n   Encrypt: boolean);\r\n var\r\n-  blocks, ctr, onepass, n, i, pos: cardinal;\r\n+  blocks, ctr, onepass, n, i, pos: PtrUInt;\r\n   txt, buf: PAesBlock;\r\n begin\r\n   if Count = 0 then\r\n@@ -4742,9 +4742,7 @@ procedure TAesGcmEngine.AvxProcess(BufIn, BufOut: PByte; Count: cardinal;\n   if state.blen <> 0 then // continue partial CTR\r\n   begin\r\n     pos := state.blen;\r\n-    n := SizeOf(TAesBlock) - pos;\r\n-    if n > Count then\r\n-      n := Count;\r\n+    n := MinPtrUInt(Count, SizeOf(TAesBlock) - pos);\r\n     for i := 0 to n - 1 do\r\n     begin\r\n       if Encrypt then\r\n@@ -4771,10 +4769,8 @@ procedure TAesGcmEngine.AvxProcess(BufIn, BufOut: PByte; Count: cardinal;\n       exit;\r\n   end;\r\n   while Count >= SizeOf(TAesBlock) do // // 8x interleaved aesni + pclmulqdq\r\n-  begin\r\n-    onepass := Count and not cardinal(AesBlockMod);\r\n-    if onepass > 1 shl 20 then\r\n-      onepass := 1 shl 20; // keep chunks <= 1 MB to fit in the CPU cache\r\n+  begin // keep chunks <= 1 MB to fit in the CPU cache\r\n+    onepass := MinPtrUInt(1 shl 20, Count and not cardinal(AesBlockMod));\r\n     if not Encrypt then\r\n       GcmAvxAuth(@gf_t4k, BufIn, onepass, @state.txt_ghv); // decrypt: AAD first\r\n     // AES-CTR using AES-NI and SSE4.1 over a 32-bit counter\r\n@@ -4916,8 +4912,12 @@ function TAesGcmEngine.Reset(pIV: PHash128Rec; IV_len: PtrInt): boolean;\n procedure TAesGcmEngine.Clone(another: PAesGcmEngine);\r\n begin // only copy what is really needed\r\n   {$ifdef USEGCMAVX}\r\n-  if flagAVX in state.flags then // x86_64 asm uses 256 bytes in gf_t4k[]\r\n-    MoveFast(self, another^, PtrInt(@PAesGcmEngine(nil)^.gf_t4k[256 div 16]))\r\n+  if flagAVX in state.flags then // x86_64 asm uses 256+32 bytes in gf_t4k[]\r\n+  begin\r\n+    MoveFast(self, another^, PtrInt(@PAesGcmEngine(nil)^.gf_t4k[256 div 16]));\r\n+    another^.aad_pending^ := aad_pending^;\r\n+    another^.txt_pending^ := txt_pending^;\r\n+  end\r\n   else\r\n   {$endif USEGCMAVX}\r\n   if flagCLMUL in state.flags then // USECLMUL or USEARMCRYPTO: no gf_t4k[] use\r\n@@ -5046,7 +5046,8 @@ function TAesGcmEngine.Add_AAD(pAAD: pointer; aLen: PtrInt): boolean;\n   begin\r\n     result := false;\r\n     if (pAAD = nil) or\r\n-       (flagFinalComputed in state.flags) then\r\n+       (flagFinalComputed in state.flags) or\r\n+       (state.atx_cnt.V <> 0) then\r\n       exit;\r\n     {$ifdef USEGCMAVX}\r\n     if flagAVX in state.flags then\r\n@@ -5057,9 +5058,7 @@ function TAesGcmEngine.Add_AAD(pAAD: pointer; aLen: PtrInt): boolean;\n       inc(state.aad_cnt.V, aLen);\r\n       if used <> 0 then // complete partial AAD from earlier call\r\n       begin\r\n-        n := SizeOf(TAesBlock) - used;\r\n-        if n > aLen then\r\n-          n := aLen;\r\n+        n := MinPtrInt(aLen, SizeOf(TAesBlock) - used);\r\n         MoveFast(pAAD^, aad_pending^[used], n);\r\n         inc(PByte(pAAD), n);\r\n         dec(aLen, n);\r\n@@ -6759,9 +6758,13 @@ function TAesGcm.AesGcmProcess(BufIn, BufOut: pointer; Count: cardinal): boolean\n \r\n procedure TAesGcm.AesGcmAad(Buf: pointer; Len: integer);\r\n begin\r\n-  fGcm.Add_AAD(Buf, Len);\r\n+  if Len <> 0 then\r\n+    if (Len < 0) or\r\n+       (Buf = nil) or\r\n+       (fStarted = stNone) or\r\n+       not fGcm.Add_AAD(Buf, Len) then\r\n+      ESynCrypto.RaiseUtf8('%.AesGcmAad: invalid AAD or GCM state', [self]);\r\n end;\r\n-\r\n function TAesGcm.AesGcmFinal(var Tag: TAesBlock; TagLen: integer): boolean;\r\n var\r\n   decoded: THash128Rec;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17564\n+17565",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17564'\r\n+'2.4.17565'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 3,
+          "patch": "@@ -801,7 +801,6 @@ function TTunnelLocalThread.Processing: boolean;\n procedure TTunnelLocalThread.EncryptGcm(var Frame: RawByteString);\r\n var\r\n   n: PtrInt;\r\n-  tag: TAesBlock;\r\n   gcm: TAesGcmAbstract;\r\n   p: PAnsiChar;\r\n begin\r\n@@ -814,9 +813,8 @@ procedure TTunnelLocalThread.EncryptGcm(var Frame: RawByteString);\n   gcm.AesGcmAad(@fSession, SizeOf(fSession));      // AAD session\r\n   gcm.Encrypt(pointer(Frame), p, n);               // no padding\r\n   FastAssignNew(Frame, p);                         // set result before ETunnel\r\n-  if not gcm.AesGcmFinal(tag) then\r\n+  if not gcm.AesGcmFinal(PAesBlock(p + n)^) then\r\n     ETunnel.RaiseUtf8('%.EncryptGcm: finalization failed', [self]);\r\n-  PAesBlock(p + n)^ := tag;\r\n end; // caller will append fSession as trailer\r\n \r\n function TTunnelLocalThread.DecryptGcm(\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Network"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2d95c74a0d22d9faf0b1b5453e0a38d561478894",
+      "short_sha": "2d95c74a",
+      "subject": "crypt: allow partial/truncated AES-GCM encryption",
+      "body": "- previously, we had to disable AVX support for partial blocks\n- now PKCS7 is not mandatory\n- so TAesGcm is on paar with TAesGcmOsl in this respect\n- full blocks still use the fast AVX+CLMUL asm so performance should not be slower",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T14:05:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2d95c74a0d22d9faf0b1b5453e0a38d561478894",
+      "parents": [
+        "e8367af56fc0d42359f9532b06a03c62dc803be3"
+      ],
+      "stats": {
+        "additions": 128,
+        "deletions": 27,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 125,
+          "deletions": 24,
+          "patch": "@@ -477,7 +477,7 @@   TAesGcmEngine = record\n     end;\r\n     /// 4KB lookup table for fast Galois Finite Field multiplication\r\n     // - is defined as last field of the object for better code generation\r\n-    // - only first 256 bytes are used in flagAVX mode\r\n+    // - only first 256 bytes and last 32 bytes are used in flagAVX mode\r\n     gf_t4k: array[byte] of THash128Rec;\r\n     /// build the gf_t4k[] internal table from current state.ghash_h\r\n     procedure Make4K_Table;\r\n@@ -489,12 +489,14 @@   TAesGcmEngine = record\n     procedure internal_auth(ctp: PByte; ILen: PtrUInt;\r\n       var ghv: TAesBlock; var gcnt: TQWordRec);\r\n     {$ifdef USEGCMAVX}\r\n+    function txt_pending: PAesBlock; inline; // = @gf_t4k[254]\r\n+    function aad_pending: PAesBlock; inline; // = @gf_t4k[255]\r\n     /// redirected from Encrypt() and Decrypt() in flagAVX mode\r\n     procedure AvxProcess(BufIn, BufOut: PByte; Count: cardinal; Encrypt: boolean);\r\n     {$endif USEGCMAVX}\r\n   public\r\n     /// initialize the AES-GCM structure for the supplied Key\r\n-    function Init(const Key; KeyBits: PtrInt; AllowAvx: boolean): boolean;\r\n+    function Init(const Key; KeyBits: PtrInt; AllowAvx: boolean = true): boolean;\r\n     /// start AES-GCM encryption with a given Initialization Vector\r\n     // - IV_len is in bytes use 12 for exact IV setting, otherwise the\r\n     // supplied buffer will be hashed using gf_mul_h()\r\n@@ -4710,46 +4712,110 @@ procedure TAesGcmEngine.internal_auth(ctp: PByte; ILen: PtrUInt;\n end;\r\n \r\n {$ifdef USEGCMAVX}\r\n+function TAesGcmEngine.txt_pending: PAesBlock;\r\n+begin\r\n+  result := @gf_t4k[pred(high(gf_t4k))];\r\n+end;\r\n+\r\n+function TAesGcmEngine.aad_pending: PAesBlock;\r\n+begin\r\n+  result := @gf_t4k[high(gf_t4k)];\r\n+end;\r\n+\r\n procedure TAesGcmEngine.AvxProcess(BufIn, BufOut: PByte; Count: cardinal;\r\n   Encrypt: boolean);\r\n var\r\n-  blocks, ctr, onepass: cardinal;\r\n+  blocks, ctr, onepass, n, i, pos: cardinal;\r\n+  txt, buf: PAesBlock;\r\n begin\r\n-  // 8x interleaved aesni + pclmulqdq x86_64 asm\r\n-  if Count and AesBlockMod <> 0 then\r\n-    ESynCrypto.RaiseU('TAesGcm.Encrypt/Decrypt should use PKCS7');\r\n+  if Count = 0 then\r\n+    exit;\r\n+  if state.atx_cnt.V = 0 then // AAD must precede ciphertext\r\n+  begin\r\n+    n := state.aad_cnt.L and AesBlockMod;\r\n+    if n <> 0 then\r\n+      GcmAvxAuth(@gf_t4k, aad_pending, n, @state.txt_ghv);\r\n+  end;\r\n+  txt := txt_pending;\r\n+  buf := @TAesContext(aes).buf;\r\n   inc(state.atx_cnt.V, Count);\r\n-  repeat\r\n-    // regroup GMAC + AES-CTR per 1MB chunks to fit in L2/L3 CPU cache\r\n-    onepass := 1 shl 20;\r\n-    if Count < onepass then\r\n-      onepass := Count;\r\n-    // GMAC done before decryption\r\n+  if state.blen <> 0 then // continue partial CTR\r\n+  begin\r\n+    pos := state.blen;\r\n+    n := SizeOf(TAesBlock) - pos;\r\n+    if n > Count then\r\n+      n := Count;\r\n+    for i := 0 to n - 1 do\r\n+    begin\r\n+      if Encrypt then\r\n+      begin\r\n+        BufOut^ := BufIn^ xor buf^[pos + i];\r\n+        txt^[pos + i] := BufOut^;\r\n+      end\r\n+      else\r\n+      begin\r\n+        txt^[pos + i] := BufIn^;\r\n+        BufOut^ := BufIn^ xor buf^[pos + i];\r\n+      end;\r\n+      inc(BufIn);\r\n+      inc(BufOut);\r\n+    end;\r\n+    inc(state.blen, n);\r\n+    dec(Count, n);\r\n+    if state.blen = SizeOf(TAesBlock) then // complete ciphertext GHASH block\r\n+    begin\r\n+      GcmAvxAuth(@gf_t4k, txt, SizeOf(TAesBlock), @state.txt_ghv);\r\n+      state.blen := 0;\r\n+    end;\r\n+    if Count = 0 then\r\n+      exit;\r\n+  end;\r\n+  while Count >= SizeOf(TAesBlock) do // // 8x interleaved aesni + pclmulqdq\r\n+  begin\r\n+    onepass := Count and not cardinal(AesBlockMod);\r\n+    if onepass > 1 shl 20 then\r\n+      onepass := 1 shl 20; // keep chunks <= 1 MB to fit in the CPU cache\r\n     if not Encrypt then\r\n-      GcmAvxAuth(@gf_t4k, BufIn, onepass, @state.txt_ghv);\r\n+      GcmAvxAuth(@gf_t4k, BufIn, onepass, @state.txt_ghv); // decrypt: AAD first\r\n     // AES-CTR using AES-NI and SSE4.1 over a 32-bit counter\r\n     blocks := onepass shr AesBlockShift;\r\n     ctr := bs\n... [truncated, 4722 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17563\n+17564",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17563'\r\n+'2.4.17564'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3493,7 +3493,7 @@ procedure TTestCoreCrypto._AES_GCM;\n   end;\r\n   for n := 1 to 32 do\r\n   begin\r\n-    Check(ctxt.Init(key, 128, false));\r\n+    Check(ctxt.Init(key, 128));\r\n     Check(ctxt.Reset(@hex32, n));\r\n     Check(ctxt.Add_AAD(@hex32, n));\r\n     Check(ctxt.Encrypt(@hex32, @buf, n));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e8367af56fc0d42359f9532b06a03c62dc803be3",
+      "short_sha": "e8367af5",
+      "subject": "crypt: fixed TAesGcmEngine.Reset after non-complete blocks",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T13:18:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e8367af56fc0d42359f9532b06a03c62dc803be3",
+      "parents": [
+        "a0b02203604b71ebde0367b6a0882f924b7d924b"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -4842,6 +4842,7 @@ function TAesGcmEngine.Reset(pIV: PHash128Rec; IV_len: PtrInt): boolean;\n   FillZero(state.txt_ghv);\r\n   state.aad_cnt.V := 0;\r\n   state.atx_cnt.V := 0;\r\n+  state.blen := 0;\r\n   state.flags := state.flags - [flagFinalComputed, flagFlushed];\r\n   result := true;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17562\n+17563",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17562'\r\n+'2.4.17563'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a0b02203604b71ebde0367b6a0882f924b7d924b",
+      "short_sha": "a0b02203",
+      "subject": "core: fix #660 part II",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:59:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a0b02203604b71ebde0367b6a0882f924b7d924b",
+      "parents": [
+        "630707acb0d0062b437b3cf74f0b01eb989e54d9"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -3754,6 +3754,7 @@ procedure TSynBackgroundTimer.EverySecond(Sender: TSynBackgroundThreadProcess);\n      Terminated then\r\n     exit;\r\n   tix := mormot.core.os.GetTickCount64; // retrieve once outside lock\r\n+  fProcessing := true;\r\n   LockedInc32(@fProcessingCounter);\r\n   try\r\n     i := 0;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17561\n+17562",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17561'\r\n+'2.4.17562'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": 660,
+      "is_merge": false
+    },
+    {
+      "sha": "630707acb0d0062b437b3cf74f0b01eb989e54d9",
+      "short_sha": "630707ac",
+      "subject": "core: fixed TSynBackgroundTimer.WaitUntilNotProcessing #660",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:56:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/630707acb0d0062b437b3cf74f0b01eb989e54d9",
+      "parents": [
+        "c0bc69848307e9f9e21a68833ddd9d1bfeeebd73"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3876,7 +3876,7 @@ procedure TSynBackgroundTimer.Enable(\n \r\n procedure TSynBackgroundTimer.WaitUntilNotProcessing(timeoutsecs: integer);\r\n begin\r\n-  SleepHiRes(timeoutsecs, fProcessing, {terminatedvalue=}false);\r\n+  SleepHiRes(timeoutsecs * MilliSecsPerSec, fProcessing, {terminatedvalue=}false);\r\n end;\r\n \r\n function TSynBackgroundTimer.ExecuteNow(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17560\n+17561",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17560'\r\n+'2.4.17561'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.threads"
+      ],
+      "pr": 660,
+      "is_merge": false
+    },
+    {
+      "sha": "c0bc69848307e9f9e21a68833ddd9d1bfeeebd73",
+      "short_sha": "c0bc6984",
+      "subject": "db: fixed #659 TSqlDBPostgresStatement.ColumnInt with BOOLINT value",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:53:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c0bc69848307e9f9e21a68833ddd9d1bfeeebd73",
+      "parents": [
+        "9a90c0093ec8855cf2881a02ff7abca1fa0b1400"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 1,
+          "patch": "@@ -1229,9 +1229,15 @@ procedure TSqlDBPostgresStatement.ReleaseRows;\n end;\r\n \r\n function TSqlDBPostgresStatement.ColumnInt(Col: integer): int64;\r\n+var\r\n+  v: PUtf8Char;\r\n begin\r\n   CheckColAndRowset(Col);\r\n-  result := GetInt64(PQ.GetValue(fRes, fCurrentRow, Col));\r\n+  v := PQ.GetValue(fRes, fCurrentRow, Col);\r\n+  if fColumns[Col].ColumnAttr = BOOLOID then // = PQ.ftype(fRes, Col)\r\n+    result := ord((v <> nil) and (v^ = 't'))\r\n+  else\r\n+    result := GetInt64(v);\r\n end;\r\n \r\n function TSqlDBPostgresStatement.ColumnNull(Col: integer): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17559\n+17560",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17559'\r\n+'2.4.17560'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.postgres"
+      ],
+      "pr": 659,
+      "is_merge": false
+    },
+    {
+      "sha": "9a90c0093ec8855cf2881a02ff7abca1fa0b1400",
+      "short_sha": "9a90c009",
+      "subject": "db: fixed #658 TSqlDBPostgresStatement.BindParams with '' value",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:51:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9a90c0093ec8855cf2881a02ff7abca1fa0b1400",
+      "parents": [
+        "db7c472122a8618a505edfe50cfe1e724dac9331"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -939,7 +939,11 @@ procedure TSqlDBPostgresStatement.BindParams;\n           'parameter #% of type %', [self, i, ToText(p^.VType)^]);\r\n       end;\r\n     if fPGParams[i] = nil then\r\n-      fPGParams[i] := pointer(p^.VData);\r\n+      if (p^.VType <> ftNull) and\r\n+         (p^.VData = '') then\r\n+        fPGParams[i] := @NULCHAR // empty value, not SQL NULL\r\n+      else\r\n+        fPGParams[i] := pointer(p^.VData);\r\n     inc(p);\r\n   end;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17558\n+17559",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17558'\r\n+'2.4.17559'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.postgres"
+      ],
+      "pr": 658,
+      "is_merge": false
+    },
+    {
+      "sha": "db7c472122a8618a505edfe50cfe1e724dac9331",
+      "short_sha": "db7c4721",
+      "subject": "db: fixed TSqlDBConnectionPropertiesThreadSafe.Destroy #657",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:45:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/db7c472122a8618a505edfe50cfe1e724dac9331",
+      "parents": [
+        "81dcd78a7614e4807a405db0c83066028d9a77e3"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -7806,7 +7806,7 @@ destructor TSqlDBConnectionPropertiesThreadSafe.Destroy;\n var\r\n   i: PtrInt;\r\n begin\r\n-  for i := fConnectionPoolMin to fConnectionPoolMax do\r\n+  for i := 0 to high(fConnectionPool) do // no fConnectionPoolMax/Max here\r\n     if fConnectionPool[i] <> nil then\r\n       FreeAndNilSafe(fConnectionPool[i]);\r\n   inherited Destroy; // do MainConnection.Free\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17557\n+17558",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17557'\r\n+'2.4.17558'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": 657,
+      "is_merge": false
+    },
+    {
+      "sha": "81dcd78a7614e4807a405db0c83066028d9a77e3",
+      "short_sha": "81dcd78a",
+      "subject": "db: fixed #655 backup destination creation failure",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:33:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/81dcd78a7614e4807a405db0c83066028d9a77e3",
+      "parents": [
+        "938a6bb1048cfd4e852aa97438cee085b3b88c15"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.sqlite3.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -7351,7 +7351,11 @@ function TSqlDataBase.BackupBackground(const BackupFileName: TFileName;\n     if not DeleteFile(BackupFileName) then\r\n       exit;\r\n   // see https://bitbucket.org/egrange/sql3bak for proper parameters\r\n-  Dest := TSqlDatabase.Create(BackupFileName,aPassword, 0, 1);\r\n+  try\r\n+    Dest := TSqlDatabase.Create(BackupFileName,aPassword, 0, 1);\r\n+  except\r\n+    exit; // keep result := false on write error\r\n+  end;\r\n   Dest.SetLockingMode(lmExclusive);\r\n   Dest.SetSynchronous(smOff);\r\n   Dest.ExecuteNoException('PRAGMA journal_mode=MEMORY');\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17556\n+17557",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17556'\r\n+'2.4.17557'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.sqlite3"
+      ],
+      "pr": 655,
+      "is_merge": false
+    },
+    {
+      "sha": "938a6bb1048cfd4e852aa97438cee085b3b88c15",
+      "short_sha": "938a6bb1",
+      "subject": "core: fixed #654 unexpected command line argument reporting",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:29:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/938a6bb1048cfd4e852aa97438cee085b3b88c15",
+      "parents": [
+        "fa932d76083687a8b1bc85482950363e55c185b9"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -10835,7 +10835,7 @@ function TExecutableCommandLine.DetectUnknown: RawUtf8;\n       if not fRetrieved[clk][i] then\r\n         if clk = clkArg then\r\n           if i >= length(fDescArg) then\r\n-            result := Join([result, 'Unexpected \"', fRawParams[i], '\" argument', fLineFeed])\r\n+            result := Join([result, 'Unexpected \"', fNames[clkArg][i], '\" argument', fLineFeed])\r\n           else\r\n             result := Join([result, 'Missing <', fDescArg[i], '> argument', fLineFeed])\r\n         else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17555\n+17556",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17555'\r\n+'2.4.17556'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 0,
+          "patch": "@@ -3690,6 +3690,15 @@ procedure TTestCoreBase._TExecutableCommandLine;\n     CheckEqual(f, 'file.txt');\r\n     Check(c.Get('t', t));\r\n     CheckEqual(t, 1);\r\n+    // regression for #654: positional argument after a parameter\r\n+    c.Clear;\r\n+    c.RawParams := CsvToRawUtf8DynArray(\r\n+      '--run /config /opt/porter/x.config', ' ');\r\n+    Check(c.Parse(#10, '-', '--'));\r\n+    Check(c.Get('run', f));\r\n+    CheckEqual(f, '/config');\r\n+    CheckEqual(c.Args[0], '/opt/porter/x.config');\r\n+    CheckEqual(c.DetectUnknown, 'Unexpected \"/opt/porter/x.config\" argument'#10);\r\n   finally\r\n     c.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": 654,
+      "is_merge": false
+    },
+    {
+      "sha": "fa932d76083687a8b1bc85482950363e55c185b9",
+      "short_sha": "fa932d76",
+      "subject": "net: one leftover of #653",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:25:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fa932d76083687a8b1bc85482950363e55c185b9",
+      "parents": [
+        "c46549d6680b98880da84ab5f5a4f4b5a7f2fb19"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17554\n+17555",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17554'\r\n+'2.4.17555'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -5865,11 +5865,13 @@ procedure TLdapClientSettings.SetTargetUri(const uri: RawUtf8);\n   if not u.From(uri) then\r\n     exit;\r\n   if u.Scheme = '' then\r\n+  begin\r\n     // no scheme:// means LDAP - force LDAPS on address:636\r\n     if u.Port = LDAP_TLS_PORT then\r\n       fTls := true\r\n-    else\r\n-      u.Port := LDAP_PORT\r\n+    else if u.Port = '80' then // no port and no scheme\r\n+      u.Port := LDAP_PORT;\r\n+  end\r\n   else\r\n     case u.UriScheme of\r\n       usLdap:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -2304,6 +2304,9 @@ procedure TNetworkProtocols.DNSAndLDAP;\n     l.TargetUri := 'dc.test.local/test.local';\r\n     CheckEqual(l.TargetPort, LDAP_PORT, 'no scheme');\r\n     Check(not l.Tls);\r\n+    l.TargetUri := 'dc.test.local:1234/test.local';\r\n+    CheckEqual(l.TargetPort, '1234', 'no scheme with port');\r\n+    Check(not l.Tls);\r\n   finally\r\n     l.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": 653,
+      "is_merge": false
+    },
+    {
+      "sha": "c46549d6680b98880da84ab5f5a4f4b5a7f2fb19",
+      "short_sha": "c46549d6",
+      "subject": "net: fixed #653 LDAP port parsing",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:17:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c46549d6680b98880da84ab5f5a4f4b5a7f2fb19",
+      "parents": [
+        "e3133b002382918eca87b8096cf440ef190decef"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17553\n+17554",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17553'\r\n+'2.4.17554'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.ldap.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 5,
+          "patch": "@@ -5862,19 +5862,23 @@ procedure TLdapClientSettings.SetTargetUri(const uri: RawUtf8);\n   fTargetPort := LDAP_PORT;\r\n   fKerberosDN := '';\r\n   fTls := false;\r\n-  if not u.From(uri, LDAP_PORT) then\r\n+  if not u.From(uri) then\r\n     exit;\r\n-  if u.Scheme <> '' then\r\n+  if u.Scheme = '' then\r\n+    // no scheme:// means LDAP - force LDAPS on address:636\r\n+    if u.Port = LDAP_TLS_PORT then\r\n+      fTls := true\r\n+    else\r\n+      u.Port := LDAP_PORT\r\n+  else\r\n     case u.UriScheme of\r\n       usLdap:\r\n         fTls := false;\r\n       usLdaps:\r\n         fTls := true;\r\n     else\r\n       exit; // unexpected scheme://\r\n-    end\r\n-  else if u.Port = LDAP_TLS_PORT then\r\n-    fTls := true; // no scheme:// means LDAP - force LDAPS on address:636\r\n+    end;\r\n   fTargetHost := u.Server;\r\n   fTargetPort := u.Port;\r\n   fKerberosDN := u.Address;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -2294,6 +2294,16 @@ procedure TNetworkProtocols.DNSAndLDAP;\n     l.TargetUri := 'ad.synopse.info';\r\n     CheckEqual(l.TargetUri, 'ldap://ad.synopse.info');\r\n     CheckEqual(l.KerberosDN, '');\r\n+    l.TargetUri := 'ldaps://dc.test.local/test.local';\r\n+    CheckEqual(l.TargetPort, LDAP_TLS_PORT, 'ldaps:');\r\n+    Check(l.Tls);\r\n+    CheckEqual(l.KerberosDN, 'test.local');\r\n+    l.TargetUri := 'ldaps://dc.test.local:389/test.local';\r\n+    CheckEqual(l.TargetPort, LDAP_PORT, 'explicit port');\r\n+    Check(l.Tls);\r\n+    l.TargetUri := 'dc.test.local/test.local';\r\n+    CheckEqual(l.TargetPort, LDAP_PORT, 'no scheme');\r\n+    Check(not l.Tls);\r\n   finally\r\n     l.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.ldap"
+      ],
+      "pr": 653,
+      "is_merge": false
+    },
+    {
+      "sha": "e3133b002382918eca87b8096cf440ef190decef",
+      "short_sha": "e3133b00",
+      "subject": "crypt: fixed #652 ECC key parsing and validation",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:17:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e3133b002382918eca87b8096cf440ef190decef",
+      "parents": [
+        "4fc7e59a69cde20a15d23bef9eabc9a82c4a93c3"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 8,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2297,7 +2297,7 @@ function PemDerRawToEcc(const pem: RawUtf8; out pub: TEccPublicKey): boolean; ov\n       pub := PEccPublicKey(der)^\r\n     else if not Ecc256r1CompressAsn1(SeqToEccPubKey(ckaEcc256, der), pub) then\r\n       exit;\r\n-  result := true; // accept key in raw, PEM or DER format\r\n+  result := pub[0] in [2, 3]; // valid compressed point prefix\r\n end;\r\n \r\n function PemDerRawToEcc(const pem: RawUtf8; out sig: TEccSignature): boolean; overload;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -10922,23 +10922,24 @@ function DerAppend(P: PAnsiChar; buf: PByteArray; buflen: PtrUInt): PAnsiChar;\n \r\n function DerParse(P: PAnsiChar; buf: PByteArray; buflen: PtrInt): PAnsiChar;\r\n var\r\n-  pos: PtrUInt;\r\n+  pos: PtrInt;\r\n begin\r\n   result := nil;\r\n   FillZero(buf^, buflen);\r\n   if (P = nil) or\r\n-     (P[0] <> AnsiChar(ASN1_INT)) then\r\n+     (P[0] <> AnsiChar(ASN1_INT)) or\r\n+     (P[1] = #0) then\r\n     exit;\r\n   pos := buflen - ord(P[1]);\r\n   inc(P, 2);\r\n   if P^ = #0 then\r\n   begin\r\n-    inc(P); // negative number appended\r\n+    inc(P); // positive INTEGER with leading zero\r\n     inc(pos);\r\n   end;\r\n+  if pos < 0 then\r\n+    exit; // INTEGER larger than destination buffer\r\n   dec(buflen, pos);\r\n-  if buflen < 0 then\r\n-    exit; // avoid buffer overflow\r\n   MoveFast(P^, buf[pos], buflen);\r\n   result := P + buflen;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17552\n+17553",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17552'\r\n+'2.4.17553'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -4134,6 +4134,8 @@ procedure TTestCoreCrypto._TKerberosKeyTab;\n procedure TTestCoreCrypto.CatalogRunAsym(Context: TObject);\r\n var\r\n   asy: TCryptAsym absolute Context;\r\n+  pk: ICryptPublicKey;\r\n+  sk: ICryptPrivateKey;\r\n   pub, pub2, priv, priv2: RawUtf8;\r\n   n, s: RawByteString;\r\n   timer: TPrecisionTimer;\r\n@@ -4165,6 +4167,14 @@ procedure TTestCoreCrypto.CatalogRunAsym(Context: TObject);\n   inc(n[1]);\r\n   Check(not asy.Verify(n, pub, s));\r\n   dec(n[1]);\r\n+  // regression for #652: public/private keys must not be interchangeable\r\n+  if asy.KeyAlgo = ckaEcc256 then\r\n+  begin\r\n+    pk := CryptPublicKey[ckaEcc256].Create;\r\n+    Check(not pk.Load(ckaEcc256, priv), 'private as public');\r\n+    sk := CryptPrivateKey[ckaEcc256].Create;\r\n+    Check(not sk.Load(ckaEcc256, nil, pub, ''), 'public as private');\r\n+  end;\r\n end;\r\n \r\n procedure TTestCoreCrypto.CatalogRunCert(Context: TObject);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.ecc",
+        "mormot.crypt.secure"
+      ],
+      "pr": 652,
+      "is_merge": false
+    },
+    {
+      "sha": "4fc7e59a69cde20a15d23bef9eabc9a82c4a93c3",
+      "short_sha": "4fc7e59a",
+      "subject": "core: fixed #651 environment variables functions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-12T12:00:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4fc7e59a69cde20a15d23bef9eabc9a82c4a93c3",
+      "parents": [
+        "69b16d3fbf10a6d9c0f88fe48c783e789fc66131"
+      ],
+      "stats": {
+        "additions": 90,
+        "deletions": 43,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 36,
+          "patch": "@@ -1819,6 +1819,7 @@ function SetSystemPath(kind: TSystemPath; const path: TFileName): boolean;\n /// efficiently return a system environment variable as UTF-8\r\n // - will maintain a cross-platform cache of allocated environment variables\r\n function GetSystemEnv(const name: RawUtf8): RawUtf8; overload;\r\n+  {$ifdef HASSAFEINLINE} inline; {$endif}\r\n \r\n /// efficiently return a system environment variable as string/TFileName\r\n // - faster cross-platform implementation of RTL GetEnvironmentVariable()\r\n@@ -6974,13 +6975,10 @@ function IsSystemError(os: TSystemError; ErrorCode: integer): boolean;\n // enumerates let compiler generate the smallest code\r\n // - all errors are cross-platform, e.g. when used in centralized servers\r\n \r\n-const\r\n-  NULL_STR: TShort1 = '';\r\n-\r\n function _GetEnumNameRtti(Info: pointer; Value: integer): PShortString;\r\n begin\r\n   // naive version - will properly be implemented in mormot.core.rtti.pas anyway\r\n-  result := @NULL_STR;\r\n+  result := @NULCHAR;\r\n   // arm32 is overcomplex and would rather use typinfo and mormot.core.rtti\r\n   {$ifndef FPC_REQUIRES_PROPER_ALIGNMENT}\r\n   if Value < 0 then\r\n@@ -8772,6 +8770,9 @@ procedure AppendKb(Size: Int64; var Dest: ShortString; WithSpace: boolean);\n   AppendShortCharSafe('B', Dest);\r\n end;\r\n \r\n+var\r\n+  _OsFlags: set of (fRawExceptionIntercepted, fSystemEnvCached);\r\n+\r\n {$ifndef NOEXCEPTIONINTERCEPT}\r\n \r\n {$ifndef KEEP_STACKFRAMES}\r\n@@ -8838,9 +8839,6 @@ procedure SynRaiseExceptObj(P: PExceptionRecord);\n {$endif WITH_RAISEEXCEPTOBJPROC}\r\n {$endif WITH_RAISEPROC}\r\n \r\n-var\r\n-  RawExceptionIntercepted: boolean; // single global Exception interception\r\n-\r\n // note that SynLogException() will use PerThreadInfo.ExceptionIgnore to avoid\r\n // recursive exception logging: global _RawLogException should not be set\r\n // temporarly to nil or exceptions on concurrent threads would not be logged\r\n@@ -8851,10 +8849,10 @@ function RawExceptionIntercept(const Handler: TOnRawLogException): boolean;\n   GlobalLock;\r\n   try\r\n     _RawLogException := Handler; // e.g. SynLogException() from mormot.core.log\r\n-    if RawExceptionIntercepted or\r\n+    if (fRawExceptionIntercepted in _OsFlags) or\r\n        not Assigned(Handler) then\r\n       exit;\r\n-    RawExceptionIntercepted := true; // intercept once\r\n+    include(_OsFlags, fRawExceptionIntercepted); // intercept once\r\n     {$ifdef WITH_RAISEPROC} // FPC RTL redirection function\r\n     if not Assigned(OldRaiseProc) then\r\n     begin\r\n@@ -10989,60 +10987,85 @@ function SetSystemPath(kind: TSystemPath; const path: TFileName): boolean;\n     _SystemPath[kind] := IncludeTrailingPathDelimiter(full);\r\n end;\r\n \r\n-function GetSystemEnv(name: PUtf8Char; len: TStrLen): pointer;\r\n-var\r\n-  ndx: PtrInt;\r\n+function EnsureSystemEnvCached: boolean;\r\n begin\r\n-  result := nil;\r\n-  if (name = nil) or\r\n-     (len <= 0) then\r\n-    exit;\r\n-  if _SystemEnvNames = nil then\r\n+  if not (fSystemEnvCached in _OsFlags) then\r\n   begin\r\n     OSSafe.Lock;\r\n-    if _SystemEnvNames = nil then\r\n+    if not (fSystemEnvCached in _OsFlags) then\r\n       _GetSystemEnv;\r\n+    include(_OsFlags, fSystemEnvCached);\r\n     OSSafe.UnLock;\r\n-    if _SystemEnvNames = nil then\r\n-      exit;\r\n   end;\r\n-  ndx := {$ifdef OSPOSIX}FindNonVoidRawUtf8{$else}FindNonVoidRawUtf8I{$endif}(\r\n-    pointer(_SystemEnvNames), name, len, length(_SystemEnvNames));\r\n-  if ndx >= 0 then\r\n-    result := pointer(_SystemEnvValues[ndx]); // O(n) fast found in cache\r\n+  result := _SystemEnvNames <> nil;\r\n end;\r\n \r\n-function GetSystemEnv(const name: RawUtf8): RawUtf8;\r\n+function GetSystemEnvIndex(name: PUtf8Char; len: TStrLen): PtrInt;\r\n begin\r\n-  result := RawUtf8(GetSystemEnv(pointer(name), length(name)));\r\n+  if (name <> nil) and\r\n+     (len > 0) and\r\n+     EnsureSystemEnvCached then\r\n+    result := {$ifdef OSPOSIX}FindNonVoidRawUtf8{$else}FindNonVoidRawUtf8I{$endif}(\r\n+      pointer(_SystemEnvNames), name, len, length(_SystemEnvNames))\r\n+  else\r\n+    result := -1;\r\n end;\r\n \r\n-function GetSystemEnvString(const name: Ra\n... [truncated, 1991 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 1,
+          "patch": "@@ -3043,10 +3043,22 @@ end;\n \r\n function setenv(name, value: PUtf8Char; replace: integer): integer;\r\n   cdecl external clib name 'setenv';\r\n+function unsetenv(name: PUtf8Char): integer;\r\n+  cdecl external clib name 'unsetenv';\r\n \r\n function _SetSystemEnv(const name, value: RawUtf8): boolean;\r\n+var\r\n+  v: pointer;\r\n+begin\r\n+  v := pointer(value);\r\n+  if v = nil then\r\n+    v := @NULCHAR;\r\n+  result := setenv(pointer(name), v, {replace=}1) = 0;\r\n+end;\r\n+\r\n+function _UnsetSystemEnv(const name: RawUtf8): boolean;\r\n begin\r\n-  result := setenv(pointer(name), pointer(value), {replace=}1) = 0;\r\n+  result := unsetenv(pointer(name)) = 0;\r\n end;\r\n \r\n procedure GetUserHost(out User, Host: RawUtf8);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 3,
+          "patch": "@@ -3151,10 +3151,21 @@ function _SetSystemEnv(const name, value: RawUtf8): boolean;\n var\r\n   n, v: TSynTempBuffer;\r\n begin\r\n-  result := SetEnvironmentVariableW(Utf8ToWin32PWideChar(name, n),\r\n-                                    Utf8ToWin32PWideChar(value, v));\r\n+  if value = '' then\r\n+    PWideChar(v.InitOnStack)^ := #0 // void but not nil UTF-16 buffer\r\n+  else\r\n+    Utf8ToWin32PWideChar(value, v);\r\n+ result := SetEnvironmentVariableW(Utf8ToWin32PWideChar(name, n), v.buf);\r\n+ n.Done;\r\n+ v.Done;\r\n+end;\r\n+\r\n+function _UnsetSystemEnv(const name: RawUtf8): boolean;\r\n+var\r\n+  n: TSynTempBuffer;\r\n+begin\r\n+  result := SetEnvironmentVariableW(Utf8ToWin32PWideChar(name, n), nil);\r\n   n.Done;\r\n-  v.Done;\r\n end;\r\n \r\n function PatchProcess(Old, New: pointer; Size: PtrInt; Backup: pointer): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -7914,7 +7914,8 @@ constructor TBinaryCookieGenerator.Create(const Name: RawUtf8;\n \r\n destructor TBinaryCookieGenerator.Destroy;\r\n begin\r\n-  FillZeroRtti(TypeInfo(TBinaryCookieContext), fContext); // anti-forensic\r\n+  Finalize(fContext);\r\n+  FillCharFast(fContext, SizeOf(fContext), 0); // anti-forensic\r\n   fAes.Done;\r\n   inherited Destroy;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17551\n+17552",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17551'\r\n+'2.4.17552'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows",
+        "mormot.crypt.secure"
+      ],
+      "pr": 651,
+      "is_merge": false
+    }
+  ]
+}
