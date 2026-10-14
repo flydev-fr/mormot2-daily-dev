@@ -3,23 +3,1494 @@
   "analysis_schema": "mormot2-monitor/analysis@1",
   "edition": "2026-10-13",
   "repo": "synopse/mORMot2",
-  "generated_at": "2026-10-14T08:45:06Z",
+  "generated_at": "2026-10-14T08:53:56Z",
   "range": {
     "since": "2026-10-12T22:00:00Z",
     "until": "2026-10-13T22:00:00Z",
     "base_sha": "b4a210033da8f9e5f66c3719aedf1ff1b2eec2c1",
-    "head_sha": "319cd63ea11765dd5760d17f85e311e5ed93db7f"
+    "head_sha": "a1725c69d341221927a82001d0bd36ca8e127c0b"
   },
   "version": {
-    "after": "2.4.17586",
+    "after": "2.4.17609",
     "before": "2.4.17580"
   },
   "totals": {
-    "commits": 6,
-    "additions": 213,
-    "deletions": 99
+    "commits": 31,
+    "additions": 2301,
+    "deletions": 737
   },
   "commits": [
+    {
+      "sha": "a1725c69d341221927a82001d0bd36ca8e127c0b",
+      "short_sha": "a1725c69",
+      "subject": "Merge pull request #663 from landrix/range-416-content-range",
+      "body": "net: send Content-Range: bytes */<size> with a 416 response",
+      "author": "ab",
+      "date": "2026-10-13T17:48:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a1725c69d341221927a82001d0bd36ca8e127c0b",
+      "parents": [
+        "5336ba7b23361469225e64d93edd821b5fde45c7",
+        "652183f7dde9d07885370bcf67d49512016ccc92"
+      ],
+      "stats": {
+        "additions": 71,
+        "deletions": 16,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 4,
+          "patch": "@@ -569,6 +569,15 @@   THttpRequestContext = record\n     /// check RangeOffset/RangeLength against ContentLength\r\n     // - and update ResponseFlags and ContentLength properties\r\n     function ValidateRange: boolean;\r\n+    /// add a 'Content-Range: bytes */aSize' header to the ResponseHeaders\r\n+    // - as RFC 9110 #15.5.17 states for a 416 response to a byte-range request:\r\n+    // \"the sender SHOULD generate a Content-Range header field specifying the\r\n+    // current length of the selected representation\"\r\n+    // - also clears rfRange/rfWantRange, so that CompressContentAndFinalizeHead\r\n+    // won't validate the range again against the error page sent instead, and\r\n+    // add a second (wrong) Content-Range header\r\n+    // - returns HTTP_RANGENOTSATISFIABLE, so can be used as a result\r\n+    function RangeNotSatisfiable(aSize: Int64): integer;\r\n     /// (re)initialize the HTTP Server state machine for ProcessRead/ProcessWrite\r\n     procedure ProcessInit;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n@@ -3699,6 +3708,15 @@ function THttpRequestContext.ValidateRange: boolean;\n   end;\r\n end;\r\n \r\n+function THttpRequestContext.RangeNotSatisfiable(aSize: Int64): integer;\r\n+begin\r\n+  AppendLine(ResponseHeaders, ['Content-Range: bytes */', aSize]);\r\n+  // clear both flags, otherwise CompressContentAndFinalizeHead would\r\n+  // validate the range once again, against the generated error page\r\n+  ResponseFlags := ResponseFlags - [rfRange, rfWantRange];\r\n+  result := HTTP_RANGENOTSATISFIABLE;\r\n+end;\r\n+\r\n procedure THttpRequestContext.ParseHeader(P: PUtf8Char; PLen: PtrInt;\r\n   HeadersUnFiltered: boolean);\r\n var\r\n@@ -4627,10 +4645,8 @@ function THttpRequestContext.ContentFromStream(aStream: TStream;\n       result := HTTP_RANGENOTSATISFIABLE;\r\n   if result <> HTTP_SUCCESS then\r\n   begin\r\n+    RangeNotSatisfiable(aLength); // also clears rfRange/rfWantRange\r\n     ContentLength := 0;\r\n-    // clear both flags, otherwise CompressContentAndFinalizeHead would\r\n-    // validate the range once again, against the generated error page\r\n-    ResponseFlags := ResponseFlags - [rfRange, rfWantRange];\r\n     exit;\r\n   end;\r\n   if not (hosNoRange in aOptions) then\r\n@@ -4675,7 +4691,7 @@ function THttpRequestContext.ContentFromFile(const FileName: TFileName;\n   if rfWantRange in ResponseFlags then\r\n     if not ValidateRange then\r\n     begin\r\n-      result := HTTP_RANGENOTSATISFIABLE;\r\n+      result := RangeNotSatisfiable(ContentLength); // ContentLength = file size\r\n       exit;\r\n     end;\r\n   include(ResponseFlags, rfAcceptRange);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -3423,7 +3423,8 @@ procedure THttpServerRequest.ProcessStaticFile(var Context: THttpRequestContext;\n       else\r\n         fRespStatus := HTTP_NOTFOUND\r\n     else\r\n-      fRespStatus := HTTP_RANGENOTSATISFIABLE\r\n+      // the expected full size of the progressive file\r\n+      fRespStatus := Context.RangeNotSatisfiable(Context.ContentLength)\r\n   else if (not Assigned(fServer.OnSendFile)) or\r\n           (not fServer.OnSendFile(self, fn)) then\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 49,
+          "deletions": 11,
+          "patch": "@@ -90,7 +90,7 @@   TNetworkProtocols = class(TSynTestCase)\n     reqthree: boolean;\r\n     reqfour: Int64;\r\n     // for FileRange\r\n-    rangefile: TFileName;\r\n+    rangefile, rangesmall: TFileName;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -6330,8 +6330,12 @@ function TNetworkProtocols.DoBodyRequest(Ctxt: THttpServerRequestAbstract): card\n function TNetworkProtocols.DoRangeRequest(\r\n   Ctxt: THttpServerRequestAbstract): cardinal;\r\n begin\r\n-  result := Ctxt.SetOutFile(rangefile, {Handle304NotModified=}false,\r\n-    BINARY_CONTENT_TYPE);\r\n+  if Ctxt.Url = '/small' then\r\n+    result := Ctxt.SetOutFile(rangesmall, {Handle304NotModified=}false,\r\n+      BINARY_CONTENT_TYPE)\r\n+  else\r\n+    result := Ctxt.SetOutFile(rangefile, {Handle304NotModified=}false,\r\n+      BINARY_CONTENT_TYPE);\r\n end;\r\n \r\n procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\r\n@@ -6344,18 +6348,20 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n   hosthead: RawUtf8;\r\n \r\n   procedure RawRange(const range, expected, context: RawUtf8;\r\n-    expectedlength: Int64 = -1);\r\n+    expectedlength: Int64 = -1; const expectedcontentrange: RawUtf8 = '';\r\n+    const url: RawUtf8 = '/file');\r\n   var\r\n     raw: TCrtSocket;\r\n-    cmd, len: RawUtf8;\r\n+    cmd, len, contentrange: RawUtf8;\r\n+    contentranges: integer;\r\n   begin\r\n     // THttpClientSocket.RangeStart is an Int64, so such an offset needs to be\r\n     // sent from a raw socket - with a timeout, so that a regression of the\r\n     // send loop shows up as a failure here instead of hanging the whole suite\r\n     raw := TCrtSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 5000);\r\n     try\r\n       raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n-      raw.SockSend('GET /file HTTP/1.1');\r\n+      raw.SockSend(['GET ', url, ' HTTP/1.1']);\r\n       raw.SockSend(hosthead);\r\n       raw.SockSend(['Range: bytes=', range]);\r\n       raw.SockSend('Connection: close');\r\n@@ -6364,18 +6370,35 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n       cmd := '';\r\n       raw.SockRecvLn(cmd);\r\n       CheckUtf8(PosEx(expected, cmd) > 0, '% [%] got %', [context, range, cmd]);\r\n-      if expectedlength < 0 then\r\n+      if (expectedlength < 0) and\r\n+         (expectedcontentrange = '') then\r\n         exit;\r\n-      // the announced body size should never exceed the actual file content\r\n       len := '';\r\n+      contentrange := '';\r\n+      contentranges := 0;\r\n       repeat\r\n         cmd := '';\r\n         raw.SockRecvLn(cmd);\r\n         if IdemPChar(pointer(cmd), 'CONTENT-LENGTH: ') then\r\n-          len := copy(cmd, 17, 30);\r\n+          len := copy(cmd, 17, 30)\r\n+        else if IdemPChar(pointer(cmd), 'CONTENT-RANGE: ') then\r\n+        begin\r\n+          contentrange := copy(cmd, 16, 100);\r\n+          inc(contentranges);\r\n+        end;\r\n       until cmd = ''; // end of response headers\r\n-      CheckUtf8(GetInt64(pointer(len)) = expectedlength,\r\n-        '% [%] length=% expected=%', [context, range, len, expectedlength]);\r\n+      // the announced body size should never exceed the actual file content\r\n+      if expectedlength >= 0 then\r\n+        CheckUtf8(GetInt64(pointer(len)) = expectedlength,\r\n+          '% [%] length=% expected=%', [context, range, len, expectedlength]);\r\n+      if expectedcontentrange <> '' then\r\n+      begin\r\n+        CheckUtf8(contentrange = expectedcontentrange,\r\n+          '% [%] content-range=% expected=%',\r\n+          [context, range, contentrange, expectedcontentrange]);\r\n+        CheckUtf8(contentranges = 1, '% [%] % content-range headers',\r\n+          [context, range, contentranges]);\r\n+      end;\r\n     finally\r\n       raw.Free;\r\n     end;\r\n@@ -6393,6 +6416,9 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n   check(DirectoryExists(TempDir), 'tempdir5');\r\n   rangefile := TempDir + 'range';\r\n   Check(FileFromString(data, rangefile), 'range file');\r\n+  // a file smaller than the error\n... [truncated, 2722 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "pr": 663,
+      "is_merge": true
+    },
+    {
+      "sha": "5336ba7b23361469225e64d93edd821b5fde45c7",
+      "short_sha": "5336ba7b",
+      "subject": "doc: Tunnel usage and security audit",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T17:42:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5336ba7b23361469225e64d93edd821b5fde45c7",
+      "parents": [
+        "c9f379d801c7837d9fed37dcf07bc3d9881083c6"
+      ],
+      "stats": {
+        "additions": 531,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "doc/security/mormot.net.tunnel.md",
+          "status": "added",
+          "additions": 529,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,529 @@\n+# `mormot.net.tunnel` — End-to-End Tunnel Security and Deployment Guidance\n+\n+**Scope:** mORMot2 local TCP forwarding through `ITunnelTransmit`, including `TTunnelLocalServer`, `TTunnelLocalClient`, the relay interfaces, the `tlmVersion2` handshake, and authenticated encrypted TCP payloads. The principal example is administrator-to-agent remote assistance carrying VNC/RFB through a relay.\n+\n+**Implementation:** [`src/net/mormot.net.tunnel.pas`](../../src/net/mormot.net.tunnel.pas).  \n+**Cryptographic dependencies:** [`mormot.crypt.ecc256r1.pas`](../../src/crypt/mormot.crypt.ecc256r1.pas), [`mormot.crypt.core.pas`](../../src/crypt/mormot.crypt.core.pas), and `ICryptCert` in [`mormot.crypt.secure.pas`](../../src/crypt/mormot.crypt.secure.pas).  \n+**Related tests:** [`test/test.net.proto.pas`](../../test/test.net.proto.pas) (`TNetworkProtocols.Tunnel`, `TunnelTest`, `TunnelRelay`, `TunnelDeferred`) and [`test/test.core.ecc.pas`](../../test/test.core.ecc.pas).\n+\n+**Review basis:** Inspection of the current trunk implementation, cryptographic construction, protocol invariants, threat boundaries, and existing tests. This is a source-level engineering security review: it is **not** a formal cryptographic proof, external certification, fuzzing report, or assertion that the complete application has been penetration-tested.\n+\n+> **Executive assessment.** `tlmVersion2` provides a compact end-to-end TCP tunnel with optional P-256 ECDHE, role-separated AES-128-GCM traffic keys, 128-bit GCM authentication tags, per-frame evolving nonces, and optional endpoint certificate signatures. A sufficiently unpredictable, confidential `AppSecret` provides an alternative shared-secret authenticator for the fixed handshake, without certificates. The relay routes opaque traffic and does not need the established ECDHE traffic keys.\n+>\n+> **Essential condition.** Encryption and authentication are separate properties. Against an **active, malicious relay**, use `[toEcdhe]` **and** authenticate the endpoint with a separately trusted `VerifyCert` or a **strong, independently provisioned `AppSecret`**. ECDHE with an empty/known secret and no certificate can be intercepted by an active man-in-the-middle. The application remains responsible for authorization, endpoint selection, user consent, and credential provisioning.\n+\n+## 1. Security goals and trust boundaries\n+\n+A representative topology is:\n+\n+```text\n+Administrator console                   Relay / transport                    End-user agent\n+VNC viewer --local TCP-- TTunnelLocalServer ===== TunnelSend frames ===== TTunnelLocalClient --local TCP-- VNC server\n+                         <-------------- P-256 ECDHE + AES-128-GCM -------------->\n+                            Endpoint authentication occurs at each endpoint\n+```\n+\n+The endpoint cryptographic server/client roles can be reversed, and the relay transport need not be WebSockets. See section 3 for the distinction between administrator console, end-user agent, SOA service endpoints, and local TCP processes. `TTunnelLocal` protects the bytes carried between the two local forwarding endpoints; it does not provide access control for the local application protocol itself.\n+\n+| Property | Intended protection | Trust boundary |\n+| --- | --- | --- |\n+| TCP payload confidentiality | AES-128-GCM when `toEcdhe` or `toEncrypt` is enabled | Requires an authenticated handshake against an active attacker |\n+| TCP payload integrity | 128-bit GCM tag checked before writing plaintext to the local socket | A relay may still drop, delay, reorder, or terminate frames |\n+| Endpoint authentication | Trusted peer certificate signature, and/or proof of a strong shared `AppSecret` | Trust anchors/secrets must be provisioned by the application |\n+| Forward secrecy | Fresh P-256 ECDHE key material for each tunnel | Does not apply to static `SpecificKey` reuse or PSK-only `toEncrypt` |\n+| Session association | Handshake session value and GCM additional authen\n... [truncated, 52876 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17608\n+17609",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17608'\r\n+'2.4.17609'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "Docs"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c9f379d801c7837d9fed37dcf07bc3d9881083c6",
+      "short_sha": "c9f379d8",
+      "subject": "tests: Validate invalid ecc public keys (out of the curve)",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T17:05:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c9f379d801c7837d9fed37dcf07bc3d9881083c6",
+      "parents": [
+        "74778edad1dbecd8351f5c4959e509ee4e301f90"
+      ],
+      "stats": {
+        "additions": 33,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17607\n+17608",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17607'\r\n+'2.4.17608'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.ecc.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 0,
+          "patch": "@@ -147,6 +147,8 @@ procedure TTestCoreEcc.ECC;\n   p, e: RawUtf8;\r\n   sec1, sec2: TEccSecretKey;\r\n   c1, c2: TEccPublicKey;\r\n+  pr: TEccPrivateKey;\r\n+  unc: TEccPublicKeyUncompressed;\r\n begin\r\n   if pub = nil then\r\n     ReferenceVectors; // need to compute some keys to work on\r\n@@ -204,6 +206,35 @@ procedure TTestCoreEcc.ECC;\n     checkEqual(EciesOpen('aes-128-ctr', priv[i], e), p, 'EciesOpen');\r\n   end;\r\n   NotifyTestSpeed('EciesSeal+EciesOpen', ECC_COUNT * 2, 0, @timer);\r\n+  // Validate invalid ecc public keys (out of the curve)\r\n+  c1 := pub[0];\r\n+  pr := priv[0];\r\n+  // Control: valid P-256 public key\r\n+  Check(ecdh_shared_secret_pas(c1, pr, sec1));\r\n+  // Invalid compressed prefix\r\n+  c2 := c1;\r\n+  c2[0] := $04;\r\n+  Check(not ecdh_shared_secret_pas(c2, pr, sec1));\r\n+  c2[0] := $00;\r\n+  Check(not ecdh_shared_secret_pas(c2, pr, sec1));\r\n+  // Non-canonical X: 2^256-1 >= curve prime\r\n+  FillCharFast(c2, SizeOf(c2), $FF);\r\n+  c2[0] := $02;\r\n+  Check(not ecdh_shared_secret_pas(c2, pr, sec1));\r\n+  // X=1: x^3-3x+b is a quadratic non-residue\r\n+  FillCharFast(c2, SizeOf(c2), 0);\r\n+  c2[0] := $02;\r\n+  c2[32] := $01;\r\n+  Check(not ecdh_shared_secret_pas(c2, pr, sec1));\r\n+  // Try the opposite parity too\r\n+  c2[0] := $03;\r\n+  Check(not ecdh_shared_secret_pas(c2, pr, sec1));\r\n+  // Invalid uncompressed point (0,0)\r\n+  FillCharFast(unc, SizeOf(unc), 0);\r\n+  Check(not ecdh_shared_secret_uncompressed_pas(unc, pr, sec1));\r\n+  // Invalid private scalar\r\n+  FillCharFast(pr, SizeOf(pr), 0);\r\n+  Check(not ecdh_shared_secret_pas(c1, pr, sec1));\r\n end;\r\n \r\n procedure TTestCoreEcc.CertificatesAndSignatures;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "74778edad1dbecd8351f5c4959e509ee4e301f90",
+      "short_sha": "74778eda",
+      "subject": "crypt: ensure public keys decompression is validated",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T17:01:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/74778edad1dbecd8351f5c4959e509ee4e301f90",
+      "parents": [
+        "b44fb74708d414770bcab770855ddb68822eff23"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 6,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 1,
+          "patch": "@@ -2544,7 +2544,10 @@ function TEccCertificate.LoadFromStream(Stream: TStream): boolean;\n   begin\r\n     // OpenSSL Ecc256r1VerifyUncomp() is actually slower than Ecc256r1Verify()\r\n     Ecc256r1Uncompress(fContent.Head.Signed.PublicKey, fUncompressed);\r\n-    fUncompressedP := @fUncompressed;\r\n+    if IsZero(THash512(fUncompressed)) then\r\n+      result := false\r\n+    else\r\n+      fUncompressedP := @fUncompressed;\r\n   end;\r\n end;\r\n \r\n@@ -2863,6 +2866,8 @@ constructor TEccCertificateSecret.CreateNew(Authority: TEccCertificateSecret;\n     begin\r\n        // OpenSSL Ecc256r1VerifyUncomp() is actually slower than Ecc256r1Verify()\r\n       Ecc256r1Uncompress(fContent.Head.Signed.PublicKey, fUncompressed);\r\n+      if IsZero(THash512(fUncompressed)) then\r\n+        EEccException.RaiseUtf8('%.CreateNew: Uncompress?', [self]);\r\n       fUncompressedP := @fUncompressed;\r\n     end;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.ecc256r1.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "patch": "@@ -139,6 +139,7 @@ interface\n   /// decompress a secp256r1 curve public key\r\n   // - could be used before calling Ecc256r1VerifyUncomp()\r\n   // - direct low-level access to the our pascal version - no OpenSSL yet\r\n+  // - returns Uncompressed buffer filled with 0 on failure\r\n   Ecc256r1Uncompress: procedure(const Compressed: TEccPublicKey;\r\n     out Uncompressed: TEccPublicKeyUncompressed);\r\n \r\n@@ -234,6 +235,7 @@ function ecdsa_verify_uncompressed_pas(const PublicKey: TEccPublicKeyUncompresse\n /// uncompress a public key for ECC secp256r1 cryptography\r\n // - convert from its compressed form with its standard byte header\r\n // (33 bytes of memory) into uncompressed/flat form (64 bytes of memory)\r\n+// - on failure - e.g. if the point is not in the curve - returns zeros\r\n procedure ecc_uncompress_key_pas(const Compressed: TEccPublicKey;\r\n   out Uncompressed: TEccPublicKeyUncompressed);\r\n \r\n@@ -1386,11 +1388,15 @@ function Ecc256r1UncompressAsn1(const Compressed: TEccPublicKey): RawByteString;\n   FastAssignNew(result);\r\n   if IsZero(Compressed) then\r\n     exit;\r\n-  SetLength(result, SizeOf({%H-}p^) + 1);\r\n-  p := pointer(result);\r\n+  p := FastNewRawByteString(result, SizeOf({%H-}p^) + 1);\r\n   p.b[0] := $04; // ASN-1 uncompressed public key marker\r\n   inc(PByte(p));\r\n   Ecc256r1Uncompress(Compressed, PEccPublicKeyUncompressed(@u)^);\r\n+  if IsZero(u.b) then\r\n+  begin\r\n+    FillZero(result); // invalid input\r\n+    exit;\r\n+  end;\r\n   _bswap256(@p.l, @u.l);\r\n   _bswap256(@p.h, @u.h);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17606\n+17607",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17606'\r\n+'2.4.17607'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.ecc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -159,7 +159,7 @@ procedure TTestCoreEcc.ECC;\n   ecc_uncompress_key_pas(pub[0], pubunc[0]); // also validate our pascal code\r\n   timer.Start;\r\n   for i := 1 to ECC_COUNT - 1 do\r\n-    Ecc256r1Uncompress(pub[i], pubunc[i]); // may be OpenSSL\r\n+    Ecc256r1Uncompress(pub[i], pubunc[i]);   // only pascal\r\n   NotifyTestSpeed('Ecc256r1Uncompress', ECC_COUNT - 1, 0, @timer);\r\n   for i := 1 to ECC_COUNT - 1 do\r\n   begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.ecc",
+        "mormot.crypt.ecc256r1"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b44fb74708d414770bcab770855ddb68822eff23",
+      "short_sha": "b44fb747",
+      "subject": "doc: precisions about Tunnel Info name/value security expectations",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T16:47:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b44fb74708d414770bcab770855ddb68822eff23",
+      "parents": [
+        "3a734d76871f41c30a9fc44b788230938064b320"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17605\n+17606",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17605'\r\n+'2.4.17606'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -296,7 +296,8 @@   TTunnelLocal = class(TInterfacedPersistent,\n     // - if Address has no port, will bound its address an an ephemeral port,\r\n     // which is returned as result for proper client connection\r\n     // - InfoNameValue are name/value pairs of some JSON fields which will be\r\n-    // included to ITunnelTransmit.TunnelInfo returned object (e.g. Host name)\r\n+    // included to ITunnelTransmit.TunnelInfo returned object (e.g. Host name) -\r\n+    // is obfuscated using AppSecret but should not contain sensitive data\r\n     // - SignCert/VerifyCert should have [cuDigitalSignature] usage, and match\r\n     // VerifyCert/SignCert corresponding certificate on other side - without\r\n     // VerifyCert, peer authentication relies on AppSecret being strong and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "Docs",
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3a734d76871f41c30a9fc44b788230938064b320",
+      "short_sha": "3a734d76",
+      "subject": "crypt: validate an affine P-256 point before using it for ECC operations",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T16:43:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3a734d76871f41c30a9fc44b788230938064b320",
+      "parents": [
+        "7a471dd75655281de8262cef40dc98c5a5639681"
+      ],
+      "stats": {
+        "additions": 107,
+        "deletions": 31,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.ecc256r1.pas",
+          "status": "modified",
+          "additions": 105,
+          "deletions": 29,
+          "patch": "@@ -1205,16 +1205,67 @@ procedure ModSqrt(var a: THash256Rec);\n   _mv(a, result);\r\n end;\r\n \r\n-procedure EccPointDecompress(out Point: TEccPoint; const Compressed: TEccPublicKey);\r\n+\r\n+// Validate an affine P-256 point before using it for ECC operations\r\n+// P-256 has cofactor 1, so curve membership is sufficient here\r\n+function EccPointIsValid(const Point: TEccPoint): boolean;\r\n+var\r\n+  rhs, y2: THash256Rec;\r\n begin\r\n-  _bswap256(@Point.x, @Compressed[1]);\r\n-  _modSquareP(Point.y, Point.x);           // y = x^2\r\n-  _modSubP(Point.y, Point.y, P_3);          // y = x^2 - 3\r\n-  _modMultP(Point.y, Point.y, Point.x);    // y = x^3 - 3x\r\n-  _modAddP(Point.y, Point.y, Curve_B_32);  // y = x^3 - 3x + b\r\n-  ModSqrt(Point.y);\r\n-  if (Point.y.C[0] and 1) <> (cardinal(Compressed[0]) and 1) then\r\n-    _sub256(Point.y, Curve_P_32, Point.y);\r\n+  result := false;\r\n+  // both coordinates must be canonical field elements\r\n+  if (_cmp256(Point.x, Curve_P_32) >= 0) or\r\n+     (_cmp256(Point.y, Curve_P_32) >= 0) then\r\n+    exit;\r\n+  // Verify y^2 = x^3 - 3*x + b (mod p)\r\n+  _modSquareP(y2, Point.y);\r\n+  _modSquareP(rhs, Point.x);\r\n+  _modSubP(rhs, rhs, P_3);\r\n+  _modMultP(rhs, rhs, Point.x);\r\n+  _modAddP(rhs, rhs, Curve_B_32);\r\n+  result := _equals(y2, rhs);\r\n+end;\r\n+\r\n+// Decode and validate a compressed P-256 public key\r\n+// Return false and set Point=0 for malformed encodings or off-curve points\r\n+function EccPointDecompress(out Point: TEccPoint;\r\n+  const Compressed: TEccPublicKey): boolean;\r\n+var\r\n+  p: TEccPoint;\r\n+  rhs, y2: THash256Rec;\r\n+begin\r\n+  result := false;\r\n+  FillCharFast(Point, SizeOf(Point), 0);\r\n+  // Only standard compressed point encodings are supported\r\n+  if not (Compressed[0] in [$02, $03]) then\r\n+    exit;\r\n+  _bswap256(@p.x, @Compressed[1]);\r\n+  // Reject non-canonical X coordinates\r\n+  if _cmp256(p.x, Curve_P_32) >= 0 then\r\n+    exit;\r\n+  // rhs = x^3 - 3*x + b (mod p)\r\n+  _modSquareP(p.y, p.x);\r\n+  _modSubP(p.y, p.y, P_3);\r\n+  _modMultP(p.y, p.y, p.x);\r\n+  _modAddP(p.y, p.y, Curve_B_32);\r\n+  _mv(rhs, p.y);\r\n+  // Compute a candidate square root\r\n+  ModSqrt(p.y);\r\n+  // Non-residue has no square root in Fp - ModSqrt alone doesn't detect this\r\n+  _modSquareP(y2, p.y);\r\n+  if not _equals(y2, rhs) then\r\n+    exit;\r\n+  // Select the root matching the compressed prefix\r\n+  if (p.y.C[0] and 1) <>\r\n+     (cardinal(Compressed[0]) and 1) then\r\n+  begin\r\n+    // Negating zero would produce non-canonical y = p\r\n+    if _isZero(p.y) then\r\n+      exit;\r\n+    _sub256(p.y, Curve_P_32, p.y);\r\n+  end;\r\n+  Point := p;\r\n+  result := true;\r\n end;\r\n \r\n var\r\n@@ -1361,39 +1412,60 @@ function _RandomPoint(var rnd: THash256Rec): boolean;\n   result := true;\r\n end;\r\n \r\n-function ecdh_shared_secret_uncompressed_pas(\r\n-  const PublicPoint: TEccPublicKeyUncompressed;\r\n+\r\n+function ecdh_shared_secret_uncompressed_pas(const PublicPoint: TEccPublicKeyUncompressed;\r\n   const PrivateKey: TEccPrivateKey; out Secret: TEccSecretKey): boolean;\r\n var\r\n   priv: THash256Rec;\r\n   product: TEccPoint;\r\n-  rnd: THash256Rec; // random lambda element in projective form to protect priv\r\n+  rnd: THash256Rec;\r\n begin\r\n-  result := _RandomPoint(rnd);\r\n-  if not result then\r\n+  FillZero(Secret);\r\n+  result := false;\r\n+  // Validate the peer point BEFORE scalar multiplication\r\n+  if not EccPointIsValid(TEccPoint(PublicPoint)) then\r\n     exit;\r\n   _bswap256(@priv, @PrivateKey);\r\n+  // Private scalar must be in [1, n-1]\r\n+  if _isZero(priv) or\r\n+     (_cmp256(priv, Curve_N_32) >= 0) then\r\n+  begin\r\n+    FillZero(priv.b);\r\n+    exit;\r\n+  end;\r\n+  // Random projective coordinate\r\n+  if not _RandomPoint(rnd) then\r\n+  begin\r\n+    FillZero(priv.b);\r\n+    exit;\r\n+  end;\r\n   EccPointMult(product, TEccPoint(PublicPoint), priv, @rnd);\r\n-  _bswap256(@Secret, @product.x);\r\n-  result := not (_isZero(product.x) and _isZero(product.y));\r\n-  FillZero(priv.b); // erase sensitive information from stack\r\n+  result := not (_isZero(product.x) and\r\n+                 _isZero(product.y));\r\n+  if r\n... [truncated, 3658 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17604\n+17605",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17604'\r\n+'2.4.17605'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.ecc256r1"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7a471dd75655281de8262cef40dc98c5a5639681",
+      "short_sha": "7a471dd7",
+      "subject": "net: defensive limits against malformed or excessive tunnel frames",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T16:33:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7a471dd75655281de8262cef40dc98c5a5639681",
+      "parents": [
+        "700b6ad55627f6be10bd3b3400b78a50d9b7c9b2"
+      ],
+      "stats": {
+        "additions": 30,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17603\n+17604",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17603'\r\n+'2.4.17604'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 8,
+          "patch": "@@ -283,21 +283,31 @@   TTunnelLocal = class(TInterfacedPersistent,\n     // - TransmitOptions will be amended to follow SignCert/VerifyCert properties\r\n     // - TimeOutMS is the delay to receive an handshake answer from the other\r\n     // end - this value will be used * 2 as TTunnelLocalThread.fTimeoutAcceptSecs\r\n-    // - AppSecret is used during handshake (and toEncrypt with no toEcdhe), and\r\n-    // should match on both sides\r\n+    // - AppSecret is used during handshake authentication and encryption key\r\n+    // derivation, and should match on both sides - it should be a confidential,\r\n+    // cryptographically random value with at least 128 bits of entropy,\r\n+    // provisioned independently of the relay - don't use a short obvious text\r\n+    // or PIN number for this - a unique 128-bit random secret securely shared\r\n+    // between both ends would provide mutual authentication without certificates\r\n+    // - AppSecret may be permanent or generated for each session - a per-session\r\n+    // secret provides better isolation, whereas a shared permanent secret only\r\n+    // authenticates membership in the group of endpoints knowing this secret\r\n     // - if Address has a port, will connect a socket to this address:port\r\n     // - if Address has no port, will bound its address an an ephemeral port,\r\n     // which is returned as result for proper client connection\r\n     // - InfoNameValue are name/value pairs of some JSON fields which will be\r\n     // included to ITunnelTransmit.TunnelInfo returned object (e.g. Host name)\r\n     // - SignCert/VerifyCert should have [cuDigitalSignature] usage, and match\r\n-    // VerifyCert/SignCert corresponding certificate on other side\r\n-    // - raise ETunnel or return 0 on error; return the new local port on sucsess\r\n+    // VerifyCert/SignCert corresponding certificate on other side - without\r\n+    // VerifyCert, peer authentication relies on AppSecret being strong and\r\n+    // confidential, and proves possession of this shared secret, not the\r\n+    // identity of a specific endpoint\r\n+    // - raise ETunnel or return 0 on error; return the new local port on success\r\n     // - should be called only once per TTunnelLocal instance\r\n     function Open(Sess: TTunnelSession; const Transmit: ITunnelTransmit;\r\n-      TransmitOptions: TTunnelOptions; TimeOutMS: integer; const AppSecret, Address: RawUtf8;\r\n-      const InfoNameValue: array of const; const SignCert: ICryptCert = nil;\r\n-      const VerifyCert: ICryptCert = nil): TNetPort;\r\n+      TransmitOptions: TTunnelOptions; TimeOutMS: integer;\r\n+      const AppSecret, Address: RawUtf8; const InfoNameValue: array of const;\r\n+      const SignCert: ICryptCert = nil; const VerifyCert: ICryptCert = nil): TNetPort;\r\n     /// called e.g. by CallbackReleased() or by Destroy\r\n     // - you could trigger it from your own UI if needed to abort the process\r\n     procedure ClosePort(FromNotify: boolean = false);\r\n@@ -720,6 +730,10 @@ implementation\n const\r\n   TRAIL_SIZE = SizeOf(TTunnelSession);\r\n \r\n+  // defensive limits against malformed or excessive tunnel frames\r\n+  MAX_TUNNEL_FRAME_BYTES = 72 shl 10; // TransmitSock.RecvWait is 64KB max\r\n+  MAX_TUNNEL_PENDING_FRAMES = 128;    // remote end could start transmitting\r\n+\r\n function ToText(opt: TTunnelOptions): ShortString;\r\n begin\r\n   GetSetNameShort(TypeInfo(TTunnelOptions), opt, result, {trim=}true);\r\n@@ -947,7 +961,7 @@ procedure TTunnelLocalThread.DoExecute;\n       while not Terminated do\r\n       begin\r\n         // wait for some data on the local loopback\r\n-        res := TransmitSock.RecvWait(100, tmp, @Terminated);\r\n+        res := TransmitSock.RecvWait(100, tmp, @Terminated); // max 64KB\r\n         case res of\r\n           nrRetry:\r\n             continue;\r\n@@ -1093,6 +1107,9 @@ procedure TTunnelLocal.TunnelSend(const aFrame: RawByteString);\n   // ITunnelTransmit method: when a Frame is received from the relay server\r\n   if fVerboseLog then\r\n     fLogClass.Add.Log(sllTrace, 'TunnelSend=%', [length(aFrame\n... [truncated, 1297 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "700b6ad55627f6be10bd3b3400b78a50d9b7c9b2",
+      "short_sha": "700b6ad5",
+      "subject": "net: tunnel authenticate its JSON handshake payload with certificates",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T15:43:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/700b6ad55627f6be10bd3b3400b78a50d9b7c9b2",
+      "parents": [
+        "4462e2f557577e0e97dc044c53b3ce78c6faf137"
+      ],
+      "stats": {
+        "additions": 42,
+        "deletions": 28,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17602\n+17603",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17602'\r\n+'2.4.17603'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 26,
+          "patch": "@@ -1400,7 +1400,6 @@ function TTunnelLocal.OpenInternal(Sess: TTunnelSession;\n       SharedRandom.Fill(@loc.Ecdh.pub, SizeOf(loc.Ecdh.pub)); // some padding\r\n     TunnelHandshakeCrc(loc, AppSecret, loc.Info.crc);\r\n     FastSetRawByteString(frame, @loc, SizeOf(loc));\r\n-    FrameSign(frame); // optional digital signature\r\n     // append (and potentially encrypt) the info JSON payload\r\n     info := JsonEncode(InfoNameValue);\r\n     if toEncrypted * fOptions <> [] then // toEncrypt or toEcdhe\r\n@@ -1418,9 +1417,12 @@ function TTunnelLocal.OpenInternal(Sess: TTunnelSession;\n     end;\r\n     li := length(info);\r\n     if li > 65535 then\r\n-      ETunnel.RaiseUtf8('Open: too much info (len=%)', [li]);\r\n-    // actually send the frame ending with its session ID\r\n-    Append(frame, [info, 'lisess']); // li:W sess:U32 = SUFFIX_SIZE\r\n+      ETunnel.RaiseUtf8('%.Open: too much info (len=%)', [self, li]);\r\n+    // sign the whole handshake INCLUDING the JSON ciphertext\r\n+    Append(frame, info);\r\n+    FrameSign(frame); // optional digital signature over handshake + JSON\r\n+    // append the unsigned length/session trailer\r\n+    Append(frame, 'lisess'); // li:W sess:U32 = SUFFIX_SIZE\r\n     l := length(frame);\r\n     PWord(@PByteArray(frame)^[l - SUFFIX_SIZE])^ := li;\r\n     PTunnelSession(@PByteArray(frame)^[l - TRAIL_SIZE])^ := fSession;\r\n@@ -1429,37 +1431,49 @@ function TTunnelLocal.OpenInternal(Sess: TTunnelSession;\n       log.Log(sllTrace, 'Open: sent % - wait for answer', [length(frame)], self);\r\n     // this method will wait until both sides sent a valid signed header\r\n     if not fHandshake.WaitPop(TimeOutMS, nil, remote) then\r\n-      ETunnel.RaiseUtf8('Open: handshake %ms timeout on port %', [TimeOutMS, result]);\r\n+      ETunnel.RaiseUtf8('%.Open: handshake %ms timeout on port %',\r\n+        [self, TimeOutMS, result]);\r\n     if Assigned(log) then\r\n       log.Log(sllTrace, 'Open: received len=%', [length(remote)], self);\r\n+    // ensure a valid minimum frame size before accessing its content\r\n+    if length(remote) < SizeOf(loc) + SUFFIX_SIZE then\r\n+      ETunnel.RaiseUtf8('%.Open: wrong handshake size=% on port %',\r\n+        [self, length(remote), result]);\r\n     // ensure the returned frame is for this session\r\n     if FrameSession(remote) <> fSession then\r\n-      ETunnel.RaiseUtf8('Open: wrong handshake trailer on port %', [result]);\r\n-    // extract (and potentially decrypt) the associated JSON info payload\r\n+      ETunnel.RaiseUtf8('%.Open: wrong handshake trailer on port %',\r\n+        [self, result]);\r\n+    // extract the JSON size from the trailing unsigned word\r\n+    // frame layout:\r\n+    // [handshake][JSON][signature][JSON size:W][session:U32]\r\n     l := length(remote) - SUFFIX_SIZE;\r\n-    if l >= 0 then\r\n-    begin\r\n-      li := PWord(@PByteArray(remote)^[l])^; // JSON size\r\n-      dec(l, li);\r\n-    end;\r\n-    if l < SizeOf(loc) then\r\n-      ETunnel.RaiseUtf8('Open: wrong handshake size=% on port %', [l, result]);\r\n-    FastSetRawByteString(info, @PByteArray(remote)^[l], li);\r\n-    if infoaes <> nil then\r\n-      info := infoaes.DecryptPkcs7(info, {ivatbeg=}false);\r\n-    if fInfo.InitJsonInPlace(pointer(info), JSON_FAST) = nil then\r\n-      ETunnel.RaiseUtf8('Open: invalid JSON info on port %', [result]);\r\n-    FillZero(info);\r\n-    // check the digital signature, maybe using the certificate\r\n+    li := PWord(@PByteArray(remote)^[l])^; // JSON size\r\n+    // ensure JSON is fully inside the received frame\r\n+    if li > l - SizeOf(loc) then\r\n+      ETunnel.RaiseUtf8('%.Open: wrong handshake JSON size=% on port %',\r\n+        [self, li, result]);\r\n+    // verify the signature over BOTH the handshake and JSON ciphertext\r\n+    // l is the end of the signature (excluding the trailing suffix)\r\n+    // SizeOf(loc) + li is the signed payload length\r\n+    if not FrameVerify(pointer(remote), l, SizeOf(loc) + li) then\r\n+      ETunnel.RaiseUtf8('%.Open: handshake failed on port %', [self, result]);\r\n+    // validate the authenticated handshake hea\n... [truncated, 1411 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4462e2f557577e0e97dc044c53b3ce78c6faf137",
+      "short_sha": "4462e2f5",
+      "subject": "doc: new SChannel audit document",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T15:11:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4462e2f557577e0e97dc044c53b3ce78c6faf137",
+      "parents": [
+        "c3e08fe860a464af36a839c7b5c69a76cae0cc71"
+      ],
+      "stats": {
+        "additions": 263,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "doc/security/SChannel-mTLS.md",
+          "status": "added",
+          "additions": 259,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,259 @@\n+# Windows SChannel TLS and Server mTLS — Design, Security Rationale, and Implementation Review\n+\n+**Scope:** Native Windows SChannel TLS client and HTTPS/TLS server in mORMot 2, with particular attention to mutual TLS (mTLS), certificate trust, callbacks, connection state, and the OpenSSL compatibility contract.  \n+**Source snapshot:** mORMot 2 **2.4.17601**, [`c3e08fe860a464af36a839c7b5c69a76cae0cc71`](https://github.com/synopse/mORMot2/tree/c3e08fe860a464af36a839c7b5c69a76cae0cc71) (13 October 2026, `master` at review time).  \n+**Primary implementation:** [`mormot.net.sock.windows.inc`](../../src/net/mormot.net.sock.windows.inc) ([reviewed revision](https://github.com/synopse/mORMot2/blob/c3e08fe860a464af36a839c7b5c69a76cae0cc71/src/net/mormot.net.sock.windows.inc)).  \n+**API and integration:** [`mormot.net.sock.pas`](../../src/net/mormot.net.sock.pas), [`mormot.net.server.pas`](../../src/net/mormot.net.server.pas), and [`mormot.lib.sspi.pas`](../../src/lib/mormot.lib.sspi.pas).  \n+**OpenSSL comparison:** [`mormot.lib.openssl11.pas`](../../src/lib/mormot.lib.openssl11.pas).  \n+**Tests:** [`test.net.proto.pas`](../../test/test.net.proto.pas), `TNetworkProtocols._SChannel` (Windows with `USE_OPENSSL`).  \n+**Review method:** Static inspection of the pinned implementation, its API and test source, plus relevant Microsoft API contracts. **No Windows build or integration test was executed in this review.**\n+\n+> **Engineering conclusion.** The native SChannel backend deliberately provides a **dependency-light Windows TLS transport** with normal operating-system server-certificate validation on the client and optional **server-side client-certificate authentication**. For mTLS, the implementation requests a certificate through SSPI, obtains the remote certificate, builds and evaluates a client-authentication chain with CryptoAPI, and rejects a missing or invalid certificate **unless an application-installed per-certificate callback explicitly overrides the validation result**. Explicit trust anchors are isolated in a private chain engine; TLS and certificate resources have well-defined ownership across accepted connections.\n+>\n+> The intended default is straightforward: **use ordinary one-way TLS unless client identity authentication is required; for mTLS, enable `ClientCertificateAuthentication`, configure the appropriate trusted CA set, and leave validation callbacks unset unless they enforce a carefully designed additional policy.** The callback override, offline-revocation tolerance, Windows-specific trust-anchor behavior, and currently absent SChannel client-certificate configuration are **real boundaries**, not properties that documentation should hide. This is an implementation-oriented security review, **not a claim of formal certification or an audit of Microsoft's TLS stack**.\n+\n+## 1. Goals, boundaries, and threat model\n+\n+### 1.1 Responsibilities and design intent\n+\n+| Component | Responsibility | Security-relevant code/API |\n+| --- | --- | --- |\n+| `TNetTlsContext`, `INetTls` | Shared TLS configuration and stable caller/backend contract | `AfterConnection`, `AfterBind`, `AfterAccept`, `ResetNetTlsContext` |\n+| `TSChannelNetTls` | One connection's SSPI context, handshake, encrypted records, post-handshake processing, output fields | `CredInit`, `HandshakeLoop`, `Receive`, `Send`, `GetRawTls` |\n+| `TSChannelServerContext` | Shared inbound credential, server certificate, private client trust, mTLS chain verification | `LoadCertificate`, `LoadClientTrust`, `ValidateClientCertificate` |\n+| Windows SSPI / SChannel | TLS negotiation, cryptographic traffic protection, remote certificate retrieval | `AcquireCredentialsHandleW`, `InitializeSecurityContextW`, `AcceptSecurityContext`, `QueryContextAttributesW` |\n+| Windows CryptoAPI / certificate wrappers | Certificate decoding, chain construction, chain policy, trust stores, context ownership | `CertGetCertificateChain`, `CertVerifyCertificateChainPolicy`, `TWin\n... [truncated, 33181 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "doc/security/TAesPrng.md",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -357,7 +357,8 @@ The reviewed design is **appropriate for an everyday CSPRNG under the standard a\n \n | Need | Recommended interface | Configuration |\n | --- | --- | --- |\n-| Key/nonce/IV/random bytes in a normal mORMot application | `TAesPrng.Fill` or `TAesPrng.Main.FillRandom` | **None**. First-use seeding and periodic reseeding are automatic. |\n+| Nonce/IV in a normal mORMot application | `Random128()` (unpredictable output) | **None**. First-use seeding and periodic reseeding are automatic. |\n+| Key/random bytes in a normal mORMot application | `TAesPrng.Fill` or `TAesPrng.Main.FillRandom` | **None** |\n | Fresh seed for native RSA key generation | `TRsa.GenerateNew` (internally uses `FillRandomTrusted`) | **None** beyond choosing a key size if required. |\n | Exactly nonzero cryptographic octets | `FillRandomNotZero` on a `TAesPrngAbstract` instance | None. |\n | Direct OS random output and explicit OS-error reporting | `TSystemPrng.Main.FillRandom` or `GetEntropy(..., gesSystemOnly...)` | Only select if this API contract is specifically needed. |",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17601\n+17602",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17601'\r\n+'2.4.17602'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Docs"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c3e08fe860a464af36a839c7b5c69a76cae0cc71",
+      "short_sha": "c3e08fe8",
+      "subject": "doc: enhanced security audit documents",
+      "body": "- refined TAesPrng with latest trunk\n- new mormot.crypt.rsa unit audit",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T14:54:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c3e08fe860a464af36a839c7b5c69a76cae0cc71",
+      "parents": [
+        "cb709f73535f5b3330ac548640124e1319a971a4"
+      ],
+      "stats": {
+        "additions": 626,
+        "deletions": 381,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "doc/security/TAesPrng.md",
+          "status": "modified",
+          "additions": 267,
+          "deletions": 379,
+          "patch": "@@ -1,517 +1,405 @@\n+# `TAesPrng` — CSPRNG Design, Security Rationale, and Implementation Review\n \n-# TAesPrng Cryptographic Design Specification\n-# - DRAFT -\n+**Scope:** mORMot2's fast AES-counter cryptographic pseudorandom generator, entropy conditioning, direct operating-system interfaces, and trusted random-source combination.  \n+**Source snapshot:** mORMot2 **2.4.17599**, [`efdf73f3e20f`](https://github.com/synopse/mORMot2/tree/efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527) (13 October 2026).  \n+**Implementation:** [`src/crypt/mormot.crypt.core.pas`](../../src/crypt/mormot.crypt.core.pas) ([reviewed source](https://github.com/synopse/mORMot2/blob/efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527/src/crypt/mormot.crypt.core.pas)).  \n+**Entropy sources:** [`mormot.core.os.pas`](../../src/core/mormot.core.os.pas), [`mormot.core.os.windows.inc`](../../src/core/mormot.core.os.windows.inc), and [`mormot.core.os.posix.inc`](../../src/core/mormot.core.os.posix.inc).  \n+**Tests:** [`test/test.core.crypt.pas`](../../test/test.core.crypt.pas).  \n+**Companion RSA review:** [`mormot.crypt.rsa.md`](mormot.crypt.rsa.md).\n \n-## 1. Overview\n+> **Engineering conclusion.** `TAesPrng` is designed to be a **general-purpose CSPRNG usable without any application tuning** on the native platforms supported by mORMot2. Its default architecture combines OS-seeded SHAKE256 conditioning and an evolving process-wide entropy chain with a secret AES-CTR key, automatic rekeying, synchronized counter reservation, and fast scalar or AES-NI output generation. These are conventional, well-understood cryptographic building blocks arranged for **cross-platform availability, high performance, and surprise-free defaults**.\n+>\n+> The library also deliberately exposes **distinct interfaces for distinct needs**: `FillRandom`/`TAesPrng.Fill` for routine cryptographic random bytes, `TSystemPrng`/direct system entropy modes for OS-source requests, and `FillRandomTrusted` for source-combined initial secrets such as RSA prime seeds. This document explains the algorithms, their concrete protections, and the few operational assumptions important to applications. It does not require users to select unusual algorithms or configuration values for normal use.\n \n-`TAesPrng` is a cryptographically secure pseudorandom number generator (CSPRNG) designed to provide high-performance random byte generation with:\n+## 1. Scope and security objectives\n \n-* AES-CTR based deterministic random bit generation;\n-* periodic reseeding from multiple entropy sources;\n-* SHAKE-256 based entropy extraction and state evolution;\n-* forward secrecy through cryptographic state chaining;\n-* thread-safe concurrent generation.\n+`TAesPrng` serves as a fast local source of pseudorandom bytes for mORMot2 cryptographic operations, including RSA key generation, Miller-Rabin witnesses, PSS salts, padding, and ephemeral keys. It is built around four boundaries:\n \n-The design separates:\n+1. **Entropy acquisition** from operating-system facilities and optionally other process/library inputs.\n+2. **Entropy conditioning** using SHAKE256 and a process-global chaining state.\n+3. **AES-CTR expansion** under a secret per-instance AES key, with a monotonically allocated counter space.\n+4. **Rekeying** from newly conditioned entropy after a configurable usage threshold or on an explicit `Seed` request.\n \n-1. **Entropy acquisition**\n+Its optimization goals are low overhead for short random values, scalable throughput for large requests, and minimal contention between threads. Its security goal is computational unpredictability **when its AES state is seeded with sufficient unpredictable entropy and that state remains secret**.\n \n-   * collection of unpredictable external inputs;\n+### 1.1 Implementation and trust boundaries\n \n-2. **Entropy conditioning**\n+| Component | Responsibility | Relevant API/state |\n+| --- | --- | --- |\n+| `TAesPrngAbstract` | Common random-byte interface, helpers, and entropy collection | `FillRandom`, `GetEntr\n... [truncated, 47133 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "doc/security/mormot.crypt.rsa.md",
+          "status": "added",
+          "additions": 357,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,357 @@\n+# `mormot.crypt.rsa` — RSA Design, Security Rationale, and Implementation Review\n+\n+**Scope:** mORMot2 native RSA engine for Delphi and Free Pascal; cryptographic algorithms, implementation invariants, and production usage.  \n+**Source snapshot:** mORMot2 **2.4.17599**, [`efdf73f3e20f`](https://github.com/synopse/mORMot2/tree/efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527) (13 October 2026).  \n+**Implementation:** [`src/crypt/mormot.crypt.rsa.pas`](../../src/crypt/mormot.crypt.rsa.pas) ([reviewed source](https://github.com/synopse/mORMot2/blob/efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527/src/crypt/mormot.crypt.rsa.pas)).  \n+**Supporting code and tests:** [`mormot.crypt.core.pas`](../../src/crypt/mormot.crypt.core.pas), [`test.core.crypt.pas`](../../test/test.core.crypt.pas).  \n+**Companion CSPRNG design:** [`TAesPrng.md`](TAesPrng.md).\n+\n+> **Engineering conclusion.** The built-in RSA engine uses well-established number theory, probabilistic primality testing, standards-based PKCS#1 encodings, and a CSPRNG-backed generation path. Its defaults are intended to be useful **without application-specific tuning**: RSA-2048 generation, exponent 65537, appropriate primality-test rounds, fresh cryptographic randomness, fixed-width signatures, and high-level signature self-verification. The optimized arithmetic and cross-platform Pascal/assembly implementations support mORMot's priorities: **safe and unsurprising defaults, portability, and speed**.\n+>\n+> This document records how those design choices work, the applicable portions of FIPS 186-5 and RFC 8017, source inspection and independent algorithm checks, and the separate responsibilities of callers using legacy encryption formats or special-purpose deployment policies. It is an engineering security review, not a replacement for production testing.\n+\n+## 1. Scope, goals, and trust boundaries\n+\n+`mormot.crypt.rsa` supplies a native Pascal RSA engine for Delphi and Free Pascal. Its responsibilities include:\n+\n+| Component | Responsibility | Security-relevant interface |\n+| --- | --- | --- |\n+| `TBigInt` | Non-negative multiprecision integers, arithmetic, primality tests, candidate generation | `IsPrime`, `FillPrime`, `PrimeAllowedFor65537`, `Release` |\n+| `TRsaContext` | BigInt ownership and free list, cached moduli, Barrett reduction, exponentiation | `Allocate`, `Reduce`, `ModPower`, `WipeReleased` |\n+| `TRsa` | RSA key pairs, CRT operations, RSASSA-PKCS1-v1_5, RSAES-PKCS1-v1_5, hybrid envelope | `GenerateNew`, `CheckPrivateKey`, `Sign`, `Verify`, `Seal`, `Open` |\n+| `TRsaPss` | RSASSA-PSS encoding, signing, verification | `Sign`, `Verify` |\n+| `TRsaPrimeWorker` | Independent concurrent generation of one RSA prime | `Execute`, `Destroy` |\n+| Crypto catalog adapters | Framework integration and algorithm selection | `RS256`/`RS384`/`RS512`, `PS256`/`PS384`/`PS512` and internal aliases |\n+\n+The audit assumes a trusted host process, sufficiently unpredictable operating-system entropy, correct compiler/runtime and platform integer semantics, and protected private-key storage. Inputs such as ciphertexts, public keys, signatures, and externally supplied DER/PEM/JWK material may be untrusted. Physical compromise, malicious native code running in the process, and active control of the entropy source are outside the promised protections.\n+\n+`RS256-int` and `PS256-int` expose this engine even if the default cryptographic catalog is configured to use OpenSSL. Testing the intended backend is essential.\n+\n+### 1.1 What the default contract provides\n+\n+- **Mathematical correctness:** BigInt arithmetic, CRT reconstruction, probable-prime generation, modular inverses, and consistent RSA key parameters.\n+- **Standards-oriented encodings:** RSASSA-PKCS1-v1_5 and RSASSA-PSS implementations following RFC 8017; deterministic v1.5 encodings are compared exactly.\n+- **Responsible cryptographic randomness:** `FillRandomTrusted()` supplies the initial prime-candidate seed from suitable external/CSPRN\n... [truncated, 40583 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17600\n+17601",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17600'\r\n+'2.4.17601'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "Docs"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cb709f73535f5b3330ac548640124e1319a971a4",
+      "short_sha": "cb709f73",
+      "subject": "crypt: hardened MakeStrongPassWord()",
+      "body": "- should never loop forever if the CSPRNG is weak",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T14:45:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cb709f73535f5b3330ac548640124e1319a971a4",
+      "parents": [
+        "efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 14,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 3,
+          "patch": "@@ -1909,7 +1909,7 @@ function ToText(s: TAesPrngGetEntropySource): PShortString; overload;\n /// low-level function as called by TAesPrngAbstract.RandomPassword()\r\n // - for length>4, reduce to uppercase/lower letters, digits and $.:()?%!-+*/@#\r\n // excluding ;,= to allow direct use in CSV content and OI against 01 confusion\r\n-function MakeStrongPassWord(var Rnd: SpiUtf8): boolean;\r\n+function MakeStrongPassWord(var Rnd: SpiUtf8; Iteration: PInteger = nil): boolean;\r\n \r\n /// low-level TKS1 anti-forensic diffusion of a memory buffer using SHA-256\r\n // - shuffle in-place buf[size] using rnd[size] as reference material\r\n@@ -7453,7 +7453,7 @@ function TAesPrngAbstract.RandomDateTime: TDateTime;\n   result := 38000 + Int64(Random32) / (maxInt shr 12);\r\n end;\r\n \r\n-function MakeStrongPassWord(var Rnd: SpiUtf8): boolean;\r\n+function MakeStrongPassWord(var Rnd: SpiUtf8; Iteration: PInteger): boolean;\r\n const\r\n   CHARS: array[0..127] of AnsiChar =\r\n     'abcdefghijklmnopqrstuvwxyzABCDEFGH[JKLMN0PQRSTUVWXYZ0123456789' +\r\n@@ -7479,13 +7479,22 @@ function MakeStrongPassWord(var Rnd: SpiUtf8): boolean;\n   FakeCodePage(RawByteString(Rnd), CP_UTF8);\r\n   if length(Rnd) > 4 then\r\n     result := haspunct and (not (IsUpper(Rnd) or IsLower(Rnd)));\r\n+  if Assigned(Iteration) and\r\n+     not result then\r\n+    if Iteration^ = 128 then // never loop forever\r\n+      ESynCrypto.RaiseU('MakeStrongPassword failure: weak PRNG')\r\n+    else\r\n+      inc(Iteration^);\r\n end;\r\n \r\n function TAesPrngAbstract.RandomPassword(Len: integer): SpiUtf8;\r\n+var\r\n+  c: integer;\r\n begin\r\n+  c := 0;\r\n   repeat\r\n     FillRandomVar(RawByteString(result), Len);\r\n-  until MakeStrongPassword(result);\r\n+  until MakeStrongPassword(result, @c);\r\n end;\r\n \r\n function TAesPrngAbstract.RandomSalt(var bin, b64: RawByteString;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -8271,10 +8271,12 @@ function TCryptRandom.GetDouble: double;\n end;\r\n \r\n function TCryptRandom.GetPassword(len: PtrInt): SpiUtf8;\r\n+var\r\n+  c: integer;\r\n begin\r\n   repeat\r\n     Get(RawByteString(result), Len);\r\n-  until MakeStrongPassword(result);\r\n+  until MakeStrongPassword(result, @c);\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17599\n+17600",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17599'\r\n+'2.4.17600'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 8,
+          "patch": "@@ -964,26 +964,29 @@ procedure TTestCoreCrypto.Prng(meta: TAesPrngClass; const name, big: RawUtf8);\n   Check(not IsEqual(b1, b2));\r\n   Check(not CompareMem(@b1, @b2, SizeOf(b1)));\r\n   // validate reusable MakeStrongPassWord() algorithm\r\n-  Check(MakeStrongPassWord(spi));\r\n+  Check(MakeStrongPassWord(spi, nil));\r\n   spi := ' ';\r\n-  Check(MakeStrongPassWord(spi));\r\n+  Check(MakeStrongPassWord(spi, nil));\r\n   CheckEqual(spi, 'G');\r\n   spi := '  ';\r\n-  Check(MakeStrongPassWord(spi));\r\n+  Check(MakeStrongPassWord(spi, nil));\r\n   CheckEqual(spi, 'GG');\r\n   spi := '    ';\r\n-  Check(MakeStrongPassWord(spi));\r\n+  Check(MakeStrongPassWord(spi, nil));\r\n   CheckEqual(spi, 'GGGG');\r\n+  clo := 0;\r\n   spi := '     ';\r\n-  CheckNot(MakeStrongPassWord(spi));\r\n+  CheckNot(MakeStrongPassWord(spi, @clo));\r\n+  CheckEqual(clo, 1);\r\n   CheckEqual(spi, 'GGGGG');\r\n-  Check(not MakeStrongPassWord(spi));\r\n+  Check(not MakeStrongPassWord(spi, nil));\r\n   CheckEqual(spi, 'jjjjj');\r\n   spi := '0123456789';\r\n-  CheckNot(MakeStrongPassWord(spi));\r\n+  CheckNot(MakeStrongPassWord(spi, nil));\r\n   CheckEqual(spi, 'WXYZ012345');\r\n-  Check(MakeStrongPassWord(spi));\r\n+  Check(MakeStrongPassWord(spi, @clo));\r\n   CheckEqual(spi, 'z+BCWXYZ01');\r\n+  CheckEqual(clo, 1);\r\n   // validate this PRNG class\r\n   clo := 0;\r\n   chi := 0;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.secure"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "652183f7dde9d07885370bcf67d49512016ccc92",
+      "short_sha": "652183f7",
+      "subject": "net: send Content-Range: bytes */<size> with a 416 response",
+      "body": "- new THttpRequestContext.RangeNotSatisfiable(aSize) adds the header as\n  RFC 9110 #15.5.17 states, and is used by ContentFromStream,\n  ContentFromFile and the progressive STATICFILE_PROGSIZE path\n- it also clears rfRange/rfWantRange: otherwise the range was validated\n  again against the HTML error page, and a file smaller than this page\n  had a second and wrong Content-Range header\n- tests for both socket server families (#661)",
+      "author": "Sven Harazim",
+      "date": "2026-10-13T14:35:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/652183f7dde9d07885370bcf67d49512016ccc92",
+      "parents": [
+        "768b8f662ee88a6798ec36277898f58260cde38c"
+      ],
+      "stats": {
+        "additions": 71,
+        "deletions": 16,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 4,
+          "patch": "@@ -569,6 +569,15 @@   THttpRequestContext = record\n     /// check RangeOffset/RangeLength against ContentLength\r\n     // - and update ResponseFlags and ContentLength properties\r\n     function ValidateRange: boolean;\r\n+    /// add a 'Content-Range: bytes */aSize' header to the ResponseHeaders\r\n+    // - as RFC 9110 #15.5.17 states for a 416 response to a byte-range request:\r\n+    // \"the sender SHOULD generate a Content-Range header field specifying the\r\n+    // current length of the selected representation\"\r\n+    // - also clears rfRange/rfWantRange, so that CompressContentAndFinalizeHead\r\n+    // won't validate the range again against the error page sent instead, and\r\n+    // add a second (wrong) Content-Range header\r\n+    // - returns HTTP_RANGENOTSATISFIABLE, so can be used as a result\r\n+    function RangeNotSatisfiable(aSize: Int64): integer;\r\n     /// (re)initialize the HTTP Server state machine for ProcessRead/ProcessWrite\r\n     procedure ProcessInit;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n@@ -3699,6 +3708,15 @@ function THttpRequestContext.ValidateRange: boolean;\n   end;\r\n end;\r\n \r\n+function THttpRequestContext.RangeNotSatisfiable(aSize: Int64): integer;\r\n+begin\r\n+  AppendLine(ResponseHeaders, ['Content-Range: bytes */', aSize]);\r\n+  // clear both flags, otherwise CompressContentAndFinalizeHead would\r\n+  // validate the range once again, against the generated error page\r\n+  ResponseFlags := ResponseFlags - [rfRange, rfWantRange];\r\n+  result := HTTP_RANGENOTSATISFIABLE;\r\n+end;\r\n+\r\n procedure THttpRequestContext.ParseHeader(P: PUtf8Char; PLen: PtrInt;\r\n   HeadersUnFiltered: boolean);\r\n var\r\n@@ -4627,10 +4645,8 @@ function THttpRequestContext.ContentFromStream(aStream: TStream;\n       result := HTTP_RANGENOTSATISFIABLE;\r\n   if result <> HTTP_SUCCESS then\r\n   begin\r\n+    RangeNotSatisfiable(aLength); // also clears rfRange/rfWantRange\r\n     ContentLength := 0;\r\n-    // clear both flags, otherwise CompressContentAndFinalizeHead would\r\n-    // validate the range once again, against the generated error page\r\n-    ResponseFlags := ResponseFlags - [rfRange, rfWantRange];\r\n     exit;\r\n   end;\r\n   if not (hosNoRange in aOptions) then\r\n@@ -4675,7 +4691,7 @@ function THttpRequestContext.ContentFromFile(const FileName: TFileName;\n   if rfWantRange in ResponseFlags then\r\n     if not ValidateRange then\r\n     begin\r\n-      result := HTTP_RANGENOTSATISFIABLE;\r\n+      result := RangeNotSatisfiable(ContentLength); // ContentLength = file size\r\n       exit;\r\n     end;\r\n   include(ResponseFlags, rfAcceptRange);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -3423,7 +3423,8 @@ procedure THttpServerRequest.ProcessStaticFile(var Context: THttpRequestContext;\n       else\r\n         fRespStatus := HTTP_NOTFOUND\r\n     else\r\n-      fRespStatus := HTTP_RANGENOTSATISFIABLE\r\n+      // the expected full size of the progressive file\r\n+      fRespStatus := Context.RangeNotSatisfiable(Context.ContentLength)\r\n   else if (not Assigned(fServer.OnSendFile)) or\r\n           (not fServer.OnSendFile(self, fn)) then\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 49,
+          "deletions": 11,
+          "patch": "@@ -90,7 +90,7 @@   TNetworkProtocols = class(TSynTestCase)\n     reqthree: boolean;\r\n     reqfour: Int64;\r\n     // for FileRange\r\n-    rangefile: TFileName;\r\n+    rangefile, rangesmall: TFileName;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -6330,8 +6330,12 @@ function TNetworkProtocols.DoBodyRequest(Ctxt: THttpServerRequestAbstract): card\n function TNetworkProtocols.DoRangeRequest(\r\n   Ctxt: THttpServerRequestAbstract): cardinal;\r\n begin\r\n-  result := Ctxt.SetOutFile(rangefile, {Handle304NotModified=}false,\r\n-    BINARY_CONTENT_TYPE);\r\n+  if Ctxt.Url = '/small' then\r\n+    result := Ctxt.SetOutFile(rangesmall, {Handle304NotModified=}false,\r\n+      BINARY_CONTENT_TYPE)\r\n+  else\r\n+    result := Ctxt.SetOutFile(rangefile, {Handle304NotModified=}false,\r\n+      BINARY_CONTENT_TYPE);\r\n end;\r\n \r\n procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\r\n@@ -6344,18 +6348,20 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n   hosthead: RawUtf8;\r\n \r\n   procedure RawRange(const range, expected, context: RawUtf8;\r\n-    expectedlength: Int64 = -1);\r\n+    expectedlength: Int64 = -1; const expectedcontentrange: RawUtf8 = '';\r\n+    const url: RawUtf8 = '/file');\r\n   var\r\n     raw: TCrtSocket;\r\n-    cmd, len: RawUtf8;\r\n+    cmd, len, contentrange: RawUtf8;\r\n+    contentranges: integer;\r\n   begin\r\n     // THttpClientSocket.RangeStart is an Int64, so such an offset needs to be\r\n     // sent from a raw socket - with a timeout, so that a regression of the\r\n     // send loop shows up as a failure here instead of hanging the whole suite\r\n     raw := TCrtSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 5000);\r\n     try\r\n       raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n-      raw.SockSend('GET /file HTTP/1.1');\r\n+      raw.SockSend(['GET ', url, ' HTTP/1.1']);\r\n       raw.SockSend(hosthead);\r\n       raw.SockSend(['Range: bytes=', range]);\r\n       raw.SockSend('Connection: close');\r\n@@ -6364,18 +6370,35 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n       cmd := '';\r\n       raw.SockRecvLn(cmd);\r\n       CheckUtf8(PosEx(expected, cmd) > 0, '% [%] got %', [context, range, cmd]);\r\n-      if expectedlength < 0 then\r\n+      if (expectedlength < 0) and\r\n+         (expectedcontentrange = '') then\r\n         exit;\r\n-      // the announced body size should never exceed the actual file content\r\n       len := '';\r\n+      contentrange := '';\r\n+      contentranges := 0;\r\n       repeat\r\n         cmd := '';\r\n         raw.SockRecvLn(cmd);\r\n         if IdemPChar(pointer(cmd), 'CONTENT-LENGTH: ') then\r\n-          len := copy(cmd, 17, 30);\r\n+          len := copy(cmd, 17, 30)\r\n+        else if IdemPChar(pointer(cmd), 'CONTENT-RANGE: ') then\r\n+        begin\r\n+          contentrange := copy(cmd, 16, 100);\r\n+          inc(contentranges);\r\n+        end;\r\n       until cmd = ''; // end of response headers\r\n-      CheckUtf8(GetInt64(pointer(len)) = expectedlength,\r\n-        '% [%] length=% expected=%', [context, range, len, expectedlength]);\r\n+      // the announced body size should never exceed the actual file content\r\n+      if expectedlength >= 0 then\r\n+        CheckUtf8(GetInt64(pointer(len)) = expectedlength,\r\n+          '% [%] length=% expected=%', [context, range, len, expectedlength]);\r\n+      if expectedcontentrange <> '' then\r\n+      begin\r\n+        CheckUtf8(contentrange = expectedcontentrange,\r\n+          '% [%] content-range=% expected=%',\r\n+          [context, range, contentrange, expectedcontentrange]);\r\n+        CheckUtf8(contentranges = 1, '% [%] % content-range headers',\r\n+          [context, range, contentranges]);\r\n+      end;\r\n     finally\r\n       raw.Free;\r\n     end;\r\n@@ -6393,6 +6416,9 @@ procedure TNetworkProtocols.DoHttpFileRange(Sender: TObject);\n   check(DirectoryExists(TempDir), 'tempdir5');\r\n   rangefile := TempDir + 'range';\r\n   Check(FileFromString(data, rangefile), 'range file');\r\n+  // a file smaller than the error\n... [truncated, 2722 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527",
+      "short_sha": "efdf73f3",
+      "subject": "crypt: hardened FillSystemRandom() API usage",
+      "body": "- depending on the context, OS failure should be reported",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T14:21:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/efdf73f3e20fe620ee0ce03f8bd2a0bdcaf49527",
+      "parents": [
+        "fcaa3d819e71372c2a922451250f1cb4e70b36d6"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 17,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 3,
+          "patch": "@@ -1904,6 +1904,8 @@   TSystemPrng = class(TAesPrngAbstract)\n   /// global flag set by mormot.crypt.openssl when the OpenSSL engine is used\r\n   HasOpenSsl: boolean;\r\n \r\n+function ToText(s: TAesPrngGetEntropySource): PShortString; overload;\r\n+\r\n /// low-level function as called by TAesPrngAbstract.RandomPassword()\r\n // - for length>4, reduce to uppercase/lower letters, digits and $.:()?%!-+*/@#\r\n // excluding ;,= to allow direct use in CSV content and OI against 01 confusion\r\n@@ -7613,6 +7615,11 @@ class procedure TAesPrngAbstract.GetEntropy(var Buffer: RawByteString; Len: inte\n     GetEntropy(FastNewRawByteString(Buffer, Len), Len, Source, AppNonce);\r\n end;\r\n \r\n+function ToText(s: TAesPrngGetEntropySource): PShortString;\r\n+begin\r\n+  result := GetEnumName(TypeInfo(TAesPrngGetEntropySource), ord(s));\r\n+end;\r\n+\r\n var\r\n   _EntropyChainSafe: TLightLock;\r\n   _EntropyChain: THash256Rec; // 256-bit secret chaining for forward security\r\n@@ -7622,16 +7629,21 @@ class procedure TAesPrngAbstract.GetEntropy(Dest: pointer; Len: integer;\n var\r\n   data: THash512Rec;\r\n   sha3: TSha3;\r\n+  fromsys: boolean;\r\n   tmp: TSynTempBuffer; // for SHAKE-256 output\r\n begin\r\n   if Len <= 0 then\r\n     exit;\r\n   // fill Dest with Len bytes of official \"system\" entropy\r\n   if Source <> gesUserOnly then\r\n   begin\r\n-    FillSystemRandom(Dest, Len, Source = gesSystemOnlyMayBlock);\r\n+    fromsys := FillSystemRandom(Dest, Len, Source = gesSystemOnlyMayBlock);\r\n     if Source in [gesSystemOnly, gesSystemOnlyMayBlock] then\r\n-      exit; // enough for some usecases\r\n+      if fromsys then\r\n+        exit // enough for some usecases\r\n+      else\r\n+        ESynCrypto.RaiseUtf8('%.GetEntropy(%) OS API failure',\r\n+          [self, ToText(Source)^]);\r\n   end;\r\n   // XOR with Len bytes of \"userland\" entropy\r\n   sha3.Init(SHAKE_256); // SHA-3 in XOF mode for variable-length output\r\n@@ -7834,7 +7846,10 @@ class function TAesPrng.Main: TAesPrngAbstract;\n \r\n procedure TSystemPrng.FillRandom(Buffer: pointer; Len: PtrInt);\r\n begin // calls mormot.core.os function\r\n-  FillSystemRandom(Buffer, Len, {allowblocking=}false);\r\n+  if Len <= 0 then\r\n+    exit;\r\n+  if not FillSystemRandom(Buffer, Len, {allowblocking=}false) then\r\n+    ESynCrypto.RaiseUtf8('%.FillRandom(%): OS API failure', [self, Len]);\r\n   inc(fTotalBytes, Len);\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 10,
+          "patch": "@@ -1863,23 +1863,20 @@ function TBigInt.FillPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n   if Iterations < min then // ensure at least FIPS recommendation\r\n     Iterations := min;\r\n   // compute a random number following FIPS 186-4 B.3.3 steps 4.4, 5.5\r\n+  if Drbg = nil then\r\n+    Drbg := TAesPrng.Main; // if none supplied\r\n   bytes := Size * HALF_BYTES;\r\n-  pointer(rnd) := FastNewString(bytes);\r\n   // since randomness may be a weak point, consolidate several trusted sources\r\n   // see https://ieeexplore.ieee.org/document/9014350\r\n   // note that RSA-2048 requires only 128-bit of true cryptographic randomness\r\n-  FillSystemRandom(pointer(rnd), bytes, {mayblock=}true); // official OS API\r\n-  {$ifdef ASMINTEL} // claimed to be NIST SP 800-90A and FIPS 140-2 compliant\r\n-  RdRand32(pointer(rnd), bytes shr 2);                    // xor HW CPU prng\r\n-  {$endif ASMINTEL}\r\n-  // compute initial trusted random Value = TKS1-sha-256(rnd)\r\n-  AFDiffusion(pointer(Value), pointer(rnd), bytes);\r\n+  rnd := Drbg.FillRandomTrusted(bytes);\r\n+  if rnd = '' then\r\n+    ESynCrypto.RaiseU('TBigInt.FillPrime: no compliant CSPRNG available');\r\n+  AFDiffusion(pointer(Value), pointer(rnd), bytes); // = TKS1-sha-256(rnd)\r\n+  FillZero(rnd);                                    // anti-forensic\r\n   // xor Value original trusted sources with our CSPRNG until we get enough bits\r\n   last32 := @Value[Size - 1 {$ifdef CPU32} - 1 {$endif}];\r\n-  if Drbg = nil then\r\n-    Drbg := TAesPrng.Main; // if none supplied\r\n   XorStrongRandom(Drbg, last32);\r\n-  FillZero(rnd); // anti-forensic counter measure\r\n   // brute force search for the next prime starting at this point\r\n   result := false; // timeout\r\n   min := 0;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 2,
+          "patch": "@@ -8344,9 +8344,12 @@   TCryptRandomSysPrng = class(TCryptRandom) // 'rnd-system,rnd-systemblocking'\n \r\n procedure TCryptRandomSysPrng.Get(dst: pointer; dstlen: PtrInt);\r\n begin\r\n-  FillSystemRandom(dst, dstlen, {allowblocking=}length(fName) > 10);\r\n+  if (dstlen > 0) and\r\n+     not FillSystemRandom(dst, dstlen, {allowblocking=}length(fName) > 10) then\r\n+    ECrypt.RaiseUtf8('%.Get(%): OS API failure', [self, dstlen]);\r\n end;\r\n \r\n+\r\n { TCryptRandomLecuyerPrng }\r\n \r\n type\r\n@@ -8363,7 +8366,7 @@ procedure TCryptRandomLecuyerPrng.Get(dst: pointer; dstlen: PtrInt);\n \r\n function TCryptRandomLecuyerPrng.Get32: cardinal;\r\n begin\r\n-  result := ThreadRandom.Next;\r\n+  result := ThreadRandom.Next; // dedicated fast 32-bit generator\r\n end;\r\n \r\n { TCryptRandom32 }\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17598\n+17599",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17598'\r\n+'2.4.17599'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.rsa",
+        "mormot.crypt.secure"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fcaa3d819e71372c2a922451250f1cb4e70b36d6",
+      "short_sha": "fcaa3d81",
+      "subject": "crypt: new TAesPrngAbstract.FillRandomTrusted() method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T14:20:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fcaa3d819e71372c2a922451250f1cb4e70b36d6",
+      "parents": [
+        "768b8f662ee88a6798ec36277898f58260cde38c"
+      ],
+      "stats": {
+        "additions": 33,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -4117,7 +4117,8 @@ procedure XorOSEntropy(var e: THash512Rec);\n // may consider that the output Buffer is always filled with randomness\r\n // - AllowBlocking=false would try /dev/random if /dev/urandom did fail\r\n // - you should not have to call this low-level procedure, but faster and broader\r\n-// TAesPrng from mormot.crypt.core - also consider the TSystemPrng class\r\n+// TAesPrng from mormot.crypt.core - also consider the TSystemPrng class or\r\n+// TAesPrng.FillRandomTrusted() wrapper method if you require an audited source\r\n // - if you need some entropy source, consider TAesPrng.GetEntropy() instead\r\n function FillSystemRandom(Buffer: PByteArray; Len: integer; AllowBlocking: boolean): boolean;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -1675,6 +1675,13 @@   TAesPrngAbstract = class(TAesLocked)\n     function FillRandomHex(Len: integer): RawUtf8;\r\n     /// fill a binary buffer with some pseudorandom data but no zero byte\r\n     procedure FillRandomNotZero(Buffer: pointer; Len: PtrInt);\r\n+    /// fill a binary buffer combining available external CSPRNG sources\r\n+    // - first call FillSystemRandom(), potentially blocking: keep Len small\r\n+    // - on Intel/AMD with cfRAND available, XORs with hardware RDRAND output\r\n+    // - returns '' if both the OS source and the RDRAND opcode are not available\r\n+    // - intended for RSA prime candidate generation and cryptographic seeding\r\n+    // - does not claim NIST SP 800-90A approval or FIPS 140 validation\r\n+    function FillRandomTrusted(Len: PtrInt): RawByteString;\r\n     /// compute a pseudorandom UUid value according to the RFC 4122\r\n     // - RandomGuid() from this unit uses Random128() so is likely strong\r\n     // - to derivate a Uuid from a name see IdentifierGuid()/DotNetIdentifierGuid()\r\n@@ -7344,6 +7351,28 @@ procedure TAesPrngAbstract.FillRandomNotZero(Buffer: pointer; Len: PtrInt);\n     ESynCrypto.RaiseUtf8('%.FillRandomNotZero failure', [self]);\r\n end;\r\n \r\n+function TAesPrngAbstract.FillRandomTrusted(Len: PtrInt): RawByteString;\r\n+var\r\n+  p: pointer;\r\n+  fromsys: boolean;\r\n+begin\r\n+  p := FastNewRawByteString(result, Len);\r\n+  if Len <= 0 then\r\n+    exit;\r\n+  fromsys := FillSystemRandom(p, Len, {mayblock=}true);\r\n+  {$ifdef ASMINTEL} // claims to be NIST SP 800-90A and FIPS 140-2 compliant\r\n+  if cfRAND in CpuFeatures then\r\n+  begin\r\n+    if not fromsys then\r\n+      FillRandom(p, Len);   // fallback to our CSPRNG as padding\r\n+    RdRand32(p, Len shr 2); // xor compliant HW CPU rdrand\r\n+    exit;                   // we estimate we got enough randomness\r\n+  end;\r\n+  {$endif ASMINTEL}\r\n+  if not fromsys then\r\n+    FillZero(result);        // no strong enough CSPRNG available\r\n+end;\r\n+\r\n function TAesPrngAbstract.FillRandomHex(Len: integer): RawUtf8;\r\n var\r\n   bin: pointer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17597\n+17598",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17597'\r\n+'2.4.17598'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "768b8f662ee88a6798ec36277898f58260cde38c",
+      "short_sha": "768b8f66",
+      "subject": "crypt: fixed TAesPrngAbstract.XorRandom method",
+      "body": "- length > 8KB was not XORed",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T13:11:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/768b8f662ee88a6798ec36277898f58260cde38c",
+      "parents": [
+        "1229767186a7fa92bf1dcd7aa2d9ea874e0cdad0"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -7372,6 +7372,7 @@ procedure TAesPrngAbstract.XorRandom(Buffer: pointer; Len: PtrInt);\n     n := MinPtrInt(SizeOf(tmp), Len);\r\n     FillRandom(@tmp, n);\r\n     XorMemory(Buffer, @tmp, n);\r\n+    inc(PByte(Buffer), n);\r\n     dec(Len, n);\r\n   end;\r\n   FillCharFast(tmp, wipe, 0); // avoid leaking the secret on the stack\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17596\n+17597",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17596'\r\n+'2.4.17597'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1229767186a7fa92bf1dcd7aa2d9ea874e0cdad0",
+      "short_sha": "12297671",
+      "subject": "crypt: minor RSA code cleanup",
+      "body": "- usage of the legacy Release([@...]) overload is misleading because it is not obvious that each pointer is also set to nil",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T13:07:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1229767186a7fa92bf1dcd7aa2d9ea874e0cdad0",
+      "parents": [
+        "a580c99403aea84e0fee4f50daf834150efc3f83"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 3,
+          "patch": "@@ -1781,7 +1781,8 @@ function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n     // need the original randomized Miller-Rabin algorithm\r\n     a.Release;\r\n     a := Owner.Allocate(Size, []);\r\n-    Owner.Release([@t]);\r\n+    t.Release;\r\n+    t := nil;\r\n     while Iterations > 0 do\r\n     begin\r\n       dec(Iterations);\r\n@@ -2331,8 +2332,10 @@ function TRsaContext.AllocateFromHex(const hex: RawUtf8): PBigInt;\n begin\r\n   n := length(hex) shr 1;\r\n   result := Allocate(n div HALF_BYTES, []);\r\n-  if not HexDisplayToBin(pointer(hex), pointer(result^.Value), n) then\r\n-    Release([@result]);\r\n+  if HexDisplayToBin(pointer(hex), pointer(result^.Value), n) then\r\n+    exit;\r\n+  result.Release;\r\n+  result := nil;\r\n end;\r\n \r\n const\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17595\n+17596",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17595'\r\n+'2.4.17596'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a580c99403aea84e0fee4f50daf834150efc3f83",
+      "short_sha": "a580c994",
+      "subject": "crypt: fixed previous commit accumulator sign",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T12:51:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a580c99403aea84e0fee4f50daf834150efc3f83",
+      "parents": [
+        "0df7461de68b80e45daf9f0d8fe0c25903fa405e"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1686,7 +1686,7 @@ function TBigInt.Is65537: boolean;\n \r\n function TBigInt.PrimeAllowedFor65537: boolean;\r\n var\r\n-  i, v, sum: PtrUInt;\r\n+  i, v, sum: PtrInt; // could be negative\r\n begin\r\n   // for e=65537, quickly reject p mod e = 1 (safe for keys up to 8192 bits)\r\n   sum := 0;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17594\n+17595",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17594'\r\n+'2.4.17595'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0df7461de68b80e45daf9f0d8fe0c25903fa405e",
+      "short_sha": "0df7461d",
+      "subject": "crypt: new TBigInt.PrimeAllowedFor65537 method",
+      "body": "- used for cleaner and slightly faster key generation",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T12:44:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0df7461de68b80e45daf9f0d8fe0c25903fa405e",
+      "parents": [
+        "d4303584a35030c9fad2870a6495d7d65587f1bc"
+      ],
+      "stats": {
+        "additions": 30,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 3,
+          "patch": "@@ -110,6 +110,7 @@   TBigInt = record\n     procedure Resize(n: integer; nozero: boolean = false);\r\n     procedure XorStrongRandom(Drbg: TAesPrngAbstract; last32: PCardinal);\r\n     procedure FillMillerRabinWitness(Drbg: TAesPrngAbstract; W: PBigInt);\r\n+    function PrimeAllowedFor65537: boolean;\r\n   public\r\n     /// the associated Big Integer RSA context\r\n     // - used to store modulo constants, and maintain an internal instance cache\r\n@@ -1683,6 +1684,30 @@ function TBigInt.Is65537: boolean;\n             (PCardinal(Value)^ = 65537); // common Exponent from FIPS 5.4 (e)\r\n end;\r\n \r\n+function TBigInt.PrimeAllowedFor65537: boolean;\r\n+var\r\n+  i, v, sum: PtrUInt;\r\n+begin\r\n+  // for e=65537, quickly reject p mod e = 1 (safe for keys up to 8192 bits)\r\n+  sum := 0;\r\n+  for i := 0 to Size - 1 do\r\n+  begin\r\n+    // CPU32: 2^16 = -1 (mod 65537), CPU64: 2^32 = 1 (mod 65537)\r\n+    v := Value[i];\r\n+    {$ifdef CPU32}\r\n+    if Odd(i) then\r\n+      dec(sum, v)\r\n+    else\r\n+      inc(sum, v);\r\n+    {$else}\r\n+    inc(sum, v and $ffff);\r\n+    dec(sum, v shr 16);\r\n+    {$endif CPU32}\r\n+  end;\r\n+  // test divisibility of sum-1, including negative sums\r\n+  result := ((sum - 1) mod 65537) <> 0;\r\n+end;\r\n+\r\n function TBigInt.IsPrime(Extend: TBigIntSimplePrime; Iterations: integer;\r\n   Drbg: TAesPrngAbstract): boolean;\r\n var\r\n@@ -2942,7 +2967,7 @@ procedure TRsaPrimeWorker.Execute;\n       repeat\r\n         if not p.FillPrime(Extend, Iterations, EndTix, Owner.fDrbg) then\r\n           exit; // timed out\r\n-      until p.Modulo(e).Compare(1, {andrelease=}true) <> 0;\r\n+      until p.PrimeAllowedFor65537;\r\n       // FIPS 186-4 B.3.1: ensure x mod e<>1 i.e. gcd(x-1,e)=1\r\n       NewPrime := p.SaveFixed(PrimeBytes); // transfer bytes, not the instance\r\n       if length(NewPrime) <> PrimeBytes then\r\n@@ -3021,15 +3046,15 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n           repeat\r\n             if not _p.FillPrime(Extend, Iterations, endtix, rnd) then\r\n               exit; // timed out\r\n-          until _p.Modulo(_e).Compare(1, {andrelease=}true) <> 0\r\n+          until _p.PrimeAllowedFor65537\r\n           // FIPS 186-4 B.3.1: ensure x mod e<>1 i.e. gcd(x-1,e)=1\r\n         end\r\n         else\r\n           wrk := TRsaPrimeWorker.Create(self, Iterations, Extend, endtix);\r\n         repeat\r\n           if not _q.FillPrime(Extend, Iterations, endtix, rnd) then\r\n             exit;\r\n-        until _q.Modulo(_e).Compare(1, {andrelease=}true) <> 0;\r\n+        until _q.PrimeAllowedFor65537;\r\n         if wrk <> nil then\r\n         begin\r\n           wrk.WaitFor; // join the threads\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17593\n+17594",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17593'\r\n+'2.4.17594'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d4303584a35030c9fad2870a6495d7d65587f1bc",
+      "short_sha": "d4303584",
+      "subject": "crypt: self-verification of the RSA/RSA-PSS signature",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T12:31:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d4303584a35030c9fad2870a6495d7d65587f1bc",
+      "parents": [
+        "351645ad3648a0d9f183dd3592ecb8e188cdcd47"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 1,
+          "patch": "@@ -3517,6 +3517,10 @@ function TRsa.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\n   seq := RsaSignHashToDer(Hash, HashAlgo);\r\n   // 2. sign it using the stored private key\r\n   result := Pkcs1Sign(pointer(seq), length(seq));\r\n+  // 3. verify the signature (much faster than the previous Pkcs1Sign call)\r\n+  if (result <> '') and\r\n+     not Verify(Hash, HashAlgo, result) then\r\n+    ERsaException.RaiseUtf8('%.Sign self-verification failed', [self]);\r\n end;\r\n \r\n function TRsa.Seal(const Message: RawByteString;\r\n@@ -3713,7 +3717,7 @@ function TRsaPss.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\n      not HasPrivateKey then\r\n     exit;\r\n   if (ModulusBits + 7) shr 3 <> ModulusLen then\r\n-    ERsaException.RaiseUtf8('%.DoPad: m=p*q is weak', [self]);\r\n+    ERsaException.RaiseUtf8('%.Sign: m=p*q is weak', [self]);\r\n   bits := ModulusBits - 1;\r\n   len := (bits + 7) shr 3; // could be one less than ModulusLen\r\n   // RFC 8017 9.1.1 encoding operation with saltlen = hashlen\r\n@@ -3738,6 +3742,10 @@ function TRsaPss.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\n   finally\r\n     fSafe.UnLock;\r\n   end;\r\n+  // verify the signature (much faster than the previous signature encryption)\r\n+  if (result <> '') and\r\n+     not Verify(Hash, HashAlgo, result) then\r\n+    ERsaException.RaiseUtf8('%.Sign self-verification failed', [self]);\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17592\n+17593",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17592'\r\n+'2.4.17593'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "351645ad3648a0d9f183dd3592ecb8e188cdcd47",
+      "short_sha": "351645ad",
+      "subject": "crypt: hardened TRsaPrimeWorker cleanup",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T12:20:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/351645ad3648a0d9f183dd3592ecb8e188cdcd47",
+      "parents": [
+        "14502d3fe6a15d271569d1966fec91582ebdc1a1"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "patch": "@@ -2908,6 +2908,7 @@   TRsaPrimeWorker = class(TThread) // no need of mormot.core.threads\n     NewPrime: RawByteString; // saved as binary\r\n     constructor Create(aOwner: TRsa; aIterations: integer;\r\n       aExtend: TBigIntSimplePrime; aEndTix: Int64); reintroduce;\r\n+    destructor Destroy; override;\r\n     procedure Execute; override;\r\n   end;\r\n \r\n@@ -2922,6 +2923,12 @@ constructor TRsaPrimeWorker.Create(aOwner: TRsa; aIterations: integer;\n   inherited Create({suspended=}false);\r\n end;\r\n \r\n+destructor TRsaPrimeWorker.Destroy;\r\n+begin\r\n+  FillZero(NewPrime);\r\n+  inherited Destroy;\r\n+end;\r\n+\r\n procedure TRsaPrimeWorker.Execute;\r\n var\r\n   c: TRsaContext;\r\n@@ -2939,7 +2946,7 @@ procedure TRsaPrimeWorker.Execute;\n       // FIPS 186-4 B.3.1: ensure x mod e<>1 i.e. gcd(x-1,e)=1\r\n       NewPrime := p.SaveFixed(PrimeBytes); // transfer bytes, not the instance\r\n       if length(NewPrime) <> PrimeBytes then\r\n-        FillZero(NewPrime);\r\n+        FillZero(NewPrime); // paranoid\r\n     finally\r\n       p.Release;\r\n       e.ResetPermanentAndRelease;\r\n@@ -3029,7 +3036,6 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n           if length(wrk.NewPrime) <> bytes then\r\n             exit;\r\n           _p := Load(pointer(wrk.NewPrime), bytes);\r\n-          FillZero(wrk.NewPrime);\r\n         end;\r\n       finally\r\n         wrk.Free;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17591\n+17592",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17591'\r\n+'2.4.17592'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "14502d3fe6a15d271569d1966fec91582ebdc1a1",
+      "short_sha": "14502d3f",
+      "subject": "crypt: some RSA fixed of DRBG",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T12:07:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/14502d3fe6a15d271569d1966fec91582ebdc1a1",
+      "parents": [
+        "118b6572f3ea8ce9c41aed0d44c70e5ca37be539"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -1851,12 +1851,10 @@ function TBigInt.FillPrime(Extend: TBigIntSimplePrime; Iterations: integer;\n   // xor Value original trusted sources with our CSPRNG until we get enough bits\r\n   last32 := @Value[Size - 1 {$ifdef CPU32} - 1 {$endif}];\r\n   if Drbg = nil then\r\n-    Drbg := TAesPrng.Main;\r\n+    Drbg := TAesPrng.Main; // if none supplied\r\n   XorStrongRandom(Drbg, last32);\r\n   FillZero(rnd); // anti-forensic counter measure\r\n   // brute force search for the next prime starting at this point\r\n-  if Drbg = nil then\r\n-    Drbg := TAesPrng.Main; // retrieve once\r\n   result := false; // timeout\r\n   min := 0;\r\n   repeat\r\n@@ -2959,6 +2957,7 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n   _e, _p, _q, _d, _h, _tmp: PBigInt;\r\n   comp, bytes: integer;\r\n   wrk: TRsaPrimeWorker;\r\n+  rnd: TAesPrngAbstract;\r\n   endtix: Int64;\r\n begin\r\n   // ensure we can actually generate such a RSA key\r\n@@ -2995,6 +2994,7 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n   _p := nil;                             // computed in TRsaPrimeWorker\r\n   _q := Allocate(ValuesSize(bytes));     // p,q size = half Bits\r\n   _d := nil;\r\n+  rnd := GetDrbg; // also ensure fDrbg field is set\r\n   try\r\n     if not _e.Is65537 then // paranoid\r\n       exit;\r\n@@ -3012,15 +3012,15 @@ function TRsa.Generate(Bits: integer; Extend: TBigIntSimplePrime;\n         begin\r\n           _p := Allocate(_q.Size); // sequential work\r\n           repeat\r\n-            if not _p.FillPrime(Extend, Iterations, endtix, fDrbg) then\r\n+            if not _p.FillPrime(Extend, Iterations, endtix, rnd) then\r\n               exit; // timed out\r\n           until _p.Modulo(_e).Compare(1, {andrelease=}true) <> 0\r\n           // FIPS 186-4 B.3.1: ensure x mod e<>1 i.e. gcd(x-1,e)=1\r\n         end\r\n         else\r\n           wrk := TRsaPrimeWorker.Create(self, Iterations, Extend, endtix);\r\n         repeat\r\n-          if not _q.FillPrime(Extend, Iterations, endtix, fDrbg) then\r\n+          if not _q.FillPrime(Extend, Iterations, endtix, rnd) then\r\n             exit;\r\n         until _q.Modulo(_e).Compare(1, {andrelease=}true) <> 0;\r\n         if wrk <> nil then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17590\n+17591",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17590'\r\n+'2.4.17591'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "118b6572f3ea8ce9c41aed0d44c70e5ca37be539",
+      "short_sha": "118b6572",
+      "subject": "crypt: some RSA hardening",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T11:55:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/118b6572f3ea8ce9c41aed0d44c70e5ca37be539",
+      "parents": [
+        "6a8ede599411d0d59a6b811ad4328ba73ce2a234"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 26,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 24,
+          "patch": "@@ -3483,34 +3483,23 @@ function TRsa.Verify(Hash: pointer; HashAlgo: THashAlgo;\n function TRsa.Verify(Hash, Sig: pointer; HashAlgo: THashAlgo;\r\n   SigLen: integer): boolean;\r\n var\r\n-  verif, digest, oid: RawByteString;\r\n-  p: integer;\r\n+  actual: RawByteString;\r\n+  expected: TAsnObject;\r\n begin\r\n   // this virtual method implements RSASSA-PKCS1-v1_5 signature scheme\r\n-  // 1. decode the supplied value using the stored public key\r\n   result := false;\r\n-  if SigLen <> fModulusLen then\r\n-    exit; // the signature is a RSA BigInt by definition\r\n-  verif := Pkcs1Verify(Sig);\r\n-  if verif = '' then\r\n-    exit; // invalid decrypted signature or no public key\r\n-  // 2. parse the ASN.1 sequence to extract the stored hash and its algo oid\r\n-  p := 1;\r\n-  if (AsnNext(p, verif) <> ASN1_SEQ) or  // DigestInfo\r\n-     (AsnNext(p, verif) <> ASN1_SEQ) or  // AlgorithmIdentifier\r\n-     (AsnNext(p, verif, @oid) <> ASN1_OBJID) or\r\n-     (oid <> ASN1_OID_HASH[HashAlgo]) then\r\n+  if (Hash = nil) or\r\n+     (Sig = nil) or\r\n+     (SigLen <> fModulusLen) then\r\n     exit;\r\n-  case AsnNextRaw(p, verif, digest) of\r\n-    ASN1_NULL: // optional Algorithm Parameters\r\n-      if AsnNextRaw(p, verif, digest) <> ASN1_OCTSTR then\r\n-        exit;\r\n-    ASN1_OCTSTR:\r\n-      ;\r\n-  else\r\n+  // recover DigestInfo from EMSA-PKCS1-v1_5 encoding\r\n+  actual := Pkcs1Verify(Sig);\r\n+  if actual = '' then\r\n     exit;\r\n-  end;\r\n-  result := CompareBuf(digest, Hash, HASH_SIZE[HashAlgo]) = 0;\r\n+  // compute the exact expected DER DigestInfo\r\n+  expected := RsaSignHashToDer(PHash512(Hash), HashAlgo);\r\n+  // reject malformed, truncated, or extended encodings\r\n+  result := actual = expected;\r\n end;\r\n \r\n function TRsa.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\r\n@@ -3738,7 +3727,8 @@ function TRsaPss.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\n   fSafe.Lock;\r\n   try\r\n     dec := Load(pointer(encoded), len);\r\n-    result := ChineseRemainderTheorem(dec).Save({andrelease=}true);\r\n+    result := ChineseRemainderTheorem(dec).\r\n+              SaveFixed(fModulusLen, {andrelease=}true);\r\n   finally\r\n     fSafe.UnLock;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17589\n+17590",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17589'\r\n+'2.4.17590'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6a8ede599411d0d59a6b811ad4328ba73ce2a234",
+      "short_sha": "6a8ede59",
+      "subject": "crypt: EME-PKCS1-v1_5 requires non zero unpredictable random padding",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T11:38:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6a8ede599411d0d59a6b811ad4328ba73ce2a234",
+      "parents": [
+        "2f93121ce96b812b4985bc1f59b6b36af05e469e"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 11,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 9,
+          "patch": "@@ -3295,7 +3295,7 @@ function TRsa.ChineseRemainderTheorem(b: PBigInt): PBigInt;\n \r\n function TRsa.Pkcs1UnPad(p: PByteArray; verify: boolean): RawByteString;\r\n var\r\n-  count, padding: integer;\r\n+  count, padding: PtrInt;\r\n begin\r\n   // virtual method following RSASSA-PKCS1-v1_5 padding\r\n   FastAssignNew(result); // error\r\n@@ -3335,9 +3335,8 @@ function TRsa.Pkcs1UnPad(p: PByteArray; verify: boolean): RawByteString;\n \r\n function TRsa.Pkcs1Pad(p: pointer; n: integer; sign: boolean): RawByteString;\r\n var\r\n-  padding: integer;\r\n-  i: PtrInt;\r\n-  r: PByteArray absolute result;\r\n+  padding: PtrInt;\r\n+  r: PByteArray;\r\n begin\r\n   // virtual method following RSASSA-PKCS1-v1_5 padding\r\n   FastAssignNew(result);\r\n@@ -3346,7 +3345,7 @@ function TRsa.Pkcs1Pad(p: pointer; n: integer; sign: boolean): RawByteString;\n      (padding < 8) or\r\n      not HasPublicKey then\r\n     exit;\r\n-  SetLength(result, fModulusLen);\r\n+  r := FastNewRawByteString(result, fModulusLen);\r\n   r[0] := 0; // leading zero\r\n   if sign then\r\n   begin\r\n@@ -3357,11 +3356,9 @@ function TRsa.Pkcs1Pad(p: pointer; n: integer; sign: boolean): RawByteString;\n   else\r\n   begin\r\n     r[1] := 2; // block type 2\r\n-    SharedRandom.Fill(@r[2], padding); // TLecuyer is enough for public padding\r\n+    // EME-PKCS1-v1_5 requires non zero unpredictable random padding\r\n+    GetDrbg.FillRandomNotZero(@r[2], padding); // our CSPRNG\r\n     inc(padding, 2);\r\n-    for i := 2 to padding - 1 do\r\n-      if r[i] = 0 then\r\n-        dec(r[i]); // non zero random padding\r\n   end;\r\n   r[padding] := 0; // padding ends with zero\r\n   MoveFast(p^, r[padding + 1], n);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17588\n+17589",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17588'\r\n+'2.4.17589'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2f93121ce96b812b4985bc1f59b6b36af05e469e",
+      "short_sha": "2f93121c",
+      "subject": "crypt: use our CSPRNG for RSA padding/DRBG",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T11:37:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2f93121ce96b812b4985bc1f59b6b36af05e469e",
+      "parents": [
+        "626baa30702a28a493d6e90a1f21453e6bf7a753"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 10,
+          "patch": "@@ -643,6 +643,7 @@   TRsa = class(TRsaContext)\n     function ChineseRemainderTheorem(b: PBigInt): PBigInt;\r\n     function Pkcs1UnPad(p: PByteArray; verify: boolean): RawByteString;\r\n     function Pkcs1Pad(p: pointer; n: integer; sign: boolean): RawByteString;\r\n+    function GetDrbg: TAesPrngAbstract;\r\n   public\r\n     /// initialize the RSA key context\r\n     constructor Create; override;\r\n@@ -797,11 +798,12 @@   TRsa = class(TRsaContext)\n     /// RSA Private key CRT coefficient satisfying q * qInv == 1 (mod p)\r\n     property QInv: PBigInt\r\n       read fQInv;\r\n-    /// override the PRNG used for padding/witness\r\n-    // - fallback to TAesPrng.Main CSPRNG if default nil is kept\r\n-    // - generation seed will always use trusted OS sources for its keys\r\n+    /// the PRNG used by this instance for its padding/witness process\r\n+    // - fallback to TAesPrng.Main CSPRNG by default\r\n+    // - generation seed will always use trusted OS sources for its keys, not\r\n+    // this TAesPrngAbstract\r\n     property Drbg: TAesPrngAbstract\r\n-      read fDrbg write fDrbg;\r\n+      read GetDrbg write fDrbg;\r\n   published\r\n     /// RSA modulus size in bits\r\n     property ModulusBits: integer\r\n@@ -2806,6 +2808,13 @@ destructor TRsa.Destroy;\n   inherited Destroy;\r\n end;\r\n \r\n+function TRsa.GetDrbg: TAesPrngAbstract;\r\n+begin\r\n+  if fDrbg = nil then\r\n+    fDrbg := TAesPrng.Main;\r\n+  result := fDrbg;\r\n+end;\r\n+\r\n function TRsa.HasPublicKey: boolean;\r\n begin\r\n   result := (self <> nil) and\r\n@@ -3562,9 +3571,7 @@ function TRsa.Seal(Cipher: TAesAbstractClass; AesBits: integer;\n   // generate the ephemeral secret key and IV within the corresponding header\r\n   Random128(@head.iv); // unpredictable\r\n   try\r\n-    if fDrbg = nil then\r\n-      fDrbg := TAesPrng.Main;\r\n-    fDrbg.FillRandom(key); // use strong CSPRNG for the private secret\r\n+    GetDrbg.FillRandom(key); // use strong CSPRNG for the private secret\r\n     // encrypt the ephemeral secret using the current RSA public key\r\n     enckey := Pkcs1Encrypt(@key, AesBits shr 3);\r\n     head.encryptedkeylen := length(enckey);\r\n@@ -3718,9 +3725,7 @@ function TRsaPss.Sign(Hash: PHash512; HashAlgo: THashAlgo): RawByteString;\n   bits := ModulusBits - 1;\r\n   len := (bits + 7) shr 3; // could be one less than ModulusLen\r\n   // RFC 8017 9.1.1 encoding operation with saltlen = hashlen\r\n-  if fDrbg = nil then\r\n-    fDrbg := TAesPrng.Main;\r\n-  fDrbg.Fill(@salt, hlen); // public salt requires unpredictable CSPRNG\r\n+  GetDrbg.FillRandom(@salt, hlen); // public salt requires unpredictable CSPRNG\r\n   RsaPssComputeSaltedHash(Hash, @salt, HashAlgo, hlen, h);\r\n   pslen := len - (hlen * 2 + 2);\r\n   if pslen < 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17587\n+17588",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17587'\r\n+'2.4.17588'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "626baa30702a28a493d6e90a1f21453e6bf7a753",
+      "short_sha": "626baa30",
+      "subject": "crypt: new TAesPrngAbstract.FillRandomNotZero method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-13T11:31:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/626baa30702a28a493d6e90a1f21453e6bf7a753",
+      "parents": [
+        "319cd63ea11765dd5760d17f85e311e5ed93db7f"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 28,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 37,
+          "deletions": 0,
+          "patch": "@@ -1673,6 +1673,8 @@   TAesPrngAbstract = class(TAesLocked)\n     /// returns an hexa-encoded binary buffer filled with some pseudorandom data\r\n     // - this method is thread-safe, and its AES process is non blocking\r\n     function FillRandomHex(Len: integer): RawUtf8;\r\n+    /// fill a binary buffer with some pseudorandom data but no zero byte\r\n+    procedure FillRandomNotZero(Buffer: pointer; Len: PtrInt);\r\n     /// compute a pseudorandom UUid value according to the RFC 4122\r\n     // - RandomGuid() from this unit uses Random128() so is likely strong\r\n     // - to derivate a Uuid from a name see IdentifierGuid()/DotNetIdentifierGuid()\r\n@@ -7307,6 +7309,41 @@ function TAesPrngAbstract.FillRandomBytes(Len: integer): TBytes;\n   FillRandom(pointer(result), Len);\r\n end;\r\n \r\n+procedure TAesPrngAbstract.FillRandomNotZero(Buffer: pointer; Len: PtrInt);\r\n+var\r\n+  rnd: TAesBlock;\r\n+  rndavail, i, rounds: PtrInt;\r\n+  p: PByte;\r\n+begin\r\n+  if (Buffer = nil) or\r\n+     (Len <= 0) then\r\n+    exit;\r\n+  FillRandom(Buffer, Len);\r\n+  rndavail := 0;\r\n+  p := pointer(Buffer);\r\n+  for i := 1 to Len do\r\n+  begin\r\n+    rounds := 0;\r\n+    while p^ = 0 do\r\n+    begin\r\n+      if rndavail = 0 then\r\n+      begin\r\n+        FillRandom(rnd);\r\n+        rndavail := 16;\r\n+        inc(rounds);\r\n+        if rounds = 5 then\r\n+          break; // avoid infinite loops\r\n+      end;\r\n+      dec(rndavail);\r\n+      p^ := rnd[rndavail];\r\n+    end;\r\n+    inc(p);\r\n+  end;\r\n+  FillZero(rnd);\r\n+  if ByteScanIndex(Buffer, Len, 0) >= 0 then // paranoid\r\n+    ESynCrypto.RaiseUtf8('%.FillRandomNotZero failure', [self]);\r\n+end;\r\n+\r\n function TAesPrngAbstract.FillRandomHex(Len: integer): RawUtf8;\r\n var\r\n   bin: pointer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 26,
+          "patch": "@@ -38,12 +38,12 @@ interface\n {\r\n   Implementation notes:\r\n   - new pure pascal OOP design of BigInt computation optimized for RSA process\r\n-  - garbage collection of BigInt instances, with proper anti-forensic wiping\r\n+  - RSA key-pair generation/validation guided by FIPS 186-5 (not FIPS-validated)\r\n+  - features both RSASSA-PKCS1-v1_5 and RSASSA-PSS signature schemes\r\n   - use half-registers (HalfUInt) for efficient computation on all CPUs\r\n   - dedicated x86_64/i386/aarch64 asm for the core computation routines\r\n+  - garbage collection of BigInt instances, with proper anti-forensic wiping\r\n   - slower than OpenSSL, but likely the fastest FPC or Delphi native RSA library\r\n-  - includes FIPS-level RSA keypair validation and generation\r\n-  - features both RSASSA-PKCS1-v1_5 and RSASSA-PSS signature schemes\r\n   - started as a fcl-hash fork, but full rewrite inspired by Mbed TLS source\r\n   - references: https://github.com/Mbed-TLS/mbedtls and the Handbook of Applied\r\n     Cryptography (HAC) at https://cacr.uwaterloo.ca/hac/about/chap4.pdf\r\n@@ -108,7 +108,7 @@   TBigInt = record\n     function Is65537: boolean; {$ifdef HASINLINE} inline; {$endif}\r\n     function UsedBytes: integer;\r\n     procedure Resize(n: integer; nozero: boolean = false);\r\n-    procedure XorStrongRandom(last32: PCardinal);\r\n+    procedure XorStrongRandom(Drbg: TAesPrngAbstract; last32: PCardinal);\r\n     procedure FillMillerRabinWitness(Drbg: TAesPrngAbstract; W: PBigInt);\r\n   public\r\n     /// the associated Big Integer RSA context\r\n@@ -251,7 +251,7 @@   TBigInt = record\n     // looped over TAesPrng.Fill and IsPrime method within a timeout period\r\n     // - if Iterations is too low, FIPS 4.48 recommendation will be forced\r\n     function FillPrime(Extend: TBigIntSimplePrime; Iterations: integer;\r\n-      EndTix: Int64): boolean;\r\n+      EndTix: Int64; Drbg: TAesPrngAbstract = nil): boolean;\r\n     /// return the crc32c hash of this Big Integer value binary\r\n     function ToHash: cardinal;\r\n     /// return the Big Integer value as hexadecimal\r\n@@ -638,6 +638,7 @@   TRsa = class(TRsaContext)\n     fSafe: TOSLightLock; // for Verify() and Sign() - not reentrant lock\r\n     fM, fE, fD, fP, fQ, fDP, fDQ, fQInv: PBigInt;\r\n     fModulusLen, fModulusBits: integer;\r\n+    fDrbg: TAesPrngAbstract;\r\n     /// compute the Chinese Remainder Theorem (CRT) for RSA sign/decrypt\r\n     function ChineseRemainderTheorem(b: PBigInt): PBigInt;\r\n     function Pkcs1UnPad(p: PByteArray; verify: boolean): RawByteString;\r\n@@ -796,6 +797,11 @@   TRsa = class(TRsaContext)\n     /// RSA Private key CRT coefficient satisfying q * qInv == 1 (mod p)\r\n     property QInv: PBigInt\r\n       read fQInv;\r\n+    /// override the PRNG used for padding/witness\r\n+    // - fallback to TAesPrng.Main CSPRNG if default nil is kept\r\n+    // - generation seed will always use trusted OS sources for its keys\r\n+    property Drbg: TAesPrngAbstract\r\n+      read fDrbg write fDrbg;\r\n   published\r\n     /// RSA modulus size in bits\r\n     property ModulusBits: integer\r\n@@ -1788,36 +1794,35 @@ function FipsMinIterations(bits: integer): integer;\n   FIPS_MIN = $b504f334; // = ceil(sqrt(2) * 2^31) for the top 32-bit dword\r\n   FIPS_RANGE = high(cardinal) - FIPS_MIN + 1; // allowed top-dword interval size\r\n \r\n-procedure TBigInt.XorStrongRandom(last32: PCardinal);\r\n+procedure TBigInt.XorStrongRandom(Drbg: TAesPrngAbstract; last32: PCardinal);\r\n var\r\n   min: integer;\r\n begin\r\n   min := 4; // paranoid\r\n   repeat\r\n-    TAesPrng.Main.XorRandom(Value, Size * HALF_BYTES);\r\n+    Drbg.XorRandom(Value, Size * HALF_BYTES);\r\n     // CSPRNG sanity check (no RSA requirement): half the bits are set on average\r\n     if GetBitsCount(Value^, Size * HALF_BITS) > Size * (HALF_BITS div 3) then\r\n     begin\r\n       // should be a big enough odd number\r\n       Value[0] := Value[0] or 1;  // set lower bit to ensure it is an odd number\r\n       if last32^ < FIPS_MIN then  // FIPS 186 range requirement\r\n-        last32^ := FIPS_MIN + TAesPrng.Main.Random32(FIPS_RA\n... [truncated, 6061 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17586\n+17587",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17586'\r\n+'2.4.17587'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -1025,6 +1025,14 @@ procedure TTestCoreCrypto.Prng(meta: TAesPrngClass; const name, big: RawUtf8);\n         Check(not (IsUpper(s1) or IsLower(s1)), 'rndpass case');\r\n       for j := 1 to i do\r\n         check(s1[j] in [#33 .. #126]);\r\n+      a1.FillRandomNotZero(pointer(s1), i);\r\n+      a2.FillRandomNotZero(pointer(s2), i);\r\n+      if i > 4 then\r\n+        checkUtf8(s1 <> s2, 'prngzero len=%', [i]);\r\n+      for j := 1 to i do\r\n+        check(s1[j] <> #0);\r\n+      for j := 1 to i do\r\n+        check(s2[j] <> #0);\r\n       // verify Random32 / RandomDouble / RandomDouble distribution\r\n       c := a1.Random32;\r\n       if c < cardinal(maxint) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
     {
       "sha": "319cd63ea11765dd5760d17f85e311e5ed93db7f",
       "short_sha": "319cd63e",
