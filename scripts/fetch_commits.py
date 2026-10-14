@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Fetch new upstream mORMot2 commits (metadata + diffs) into data/raw/<date>.json.
+"""Fetch one complete mORMot2 calendar day into data/raw/<date>.json.
 
-Incremental: `data/state.json` remembers the last processed commit date and the
-SHAs already published, so a re-run never duplicates work.
+By default the edition is yesterday in ``Europe/Zagreb``.  Waiting until the
+next morning closes the whole calendar day before publishing it.  Commits are
+selected from the Git graph between the heads immediately before and after the
+day, rather than from a rolling author-date cursor.  This also catches older
+topic-branch commits which only became reachable when a pull request was merged.
 
 Environment:
   GITHUB_TOKEN   optional but strongly recommended (rate limits, 60/h anonymous)
   UPSTREAM_REPO  default "synopse/mORMot2"
-  SINCE_DAYS     lookback when there is no state yet (default 1)
+  EDITION_TIMEZONE  calendar timezone (default "Europe/Zagreb")
   MAX_COMMITS    safety cap per run (default 60)
 """
 
@@ -22,16 +25,18 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from common import (
     ANALYSIS_SCHEMA, NOISE_FILES, RAW_DIR, RAW_SCHEMA, ROOT, UPSTREAM,
-    iso, load_state, save_state, short, utcnow, write_json,
+    iso, load_state, parse_iso, save_state, short, utcnow, write_json,
 )
 from heuristics import annotate
 
 API = "https://api.github.com"
 MAX_PATCH_CHARS = int(os.environ.get("MAX_PATCH_CHARS", "12000"))
 MAX_FILE_PATCH_CHARS = int(os.environ.get("MAX_FILE_PATCH_CHARS", "4000"))
+EDITION_TIMEZONE = os.environ.get("EDITION_TIMEZONE", "Europe/Zagreb")
 
 
 def api_get(path: str, params: dict | None = None, retries: int = 4):
@@ -69,18 +74,71 @@ def api_get(path: str, params: dict | None = None, retries: int = 4):
     return None
 
 
-def list_commits(since_iso: str, max_commits: int) -> list[dict]:
-    out, page = [], 1
-    while len(out) < max_commits:
-        batch = api_get(f"/repos/{UPSTREAM}/commits",
-                        {"since": since_iso, "per_page": 100, "page": page})
+def calendar_timezone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"unknown edition timezone: {name}") from exc
+
+
+def default_edition(now: datetime.datetime, timezone_name: str) -> str:
+    """Return the last fully closed local calendar day."""
+    local_today = now.astimezone(calendar_timezone(timezone_name)).date()
+    return (local_today - datetime.timedelta(days=1)).isoformat()
+
+
+def edition_bounds(edition: str, timezone_name: str) -> tuple[str, str]:
+    """Return the local day's half-open [start, end) bounds as UTC ISO strings."""
+    try:
+        day = datetime.date.fromisoformat(edition)
+    except ValueError as exc:
+        raise ValueError(f"invalid edition date: {edition}") from exc
+    timezone = calendar_timezone(timezone_name)
+    start = datetime.datetime.combine(day, datetime.time.min, timezone)
+    end = datetime.datetime.combine(day + datetime.timedelta(days=1),
+                                    datetime.time.min, timezone)
+    return iso(start), iso(end)
+
+
+def head_at_or_before(until_iso: str) -> str | None:
+    """Return the default-branch head at a UTC boundary."""
+    listed = api_get(f"/repos/{UPSTREAM}/commits",
+                     {"until": until_iso, "per_page": 1, "page": 1}) or []
+    return listed[0]["sha"] if listed else None
+
+
+def compare_commit_shas(base: str | None, head: str | None,
+                        max_commits: int) -> list[str]:
+    """Return every commit which became reachable between two branch heads."""
+    if not head or base == head:
+        return []
+    if not base:
+        raise RuntimeError("cannot compare the edition: no commit before its start")
+
+    path = f"/repos/{UPSTREAM}/compare/{base}...{head}"
+    first = api_get(path, {"per_page": 100, "page": 1}) or {}
+    status = first.get("status")
+    if status not in ("ahead", "identical"):
+        raise RuntimeError(f"unexpected Git comparison status: {status or 'missing'}")
+
+    total = int(first.get("ahead_by", first.get("total_commits", 0)) or 0)
+    if total > max_commits:
+        raise RuntimeError(
+            f"edition contains {total} commits, above MAX_COMMITS={max_commits}; "
+            "raise the cap instead of publishing a truncated edition")
+
+    commits = list(first.get("commits", []))
+    page = 2
+    while len(commits) < total:
+        payload = api_get(path, {"per_page": 100, "page": page}) or {}
+        batch = payload.get("commits", [])
         if not batch:
             break
-        out.extend(batch)
-        if len(batch) < 100:
-            break
+        commits.extend(batch)
         page += 1
-    return out[:max_commits]
+    if len(commits) != total:
+        raise RuntimeError(f"Git comparison returned {len(commits)} of {total} commits")
+    return [commit["sha"] for commit in commits]
 
 
 def truncate(text: str, limit: int) -> tuple[str, bool]:
@@ -151,41 +209,68 @@ def upstream_version(commits: list[dict]) -> dict:
     return version
 
 
+def payload_changed(previous: dict | None, current: dict) -> bool:
+    """Ignore generation time when deciding whether the repository must change."""
+    if previous is None:
+        return bool(current.get("commits"))
+    old = dict(previous)
+    new = dict(current)
+    old.pop("generated_at", None)
+    new.pop("generated_at", None)
+    return old != new
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--date", help="edition date (default: today, UTC)")
-    parser.add_argument("--since", help="ISO timestamp overriding the stored state")
-    parser.add_argument("--since-days", type=int,
-                        default=int(os.environ.get("SINCE_DAYS", "1")))
+    parser.add_argument("--date",
+                        help="edition date (default: yesterday in the edition timezone)")
+    parser.add_argument("--timezone", default=EDITION_TIMEZONE,
+                        help=f"calendar timezone (default: {EDITION_TIMEZONE})")
+    parser.add_argument("--since",
+                        help="override the edition's UTC start boundary")
     parser.add_argument("--max-commits", type=int,
                         default=int(os.environ.get("MAX_COMMITS", "60")))
     parser.add_argument("--force", action="store_true",
-                        help="ignore seen_shas de-duplication")
+                        help="re-fetch details already cached in this edition")
     args = parser.parse_args()
 
     state = load_state()
     now = utcnow()
-    edition = args.date or now.strftime("%Y-%m-%d")
-
+    edition = args.date or default_edition(now, args.timezone)
+    since, until = edition_bounds(edition, args.timezone)
     if args.since:
-        since = args.since
-    elif state.get("last_commit_date"):
-        since = state["last_commit_date"]
-    else:
-        since = iso(now - datetime.timedelta(days=args.since_days))
+        since = iso(parse_iso(args.since))
 
-    print(f"Fetching {UPSTREAM} commits since {since}", flush=True)
-    listed = list_commits(since, args.max_commits)
-    seen = set() if args.force else set(state.get("seen_shas", []))
-    todo = [c["sha"] for c in listed if c["sha"] not in seen]
-    print(f"  {len(listed)} listed, {len(todo)} new", flush=True)
+    # The boundary is exclusive. GitHub's `until` is inclusive and commit
+    # timestamps have one-second precision, so ask for the previous second.
+    before_start = iso(parse_iso(since) - datetime.timedelta(seconds=1))
+    before_end = iso(parse_iso(until) - datetime.timedelta(seconds=1))
+    base_sha = head_at_or_before(before_start)
+    head_sha = head_at_or_before(before_end)
+    listed_shas = compare_commit_shas(base_sha, head_sha, args.max_commits)
 
-    commits = []
-    for sha in todo:
+    out = RAW_DIR / f"{edition}.json"
+    previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
+    cached = {} if args.force else {
+        commit["sha"]: commit for commit in (previous or {}).get("commits", [])
+    }
+    todo = [sha for sha in listed_shas if sha not in cached]
+    print(f"Fetching {UPSTREAM} calendar day {edition} ({since} to {until})", flush=True)
+    print(f"  {len(listed_shas)} in Git graph, {len(todo)} details to fetch", flush=True)
+
+    records = dict(cached)
+    for sha in listed_shas:
+        if sha in records:
+            continue
         record = build_record(sha)
         if record:
-            commits.append(record)
+            records[sha] = record
             print(f"  + {record['short_sha']} {record['subject'][:78]}", flush=True)
+
+    missing = [sha for sha in listed_shas if sha not in records]
+    if missing:
+        raise RuntimeError(f"failed to fetch {len(missing)} commit detail record(s)")
+    commits = [records[sha] for sha in listed_shas]
 
     commits.sort(key=lambda c: c.get("date") or "", reverse=True)
     payload = {
@@ -196,8 +281,9 @@ def main() -> int:
         "generated_at": iso(now),
         "range": {
             "since": since,
-            "until": iso(now),
-            "head_sha": commits[0]["sha"] if commits else None,
+            "until": until,
+            "base_sha": base_sha,
+            "head_sha": head_sha,
         },
         "version": upstream_version(commits),
         "totals": {
@@ -208,36 +294,16 @@ def main() -> int:
         "commits": commits,
     }
 
-    # Several runs a day are normal (a manual re-run, a retry). Always merge with
-    # what is already on disk for this edition — never overwrite it with a shorter
-    # window, even when this run found nothing new.
-    out = RAW_DIR / f"{edition}.json"
-    previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else None
-    if previous:
-        known = {c["sha"] for c in payload["commits"]}
-        merged = payload["commits"] + [c for c in previous.get("commits", [])
-                                       if c["sha"] not in known]
-        merged.sort(key=lambda c: c.get("date") or "", reverse=True)
-        payload["commits"] = merged
-        payload["totals"] = {
-            "commits": len(merged),
-            "additions": sum(c["stats"]["additions"] for c in merged),
-            "deletions": sum(c["stats"]["deletions"] for c in merged),
-        }
-        old_version = previous.get("version") or {}
-        payload["version"]["before"] = old_version.get("before") or payload["version"]["before"]
-        payload["version"]["after"] = payload["version"]["after"] or old_version.get("after")
-        old_range = previous.get("range") or {}
-        payload["range"]["since"] = min(filter(None, [since, old_range.get("since")]),
-                                        default=since)
-        payload["range"]["head_sha"] = (merged[0]["sha"] if merged
-                                        else old_range.get("head_sha"))
-    write_json(out, payload)
-    print(f"Wrote {out.relative_to(ROOT)} ({payload['totals']['commits']} commits)")
+    changed = payload_changed(previous, payload)
+    if changed:
+        write_json(out, payload)
+        print(f"Wrote {out.relative_to(ROOT)} ({payload['totals']['commits']} commits)")
+    else:
+        print(f"Unchanged {out.relative_to(ROOT)} ({payload['totals']['commits']} commits)")
 
     if commits:
         state["last_commit_date"] = commits[0]["date"]
-        state["seen_shas"] = list(state.get("seen_shas", [])) + [c["sha"] for c in commits]
+        state["seen_shas"] = list(state.get("seen_shas", [])) + listed_shas
     state["last_run"] = iso(now)
     save_state(state)
 
@@ -246,7 +312,8 @@ def main() -> int:
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as fh:
             fh.write(f"edition={edition}\n")
-            fh.write(f"new_commits={len(commits)}\n")
+            fh.write(f"new_commits={len(todo)}\n")
+            fh.write(f"payload_changed={'true' if changed else 'false'}\n")
             fh.write(f"raw_path=data/raw/{edition}.json\n")
     return 0
 
