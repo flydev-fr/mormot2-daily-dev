@@ -1,0 +1,1666 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-14",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-15T08:29:04Z",
+  "range": {
+    "since": "2026-10-13T22:00:00Z",
+    "until": "2026-10-14T22:00:00Z",
+    "base_sha": "a1725c69d341221927a82001d0bd36ca8e127c0b",
+    "head_sha": "c35132cf6eecfbfc86c7e4c7ed43a1c7db970bc7"
+  },
+  "version": {
+    "after": "2.4.17634",
+    "before": "2.4.17609"
+  },
+  "totals": {
+    "commits": 23,
+    "additions": 1385,
+    "deletions": 1022
+  },
+  "commits": [
+    {
+      "sha": "c35132cf6eecfbfc86c7e4c7ed43a1c7db970bc7",
+      "short_sha": "c35132cf",
+      "subject": "net: some async server logic fixes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T20:29:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c35132cf6eecfbfc86c7e4c7ed43a1c7db970bc7",
+      "parents": [
+        "2bae69517c26743008742c32e99dabfd76974dd2"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 33,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17633\n+17634",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17633'\r\n+'2.4.17634'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 31,
+          "patch": "@@ -3227,8 +3227,7 @@ procedure TAsyncConnections.Shutdown;\n     exit;             // use this counter to avoid duplicated calls\r\n   inc(fFlag1);\r\n   {$ifdef USE_WINIOCP}\r\n-  fIocpAccept.Unsubscribe(fIocpAcceptSub);\r\n-  fIocpAccept.Terminate;\r\n+  fIocpAccept.Terminate;  // notify the IOCP queue - no Unsubscribe(fIocpAcceptSub)\r\n   {$endif USE_WINIOCP}\r\n   if fSockets <> nil then\r\n     fSockets.fTerminated := true; // shutdown ASAP\r\n@@ -4430,36 +4429,32 @@ procedure TAsyncServer.DoExecute;\n           DoLog(sllCustom1, 'Execute: Accept(%) retry', [fServer.Port], self);}\r\n         if res = nrRetry then // timeout\r\n           continue;\r\n-        // check if the remote IP is banned\r\n-        if (res = nrOk) and\r\n-           fBanned.IsBanned(sin) then // IP filtering from blacklist\r\n-        begin\r\n-          if acoVerboseLog in fOptions then\r\n-            DoLog(sllTrace, 'Execute: ban=%', [CardinalToHexShort(sin.IP4)], self);\r\n-          len := ord(HTTP_BANIP_RESPONSE[0]);\r\n-          client.Send(@HTTP_BANIP_RESPONSE[1], len); // 418 I'm a teapot\r\n-          client.ShutdownAndClose({rdwr=}false);    // reject before TLS setup\r\n-          continue;\r\n-        end;\r\n-        // ensure we don't have too many connections on this server instance\r\n-        {$ifdef USE_WINIOCP}\r\n-        if fSockets.fIocpRecvSend.Count > fMaxConnections then\r\n-        {$else}\r\n-        if (fSockets.fRead.Count > fMaxConnections) or\r\n-           (fSockets.fRead.PendingCount > fMaxPending) then\r\n-           // map THttpAsyncServer.HttpQueueLength property value\r\n-        {$endif USE_WINIOCP}\r\n-        begin\r\n-          client.ShutdownAndClose({rdwr=}false); // e.g. for load balancing\r\n-          res := nrTooManyConnections;\r\n-        end;\r\n+        if res = nrOk then\r\n+          // check if the remote IP is banned\r\n+          if fBanned.IsBanned(sin) then // IP filtering from blacklist\r\n+          begin\r\n+            if acoVerboseLog in fOptions then\r\n+              DoLog(sllTrace, 'Execute: ban=%', [CardinalToHexShort(sin.IP4)], self);\r\n+            len := ord(HTTP_BANIP_RESPONSE[0]);\r\n+            client.Send(@HTTP_BANIP_RESPONSE[1], len); // 418 I'm a teapot\r\n+            client.ShutdownAndClose({rdwr=}false);    // reject before TLS setup\r\n+            continue;\r\n+          end\r\n+          // ensure we don't have too many connections on this server instance\r\n+          {$ifdef USE_WINIOCP}\r\n+          else if fSockets.fIocpRecvSend.Count > fMaxConnections then\r\n+          {$else}\r\n+          else if (fSockets.fRead.Count > fMaxConnections) or\r\n+                  (fSockets.fRead.PendingCount > fMaxPending) then\r\n+             // map THttpAsyncServer.HttpQueueLength property value\r\n+          {$endif USE_WINIOCP}\r\n+          begin\r\n+            client.ShutdownAndClose({rdwr=}false); // e.g. for load balancing\r\n+            if Terminated then\r\n+              break;\r\n+            res := nrTooManyConnections;\r\n+          end;\r\n         // handle any socket error in fServer.Sock.Accept()\r\n-        if Terminated then\r\n-        begin\r\n-          if res = nrOk then\r\n-            client.ShutdownAndClose({rdwr=}false);\r\n-          break;\r\n-        end;\r\n         if res <> nrOK then\r\n         begin\r\n           // failure (too many clients?) -> wait and retry\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2bae69517c26743008742c32e99dabfd76974dd2",
+      "short_sha": "2bae6951",
+      "subject": "core: final SynLZ code cleanup",
+      "body": "- now the pascal code is as fast as the asm on x64 !",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T20:21:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2bae69517c26743008742c32e99dabfd76974dd2",
+      "parents": [
+        "831168920cf5b64dc22301e43fd5d6ad7760a175"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 13,
+          "patch": "@@ -12159,14 +12159,14 @@ procedure SynLZcompress1passub(var ctx: TSynLzContext);\n   src, dst, o: PAnsiChar;\r\n   v, cached, cwmask: cardinal;\r\n   h, t, tmax: PtrUInt;\r\n-begin\r\n+begin // better code generation with sub-functions for raw encoding\r\n   cwmask := 1;\r\n   src := ctx.src;\r\n   dst := ctx.dst;\r\n   repeat\r\n     v := PCardinal(src)^;\r\n     h := ((v shr 12) xor v) and 4095;\r\n-    o := ctx.offset[h];\r\n+    o := ctx.offset[h];           // not faster with a transient pointer\r\n     ctx.offset[h] := src;\r\n     cached := v xor ctx.cache[h]; // o=nil if cache[h] is uninitialized\r\n     ctx.cache[h] := v;\r\n@@ -12190,15 +12190,15 @@ procedure SynLZcompress1passub(var ctx: TSynLzContext);\n       if t <= 15 then\r\n       begin\r\n         // mark 2 to 17 bytes -> size=1..15\r\n-        PInteger(dst)^ := integer(t or h);\r\n+        PWord(dst)^ := integer(t or h);\r\n         inc(dst, 2);\r\n       end\r\n       else\r\n       begin\r\n         // mark 18 to (255+16) bytes -> size=0, next byte=t\r\n         dec(t, 16);\r\n-        PInteger(dst)^ := h; // size=0\r\n-        dst[2] := ansichar(t);\r\n+        PWord(dst)^ := h; // size=0\r\n+        dst[2] := AnsiChar(t);\r\n         inc(dst, 3);\r\n       end;\r\n     end\r\n@@ -12212,9 +12212,9 @@ procedure SynLZcompress1passub(var ctx: TSynLzContext);\n     if cwmask = 0 then\r\n     begin\r\n       ctx.cwpoint := pointer(dst);\r\n-      PCardinal(dst)^ := 0;\r\n+      PCardinal(dst)^ := cwmask;\r\n       inc(PCardinal(dst));\r\n-      cwmask := 1;\r\n+      inc(cwmask);\r\n     end;\r\n   until src > ctx.srcendmatch;\r\n   ctx.src := src; // store end position\r\n@@ -12240,7 +12240,7 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n   end\r\n   else\r\n   begin\r\n-    PCardinal(dst)^ := size; // size<32768 -> stored as word\r\n+    PWord(dst)^ := size; // size<32768 -> stored as word\r\n     if size = 0 then\r\n     begin\r\n       result := 2;\r\n@@ -12277,9 +12277,9 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n     if cwmask = 0 then\r\n     begin\r\n       ctx.cwpoint := pointer(dst);\r\n-      PCardinal(dst)^ := 0;\r\n+      PCardinal(dst)^ := cwmask;\r\n       inc(PCardinal(dst));\r\n-      cwmask := 1;\r\n+      inc(cwmask);\r\n     end;\r\n   end;\r\n   result := dst - dstbeg;\r\n@@ -12298,13 +12298,12 @@ procedure MoveByPtr(src, dst: PPtrUIntArray; max: PtrUInt); inline;\n   until i = max; // this loop pattern is faster than -count + inc(count) on RISC\r\n end;\r\n \r\n-// better code generation with sub-functions for raw decoding\r\n procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffsets);\r\n var\r\n   last_hashed, o: PAnsiChar;\r\n   cw, cwbit, v: cardinal;\r\n   t: PtrUInt;\r\n-begin\r\n+begin // better code generation with sub-functions for raw decoding\r\n   last_hashed := dst - 1;\r\n   cw := PCardinal(src)^;\r\n   inc(src, 4);\r\n@@ -12363,7 +12362,7 @@ procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffs\n       end;\r\n       cw := PCardinal(src)^;\r\n       inc(src, 4);\r\n-      cwbit := 1;\r\n+      inc(cwbit); // = 1\r\n     until false;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17632\n+17633",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17632'\r\n+'2.4.17633'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "831168920cf5b64dc22301e43fd5d6ad7760a175",
+      "short_sha": "83116892",
+      "subject": "net: fixed IOCP accept failure",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T18:24:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/831168920cf5b64dc22301e43fd5d6ad7760a175",
+      "parents": [
+        "30287319ed592c5d98338c5da3a059b98f780a61"
+      ],
+      "stats": {
+        "additions": 37,
+        "deletions": 13,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17631\n+17632",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17631'\r\n+'2.4.17632'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 9,
+          "patch": "@@ -4351,24 +4351,48 @@ procedure TAsyncServer.DoExecute;\n       res := nrFatalError;\r\n       case e of\r\n         wieAccept:\r\n-          if fIocpAccept.GetNextAccept(sub, client, sin) then\r\n           begin\r\n-            if acoEnableTls in fOptions then\r\n-              res := nrOk\r\n-            else\r\n-              res := client.MakeAsync;\r\n-            if res = nrOk then\r\n+            client := nil;\r\n+            // retrieve the completed accept\r\n+            if fIocpAccept.GetNextAccept(sub, client, sin) then\r\n+              res := nrOk;\r\n+            // always re-arm AcceptEx after consuming its completion\r\n+            if not Terminated then\r\n             begin\r\n               s := nil; // allocate in PrepareNext()\r\n               {$ifdef IOCP_ACCEPT_PREALLOCATE_SOCKETS}\r\n               if socketsalloc <= high(sockets) then\r\n               begin\r\n-                s := sockets[socketsalloc]; // provide one pre-allocated socket\r\n+                s := sockets[socketsalloc];\r\n                 inc(socketsalloc);\r\n               end;\r\n               {$endif IOCP_ACCEPT_PREALLOCATE_SOCKETS}\r\n-              if not fIocpAccept.PrepareNext('next', sub, wieAccept, nil, 0, s) then\r\n-                res := nrFatalError;\r\n+              try\r\n+                if not fIocpAccept.PrepareNext(\r\n+                         'next', sub, wieAccept, nil, 0, s) then\r\n+                  raise EWinIocp.Create(\r\n+                    'TAsyncServer.Execute: rearming AcceptEx failed');\r\n+              except\r\n+                // cannot continue accepting: release any client socket\r\n+                if client <> nil then\r\n+                begin\r\n+                  client.Close;\r\n+                  client := nil;\r\n+                end;\r\n+                raise;\r\n+              end;\r\n+            end;\r\n+            // Prepare the accepted client only if initialization succeeded.\r\n+            // TLS connections remain blocking until TLS setup is finished.\r\n+            if (res = nrOk) and\r\n+               not (acoEnableTls in fOptions) then\r\n+            begin\r\n+              res := client.MakeAsync;\r\n+              if res <> nrOk then\r\n+              begin\r\n+                client.Close;\r\n+                client := nil;\r\n+              end;\r\n             end;\r\n           end;\r\n         wieSend:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -2034,7 +2034,7 @@ end;\n \r\n procedure TWinIocp.AcceptSocketCloseAndUnlock;\r\n begin\r\n-  // AcceptEx did not start: no completion will own this socket\r\n+  // release the accept socket and lock on failure\r\n   if fAcceptSocket <> nil then\r\n   begin\r\n     fAcceptSocket.Close;\r\n@@ -2099,7 +2099,7 @@ begin\n     AcceptSocketCloseAndUnlock;\r\n     exit;\r\n   end;\r\n-  Socket.SetLinger(-1); // ensure client socket won't inherit timed linger\r\n+  fAcceptSocket.SetLinger(-1); // disable inherited timed linger\r\n   Socket := fAcceptSocket;\r\n   fAcceptSocket := nil;\r\n   fAcceptExUsed.UnLock;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "30287319ed592c5d98338c5da3a059b98f780a61",
+      "short_sha": "30287319",
+      "subject": "core: enhanced SynLZcompress1pas() pure pascal version",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T18:16:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/30287319ed592c5d98338c5da3a059b98f780a61",
+      "parents": [
+        "19d3bcef8d32a51088ce93e30a413a9f2ce4e1db"
+      ],
+      "stats": {
+        "additions": 112,
+        "deletions": 107,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 109,
+          "deletions": 104,
+          "patch": "@@ -12145,15 +12145,88 @@ function SynLZdecompressdestlen(in_p: PAnsiChar): integer;\n     result := (result and $7fff) or (integer(PWord(in_p + 2)^) shl 15);\r\n end;\r\n \r\n+type\r\n+  TSynLzContext = record\r\n+    src, srcend, srcendmatch, dst: PAnsiChar;\r\n+    cwpoint: PCardinal;\r\n+    cwmask: cardinal;\r\n+    offset: ^TOffsets;\r\n+    cache: PCardinalArray;\r\n+  end;\r\n+\r\n+procedure SynLZcompress1passub(var ctx: TSynLzContext);\r\n+var\r\n+  src, dst, o: PAnsiChar;\r\n+  v, cached, cwmask: cardinal;\r\n+  h, t, tmax: PtrUInt;\r\n+begin\r\n+  cwmask := 1;\r\n+  src := ctx.src;\r\n+  dst := ctx.dst;\r\n+  repeat\r\n+    v := PCardinal(src)^;\r\n+    h := ((v shr 12) xor v) and 4095;\r\n+    o := ctx.offset[h];\r\n+    ctx.offset[h] := src;\r\n+    cached := v xor ctx.cache[h]; // o=nil if cache[h] is uninitialized\r\n+    ctx.cache[h] := v;\r\n+    if (cached and $00ffffff = 0) and\r\n+       (o <> nil) and\r\n+       (src - o > 2) then\r\n+    begin\r\n+      ctx.cwpoint^ := ctx.cwpoint^ or cwmask;\r\n+      inc(src, 2);\r\n+      inc(o, 2);\r\n+      t := 1;\r\n+      tmax := ctx.srcend - src - 1;\r\n+      if tmax >= (255 + 16) then\r\n+        tmax := (255 + 16);\r\n+      while (o[t] = src[t]) and\r\n+            (t < tmax) do\r\n+        inc(t);\r\n+      inc(src, t);\r\n+      h := h shl 4;\r\n+      // here we have always t>0\r\n+      if t <= 15 then\r\n+      begin\r\n+        // mark 2 to 17 bytes -> size=1..15\r\n+        PInteger(dst)^ := integer(t or h);\r\n+        inc(dst, 2);\r\n+      end\r\n+      else\r\n+      begin\r\n+        // mark 18 to (255+16) bytes -> size=0, next byte=t\r\n+        dec(t, 16);\r\n+        PInteger(dst)^ := h; // size=0\r\n+        dst[2] := ansichar(t);\r\n+        inc(dst, 3);\r\n+      end;\r\n+    end\r\n+    else\r\n+    begin\r\n+      dst^ := src^;\r\n+      inc(src);\r\n+      inc(dst);\r\n+    end;\r\n+    cwmask := cwmask shl 1;\r\n+    if cwmask = 0 then\r\n+    begin\r\n+      ctx.cwpoint := pointer(dst);\r\n+      PCardinal(dst)^ := 0;\r\n+      inc(PCardinal(dst));\r\n+      cwmask := 1;\r\n+    end;\r\n+  until src > ctx.srcendmatch;\r\n+  ctx.src := src; // store end position\r\n+  ctx.dst := dst;\r\n+  ctx.cwmask := cwmask\r\n+end;\r\n+\r\n function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;\r\n var\r\n-  dstbeg,          // initial dst value\r\n-  srcend,          // real last byte available in src\r\n-  srcendmatch,     // last byte to try for hashing\r\n-  o: PAnsiChar;\r\n-  cwbit: byte;\r\n-  cwpoint: PCardinal;\r\n-  v, h, cached, t, tmax: PtrUInt;\r\n+  cwmask: cardinal;\r\n+  ctx: TSynLzContext;\r\n+  dstbeg: PAnsiChar;\r\n   offset: TOffsets;\r\n   cache: array[0..4095] of cardinal; // 16KB+16KB=32KB on stack (48KB for cpu64)\r\n begin\r\n@@ -12176,107 +12249,39 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n     inc(dst, 2);\r\n   end;\r\n   // 2. compress\r\n-  srcend := src + size;\r\n-  srcendmatch := srcend - (6 + 5);\r\n-  cwbit := 0;\r\n-  cwpoint := pointer(dst);\r\n+  ctx.srcend := src + size;\r\n+  ctx.srcendmatch := ctx.srcend - (6 + 5);\r\n+  ctx.cwpoint := pointer(dst);\r\n   PCardinal(dst)^ := 0;\r\n-  inc(dst, SizeOf(cwpoint^));\r\n-  // 1. main loop to search using hash[]\r\n-  if src <= srcendmatch then\r\n+  inc(PCardinal(dst));\r\n+  if src <= ctx.srcendmatch then\r\n   begin\r\n     FillCharFast(offset, SizeOf(offset), 0); // fast 16KB/32KB reset to 0\r\n-    repeat\r\n-      v := PCardinal(src)^;\r\n-      h := ((v shr 12) xor v) and 4095;\r\n-      o := offset[h];\r\n-      offset[h] := src;\r\n-      cached := v xor {%H-}cache[h]; // o=nil if cache[h] is uninitialized\r\n-      cache[h] := v;\r\n-      if (cached and $00ffffff = 0) and\r\n-         (o <> nil) and\r\n-         (src - o > 2) then\r\n-      begin\r\n-        cwpoint^ := cwpoint^ or (cardinal(1) shl cwbit);\r\n-        inc(src, 2);\r\n-        inc(o, 2);\r\n-        t := 1;\r\n-        tmax := srcend - src - 1;\r\n-        if tmax >= (255 + 16) then\r\n-          tmax := (255 + 16);\r\n-        while (o[t] = src[t]) and\r\n-              (t < tmax) do\r\n-          inc(t);\r\n-        inc(src, t);\r\n-        h := h shl 4;\r\n-        // here we have alway\n... [truncated, 2079 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17630\n+17631",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17630'\r\n+'2.4.17631'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -11761,7 +11761,7 @@ procedure TTestCoreCompression._SynLZ;\n     FastSetRawByteString(s, pointer(t), length(t)); // =UniqueString\r\n     Check(CompressSynLZ(s, true) = 'synlz');\r\n     Check(CompressSynLZ(s, false) = 'synlz');\r\n-    Check(s = t);\r\n+    CheckEqual(s, t);\r\n     Check(AlgoSynLZ.Decompress(AlgoSynLZ.Compress(s)) = t);\r\n     SetLength(comp2, AlgoSynLZ.Compressdestlen(length(s)));\r\n     complen2 := SynLZCompress1pas(Pointer(s), length(s), pointer(comp2));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "19d3bcef8d32a51088ce93e30a413a9f2ce4e1db",
+      "short_sha": "19d3bcef",
+      "subject": "net: fixed TWinIocp.GetNextAccept against errors",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T17:59:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/19d3bcef8d32a51088ce93e30a413a9f2ce4e1db",
+      "parents": [
+        "9c55b5c6b40664de7666c8b8377426f12317ab8f"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17629\n+17630",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17629'\r\n+'2.4.17630'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 6,
+          "patch": "@@ -2034,7 +2034,7 @@ end;\n \r\n procedure TWinIocp.AcceptSocketCloseAndUnlock;\r\n begin\r\n-  // AcceptEx did not start: no completion will own this socket.\r\n+  // AcceptEx did not start: no completion will own this socket\r\n   if fAcceptSocket <> nil then\r\n   begin\r\n     fAcceptSocket.Close;\r\n@@ -2051,6 +2051,7 @@ var\n   lsock: TSocket;\r\n begin\r\n   result := false;\r\n+  Socket := nil;\r\n   if (self = nil) or\r\n      (one = nil) or\r\n      fTerminated then\r\n@@ -2062,8 +2063,9 @@ begin\n      not Assigned(getacceptexsockaddrs) then\r\n   begin\r\n     if Assigned(fOnLog) then\r\n-      fOnLog(sllWarning, 'GetNextAccept(%)=false',\r\n-        [pointer(one^.socket)], self);\r\n+      fOnLog(sllWarning, 'GetNextAccept(%)=false', [pointer(one^.socket)], self);\r\n+    if fAcceptExUsed.IsLocked then\r\n+      AcceptSocketCloseAndUnlock;\r\n     exit;\r\n   end;\r\n   l := nil;\r\n@@ -2075,16 +2077,20 @@ begin\n   if (r = nil) or\r\n      (rlen = 0) or\r\n      (rlen > SizeOf(Remote)) then\r\n+  begin\r\n+    if Assigned(fOnLog) then\r\n+      fOnLog(sllWarning, 'GetNextAccept: getacceptexsockaddrs rlen=%',\r\n+        [rlen], self);\r\n+    AcceptSocketCloseAndUnlock;\r\n     exit;\r\n+  end;\r\n   MoveFast(r^, Remote, rlen);\r\n-  Socket := fAcceptSocket;\r\n-  fAcceptSocket := nil;\r\n   // AcceptEx() sockets need SO_UPDATE_ACCEPT_CONTEXT to inherit the listening\r\n   // socket properties, and before shutdown() getsockname() getpeername() are\r\n   // used - otherwise shutdown(SD_SEND) in Unsubscribe() fails with WSAENOTCONN\r\n   // and no FIN is ever sent to the client on a server-side close\r\n   lsock := TSocket(one^.socket);\r\n-  if setsockopt(TSocket(Socket), SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,\r\n+  if setsockopt(TSocket(fAcceptSocket), SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,\r\n         @lsock, SizeOf(lsock)) <> NO_ERROR then\r\n   begin\r\n     if Assigned(fOnLog) then\r\n@@ -2094,6 +2100,8 @@ begin\n     exit;\r\n   end;\r\n   Socket.SetLinger(-1); // ensure client socket won't inherit timed linger\r\n+  Socket := fAcceptSocket;\r\n+  fAcceptSocket := nil;\r\n   fAcceptExUsed.UnLock;\r\n   result := true;\r\n   if Assigned(fOnLog) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9c55b5c6b40664de7666c8b8377426f12317ab8f",
+      "short_sha": "9c55b5c6",
+      "subject": "core: optimized SynLZ compression/decompression in pure pascal",
+      "body": "- targetting RISC cpus",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T17:03:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9c55b5c6b40664de7666c8b8377426f12317ab8f",
+      "parents": [
+        "b73128475c12349669697ac21e130216df014c03"
+      ],
+      "stats": {
+        "additions": 53,
+        "deletions": 67,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 65,
+          "patch": "@@ -12182,9 +12182,10 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n   cwpoint := pointer(dst);\r\n   PCardinal(dst)^ := 0;\r\n   inc(dst, SizeOf(cwpoint^));\r\n-  FillCharFast(offset, SizeOf(offset), 0); // fast 16KB/32KB reset to 0\r\n   // 1. main loop to search using hash[]\r\n   if src <= srcendmatch then\r\n+  begin\r\n+    FillCharFast(offset, SizeOf(offset), 0); // fast 16KB/32KB reset to 0\r\n     repeat\r\n       v := PCardinal(src)^;\r\n       h := ((v shr 12) xor v) and 4095;\r\n@@ -12250,6 +12251,7 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n           break;\r\n       end;\r\n     until false;\r\n+  end;\r\n   // 2. store remaining bytes\r\n   if src < srcend then\r\n     repeat\r\n@@ -12278,20 +12280,27 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n   result := dst - dstbeg;\r\n end;\r\n \r\n+procedure MoveByPtr(src, dst: PPtrUIntArray; max: PtrUInt); inline;\r\n+var\r\n+  i, c: PtrUInt; // RISC targets are likely to have more registers\r\n+begin\r\n+  max := max shr POINTERSHR;\r\n+  i := 0;\r\n+  repeat\r\n+    c := src[i];\r\n+    dst[i] := c;\r\n+    inc(i);\r\n+  until i = max; // this loop pattern is faster than -count + inc(count) on RISC\r\n+end;\r\n+\r\n // better code generation with sub-functions for raw decoding\r\n procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffsets);\r\n var\r\n-  last_hashed: PAnsiChar; // initial src and dst value\r\n-  {$ifdef CPU64}\r\n-  o: PAnsiChar;\r\n-  {$endif CPU64}\r\n-  cw, cwbit: cardinal;\r\n-  v, t, h: PtrUInt;\r\n-label\r\n-  nextCW;\r\n+  last_hashed, o: PAnsiChar;\r\n+  cw, cwbit, v: cardinal;\r\n+  t: PtrUInt;\r\n begin\r\n   last_hashed := dst - 1;\r\n-nextCW:\r\n   cw := PCardinal(src)^;\r\n   inc(src, 4);\r\n   cwbit := 1;\r\n@@ -12312,37 +12321,27 @@ procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffs\n         end;\r\n         cwbit := cwbit shl 1;\r\n         if cwbit <> 0 then\r\n-          continue\r\n-        else\r\n-          goto nextCW;\r\n+          continue;\r\n       end\r\n       else\r\n       begin\r\n-        h := PWord(src)^;\r\n+        t := (PtrUInt(PByte(src)^) and 15) + 2;\r\n+        o := offset[PWord(src)^ shr 4];\r\n         inc(src, 2);\r\n-        t := (h and 15) + 2;\r\n         if t = 2 then\r\n         begin\r\n           t := ord(src^) + (16 + 2);\r\n           inc(src);\r\n         end;\r\n-        h := h shr 4;\r\n-        {$ifdef CPU64}\r\n-        o := offset[h];\r\n         if PtrUInt(dst - o) < t then // overlap -> move byte-by-byte\r\n           MoveByOne(o, dst, t)\r\n         else if t <= 8 then\r\n-          PInt64(dst)^ := PInt64(o)^ // much faster in practice\r\n+          PInt64(dst)^ := PInt64(o)^ // safe since src_endmatch := src_end-(6+5)\r\n         else\r\n-          MoveFast(o^, dst^, t);     // safe since src_endmatch := src_end-(6+5)\r\n-        {$else}\r\n-        if PtrUInt(dst - offset[h]) < t then\r\n-          MoveByOne(offset[h], dst, t)\r\n-        else if t > 8 then\r\n-          MoveFast(offset[h]^, dst^, t)\r\n-        else\r\n-          PInt64(dst)^ := PInt64(offset[h])^;\r\n-        {$endif CPU64}\r\n+        begin\r\n+          MoveByPtr(pointer(o), pointer(dst), t - 1);\r\n+          PPtrUInt(dst + t - SizeOf(o))^ := PPtrUInt(o + t - SizeOf(o))^;\r\n+        end;\r\n         if src >= src_end then\r\n           break;\r\n         if last_hashed < dst then\r\n@@ -12355,16 +12354,17 @@ procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffs\n         last_hashed := dst - 1;\r\n         cwbit := cwbit shl 1;\r\n         if cwbit <> 0 then\r\n-          continue\r\n-        else\r\n-          goto nextCW;\r\n+          continue;\r\n       end;\r\n+      cw := PCardinal(src)^;\r\n+      inc(src, 4);\r\n+      cwbit := 1;\r\n     until false;\r\n end;\r\n \r\n function SynLZdecompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;\r\n var\r\n-  offset: TOffsets;\r\n+  offset: TOffsets; // stack-allocated working buffer\r\n   srcend: PAnsiChar;\r\n begin\r\n   srcend := src + size;\r\n@@ -12383,17 +12383,11 @@ function SynLZde\n... [truncated, 2701 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17628\n+17629",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17628'\r\n+'2.4.17629'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b73128475c12349669697ac21e130216df014c03",
+      "short_sha": "b7312847",
+      "subject": "net: fixed Windows IOCP/linger calls",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T15:18:48Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b73128475c12349669697ac21e130216df014c03",
+      "parents": [
+        "1b025768f5c46a1567fdc73ea8441b665ae4cd79"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 24,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17627\n+17628",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17627'\r\n+'2.4.17628'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -1703,6 +1703,7 @@   TWinIocp = class\n     fAcceptExUsed: TLightLock; // can track only a single AcceptEx()\r\n     fAcceptSocket: TNetSocket;\r\n     fAcceptExBuf: TBytes;\r\n+    procedure AcceptSocketCloseAndUnlock;\r\n   public\r\n     /// initialize this IOCP queue for a number of processing thread\r\n     constructor Create(processing: integer = 1; options: TWinIocpOptions = []);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 22,
+          "patch": "@@ -595,8 +595,8 @@ procedure TNetSocketWrap.SetLinger(linger: integer);\n var\r\n   v: TLinger;\r\n begin\r\n+  v.l_onoff := ord(linger >= 0);\r\n   v.l_linger := MinPtrInt(high(word), MaxPtrInt(0, linger)); // 16-bit field\r\n-  v.l_onoff := ord(linger = 0);\r\n   // best effort (no exception): may be called during socket shutdown\r\n   setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n end;\r\n@@ -1667,6 +1667,7 @@ destructor TWinIocp.Destroy;\n var\r\n   tix, endtix, tmp, err: cardinal;\r\n   tmplen: integer;\r\n+  res: TNetResult;\r\n   txt: PAnsiChar;\r\n   sub: PIocpSubscription;\r\n begin\r\n@@ -1726,9 +1727,11 @@ begin\n       end;\r\n       if wioUnsubscribeShutdownSocket in fOptions then\r\n       begin\r\n-        if closesocket(sub^.socket) <> NO_ERROR then // brutal abort\r\n-          fOnLog(sllWarning, 'Destroy: closesocket(%)=%', [\r\n-            pointer(sub^.socket), WinErrorShort(RawSocketErrNo)], self);\r\n+        res := TNetSocket(sub^.socket).Close;\r\n+        if Assigned(fOnLog) and\r\n+           (res <> nrOk) then // brutal abort\r\n+          fOnLog(sllWarning, 'Destroy: Close(%) failed as %',\r\n+            [pointer(sub^.socket), _NR[res]], self);\r\n       end;\r\n       sub := sub.head.next;\r\n     end;\r\n@@ -1744,35 +1747,34 @@ function TWinIocp.Subscribe(socket: TNetSocket;\n   tag: TPollSocketTag): PWinIocpSubscription;\r\n var\r\n   o: PIocpSubscription;\r\n-  res: TNetResult;\r\n   e: TWinIocpEvent;\r\n   sll: TSynLogLevel;\r\n+  lg: TLinger;\r\n begin\r\n   result := nil;\r\n   if (self = nil) or\r\n      fTerminated then\r\n     exit;\r\n   if socket = nil then\r\n     raise EWinIocp.Create('Unexpected TWinIocp.Subscribe(nil)');\r\n+  // closesocket() may fail with WSAEWOULDBLOCK with SO_LINGER from AcceptEx()\r\n+  lg.l_onoff := 0;\r\n+  lg.l_linger := 0;\r\n+  if setsockopt(TSocket(socket), SOL_SOCKET, SO_LINGER, @lg, SizeOf(lg)) <> NO_ERROR then\r\n+    raise EWinIocp.Create('TWinIocp.Subscribe: SO_LINGER reset failed');\r\n   o := fOne.New; // returned o^ is filled with zeros\r\n   o^.tag := tag;\r\n   o^.socket := TSocket(socket);\r\n   for e := low(o^.over) to high(o^.over) do\r\n     o^.over[e].event := e; // marker to convert POverlapped to PIocpSubscription\r\n   sll := sllTrace;\r\n-  res := nrOk;\r\n-  if IocpCreate(\r\n-    o^.socket, fIocp, {completionkey=}pointer(o^.head.sequence), 0) = 0 then\r\n-  begin\r\n+  if IocpCreate(o^.socket, fIocp, {completionkey=}pointer(o^.head.sequence), 0) = 0 then\r\n     sll := sllLastError;\r\n-    res := nrFatalError;\r\n-    RaiseLastError('TWinIocp: iocpcreate', EWinIocp);\r\n-  end;\r\n   if Assigned(fOnLog) then\r\n-    fOnLog(sll, 'Subscribe(socket=% seq=%)=% cnt=%',\r\n-      [socket, pointer(o^.head.sequence), _NR[res], Count], self);\r\n-  if res = nrOk then\r\n-    result := pointer(o)\r\n+    fOnLog(sll, 'Subscribe(socket=% seq=%) cnt=%',\r\n+      [socket, pointer(o^.head.sequence), Count], self);\r\n+  if sll = sllTrace then\r\n+    result := pointer(o) // success\r\n   else\r\n     fOne.Free(o);\r\n end;\r\n@@ -1851,7 +1853,7 @@ begin\n           DoCheck(acceptex(o^.Socket, TSocket(netsock), pointer(fAcceptExBuf),\r\n             0, ACCEPTEX_SIZE, ACCEPTEX_SIZE, bytes, @oe^.overlapped));\r\n           if not result then\r\n-            fAcceptExUsed.UnLock; // release AcceptEx() lock on failure\r\n+            AcceptSocketCloseAndUnlock; // release AcceptEx() lock on failure\r\n         end\r\n         else\r\n           fatal := 'concurrent wieAccept'\r\n@@ -2030,6 +2032,17 @@ begin\n   until result <> nil;\r\n end;\r\n \r\n+procedure TWinIocp.AcceptSocketCloseAndUnlock;\r\n+begin\r\n+  // AcceptEx did not start: no completion will own this socket.\r\n+  if fAcceptSocket <> nil then\r\n+  begin\r\n+    fAcceptSocket.Close;\r\n+    fAcceptSocket := nil;\r\n+  end;\r\n+  fAcceptExUsed.UnLock;\r\n+end;\r\n+\r\n function TWinIocp.GetNextAccept(one: PWinIocpSubscription;\r\n   out Socket: TNetSocket; out Remote: TNetAddr): boolean;\r\n var\r\n@@ -2071,11 +2084,16 @@ begin\n   // used - otherwise shutdown(SD_SEND) in Unsubscribe() fails with WSAENOTCONN\r\n   // and no FIN is ever sent to the client on a server-side \n... [truncated, 875 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1b025768f5c46a1567fdc73ea8441b665ae4cd79",
+      "short_sha": "1b025768",
+      "subject": "core: optimized DynArrayHashTableAdjust() pure pascal code",
+      "body": "especially for arm32/aarch64 targets",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T15:17:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1b025768f5c46a1567fdc73ea8441b665ae4cd79",
+      "parents": [
+        "ebaba4a4cc260b82b2fa720d9c6d8078c7f1cab6"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 21,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 19,
+          "patch": "@@ -14252,44 +14252,50 @@ function SortDynArrayShortString(const A, B): integer;\n {$if not defined(ASMX64AVX0) and not defined(ASMX86)} // fallback if no asm\r\n \r\n procedure DynArrayHashTableAdjust(P: PIntegerArray; deleted: integer; count: PtrInt);\r\n+var\r\n+  v: integer; // a temporary variable seems better especially on ARM\r\n begin\r\n   repeat\r\n     dec(count, 8);\r\n-    dec(P[0], ord(P[0] > deleted)); // branchless code is 10x faster than if :)\r\n-    dec(P[1], ord(P[1] > deleted));\r\n-    dec(P[2], ord(P[2] > deleted));\r\n-    dec(P[3], ord(P[3] > deleted));\r\n-    dec(P[4], ord(P[4] > deleted));\r\n-    dec(P[5], ord(P[5] > deleted));\r\n-    dec(P[6], ord(P[6] > deleted));\r\n-    dec(P[7], ord(P[7] > deleted));\r\n+    v := P[0]; P[0] := v - ord(v > deleted);\r\n+    v := P[1]; P[1] := v - ord(v > deleted);\r\n+    v := P[2]; P[2] := v - ord(v > deleted);\r\n+    v := P[3]; P[3] := v - ord(v > deleted);\r\n+    v := P[4]; P[4] := v - ord(v > deleted);\r\n+    v := P[5]; P[5] := v - ord(v > deleted);\r\n+    v := P[6]; P[6] := v - ord(v > deleted);\r\n+    v := P[7]; P[7] := v - ord(v > deleted);\r\n     P := @P[8];\r\n   until count < 8;\r\n   while count > 0 do\r\n   begin\r\n     dec(count);\r\n-    dec(P[count], ord(P[count] > deleted));\r\n+    v := P[count];\r\n+    P[count] := v - ord(v > deleted);\r\n   end;\r\n end;\r\n \r\n procedure DynArrayHashTableAdjust16(P: PWordArray; deleted: cardinal; count: PtrInt);\r\n+var\r\n+  v: cardinal; // a temporary variable seems better especially on ARM\r\n begin\r\n-  repeat // branchless code is 10x faster than if :)\r\n+  repeat\r\n     dec(count, 8);\r\n-    dec(P[0], cardinal(P[0] > deleted));\r\n-    dec(P[1], cardinal(P[1] > deleted));\r\n-    dec(P[2], cardinal(P[2] > deleted));\r\n-    dec(P[3], cardinal(P[3] > deleted));\r\n-    dec(P[4], cardinal(P[4] > deleted));\r\n-    dec(P[5], cardinal(P[5] > deleted));\r\n-    dec(P[6], cardinal(P[6] > deleted));\r\n-    dec(P[7], cardinal(P[7] > deleted));\r\n+    v := P[0]; P[0] := v - cardinal(v > deleted);\r\n+    v := P[1]; P[1] := v - cardinal(v > deleted);\r\n+    v := P[2]; P[2] := v - cardinal(v > deleted);\r\n+    v := P[3]; P[3] := v - cardinal(v > deleted);\r\n+    v := P[4]; P[4] := v - cardinal(v > deleted);\r\n+    v := P[5]; P[5] := v - cardinal(v > deleted);\r\n+    v := P[6]; P[6] := v - cardinal(v > deleted);\r\n+    v := P[7]; P[7] := v - cardinal(v > deleted);\r\n     P := @P[8];\r\n   until count < 8;\r\n   while count > 0 do\r\n   begin\r\n     dec(count);\r\n-    dec(P[count], cardinal(P[count] > deleted));\r\n+    v := P[count];\r\n+    P[count] := v - cardinal(v > deleted);\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17626\n+17627",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17626'\r\n+'2.4.17627'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ebaba4a4cc260b82b2fa720d9c6d8078c7f1cab6",
+      "short_sha": "ebaba4a4",
+      "subject": "all: small fixes and refactoring",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T14:41:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ebaba4a4cc260b82b2fa720d9c6d8078c7f1cab6",
+      "parents": [
+        "c771bc8a5e2d91fd523c0012a7a7e2991d05e553"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 9,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1206,7 +1206,7 @@   TSynLogFamily = class\n \n   /// thread-specific internal threadvar definition used for fast process\n   // - consumes 484/512 bytes + 256+64 per thread on CPU32/CPU64\n-  TSynLogThreadInfo = {$ifndef CPUINTEL} packed {$endif} record\n+  TSynLogThreadInfo = {$ifdef CPUINTEL} packed {$endif} record\n     /// number of recursive calls currently stored in Recursion[]\n     // - nothing logged above MAX_SYNLOGRECURSION (53) to keep this record small\n     RecursionCount: byte;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -593,7 +593,7 @@   TSynHasher = record\n   TSynHasher = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    ctxt: array[1 .. SizeOf(TSha3)] of byte; // enough space for all algorithms\r\n+    ctxt: TSha3;      // enough space for all algorithms\r\n     fAlgo: THashAlgo; // ctxt is better aligned if put first\r\n     procedure CopyTo(out aHasher: TSynHasher); {$ifdef FPC} inline; {$endif}\r\n     procedure Clear;                           {$ifdef FPC} inline; {$endif}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17625\n+17626",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17625'\r\n+'2.4.17626'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -596,7 +596,7 @@ var\n   v: TLinger;\r\n begin\r\n   v.l_linger := MinPtrInt(high(word), MaxPtrInt(0, linger)); // 16-bit field\r\n-  v.l_onoff := 0; // don't wait - ord(linger >= 0) would wait\r\n+  v.l_onoff := ord(linger = 0);\r\n   // best effort (no exception): may be called during socket shutdown\r\n   setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/tools/mget/mget.dpr",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -46,6 +46,7 @@ uses\n   mormot.core.log,\r\n   mormot.core.zip,\r\n   mormot.net.sock,\r\n+  mormot.net.http,\r\n   mormot.net.client,\r\n   mormot.net.server,\r\n   mormot.crypt.secure,\r\n@@ -66,7 +67,6 @@ var\n   c: TExecutableCommandLine;\r\n   mac: TMacAddress;\r\n   logfolder: TFileName;\r\n-  dest: RawUtf8;\r\n   port: integer;\r\n begin\r\n   // some good enough general default values\r\n@@ -91,9 +91,8 @@ begin\n   result := gpWithUrl;\r\n   if c.Option(['P', 'prompt'], 'run in prompt mode (end on void input)') then\r\n     result := gpPromptMode;\r\n-  dest := MakePath([GetCurrentDir, ExtractResourceName(url{%H-})]);\r\n-  p.DestFile := c.ParamS('&output',\r\n-    'destination #filename or existing foldername', dest);\r\n+  p.DestFile := c.ParamS('&output', 'destination #filename or existing foldername',\r\n+    MakePath([GetCurrentDir, ExtractResourceName(url{%H-})]));\r\n   p.Silent := c.Option('&silent', 'generate no console output');\r\n   p.NoResume := c.Option('&noresume',\r\n      'disable auto-resume of interrupted partial download');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Cross-cutting",
+        "Core",
+        "Crypto",
+        "Network",
+        "Tools"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.crypt.secure",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c771bc8a5e2d91fd523c0012a7a7e2991d05e553",
+      "short_sha": "c771bc8a",
+      "subject": "crypt: made TSha3Context public",
+      "body": "- so that we don't need to mess with \"packed record\" and hidden structures",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T14:29:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c771bc8a5e2d91fd523c0012a7a7e2991d05e553",
+      "parents": [
+        "71d679fb94c8b09218daa337f306f07c0c56e008"
+      ],
+      "stats": {
+        "additions": 54,
+        "deletions": 59,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 50,
+          "deletions": 55,
+          "patch": "@@ -1980,10 +1980,6 @@ function CryptDataWithSecret(const Data: RawByteString;\n \r\n { ****************** SHA-2 SHA-3 Secure Hashing }\r\n \r\n-const\r\n-  /// hide TSha3Context complex code by storing the Keccak/SHA-3 Sponge as buffer\r\n-  SHA3_CONTEXT_SIZE = 410;\r\n-\r\n type\r\n   /// shared SHA-1/SHA-2 context as used by both TSha1 and TSha256\r\n   TShaContext = record\r\n@@ -2229,6 +2225,13 @@   TSha512 = record\n   /// points to SHA-512 hashing instance\r\n   PSha512 = ^TSha512;\r\n \r\n+const\r\n+  cKeccakNumberOfRounds   = 24;\r\n+  cKeccakMaximumRateBits  = 1536;\r\n+  cKeccakPermutationBits  = 1600;\r\n+  cKeccakMaximumRateBytes = cKeccakMaximumRateBits div 8;\r\n+  cKeccakPermutationQWord = cKeccakPermutationBits div 64;\r\n+\r\n type\r\n   /// SHA-3, SHAKE and original Keccak instances\r\n   // - SHA3_224..SHA3_512 output 224, 256, 384 and 512 bits of cryptographic hash\r\n@@ -2243,6 +2246,32 @@   TSha512 = record\n     SHAKE_256,\r\n     KECCAK_256);\r\n \r\n+  /// raw SHA-3 / Keccak state engine as used by the TSha3 high-level wrapper\r\n+  {$ifdef USERECORDWITHMETHODS}\r\n+  TSha3Context = record\r\n+  {$else}\r\n+  TSha3Context = object\r\n+  {$endif USERECORDWITHMETHODS}\r\n+  public\r\n+    State: array[0 .. cKeccakPermutationQWord - 1] of QWord;\r\n+    DataQueue: array[0 .. cKeccakMaximumRateBytes - 1] of byte;\r\n+    Rate: integer;\r\n+    Capacity: integer;\r\n+    BitsInQueue: integer;\r\n+    BitsAvailableForSqueezing: integer;\r\n+    Algo: TSha3Algo;\r\n+    Squeezing: boolean;\r\n+    procedure Init(aAlgo: TSha3Algo);\r\n+    procedure AbsorbQueue;\r\n+    procedure Absorb(Data: PByteArray; databitlen: integer);\r\n+    procedure AbsorbFinal(Data: PByteArray; databitlen: integer);\r\n+    procedure PadAndSwitchToSqueezingPhase;\r\n+    procedure Squeeze(output: PByteArray; outputLength: PtrInt);\r\n+    procedure FinalBit_LSB(bits: byte; bitlen: integer; hashval: pointer;\r\n+      numbits: integer);\r\n+  end;\r\n+  PSha3Context = ^TSha3Context;\r\n+\r\n   /// implements SHA-3 (Keccak) hashing\r\n   // - Keccak was the winner of the NIST hashing competition for a new hashing\r\n   // algorithm to provide an alternative to SHA-256. It became SHA-3 and was\r\n@@ -2260,7 +2289,7 @@   TSha3 = record\n   TSha3 = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Context: packed array[1..SHA3_CONTEXT_SIZE] of byte;\r\n+    Data: TSha3Context;\r\n   public\r\n     /// initialize SHA-3 context for hashing\r\n     // - in practice, you may use SHA3_256 or SHA3_512 to return THash256\r\n@@ -2850,6 +2879,12 @@ implementation\n \r\n { we need to define now some shared types and constants used also from asm }\r\n \r\n+type\r\n+  TShaHash = record\r\n+    // will use A..E with TSha1, A..H with TSha256\r\n+    A, B, C, D, E, F, G, H: cardinal;\r\n+  end;\r\n+\r\n const\r\n   // used by SHA-256\r\n   K256: TBlock2048 = (\r\n@@ -7972,12 +8007,6 @@ function CryptDataWithSecret(const Data: RawByteString; const Secret: array of c\n \r\n { --------- SHA-2 Hashing }\r\n \r\n-type\r\n-  TShaHash = record\r\n-    // will use A..E with TSha1, A..H with TSha256\r\n-    A, B, C, D, E, F, G, H: cardinal;\r\n-  end;\r\n-\r\n // under Win32, with a Core i7 CPU: pure pascal: 152ms - x86: 112ms\r\n // under Win64, with a Core i7 CPU: pure pascal: 202ms - SSE4: 78ms\r\n \r\n@@ -8629,12 +8658,6 @@ procedure TSha512.Full(Buffer: pointer; Len: integer; out Digest: TSha512Digest)\n  3. This notice may not be removed or altered from any source distribution. }\r\n \r\n const\r\n-  cKeccakNumberOfRounds   = 24;\r\n-  cKeccakMaximumRateBits  = 1536;\r\n-  cKeccakPermutationBits  = 1600;\r\n-  cKeccakMaximumRateBytes = cKeccakMaximumRateBits div 8;\r\n-  cKeccakPermutationQWord = cKeccakPermutationBits div 64;\r\n-\r\n   cRoundConstants: array[0 .. cKeccakNumberOfRounds - 1] of QWord = (\r\n     QWord($0000000000000001), QWord($0000000000008082), QWord($800000000000808A),\r\n     QWord($8000000080008000), QWord($000000000000808B), QWord($0000000080000001),\r\n@@ -8840,34 +8863,6 @@ procedure KeccakPermutation(A: PQWordArray);\n \r\n { TSha3Context }\r\n \r\n-type\r\n-  {$A-}\r\n-  {$ifdef USERECORDWITHMETHODS}\r\n-  TSha3Context = reco\n... [truncated, 3319 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -593,7 +593,7 @@   TSynHasher = record\n   TSynHasher = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    ctxt: array[1..SHA3_CONTEXT_SIZE] of byte; // enough space for all algorithms\r\n+    ctxt: array[1 .. SizeOf(TSha3)] of byte; // enough space for all algorithms\r\n     fAlgo: THashAlgo; // ctxt is better aligned if put first\r\n     procedure CopyTo(out aHasher: TSynHasher); {$ifdef FPC} inline; {$endif}\r\n     procedure Clear;                           {$ifdef FPC} inline; {$endif}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17624\n+17625",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17624'\r\n+'2.4.17625'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2929,7 +2929,7 @@ procedure TTestCoreCrypto._AES;\n   CheckEqual(SizeOf(TSha1), SizeOf(TShaContext));\r\n   CheckEqual(SizeOf(TSha256), SizeOf(TShaContext));\r\n   CheckEqual(SizeOf(TSha256), SizeOf(TSha1));\r\n-  CheckEqual(SizeOf(TSha3), SHA3_CONTEXT_SIZE);\r\n+  CheckEqual(SizeOf(TSha3), SizeOf(TSha3Context));\r\n   Check(SizeOf(TSha512) > SizeOf(TSha256));\r\n   Check(SizeOf(TSha3) > SizeOf(TSha512));\r\n   CheckEqual(SizeOf(TSha384), SizeOf(TSha384512));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.secure"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "71d679fb94c8b09218daa337f306f07c0c56e008",
+      "short_sha": "71d679fb",
+      "subject": "net: rewritten TNetSocketWrap.Close/SetLinger methods",
+      "body": "- audited and fixed the behavior on Windows, POSIX and even MacOS\n- feedback is welcome: no error appeared from our preliminary testing",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T14:27:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/71d679fb94c8b09218daa337f306f07c0c56e008",
+      "parents": [
+        "995b4338050187503690783884803f5231d481ed"
+      ],
+      "stats": {
+        "additions": 48,
+        "deletions": 15,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17623\n+17624",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17623'\r\n+'2.4.17624'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 11,
+          "patch": "@@ -3906,17 +3906,6 @@ function TNetSocketWrap.ShutdownAndClose(rdwr: boolean; waitms: integer): TNetRe\n   end;\r\n end;\r\n \r\n-function TNetSocketWrap.Close: TNetResult;\r\n-begin\r\n-  if @self = nil then\r\n-    result := nrNoSocket\r\n-  else\r\n-  begin\r\n-    closesocket(TSocket(@self)); // SO_LINGER usually set to 5 or 10 seconds\r\n-    result := nrOk;\r\n-  end;\r\n-end;\r\n-\r\n function TNetSocketWrap.Socket: PtrInt;\r\n begin\r\n   result := TSocket(@self);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 0,
+          "patch": "@@ -824,11 +824,16 @@ begin\n end;\r\n \r\n procedure TNetSocketWrap.SetLinger(linger: integer);\r\n+{$ifdef OSDARWIN}\r\n+const\r\n+  SO_LINGER = $1080; // = specific SO_LINGER_SECONDS - SO_LINGER is in ticks\r\n+{$endif OSDARWIN}\r\n var\r\n   v: TLinger;\r\n begin\r\n   v.l_linger := MaxPtrInt(0, linger);\r\n   v.l_onoff := ord(linger >= 0);\r\n+  // best effort (no exception): may be called during socket shutdown\r\n   setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n   if linger > 0 then\r\n     SetReuseAddrPort;\r\n@@ -941,6 +946,17 @@ begin\n   result := false; // e.g. neError or neClosed with no neRead\r\n end;\r\n \r\n+function TNetSocketWrap.Close: TNetResult;\r\n+begin\r\n+  if @self = nil then\r\n+    result := nrNoSocket\r\n+  else if closesocket(TSocket(@self)) = NO_ERROR then\r\n+    result := nrOk\r\n+  else\r\n+    // don't retry close() after EINTR: the descriptor may be released\r\n+    result := NetLastError;\r\n+end;\r\n+\r\n \r\n { ******************** Mac and IP Addresses Support }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 2,
+          "patch": "@@ -595,9 +595,9 @@ procedure TNetSocketWrap.SetLinger(linger: integer);\n var\r\n   v: TLinger;\r\n begin\r\n-  v.l_linger := linger;\r\n+  v.l_linger := MinPtrInt(high(word), MaxPtrInt(0, linger)); // 16-bit field\r\n   v.l_onoff := 0; // don't wait - ord(linger >= 0) would wait\r\n-  // https://docs.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-closesocket\r\n+  // best effort (no exception): may be called during socket shutdown\r\n   setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n end;\r\n \r\n@@ -860,6 +860,34 @@ begin\n   result := false; // e.g. neError or neClosed with no neRead\r\n end;\r\n \r\n+function TNetSocketWrap.Close: TNetResult;\r\n+var\r\n+  sock: TSocket;\r\n+  err: integer;\r\n+  v: TLinger;\r\n+begin\r\n+  result := nrNoSocket;\r\n+  sock := TSocket(@self);\r\n+  if sock = 0 then\r\n+    exit;\r\n+  result := nrOk;\r\n+  if closesocket(sock) = NO_ERROR then\r\n+    exit;\r\n+  err := RawSocketErrNo;\r\n+  if err = WSAEWOULDBLOCK then\r\n+  begin\r\n+    // non-blocking socket with positive SO_LINGER:\r\n+    // disable linger and retry an asynchronous graceful close\r\n+    v.l_onoff := 0;\r\n+    v.l_linger := 0;\r\n+    if setsockopt(sock, SOL_SOCKET, SO_LINGER, @v, SizeOf(v)) = NO_ERROR then\r\n+      if closesocket(sock) = NO_ERROR then\r\n+        exit;\r\n+    err := RawSocketErrNo;\r\n+  end;\r\n+  result := NetErrorFromSystem(err, NO_ERROR);\r\n+end;\r\n+\r\n \r\n { ******************** IP Addresses Support }\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "995b4338050187503690783884803f5231d481ed",
+      "short_sha": "995b4338",
+      "subject": "core: avoid \"packed record\" definition unless really needed",
+      "body": "- since it has a huge performance cost on ARM",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T14:26:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/995b4338050187503690783884803f5231d481ed",
+      "parents": [
+        "e2cd4cb4133798ecad6b642f31b4ca4bd5e25103"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 13,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.interfaces.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -6579,7 +6579,7 @@ function TInterfaceStub.Executes(const aEvent: TOnInterfaceStubExecuteVariant;\n end;\r\n \r\n type\r\n-  TInterfaceStubExecutesToLog = packed record\r\n+  TInterfaceStubExecutesToLog = record\r\n     Log: TSynLogClass;\r\n     LogLevel: TSynLogLevel;\r\n     Kind: TInterfaceMethodParamsDocVariantKind;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -1206,7 +1206,7 @@   TSynLogFamily = class\n \n   /// thread-specific internal threadvar definition used for fast process\n   // - consumes 484/512 bytes + 256+64 per thread on CPU32/CPU64\n-  TSynLogThreadInfo = packed record\n+  TSynLogThreadInfo = {$ifndef CPUINTEL} packed {$endif} record\n     /// number of recursive calls currently stored in Recursion[]\n     // - nothing logged above MAX_SYNLOGRECURSION (53) to keep this record small\n     RecursionCount: byte;\n@@ -9180,8 +9180,7 @@ function SyslogMessage(facility: TSyslogFacility; severity: TSyslogSeverity;\n   destbuffer^ := '<';\n   destbuffer := AppendUInt32ToBuffer(destbuffer + 1,\n     ord(severity) + ord(facility) shl 3);\n-  PInteger(destbuffer)^ :=\n-    ord('>') + ord('1') shl 8 + ord(' ') shl 16; // VERSION=1\n+  PInteger(destbuffer)^ := ord('>') + ord('1') shl 8 + ord(' ') shl 16; // VERSION=1\n   inc(destbuffer, 3);\n   FromGlobalTime(st, {local=}false);\n   DateToIso8601PChar(destbuffer, true, st.Year, st.Month, st.Day);\n@@ -9210,7 +9209,7 @@ function SyslogMessage(facility: TSyslogFacility; severity: TSyslogSeverity;\n     exit; // nothing to send\n   if not IsAnsiCompatible(P, len) then\n   begin\n-    PInteger(destbuffer)^ := BOM_UTF8; // weird enough behavior on POSIX :(\n+    PInteger(destbuffer)^ := BOM_UTF8; // weird enough behavior for POSIX :(\n     inc(destbuffer, 3);\n   end;\n   MoveFast(P^, destbuffer^, len);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -473,7 +473,7 @@   TSynQueue = class(TObjectStore)\n \r\n type\r\n   /// internal item definition, used by TPendingTaskList storage\r\n-  TPendingTaskListItem = packed record\r\n+  TPendingTaskListItem = record\r\n     /// the task should be executed when TPendingTaskList.GetTimestamp reaches\r\n     // this value\r\n     Timestamp: Int64;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 5,
+          "patch": "@@ -2908,11 +2908,8 @@ function TZipRead.RetrieveLocalFileHeader(Index: integer;\n \r\n type\r\n   // some (MacOs) tools store 0 in local header, and append FLAG_DATADESCRIPTOR\r\n-  TDataDescriptor = packed record\r\n-    signature: cardinal;\r\n-    crc32:     cardinal;\r\n-    zipSize:   cardinal;\r\n-    fullSize:  cardinal;\r\n+  TDataDescriptor = record\r\n+    signature, crc32, zipSize, fullSize:  cardinal;\r\n   end;\r\n \r\n function TZipRead.RetrieveFileInfo(Index: integer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17622\n+17623",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17622'\r\n+'2.4.17623'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "patch": "@@ -4734,6 +4734,10 @@ procedure TTestCoreBase.Integers;\n   c: integer;\r\n   timer: TPrecisionTimer;\r\n begin\r\n+  CheckEqual(SizeOf(cardinal), SizeOf(TDWordRec), 'TDWordRec');\r\n+  CheckEqual(SizeOf(Int64), SizeOf(Int64Rec), 'Int64Rec');\r\n+  CheckEqual(SizeOf(QWord), SizeOf(TQWordRec), 'TQWordRec');\r\n+  CheckEqual(SizeOf(TFileTime), SizeOf(TQWordRec), 'TFileTime');\r\n   CheckEqual(9007199254740991, MAX_SAFE_JS_INTEGER);\r\n   Check(IsPowerOfTwo(0));\r\n   Check(IsPowerOfTwo(1));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.interfaces",
+        "mormot.core.log",
+        "mormot.core.threads",
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e2cd4cb4133798ecad6b642f31b4ca4bd5e25103",
+      "short_sha": "e2cd4cb4",
+      "subject": "crypt: made TShaContext public",
+      "body": "- to be shared by both SHA-1 and SHA-2 implementation routines\n- use of \"packed record\" was pointless and generate sub-optimal code on arm32/aarch64",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T13:59:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e2cd4cb4133798ecad6b642f31b4ca4bd5e25103",
+      "parents": [
+        "e421a7eac9e6b4d8901f98efc96d5bb489249b4a"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 47,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 43,
+          "patch": "@@ -1981,13 +1981,22 @@ function CryptDataWithSecret(const Data: RawByteString;\n { ****************** SHA-2 SHA-3 Secure Hashing }\r\n \r\n const\r\n-  /// hide TSha1/TSha256 complex code by storing the SHA-1/SHA-2 context as buffer\r\n-  SHA_CONTEXT_SIZE = 108;\r\n-\r\n   /// hide TSha3Context complex code by storing the Keccak/SHA-3 Sponge as buffer\r\n   SHA3_CONTEXT_SIZE = 410;\r\n \r\n type\r\n+  /// shared SHA-1/SHA-2 context as used by both TSha1 and TSha256\r\n+  TShaContext = record\r\n+    /// current hash state (TSha256/224.Init expect this field to be the first)\r\n+    Hash: THash256Rec;\r\n+    /// 64-bit msg length\r\n+    MLen: QWord;\r\n+    /// 512-bit block buffer\r\n+    Buffer: THash512;\r\n+    /// current position in Buffer[0..63]\r\n+    Index: integer;\r\n+  end;\r\n+\r\n   /// 224-bit (24 bytes) memory block for SHA-224 hash digest storage\r\n   TSha224Digest = THash224;\r\n   PSha224Digest = ^TSha224Digest;\r\n@@ -2016,7 +2025,7 @@   TSha256 = record\n   TSha256 = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Context: packed array[1..SHA_CONTEXT_SIZE] of byte; // 108 bytes\r\n+    Data: TShaContext;\r\n   public\r\n     /// initialize SHA-256 context for hashing\r\n     procedure Init;\r\n@@ -2431,7 +2440,7 @@   TSha1 = record\n   TSha1 = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Context: packed array[1..SHA_CONTEXT_SIZE] of byte;\r\n+    Data: TShaContext;\r\n   public\r\n     /// initialize SHA-1 context for hashing\r\n     procedure Init;\r\n@@ -2841,23 +2850,6 @@ implementation\n \r\n { we need to define now some shared types and constants used also from asm }\r\n \r\n-type\r\n-  TShaHash = record\r\n-    // will use A..E with TSha1, A..H with TSha256\r\n-    A, B, C, D, E, F, G, H: cardinal;\r\n-  end;\r\n-\r\n-  TShaContext = packed record\r\n-    // current hash state (TSha256/224.Init expect this field to be the first)\r\n-    Hash: TShaHash;\r\n-    // 64-bit msg length\r\n-    MLen: QWord;\r\n-    // 512-bit block buffer\r\n-    Buffer: THash512;\r\n-    // current position in Buffer[0..63]\r\n-    Index: integer;\r\n-  end;\r\n-\r\n const\r\n   // used by SHA-256\r\n   K256: TBlock2048 = (\r\n@@ -7980,6 +7972,12 @@ function CryptDataWithSecret(const Data: RawByteString; const Secret: array of c\n \r\n { --------- SHA-2 Hashing }\r\n \r\n+type\r\n+  TShaHash = record\r\n+    // will use A..E with TSha1, A..H with TSha256\r\n+    A, B, C, D, E, F, G, H: cardinal;\r\n+  end;\r\n+\r\n // under Win32, with a Core i7 CPU: pure pascal: 152ms - x86: 112ms\r\n // under Win64, with a Core i7 CPU: pure pascal: 202ms - SSE4: 78ms\r\n \r\n@@ -8140,24 +8138,19 @@ procedure RawSha256Compress(var Hash; Data: pointer);\n     $ffc00b31, $68581511, $64f98fa7, $befa4fa4);\r\n \r\n procedure TSha256.Init;\r\n-var\r\n-  Data: TShaContext absolute Context;\r\n begin\r\n   MoveFast(SHA256_INIT, Data.Hash, SizeOf(Data.Hash));\r\n   FillcharFast(Data.MLen, SizeOf(Data) - SizeOf(Data.Hash), 0);\r\n end;\r\n \r\n procedure TSha256.Init224;\r\n-var\r\n-  Data: TShaContext absolute Context;\r\n begin\r\n   MoveFast(SHA224_INIT, Data.Hash, SizeOf(Data.Hash));\r\n   FillcharFast(Data.MLen, SizeOf(Data) - SizeOf(Data.Hash), 0);\r\n end;\r\n \r\n procedure TSha256.Update(Buffer: pointer; Len: integer);\r\n var\r\n-  Data: TShaContext absolute Context;\r\n   bytes: integer;\r\n begin\r\n   if (Buffer = nil) or\r\n@@ -8186,7 +8179,7 @@ procedure TSha256.Update(Buffer: pointer; Len: integer);\n           bytes := Len and (not 63); // all whole blocks have been added\r\n         end\r\n         else\r\n-          Sha256CompressPas(Data.Hash, Buffer); // process on old CPU\r\n+          Sha256CompressPas(TShaHash(Data.Hash), Buffer); // process on old CPU\r\n         {$else}\r\n         RawSha256Compress(Data.Hash, Buffer); // may be AARCH64 version\r\n         {$endif ASMX64NOTPIC}\r\n@@ -8215,8 +8208,6 @@ procedure TSha256.UpdateBigEndian(c: cardinal);\n \r\n procedure TSha256.Final(out Digest: TSha256Digest; NoInit: boolean);\r\n // finalize SHA-256 calculation, clear context\r\n-var\r\n-  Data: TShaContext absolute Context;\r\n begin\r\n   // append bit '1' after Buffer\r\n   Data.Buffer[Data.Index] := $80;\r\n@@ -10\n... [truncated, 2207 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17621\n+17622",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17621'\r\n+'2.4.17622'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -2926,8 +2926,8 @@ procedure TTestCoreCrypto._AES;\n   {$ifndef PUREMORMOT2}\r\n   CheckEqual(SizeOf(TAesFullHeader), SizeOf(TAesBlock));\r\n   {$endif PUREMORMOT2}\r\n-  CheckEqual(SizeOf(TSha1), SHA_CONTEXT_SIZE);\r\n-  CheckEqual(SizeOf(TSha256), SHA_CONTEXT_SIZE);\r\n+  CheckEqual(SizeOf(TSha1), SizeOf(TShaContext));\r\n+  CheckEqual(SizeOf(TSha256), SizeOf(TShaContext));\r\n   CheckEqual(SizeOf(TSha256), SizeOf(TSha1));\r\n   CheckEqual(SizeOf(TSha3), SHA3_CONTEXT_SIZE);\r\n   Check(SizeOf(TSha512) > SizeOf(TSha256));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e421a7eac9e6b4d8901f98efc96d5bb489249b4a",
+      "short_sha": "e421a7ea",
+      "subject": "crypt: removed TAesContext confusing structure",
+      "body": "- we should have just put all the fields as private in TAes record\n- use of \"packed record\" was pointless and generate sub-optimal code on arm32/aarch64",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T13:45:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e421a7eac9e6b4d8901f98efc96d5bb489249b4a",
+      "parents": [
+        "eb342ae95b5a4ee8fdf8d03b4e2ced0793386eaa"
+      ],
+      "stats": {
+        "additions": 328,
+        "deletions": 376,
+        "files": 10
+      },
+      "files": [
+        {
+          "path": "doc/security/TAesPrng.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -31,7 +31,7 @@ Its optimization goals are low overhead for short random values, scalable throug\n | `TSystemPrng` | Direct wrapper around operating-system random acquisition | `FillRandom` -> `FillSystemRandom` |\n | `TSha3` | SHAKE256 absorb/squeeze operation | `Init(SHAKE_256)`, `Update`, `Final` |\n | `_EntropyChain` | Process-global state propagated across conditioned entropy requests | `_EntropyChainSafe`, `_EntropyChain` |\n-| `TAesContext` | AES key schedule, IV/counter, and accelerated block processing | `DoRndBlock`, `DoRnd`, `AesNiEncryptCtrNist` |\n+| `TAes` | AES key schedule, IV/counter, and accelerated block processing | `DoRndBlock`, `DoRnd`, `AesNiEncryptCtrNist` |\n | `mormot.core.os` | OS entropy access and explicit fallback behavior | `FillSystemRandom`, `XorOSEntropy` |\n \n The implementation presumes a trusted native process, secure compiler/runtime, secrecy of AES keys and entropy-chain state, and an OS random source that succeeds whenever cryptographic unpredictability is required. Physical observation, malicious code in-process, memory disclosure, process cloning/snapshot restoration, and attacker control of system entropy are separate threats requiring additional measures.",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx64.inc",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 15,
+          "patch": "@@ -16,9 +16,9 @@\n \r\n {$ifdef ASMX64NOTPIC} // some asm with global variables access\r\n \r\n-procedure AesEncryptAsm(const ctxt: TAesContext; bi, bo: PBlock128);\r\n+procedure AesEncryptAsm(const ctxt: TAes; bi, bo: PBlock128);\r\n {$ifdef FPC} nostackframe; assembler; asm {$else}\r\n-asm     // input: rcx/rdi=TAesContext, rdx/rsi=source, r8/rdx=dest\r\n+asm     // input: rcx/rdi=TAes, rdx/rsi=source, r8/rdx=dest\r\n         .noframe\r\n {$endif}\r\n         // rolled optimized encryption asm version by A. Bouchez\r\n@@ -38,7 +38,7 @@ asm     // input: rcx/rdi=TAesContext, rdx/rsi=source, r8/rdx=dest\n         mov     rdx,  rsi\r\n         mov     r12,  rdi\r\n         {$endif ABIWINX64}\r\n-        movzx   r13,  byte ptr [r12].TAesContext.Rounds\r\n+        movzx   r13,  byte ptr [r12].TAes.Rounds\r\n         mov     eax,  dword ptr [rdx]\r\n         mov     ebx,  dword ptr [rdx + 4H]\r\n         mov     ecx,  dword ptr [rdx + 8H]\r\n@@ -4110,7 +4110,7 @@ end;\n \r\n {$ifdef USEAESNI}\r\n \r\n-procedure AesNiEncryptXmm0; // rax=TAesContext+$70 xmm0=input/output\r\n+procedure AesNiEncryptXmm0; // rax=TAes+$70 xmm0=input/output\r\n {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}\r\n       movups  xmm1,  dqword ptr [rax + $00 - $70]\r\n       movups  xmm2,  dqword ptr [rax + $10 - $70]\r\n@@ -4133,7 +4133,7 @@ procedure AesNiEncryptXmm0; // rax=TAesContext+$70 xmm0=input/output\n       aesenc  xmm0,  xmm2\r\n       aesenc  xmm0,  xmm3\r\n       aesenc  xmm0,  xmm4\r\n-      cmp     byte ptr [rax - $70].TAesContext.Rounds, 12\r\n+      cmp     byte ptr [rax - $70].TAes.Rounds, 12\r\n       je      @192\r\n       ja      @256\r\n       aesenclast xmm0, xmm5\r\n@@ -4936,7 +4936,7 @@ asm     // Windows x64 calling convention expects to preserve XMM6-XMM15\n       \tcmp    rdx, $1\r\n       \tjne    @big\r\n         // handle single block without allocating any stack frame\r\n-        mov   al, byte ptr [rcx].TAesContext.Rounds\r\n+        mov   al, byte ptr [rcx].TAes.Rounds\r\n       \tmovups xmm2, dqword ptr [r8]\r\n       \tmovups xmm0, dqword ptr [rcx]\r\n       \tmovups xmm3, dqword ptr [rcx + $10]\r\n@@ -5017,7 +5017,7 @@ asm     // Windows x64 calling convention expects to preserve XMM6-XMM15\n         xor    eax, ebp\r\n         bswap  r10d\r\n         pinsrd xmm5, eax, $3\r\n-        movzx  eax, byte ptr [rcx].TAesContext.Rounds\r\n+        movzx  eax, byte ptr [rcx].TAes.Rounds\r\n         xor    r10d, ebp\r\n         movaps dqword ptr [rsp + $30], xmm5\r\n         lea    r9, [r8 + $5]\r\n@@ -5448,7 +5448,7 @@ procedure AesNiEncryptCtrNist32Small;\n         aesenc  xmm0,  xmm2\r\n         aesenc  xmm0,  xmm3\r\n         aesenc  xmm0,  xmm4\r\n-        cmp     byte ptr [rax - $70].TAesContext.Rounds, 12\r\n+        cmp     byte ptr [rax - $70].TAes.Rounds, 12\r\n         je      @192\r\n         ja      @256\r\n         aesenclast xmm0, xmm5\r\n@@ -5546,7 +5546,7 @@ procedure AesNiEncryptCtrNist32Fast(var ctx: TAesNiCtr);\n         bswap   ecx\r\n         lea     rcx, [rcx + 4]\r\n         // 4x interleaved AES process\r\n-        mov     dl, byte ptr [rax - $70].TAesContext.Rounds\r\n+        mov     dl, byte ptr [rax - $70].TAes.Rounds\r\n         movups  xmm4, [rax + $00 - $70]\r\n         movups  xmm5, [rax + $10 - $70]\r\n         movups  xmm6, [rax + $20 - $70]\r\n@@ -5734,7 +5734,7 @@ procedure AesNiEncryptCtrNist32Fast(var ctx: TAesNiCtr);\n         bswap   ecx\r\n         lea     rcx, [rcx + 4]\r\n         // 8x interleaved AES process\r\n-        mov     dl, byte ptr [rax - $70].TAesContext.Rounds\r\n+        mov     dl, byte ptr [rax - $70].TAes.Rounds\r\n         movups  xmm8,  [rax + $00 - $70]\r\n         movups  xmm9,  [rax + $10 - $70]\r\n         movups  xmm10, [rax + $20 - $70]\r\n@@ -5933,7 +5933,7 @@ end;\n {$endif USEAESNICTRBY4}\r\n \r\n procedure AesNiEncryptCtrNist32(src, dst: pointer; blocks: PtrUInt;\r\n-  ctxt: PAesContext; iv: PHash128Rec); inline;\r\n+  ctxt: PAes; iv: PHash128Rec); inline;\r\n var\r\n   params: TAesNiCtr;\r\n begin\r\n@@ -5979,7 +5979,7 @@ asm     // Windows x64 calling convention expects to preserve XMM6-XMM15\n         lea    \n... [truncated, 1239 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx86.inc",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 41,
+          "patch": "@@ -20,7 +20,7 @@\n \r\n // those functions use global variables, so are not PIC-compatible\r\n \r\n-procedure AesEncryptAsm(const ctxt: TAesContext; bi, bo: PBlock128);\r\n+procedure AesEncryptAsm(const ctxt: TAes; bi, bo: PBlock128);\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm // rolled optimized encryption asm version by A. Bouchez\r\n         push    ebx\r\n@@ -30,7 +30,7 @@ asm // rolled optimized encryption asm version by A. Bouchez\n         add     esp, - 24\r\n         mov     [esp + 4], ecx\r\n         mov     ecx, eax // ecx=pk\r\n-        movzx   eax, byte ptr [eax].TAesContext.Rounds\r\n+        movzx   eax, byte ptr [eax].TAes.Rounds\r\n         dec     eax\r\n         mov     [esp + 20], eax\r\n         mov     ebx, [edx]\r\n@@ -195,7 +195,7 @@ asm // rolled optimized encryption asm version by A. Bouchez\n         pop     ebx\r\n end;\r\n \r\n-procedure aesdecrypt386(const ctxt: TAesContext; bi, bo: PBlock128);\r\n+procedure aesdecrypt386(const ctxt: TAes; bi, bo: PBlock128);\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm\r\n         push    ebx\r\n@@ -204,7 +204,7 @@ asm\n         push    ebp\r\n         add     esp, - 20\r\n         mov     [esp], ecx\r\n-        movzx   ecx, byte ptr [eax].TAesContext.Rounds\r\n+        movzx   ecx, byte ptr [eax].TAes.Rounds\r\n         lea     esi, [4 * ecx]\r\n         lea     ecx, [ecx - 1]\r\n         lea     eax, [eax + 4 * esi] // eax=@ctx.rk[ctx.rounds]=pk\r\n@@ -2810,9 +2810,9 @@ end;\n \r\n procedure AesNiTrailer; // = TAesAbstractSyn.EncryptTrailer from AES-NI procs\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n-asm // eax=TAesContext ecx=len xmm7=IV esi=BufIn edi=BufOut\r\n-        call   dword ptr [eax].TAesContext.AesNi32 // = AES.Encrypt(fIV,fIV)\r\n-        lea    edx, [eax].TAesContext.buf // used as temporary buffer\r\n+asm // eax=TAes ecx=len xmm7=IV esi=BufIn edi=BufOut\r\n+        call   dword ptr [eax].TAes.AesNi32 // = AES.Encrypt(fIV,fIV)\r\n+        lea    edx, [eax].TAes.buf // used as temporary buffer\r\n         movups [edx], xmm7\r\n         cld\r\n @s:     lodsb\r\n@@ -2972,7 +2972,7 @@ end;\n \r\n procedure AesNiEncryptXmm7_128;\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n-asm // input: eax=TAesContext, xmm7=data; output: eax=TAesContext, xmm7=data\r\n+asm // input: eax=TAes, xmm7=data; output: eax=TAes, xmm7=data\r\n         movups  xmm0, [eax + $00]\r\n         movups  xmm1, [eax + $10]\r\n         movups  xmm2, [eax + $20]\r\n@@ -3049,7 +3049,7 @@ end;\n \r\n procedure AesNiEncryptXmm7_192;\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n-asm // input: eax=TAesContext, xmm7=data; output: eax=TAesContext, xmm7=data\r\n+asm // input: eax=TAes, xmm7=data; output: eax=TAes, xmm7=data\r\n         movups  xmm0, [eax + $00]\r\n         movups  xmm1, [eax + $10]\r\n         movups  xmm2, [eax + $20]\r\n@@ -3106,7 +3106,7 @@ end;\n \r\n procedure AesNiEncryptXmm7_256;\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n-asm // input: eax=TAesContext, xmm7=data; output: eax=TAesContext, xmm7=data\r\n+asm // input: eax=TAes, xmm7=data; output: eax=TAes, xmm7=data\r\n         movups  xmm0, [eax + $00]\r\n         movups  xmm1, [eax + $10]\r\n         movups  xmm2, [eax + $20]\r\n@@ -3369,10 +3369,10 @@ asm\n         movups  xmm7, dqword ptr [eax].TAesCfb.fIV\r\n         lea     eax, [eax].TAesCfb.fAes\r\n         push    ecx\r\n-        shr     ecx, AesBlockShift\r\n+        shr     ecx, AES_SHIFT\r\n         jz      @z\r\n         {$ifdef FPC} align 16 {$endif}\r\n-@s:     call    dword ptr [eax].TAesContext.AesNi32 // AES.Encrypt(fIV,fIV)\r\n+@s:     call    dword ptr [eax].TAes.AesNi32 // AES.Encrypt(fIV,fIV)\r\n         movups  xmm0, dqword ptr [esi]\r\n         movaps  xmm1, xmm0\r\n         pxor    xmm0, xmm7\r\n@@ -3402,10 +3402,10 @@ asm\n         movups  xmm7, dqword ptr [eax].TAesCfb.fIV\r\n         lea     eax, [eax].TAesCfb.fAes\r\n         push    ecx\r\n-        shr     ecx, AesBlockShift\r\n+        shr     ecx, AES_SHIFT\r\n         jz      @z\r\n         {$ifdef FPC} align 16 {$endif}\r\n-@s:     call    dword ptr [eax].TAesContext.AesNi32 // AES.Encrypt(fIV,fIV)\r\n+\n... [truncated, 7360 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 241,
+          "deletions": 288,
+          "patch": "@@ -321,25 +321,18 @@ procedure _mmodP(out Output: THash256Rec; var Product: THash512Rec);\n { *************** AES Encoding/Decoding with optimized asm and AES-NI support }\r\n \r\n const\r\n-  /// hide all AES Context complex code\r\n-  AES_CONTEXT_SIZE = 276 + SizeOf(pointer)\r\n-     {$ifdef USEAESNI32} + SizeOf(pointer)  {$endif};\r\n-\r\n   /// power of two for a standard AES block size during cypher/uncypher\r\n-  // - used as \"1 shl AesBlockShift\" or \"1 shr AesBlockShift\" for fast */div\r\n-  AesBlockShift = 4;\r\n-\r\n+  // - used as \"1 shl AES_SHIFT\" or \"1 shr AES_SHIFT\" for fast */div\r\n+  AES_SHIFT = 4;\r\n   /// bit mask for fast modulo of AES block size\r\n-  AesBlockMod = 15;\r\n-\r\n+  AES_MOD = 15;\r\n   /// the AES-GCM GMAC size (in bytes)\r\n   GMAC_SIZE = SizeOf(THash128);\r\n \r\n type\r\n   /// 128-bit memory block for AES data cypher/uncypher\r\n   TAesBlock = THash128;\r\n   PAesBlock = ^TAesBlock;\r\n-\r\n   /// 256-bit memory block for maximum AES key storage\r\n   TAesKey = THash256;\r\n \r\n@@ -360,8 +353,18 @@   TAes = record\n   TAes = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Context: packed array[1 .. AES_CONTEXT_SIZE] of byte; // hidden state\r\n+    RK: packed array[0 .. 14] of TAesBlock; // asm expects this as first field\r\n+    iv: THash128Rec;                 // IV or CTR used e.g. by GCM or TAesPrng\r\n+    buf: THash128Rec;                // work buffer used e.g. by GCM\r\n+    DoBlock: procedure(const Ctxt, Source, Dest); // set at runtime from HW\r\n+    {$ifdef USEAESNI32}\r\n+    AesNi32: pointer;                // xmm7 AES-NI raw encoding function for i386\r\n+    {$endif USEAESNI32}\r\n+    Flags: set of (aesInitialized, aesNi, aesNiSse41);\r\n+    Rounds: byte;                    // number of AES rounds\r\n   public\r\n+    /// key size in bits (128/192/256)\r\n+    KeyBits: integer;\r\n     /// to be called if this TAes was not filled with zeros, e.g. not used as\r\n     // TObject field or global variable, but simply declared on the local stack\r\n     procedure InitOnStack;\r\n@@ -422,27 +425,24 @@   TAes = record\n     // - may be called instead of TAesOfb when only a raw TAes is available\r\n     // - as used e.g. by mormot.db.raw.sqlite3.static.pas for its DB encryption\r\n     // - this method is thread-safe, and is optimized for AES-NI on x86_64\r\n-    procedure DoBlocksOfb(iv: PAesBlock; src, dst: pointer;\r\n+    procedure DoBlocksOfb(piv: PAesBlock; src, dst: pointer;\r\n       blockcount: PtrUInt);\r\n     /// performs AES-CTR NIST encryption and decryption on whole blocks\r\n     // - may be called instead of TAesCtr when only a raw TAes is available\r\n     // - as used e.g. by mormot.db.raw.sqlite3.static.pas for its DB encryption\r\n     // - this method is thread-safe, and is optimized for AES-NI on \n... [truncated, 51204 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 388 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.other.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 16,
+          "patch": "\n... [truncated, 4772 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "\n... [truncated, 862 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 385 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.sqlite3.static.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "\n... [truncated, 1795 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 25 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 39 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 5,
+          "patch": "\n... [truncated, 1154 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Database",
+        "Docs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.core.asmx64",
+        "mormot.crypt.core.asmx86",
+        "mormot.crypt.ecc",
+        "mormot.crypt.other",
+        "mormot.crypt.secure",
+        "mormot.crypt.win",
+        "mormot.db.raw.sqlite3.static"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "eb342ae95b5a4ee8fdf8d03b4e2ced0793386eaa",
+      "short_sha": "eb342ae9",
+      "subject": "net: fixed TNetSocketWrap.SetLinger behavior",
+      "body": "- won't raise any exception any more\n- clean linger structure parameters on POSIX, especially for some MacOS versions",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T12:01:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/eb342ae95b5a4ee8fdf8d03b4e2ced0793386eaa",
+      "parents": [
+        "4cec12d3b2ff9e3f6f6bddd28ae74f1e1b03965d"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 6,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17619\n+17620",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17619'\r\n+'2.4.17620'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -323,6 +323,7 @@   TNetSocketWrap = record\n     // - linger = 0 aborts immediately and discards pending data\r\n     // - linger > 0 waits up to the given number of seconds on close\r\n     // - on POSIX, linger > 0 will also set SO_REUSEADDR/SO_REUSEPORT\r\n+    // - linger <= 0 is likely to be run at shutdown so won't raise any exception\r\n     procedure SetLinger(linger: integer);\r\n     /// allow to disable the Nagle's algorithm and send packets without delay\r\n     procedure SetNoDelay(nodelay: boolean);\r\n@@ -3483,7 +3484,7 @@ function NewSocket(const address, port: RawUtf8; layer: TNetLayer;\n     // bind, or no timeout specified: just call the OS bind() or connect()\r\n     if dobind then\r\n     begin\r\n-      // bound Socket should remain open for 5 seconds after a closesocket()\r\n+      // let bound Socket remain open for 5 seconds after a closesocket()\r\n       if layer <> nlUdp then\r\n         sock.SetLinger(5);\r\n       if (layer in [nlTcp, nlUdp]) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -827,9 +827,9 @@ procedure TNetSocketWrap.SetLinger(linger: integer);\n var\r\n   v: TLinger;\r\n begin\r\n-  v.l_linger := linger;\r\n+  v.l_linger := MaxPtrInt(0, linger);\r\n   v.l_onoff := ord(linger >= 0);\r\n-  SetOpt(SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n+  setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n   if linger > 0 then\r\n     SetReuseAddrPort;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -598,7 +598,7 @@ begin\n   v.l_linger := linger;\r\n   v.l_onoff := 0; // don't wait - ord(linger >= 0) would wait\r\n   // https://docs.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-closesocket\r\n-  SetOpt(SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n+  setsockopt(TSocket(@self), SOL_SOCKET, SO_LINGER, @v, SizeOf(v));\r\n end;\r\n \r\n procedure TNetSocketWrap.SetCork(cork: boolean);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4cec12d3b2ff9e3f6f6bddd28ae74f1e1b03965d",
+      "short_sha": "4cec12d3",
+      "subject": "net: enhanced THttpProxyServer callback support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T11:29:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4cec12d3b2ff9e3f6f6bddd28ae74f1e1b03965d",
+      "parents": [
+        "bb92b883f73c3b4688173fa6f61ef35400cb248e"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 17,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17618\n+17619",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17618'\r\n+'2.4.17619'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 15,
+          "patch": "@@ -1255,9 +1255,12 @@   THttpProxyUrl = class;\n   /// store THttpProxyUrl.Settings options for a given URI\r\n   THttpProxyUrlOptions = set of THttpProxyUrlOption;\r\n \r\n+  THttpProxyUrlSettings = class;\r\n+\r\n   /// callback function prototype for THttpProxyServerSettings.AddEvent()\r\n   TOnHttpProxyServerRequest = function(Ctxt: THttpServerRequestAbstract;\r\n-    const Uri: TUriMatchName; Met: TUriRouterMethod): cardinal of object;\r\n+    const Uri: TUriMatchName; Met: TUriRouterMethod;\r\n+    ProxyUrl: THttpProxyUrl): cardinal of object;\r\n \r\n   /// define one URL content / THttpProxyUrl setting for THttpProxyServer\r\n   THttpProxyUrlSettings = class(TSynAutoCreateFields)\r\n@@ -6570,7 +6573,10 @@ procedure THttpProxyServer.AfterServerStarted;\n       PtrArrayAdd(fUrl, one);\r\n       // validate source as local file folder or remote http(s) server\r\n       hps := hpsUndefined;\r\n-      if s.Source <> '' then\r\n+      if Assigned(s.OnRequest) then\r\n+        // execute a callback event\r\n+        hps := hpsEvent\r\n+      else if s.Source <> '' then\r\n         if IsHttp(s.Source) then\r\n         begin\r\n           // detects also 'http://unix:/path/to/socket.sock:/url/path'\r\n@@ -6586,10 +6592,7 @@ procedure THttpProxyServer.AfterServerStarted;\n             s.fLocalFolder := IncludeTrailingPathDelimiter(s.fLocalFolder);\r\n             hps := hpsLocalFolder;\r\n           end;\r\n-        end\r\n-      else if Assigned(s.OnRequest) then\r\n-        // execute a callback event\r\n-        hps := hpsEvent;\r\n+        end;\r\n       one.fSource := hps;\r\n       if hps = hpsUndefined then\r\n       begin\r\n@@ -6906,38 +6909,34 @@ function THttpProxyServer.OnExecute(Ctxt: THttpServerRequestAbstract): cardinal;\n   uri: TUriMatchName;\r\n   met: TUriRouterMethod;\r\n begin\r\n-  result := HTTP_NOTFOUND; // 404 by default\r\n   // retrieve O(1) execution context\r\n+  result := HTTP_NOTFOUND; // 404 by default\r\n   one := Ctxt.RouteOpaque;\r\n   if (one = nil) or\r\n      one.Settings.Disabled or\r\n      (one.Source = hpsUndefined) then\r\n     exit;\r\n   // validate the request method\r\n+  result := HTTP_NOTALLOWED; // 405 Method Not Allowed\r\n   if not (UriMethod(Ctxt.Method, met) and\r\n           (met in one.Settings.Methods)) then\r\n-  begin\r\n-    result := HTTP_NOTALLOWED; // 405 Method Not Allowed\r\n     exit;\r\n-  end;\r\n   // retrieve path and resource/file name from URI\r\n   Ctxt.RouteAt(0, uri.Path);\r\n   if uri.Path.Len > 512 then // obviously invalid\r\n     exit;\r\n   uri.ParsePath; // compute uri.Name for file-level TUriMatch\r\n   // ensure was not marked as rejected\r\n+  result := HTTP_FORBIDDEN; // 403\r\n   if (one.Settings.RejectCsv <> '') and\r\n      one.fReject.Check(one.Settings.RejectCsv, uri, PathCaseInsensitive) then\r\n-  begin\r\n-    result := HTTP_FORBIDDEN; // 403\r\n     exit;\r\n-  end;\r\n   // actual request processing\r\n   result := HTTP_NOTALLOWED; // 405 Method Not Allowed\r\n   case one.Source of\r\n     hpsEvent:\r\n-      result := one.Settings.OnRequest(Ctxt, uri, met);\r\n-      // no cache for callback methods (by design)\r\n+      result := one.Settings.OnRequest(Ctxt, uri, met, one);\r\n+      // no cache nor method filtering for callback (by design)\r\n   else\r\n     case met of\r\n       urmGet,\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bb92b883f73c3b4688173fa6f61ef35400cb248e",
+      "short_sha": "bb92b883",
+      "subject": "lib: minor cleaning after previous commits",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T10:16:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bb92b883f73c3b4688173fa6f61ef35400cb248e",
+      "parents": [
+        "071b81b41a6f3b0460a2d358902b4383210ce0de"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 8,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -302,7 +302,7 @@ function _xasmdiv(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\n /// mod-by-integer of a TBigInt 512/1024-bit buffer - as used by mormot.crypt.rsa\r\n function _xasmmod(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n \r\n-/// fast diagonal mul-and-add helper as used by TBitInt.Square with Count > 0\r\n+/// fast diagonal mul-and-add helper as used by TBigInt.Square with Count > 0\r\n procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n \r\n const\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.curl.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -44,7 +44,7 @@   ECurl = class(ExceptionWithProps);\n \r\n   /// C long used by libcurl - 32-bit on Win64 (LLP64), pointer-sized on POSIX\r\n   {$ifdef OSWINDOWS}\r\n-  TCurlLong = LongInt;\r\n+  TCurlLong = integer;\r\n   {$else}\r\n   TCurlLong = PtrInt;\r\n   {$endif}\r\n@@ -874,24 +874,24 @@   TCurlHttpPost = record\n     /// pointer to allocated name\r\n     name: PAnsiChar;\r\n     /// length of name length\r\n-    namelength: PtrUInt;\r\n+    namelength: TCurlLong;\r\n     /// pointer to allocated data contents\r\n     contents: PAnsiChar;\r\n     /// length of contents field\r\n     // - see also CURL_HTTPPOST_LARGE / 64-bit contentlen\r\n-    contentslength: PtrUInt;\r\n+    contentslength: TCurlLong;\r\n     /// pointer to allocated buffer contents\r\n     buffer: PAnsiChar;\r\n     /// length of buffer field\r\n-    bufferlength: PtrUInt;\r\n+    bufferlength: TCurlLong;\r\n     /// Content-Type text\r\n     contenttype: PAnsiChar;\r\n     /// list of extra headers for this form\r\n     contentheader: PPCurlSListArray;\r\n     /// if one field name has more than one file, this link should link to following files\r\n     more: PCurlHttpPost;\r\n     /// some associated flags\r\n-    flags: integer;\r\n+    flags: TCurlLong;\r\n     /// file name to show. If not set, the actual file name will be used (if this is a file part)\r\n     showfilename: PAnsiChar;\r\n     /// custom pointer used for HTTPPOST_CALLBACK posts\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17617\n+17618",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17617'\r\n+'2.4.17618'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 0,
+          "patch": "@@ -5399,6 +5399,15 @@ procedure TTestCoreCrypto.RsaSquare;\n     CheckEqual(c.ActiveCount, 1, 'Square consumes unshared source');\r\n     actual.Release;\r\n     CheckEqual(c.ActiveCount, 0, 'Square unshared result released');\r\n+    // three-limb case to test consumption by the optimized path\r\n+    a := c.AllocateFrom(1).LeftShift(2).IntAdd(123);\r\n+    expected := a^.Copy.Multiply(a^.Copy);\r\n+    actual := a^.Square;\r\n+    CheckEqual(actual^.Compare(expected), 0, 'Square unshared large');\r\n+    CheckEqual(c.ActiveCount, 2, 'unshared source consumed');\r\n+    actual.Release;\r\n+    expected.Release;\r\n+    CheckEqual(c.ActiveCount, 0, 'Square unshared large released');\r\n   finally\r\n     c.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.lib.curl"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "071b81b41a6f3b0460a2d358902b4383210ce0de",
+      "short_sha": "071b81b4",
+      "subject": "lib: fixed libcurl ABI especially on aarch64",
+      "body": "- as reported initially in https://github.com/synopse/mORMot/pull/477\n- but with a full libcurl ABI review and dedicated overloaded wrappers",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T10:05:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/071b81b41a6f3b0460a2d358902b4383210ce0de",
+      "parents": [
+        "85e4b8d6425ac6efb69ab4b2997034a1456e4da3"
+      ],
+      "stats": {
+        "additions": 181,
+        "deletions": 67,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.curl.pas",
+          "status": "modified",
+          "additions": 174,
+          "deletions": 60,
+          "patch": "@@ -42,6 +42,13 @@ interface\n   /// low-level exception raised during libcurl library access\r\n   ECurl = class(ExceptionWithProps);\r\n \r\n+  /// C long used by libcurl - 32-bit on Win64 (LLP64), pointer-sized on POSIX\r\n+  {$ifdef OSWINDOWS}\r\n+  TCurlLong = LongInt;\r\n+  {$else}\r\n+  TCurlLong = PtrInt;\r\n+  {$endif}\r\n+\r\n   /// low-level access to the libcurl CURLOPTTYPE_BLOB options\r\n   TCurlBlob = record\r\n     data: pointer;\r\n@@ -685,12 +692,10 @@   TCurlBlob = record\n   );\r\n \r\n   /// low-level initialization option for libcurl library API\r\n-  // - currently, only giSsl is set, since giWin32 is redundant with WinHttp\r\n+  // - by default LibCurlInitialize() will use giAll constant\r\n   TCurlGlobalInit = set of (\r\n-    giNone,\r\n     giSsl,\r\n-    giWin32,\r\n-    giAll\r\n+    giWin32\r\n   );\r\n \r\n   /// low-level message state for libcurl library API\r\n@@ -869,16 +874,16 @@   TCurlHttpPost = record\n     /// pointer to allocated name\r\n     name: PAnsiChar;\r\n     /// length of name length\r\n-    namelength: integer;\r\n+    namelength: PtrUInt;\r\n     /// pointer to allocated data contents\r\n     contents: PAnsiChar;\r\n     /// length of contents field\r\n     // - see also CURL_HTTPPOST_LARGE / 64-bit contentlen\r\n-    contentslength: integer;\r\n+    contentslength: PtrUInt;\r\n     /// pointer to allocated buffer contents\r\n     buffer: PAnsiChar;\r\n     /// length of buffer field\r\n-    bufferlength: integer;\r\n+    bufferlength: PtrUInt;\r\n     /// Content-Type text\r\n     contenttype: PAnsiChar;\r\n     /// list of extra headers for this form\r\n@@ -927,12 +932,12 @@   TCurlHttpPost = record\n   PCurlWaitFD = ^TCurlWaitFD;\r\n \r\n   /// low-level write callback function signature for libcurl library API\r\n-  curl_write_callback = function (buffer: PAnsiChar; size,nitems: integer;\r\n-    outstream: pointer): integer; cdecl;\r\n+  curl_write_callback = function (buffer: PAnsiChar; size,nitems: PtrUInt;\r\n+    outstream: pointer): PtrUInt; cdecl;\r\n \r\n   /// low-level read callback function signature for libcurl library API\r\n-  curl_read_callback = function (buffer: PAnsiChar; size,nitems: integer;\r\n-    instream: pointer): integer; cdecl;\r\n+  curl_read_callback = function (buffer: PAnsiChar; size,nitems: PtrUInt;\r\n+    instream: pointer): PtrUInt; cdecl;\r\n \r\n   curl_lock_data = (\r\n     CURL_LOCK_DATA_NONE = 0,\r\n@@ -1047,20 +1052,19 @@   TLibCurl = class(TSynLibrary)\n     /// global TCurlShare object, created by CurlEnableGlobalShare\r\n     globalShare: TCurlShare;\r\n     /// initialize the library\r\n-    global_init: function(flags: TCurlGlobalInit): TCurlResult; cdecl;\r\n+    global_init: function(flags: TCurlLong): TCurlResult; cdecl;\r\n     /// initialize the library and specify a memory manager\r\n     // - set malloc, free, realloc, strdup and calloc functions\r\n-    global_init_mem: function(flags: TCurlGlobalInit;\r\n-      m, f, r, s, c: pointer): TCurlResult; cdecl;\r\n+    global_init_mem: function(flags: TCurlLong; m, f, r, s, c: pointer): TCurlResult; cdecl;\r\n     /// finalize the library\r\n     global_cleanup: procedure; cdecl;\r\n     /// returns run-time libcurl version info\r\n     version_info: function(age: TCurlVersion): PCurlVersionInfo; cdecl;\r\n \r\n     // start a libcurl easy session\r\n     easy_init: function: pointer; cdecl;\r\n-    /// set options for a curl easy handle\r\n-    easy_setopt: function(curl: TCurl; option: TCurlOption): TCurlResult; cdecl varargs;\r\n+    /// set options for a curl easy handle - not used directly\r\n+    _easy_setopt: function(curl: TCurl; option: TCurlOption): TCurlResult; cdecl varargs;\r\n     /// perform a blocking file transfer\r\n     easy_perform: function(curl: TCurl): TCurlResult; cdecl;\r\n     /// end a libcurl easy handle\r\n@@ -1088,8 +1092,8 @@   TLibCurl = class(TSynLibrary)\n     share_init: function: pointer; cdecl;\r\n     /// clean up a shared object\r\n     share_cleanup: function(share_handle: TCurlShare): TCurlShareResult; cdecl;\r\n-    /// set options for a shared object\r\n-    share_setopt: function(share: TCurlShare; option: TCurlSh\n... [truncated, 16023 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17616\n+17617",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17616'\r\n+'2.4.17617'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -6418,8 +6418,8 @@ procedure TCurlHttp.UseClientCertificate(const aCertFile, aCACertFile, aKeyName,\n   fTls.PassPhrase := aPassPhrase;\r\n end;\r\n \r\n-function CurlWriteLastResponseHeader(buffer: PAnsiChar; size, nitems: integer;\r\n-  opaque: pointer): integer; cdecl;\r\n+function CurlWriteLastResponseHeader(buffer: PAnsiChar; size, nitems: PtrUInt;\r\n+  opaque: pointer): PtrUInt; cdecl;\r\n var\r\n   headers: PRawByteString absolute opaque;\r\n begin\r\n@@ -6528,7 +6528,7 @@ procedure TCurlHttp.InternalSendRequest(const aMethod: RawUtf8;\n   curl.easy_setopt(fHandle, coUserName, pointer(AuthUserName));\r\n   curl.easy_setopt(fHandle, coPassword, pointer(AuthPassword));\r\n   curl.easy_setopt(fHandle, coXOAuth2Bearer, pointer(AuthToken));\r\n-  curl.easy_setopt(fHandle, coHttpAuth, integer(WRA2CAU[AuthScheme]));\r\n+  curl.easy_setopt(fHandle, coHttpAuth, WRA2CAU[AuthScheme]);\r\n   // 2. main request options\r\n   // the only verb which do not expect body in answer is HEAD - OPTIONS could\r\n   curl.easy_setopt(fHandle, coNoBody, ord(IsHead(fIn.Method)));\r\n@@ -6580,7 +6580,7 @@ function TCurlHttp.InternalRetrieveAnswer(\n   P: PUtf8Char;\r\n   s: RawUtf8;\r\n   i: integer;\r\n-  rc: PtrInt; // needed on Linux x86-64\r\n+  rc: TCurlLong; // CURLINFO_RESPONSE_CODE writes C long\r\n begin\r\n   if Assigned(OnUploadProgress) or\r\n      Assigned(OnDownloadProgress) then\r\n@@ -6603,7 +6603,7 @@ function TCurlHttp.InternalRetrieveAnswer(\n     raise ECurlHttp.Create(res, 'libcurl error %d (%s) on %s %s',\r\n       [ord(res), curl.easy_strerror(res), fIn.Method, fIn.URL]);\r\n   rc := 0;\r\n-  curl.easy_getinfo(fHandle, ciResponseCode, rc);\r\n+  curl.easy_getinfo_long(fHandle, ciResponseCode, rc);\r\n   result := rc;\r\n   Header := fOut.Header;\r\n   RemoveHeadInHeaders(Header); // trim 'HTTP/1.1 200 OK' first line\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs",
+        "Network"
+      ],
+      "units": [
+        "mormot.lib.curl",
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "85e4b8d6425ac6efb69ab4b2997034a1456e4da3",
+      "short_sha": "85e4b8d6",
+      "subject": "tests: validate TBigInt.Square algorithm",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T09:37:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/85e4b8d6425ac6efb69ab4b2997034a1456e4da3",
+      "parents": [
+        "08ea96287a0641b474cf83f8a9ece2ed6a49387b"
+      ],
+      "stats": {
+        "additions": 97,
+        "deletions": 5,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -302,7 +302,7 @@ function _xasmdiv(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\n /// mod-by-integer of a TBigInt 512/1024-bit buffer - as used by mormot.crypt.rsa\r\n function _xasmmod(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n \r\n-/// fast diagonal mul-and-add helper as used by TBitInt.Square\r\n+/// fast diagonal mul-and-add helper as used by TBitInt.Square with Count > 0\r\n procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n \r\n const\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2208,7 +2208,7 @@ function TBigInt.Square: PBigInt;\n   // compute off-diagonal products as r = sum(a[i] * a[j] * B^(i+j)), for j < i\r\n   for i := 0 to n - 2 do\r\n     RawMultiply(@Value[i + 1], @r^.Value[2 * i + 1], n - i - 1, Value[i]);\r\n-  // double all off-diagonal products\r\n+  // double off-diagonal products and add diagonal squares in a single pass\r\n   _xasmsquarediagonal(pointer(Value), pointer(r^.Value), n);\r\n   Release;\r\n   result := r.Trim;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17615\n+17616",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17615'\r\n+'2.4.17616'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 93,
+          "deletions": 1,
+          "patch": "@@ -52,6 +52,7 @@   TTestCoreCrypto = class(TSynTestCase)\n     procedure RsaSlow(Context: TObject);\r\n     procedure CrcSlow(Context: TObject); // 32-bit, 64-bit and 128-bit hash\r\n     procedure RsaBarrett;\r\n+    procedure RsaSquare;\r\n     procedure RsaMillerRabin;\r\n     procedure Rfc(a: TSignAlgo; const P, S: RawUtf8; c, l: integer;\r\n       const exp, msg: RawUtf8);\r\n@@ -5020,8 +5021,9 @@ procedure TTestCoreCrypto.RsaSlow(Context: TObject);\n   bin, hash, signed, encrypted: RawByteString;\r\n   timer: TPrecisionTimer;\r\n begin\r\n-  // validate Barret Reduction algorithm\r\n+  // validate Barret Reduction, Square and Miller-Rabin algorithms\r\n   RsaBarrett;\r\n+  RsaSquare;\r\n   RsaMillerRabin;\r\n   // validate RSA key generation - in a background thread for this slow process\r\n   hash := HexToBin(_hash);\r\n@@ -5312,6 +5314,96 @@ procedure TTestCoreCrypto.RsaBarrett;\n   end;\r\n end;\r\n \r\n+procedure TTestCoreCrypto.RsaSquare;\r\n+const\r\n+  SIZES: array[0 .. 26] of integer = (1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33,\r\n+    47, 48, 49, 63, 64, 65, 95, 96, 97, 127, 128, 129, 255, 256, 257);\r\n+var\r\n+  c: TRsaContext;\r\n+  a, expected, actual: PBigInt;\r\n+  hex: RawUtf8;\r\n+  seed: cardinal;\r\n+  v: PHalfUInt;\r\n+  si, kind, i, n: integer;\r\n+begin\r\n+  c := TRsaContext.Create;\r\n+  seed := $a5a55a5a;\r\n+  try\r\n+    for si := 0 to high(SIZES) do\r\n+      for kind := 0 to 105 do\r\n+      begin\r\n+        n := SIZES[si];\r\n+        a := c.Allocate(n);\r\n+        if kind <> 0 then // kind=0: all zero, even with untrimmed leading limbs\r\n+        begin\r\n+          v := pointer(a^.Value);\r\n+          for i := 0 to n - 1 do\r\n+          begin\r\n+            case kind of\r\n+              1:\r\n+                v^ := high(HalfUInt);   // maximal carry chains\r\n+              2:\r\n+                if i and 1 = 0 then\r\n+                  v^ := high(HalfUInt); // odd\r\n+              3:\r\n+                if i = n - 1 then\r\n+                  v^ := high(HalfUInt); // last\r\n+              4:\r\n+                if i = 0 then\r\n+                  v^ := high(HalfUInt) // first\r\n+                else\r\n+                  break;\r\n+              5:\r\n+                v^ := HalfUInt(1) shl (HALF_BITS - 1);\r\n+            else\r\n+              begin\r\n+                seed := seed xor (seed shl 13); // some random diffusion\r\n+                seed := seed xor (seed shr 17);\r\n+                seed := seed xor (seed shl 5);\r\n+                v^ := seed;\r\n+              end;\r\n+            end;\r\n+            inc(v);\r\n+          end;\r\n+        end;\r\n+        hex := a^.ToHexa;\r\n+        expected := a^.Copy.Multiply(a^.Copy);\r\n+        actual := a^.Copy.Square;\r\n+        CheckEqual(actual^.Compare(expected), 0, 'Square vs Multiply');\r\n+        CheckEqual(a^.ToHexa, hex, 'Square source preserved');\r\n+        CheckEqual(a^.RefCnt, 1, 'Square shared source retained');\r\n+        actual.Release;\r\n+        // squaring a permanent operand must leave its value and ownership intact\r\n+        a^.SetPermanent;\r\n+        actual := a^.Square;\r\n+        CheckEqual(actual^.Compare(expected), 0, 'Square permanent');\r\n+        CheckEqual(a^.RefCnt, -1, 'Square permanent source retained');\r\n+        CheckEqual(a^.ToHexa, hex, 'Square permanent value preserved');\r\n+        actual.Release;\r\n+        expected.Release;\r\n+        a^.ResetPermanentAndRelease;\r\n+        CheckEqual(c.ActiveCount, 0, 'Square temporaries released');\r\n+      end;\r\n+    // empty storage must not enter the positive-count diagonal loop\r\n+    a := c.Allocate(0);\r\n+    expected := a^.Copy.Multiply(a^.Copy);\r\n+    actual := a^.Square;\r\n+    CheckEqual(actual^.Compare(expected), 0, 'Square empty');\r\n+    actual.Release;\r\n+    expected.Release;\r\n+    CheckEqual(c.ActiveCount, 0, 'Square empty released');\r\n+    // an unshared input is consumed by Square\r\n+    a := c.AllocateFrom(123);\r\n+    actual := a^.Square;\r\n+    CheckEqual(actual^.Compare(15129), 0, 'Square unshared');\r\n+    CheckEqual(c.ActiveCount, 1, 'Square consumes unshared source');\r\n+    actual.Releas\n... [truncated, 281 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "08ea96287a0641b474cf83f8a9ece2ed6a49387b",
+      "short_sha": "08ea9628",
+      "subject": "crypt: slightly optimized TBigInt.Square with proper asm",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T09:14:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/08ea96287a0641b474cf83f8a9ece2ed6a49387b",
+      "parents": [
+        "e00d96b11fe8329f86eebe5487f8f3481e8fb42f"
+      ],
+      "stats": {
+        "additions": 122,
+        "deletions": 27,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmarm.inc",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 2,
+          "patch": "@@ -434,6 +434,24 @@ asm\n .LxasmmodDone:\r\n end;\r\n \r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+  assembler; nostackframe;\r\n+asm\r\n+  // x0=Src x1=Dst x2=Count\r\n+  mov    x7, xzr\r\n+.LsquarePair:\r\n+  ldr    w3, [x0], #4\r\n+  umaddl x3, w3, w3, x7\r\n+  ldr    x4, [x1]\r\n+  lsl    x5, x4, #1\r\n+  lsr    x7, x4, #63\r\n+  adds   x5, x5, x3\r\n+  adc    x7, x7, xzr\r\n+  str    x5, [x1], #8\r\n+  subs   x2, x2, #1\r\n+  b.ne   .LsquarePair\r\n+end;\r\n+\r\n procedure mul64x64(const left, right: QWord; out product: THash128Rec);\r\n   assembler; nostackframe;\r\n asm\r\n@@ -447,8 +465,8 @@ procedure _mult128(constref l, r: THash128Rec; out product: THash256Rec);\n   assembler; nostackframe;\r\n asm\r\n   // x0 = @l, x1 = @r, x2 = @product\r\n-  ldp   x3, x4, [x0]       // l0, l1\r\n-  ldp   x5, x6, [x1]       // r0, r1\r\n+  ldp   x3, x4, [x0]      // l0, l1\r\n+  ldp   x5, x6, [x1]      // r0, r1\r\n   mul   x7, x3, x5        // low(l0*r0)\r\n   umulh x8, x3, x5        // high(l0*r0)\r\n   str   x7, [x2]\r\n@@ -902,6 +920,27 @@ asm\n   pop   {r4-r7}\r\n end;\r\n \r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+  assembler; nostackframe;\r\n+asm\r\n+  // r0=Src r1=Dst r2=Count\r\n+  push  {r4-r5}\r\n+  mov   r4, #0\r\n+.LsquarePair32:\r\n+  ldrh  r3, [r0], #2\r\n+  mla   r3, r3, r3, r4\r\n+  ldr   r12, [r1]\r\n+  adds  r12, r12, r12\r\n+  mov   r4, #0\r\n+  adc   r4, r4, #0\r\n+  adds  r12, r12, r3\r\n+  adc   r4, r4, #0\r\n+  str   r12, [r1], #4\r\n+  subs  r2, r2, #1\r\n+  bne   .LsquarePair32\r\n+  pop   {r4-r5}\r\n+end;\r\n+\r\n {$endif FPC_CPUAARCH64}\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -2707,6 +2707,9 @@ procedure mul64x64(const left, right: QWord; out product: THash128Rec);\n procedure mul64x64({$ifdef FPC_32}constref{$else}const{$endif} left, right: QWord;\r\n   out product: THash128Rec); {$ifndef ASMARM} inline; {$endif}\r\n \r\n+{$ifdef ASMARM}\r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+{$endif ASMARM}\r\n {$ifdef ASMARM64} // unrolled ARMv8 64-bit asm used by mormot.crypt.* units\r\n function _add256(out Output: THash256Rec; const Left, Right: THash256Rec): PtrUInt;\r\n function _inc256(var Value: THash256Rec; const Added: THash256Rec): PtrUInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx64.inc",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 0,
+          "patch": "@@ -3074,6 +3074,25 @@ function _xasmmuladd(Src, Dst: pointer; Factor, Carry: PtrUInt): PtrUInt;\n         {$endif ABIWINX64}\r\n end;\r\n \r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+{$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif}\r\n+        xor     r10d, r10d       // carry\r\n+@s:     mov     eax, dword ptr [Src]\r\n+        imul    rax, rax\r\n+        lea     rax, [rax + r10] // square + carry cannot overflow\r\n+        mov     r9, qword ptr [Dst]\r\n+        xor     r10d, r10d\r\n+        add     r9, r9\r\n+        adc     r10, 0\r\n+        add     r9, rax\r\n+        adc     r10, 0\r\n+        mov     qword ptr [Dst], r9\r\n+        add     Src, 4\r\n+        add     Dst, 8\r\n+        dec     Count\r\n+        jnz     @s\r\n+end;\r\n+\r\n procedure Xor512(dst, src: PPtrIntArray);\r\n {$ifdef FPC} nostackframe; assembler; asm {$else} asm .noframe {$endif FPC}\r\n         movups  xmm0, dqword ptr [dst]\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx86.inc",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 0,
+          "patch": "@@ -2421,6 +2421,34 @@ asm     // Src=eax Dst=edx Factor=ecx Carry=[ebp]\n         pop    ebx\r\n end;\r\n \r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+  {$ifdef FPC} nostackframe; assembler; {$endif}\r\n+asm\r\n+        push    ebx\r\n+        push    esi\r\n+        push    edi\r\n+        mov     esi, eax        // esi=Src\r\n+        mov     edi, edx        // edi=Dst\r\n+        xor     ebx, ebx        // ebx=carry\r\n+@s:     movzx   eax, word ptr [esi]\r\n+        imul    eax, eax\r\n+        lea     eax, [eax + ebx]\r\n+        mov     edx, dword ptr [edi]\r\n+        xor     ebx, ebx\r\n+        add     edx, edx\r\n+        adc     ebx, 0\r\n+        add     edx, eax\r\n+        adc     ebx, 0\r\n+        mov     dword ptr [edi], edx\r\n+        add     esi, 2\r\n+        add     edi, 4\r\n+        dec     ecx             // ecx=Count\r\n+        jnz     @s\r\n+        pop     edi\r\n+        pop     esi\r\n+        pop     ebx\r\n+end;\r\n+\r\n procedure _mmodP(out Output: THash256Rec; var Product: THash512Rec);\r\n   {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -302,6 +302,9 @@ function _xasmdiv(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\n /// mod-by-integer of a TBigInt 512/1024-bit buffer - as used by mormot.crypt.rsa\r\n function _xasmmod(Value: pointer; Factor, Carry: PtrUInt): PtrUInt;\r\n \r\n+/// fast diagonal mul-and-add helper as used by TBitInt.Square\r\n+procedure _xasmsquarediagonal(Src, Dst: pointer; Count: PtrUInt);\r\n+\r\n const\r\n   _xasmaddn    = SizeOf(pointer) * 16; // 512/1024 bits per call\r\n   _xasmsubn    = SizeOf(pointer) * 16; // 512/1024 bits per call\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 26,
+          "deletions": 23,
+          "patch": "@@ -2171,11 +2171,32 @@ function TBigInt.MultiplyLow(b: PBigInt; LimbCount: integer): PBigInt;\n   result := r.Trim;\r\n end;\r\n \r\n+{$ifndef ASMINTELARM} // pure pascal fallback\r\n+procedure _xasmsquarediagonal(Src, Dst: PHalfUInt; Count: PtrUInt);\r\n+var\r\n+  square, carry: PtrUInt;\r\n+begin\r\n+  carry := 0;\r\n+  repeat\r\n+    square := PtrUInt(Src^) * PtrUInt(Src^);\r\n+    inc(carry, (PtrUInt(Dst^) shl 1) + HalfUInt(square));\r\n+    Dst^ := carry;\r\n+    inc(Dst);\r\n+    carry := (carry shr HALF_BITS) + (PtrUInt(Dst^) shl 1) +\r\n+             (square shr HALF_BITS);\r\n+    Dst^ := carry;\r\n+    carry := carry shr HALF_BITS;\r\n+    inc(Dst);\r\n+    inc(Src);\r\n+    dec(Count);\r\n+  until Count = 0;\r\n+end;\r\n+{$endif ASMINTELARM}\r\n+\r\n function TBigInt.Square: PBigInt;\r\n var\r\n   r: PBigInt;\r\n-  i, j, n: PtrInt;\r\n-  v, carry: PtrUInt;\r\n+  n, i: PtrInt;\r\n begin\r\n   n := Size;\r\n   if n <= 2 then\r\n@@ -2185,28 +2206,10 @@ function TBigInt.Square: PBigInt;\n   end;\r\n   r := Owner.Allocate(n shl 1); // zeroed 2*n-limb result\r\n   // compute off-diagonal products as r = sum(a[i] * a[j] * B^(i+j)), for j < i\r\n-  for i := 1 to n - 1 do\r\n-    RawMultiply(pointer(Value), @r^.Value[i], i, Value[i]);\r\n+  for i := 0 to n - 2 do\r\n+    RawMultiply(@Value[i + 1], @r^.Value[2 * i + 1], n - i - 1, Value[i]);\r\n   // double all off-diagonal products\r\n-  carry := 0;\r\n-  for i := 0 to (n shl 1) - 1 do\r\n-  begin\r\n-    v := (PtrUInt(r^.Value[i]) shl 1) + carry;\r\n-    r^.Value[i] := v;\r\n-    carry := v shr HALF_BITS;\r\n-  end;\r\n-  // add diagonal products a[i]^2 at positions 2*i, propagating the carry\r\n-  carry := 0;\r\n-  for i := 0 to n - 1 do\r\n-  begin\r\n-    j := i shl 1;\r\n-    v := PtrUInt(Value[i]) * Value[i] +\r\n-         r^.Value[j] + carry;\r\n-    r^.Value[j] := v;\r\n-    v := (v shr HALF_BITS) + r^.Value[j + 1];\r\n-    r^.Value[j + 1] := v;\r\n-    carry := v shr HALF_BITS;\r\n-  end;\r\n+  _xasmsquarediagonal(pointer(Value), pointer(r^.Value), n);\r\n   Release;\r\n   result := r.Trim;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17614\n+17615",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17614'\r\n+'2.4.17615'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmarm",
+        "mormot.crypt.core",
+        "mormot.crypt.core.asmx64",
+        "mormot.crypt.core.asmx86",
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e00d96b11fe8329f86eebe5487f8f3481e8fb42f",
+      "short_sha": "e00d96b1",
+      "subject": "core: slightly optimized previous commit",
+      "body": "- against previous https://github.com/synopse/mORMot/pull/476",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T08:27:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e00d96b11fe8329f86eebe5487f8f3481e8fb42f",
+      "parents": [
+        "fdb335f838bde2060e69721ac9c95e64be9b7e06"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 6,
+          "patch": "@@ -1746,22 +1746,27 @@ function Iso8601ToTime(const S: RawByteString): TTime;\n \r\n function Iso8601FractionToMS(P: PUtf8Char; L: PtrInt): cardinal;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n+var\r\n+  c: cardinal;\r\n begin\r\n   result := 0;\r\n   if L <= 0 then\r\n     exit;\r\n-  if not (P[0] in ['0'..'9']) then\r\n+  c := ord(P[0]) - 48;\r\n+  if c > 9 then\r\n     exit;\r\n-  result := (ord(P[0]) - 48) * 100;\r\n+  result := c * 100;\r\n   if L < 2 then\r\n     exit;\r\n-  if not (P[1] in ['0'..'9']) then\r\n+  c := ord(P[1]) - 48;\r\n+  if c > 9 then\r\n     exit;\r\n-  inc(result, (ord(P[1]) - 48) * 10);\r\n+  inc(result, c * 10);\r\n   if L < 3 then\r\n     exit;\r\n-  if P[2] in ['0'..'9'] then\r\n-    inc(result, ord(P[2]) - 48);\r\n+  c := ord(P[2]) - 48;\r\n+  if c <= 9 then\r\n+    inc(result, c);\r\n end;\r\n \r\n procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17613\n+17614",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17613'\r\n+'2.4.17614'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fdb335f838bde2060e69721ac9c95e64be9b7e06",
+      "short_sha": "fdb335f8",
+      "subject": "core: fixed millisecond time parsing",
+      "body": "- backport of https://github.com/synopse/mORMot/pull/476",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T08:24:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fdb335f838bde2060e69721ac9c95e64be9b7e06",
+      "parents": [
+        "f0a6942d735fe770c51b687125a93b1aa050ccca"
+      ],
+      "stats": {
+        "additions": 50,
+        "deletions": 21,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 19,
+          "patch": "@@ -1744,12 +1744,36 @@ function Iso8601ToTime(const S: RawByteString): TTime;\n   result := tmp;\r\n end;\r\n \r\n+function Iso8601FractionToMS(P: PUtf8Char; L: PtrInt): cardinal;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n+begin\r\n+  result := 0;\r\n+  if L <= 0 then\r\n+    exit;\r\n+  if not (P[0] in ['0'..'9']) then\r\n+    exit;\r\n+  result := (ord(P[0]) - 48) * 100;\r\n+  if L < 2 then\r\n+    exit;\r\n+  if not (P[1] in ['0'..'9']) then\r\n+    exit;\r\n+  inc(result, (ord(P[1]) - 48) * 10);\r\n+  if L < 3 then\r\n+    exit;\r\n+  if P[2] in ['0'..'9'] then\r\n+    inc(result, ord(P[2]) - 48);\r\n+end;\r\n+\r\n procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\r\n   var result: TDateTime);\r\n var\r\n   b, y, m, d, h, mi, ss, ms: cardinal;\r\n   time: TDateTime;\r\n+  {$ifdef FPC}\r\n+  y100: cardinal;\r\n+  {$else}\r\n   d100: TDiv100Rec;\r\n+  {$endif FPC}\r\n   {$ifdef CPUX86NOTPIC}\r\n   tab: TNormTableByte absolute ConvertHexToBin;\r\n   {$else}\r\n@@ -1851,10 +1875,17 @@ procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\n     end;\r\n     if y > 9999 then\r\n       exit; // avoid integer overflow e.g. if '0000' is an invalid date\r\n-    Div100(y, d100{%H-});\r\n-    unaligned(result) := cardinal(cardinal(D1 * d100.d) shr 2) +\r\n-                         cardinal(cardinal(D0 * d100.m) shr 2) +\r\n+    {$ifdef FPC}\r\n+    y100 := y div 100; // FPC will use fast reciprocal\r\n+    unaligned(result) := cardinal(cardinal(D1 * y100) shr 2) +\r\n+                         cardinal(cardinal(D0 * (y - y100 * 100)) shr 2) +\r\n                          cardinal(cardinal(D2 * m + 2) div 5) + d;\r\n+    {$else}\r\n+    Div100(y, d100{%H-});\r\n+    result := cardinal(cardinal(D1 * d100.d) shr 2) +\r\n+              cardinal(cardinal(D0 * d100.m) shr 2) +\r\n+              cardinal(cardinal(D2 * m + 2) div 5) + d;\r\n+    {$endif FPC}\r\n     unaligned(result) := unaligned(result) - D1899; // avoid sign issue\r\n     if L < 15 then\r\n       exit; // not enough space to retrieve the time\r\n@@ -1874,16 +1905,8 @@ procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\n   ss := ord(P[13]) * 10 + ord(P[14]) - (48 + 480);\r\n   if (L > 16) and\r\n      (P[15] = '.') then\r\n-  begin\r\n     // one or more digits representing a decimal fraction of a second\r\n-    ms := ord(P[16]) * 100 - 4800;\r\n-    if L > 17 then\r\n-      ms := ms {%H-}+ byte(P[17]) * 10 - 480;\r\n-    if L > 18 then\r\n-      ms := ms + byte(P[18]) - 48;\r\n-    if ms > MilliSecsPerSec then\r\n-      ms := 0;\r\n-  end\r\n+    ms := Iso8601FractionToMS(@P[16], L - 16)\r\n   else\r\n     ms := 0;\r\n   if (h >= 24) or\r\n@@ -1989,14 +2012,12 @@ function Iso8601ToTimePUtf8Char(P: PUtf8Char; L: PtrInt;\n   S := ord(P[4]) * 10 + ord(P[5]) - (48 + 480);\r\n   if (L > 6) and\r\n      (P[6] = '.') then\r\n-  begin\r\n     // one or more digits representing a decimal fraction of a second\r\n-    MS := ord(P[7]) * 100 - 4800;\r\n-    if L > 7 then\r\n-      MS := MS {%H-}+ ord(P[8]) * 10 - 480;\r\n-    if L > 8 then\r\n-      MS := MS + ord(P[9]) - 48;\r\n-  end\r\n+    if (L > 7) and\r\n+       (P[7] in ['0'..'9']) then\r\n+      MS := Iso8601FractionToMS(@P[7], L - 7)\r\n+    else\r\n+      exit\r\n   else\r\n     MS := 0;\r\n   if (H < 24) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17612\n+17613",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17612'\r\n+'2.4.17613'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -8816,6 +8816,14 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n   CheckEqual(tmp, '0002-00-00');\r\n   CheckEqual(DateTimeToIso8601Text(Iso8601ToDateTime('1492-10-12T16:00:00')),\r\n     '1492-10-12T16:00:00');\r\n+  CheckEqual(DateTimeToIso8601(Iso8601ToDateTime('2026-01-01T12:00:23.1Z'),\r\n+      true, 'T', true), '2026-01-01T12:00:23.100');\r\n+  CheckEqual(DateTimeToIso8601(Iso8601ToDateTime('2026-01-01T12:00:23.13Z'),\r\n+      true, 'T', true), '2026-01-01T12:00:23.130');\r\n+  CheckEqual(DateTimeToIso8601(Iso8601ToDateTime('2026-01-01T12:00:23.123Z'),\r\n+      true, 'T', true), '2026-01-01T12:00:23.123');\r\n+  CheckEqual(DateTimeToIso8601(Iso8601ToDateTime('2026-01-01T12:00:23.123456Z'),\r\n+      true, 'T', true), '2026-01-01T12:00:23.123');\r\n end;\r\n \r\n {$R ..\\src\\mormot.tz.res} // validate our Win11-generated resource file\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f0a6942d735fe770c51b687125a93b1aa050ccca",
+      "short_sha": "f0a6942d",
+      "subject": "core: enhanced numbers to text conversion routine",
+      "body": "- by using multiplication per reciprocal when possible instead of plain division",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-14T08:23:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f0a6942d735fe770c51b687125a93b1aa050ccca",
+      "parents": [
+        "a1725c69d341221927a82001d0bd36ca8e127c0b"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 56,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4366,7 +4366,7 @@ asm\n         mov     r8, res\r\n         mov     edx, Y\r\n         mov     dword ptr [r8].TDiv100Rec.M,edx\r\n-        mov     eax, DIV100_INV\r\n+        mov     eax, DIV100_INV // Y div 100 = (QWord(Y) * DIV100_INV) shr 37\r\n         mul     edx\r\n         shr     edx, 5\r\n         mov     dword ptr [r8].TDiv100Rec.D, edx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 6,
+          "patch": "@@ -620,7 +620,7 @@ asm\n         cmp     eax, 100\r\n         jb      @2\r\n         mov     ecx, eax\r\n-        mov     edx, DIV100_INV\r\n+        mov     edx, DIV100_INV // val div 100 = (QWord(val)*DIV100_INV) shr 37\r\n         mul     edx\r\n         shr     edx, 5          // now edx=eax div 100\r\n         mov     eax, edx\r\n@@ -667,9 +667,9 @@ asm\n         cmp     eax, 100\r\n         jb      @2\r\n         mov     ecx, eax\r\n-        mov     edx, DIV100_INV\r\n+        mov     edx, DIV100_INV // val div 100 = (QWord(val)*DIV100_INV) shr 37\r\n         mul     edx\r\n-        shr     edx, 5 // now edx=eax div 100\r\n+        shr     edx, 5          // now edx=eax div 100\r\n         mov     eax, edx\r\n         imul    edx, -200\r\n         movzx   edx, word ptr [TwoDigitLookup + ecx * 2 + edx]\r\n@@ -698,9 +698,9 @@ asm\n         // eax=Y, edx=P\r\n         push    edx\r\n         mov     ecx, eax\r\n-        mov     edx, DIV100_INV\r\n+        mov     edx, DIV100_INV // Y div 100 = (QWord(Y) * DIV100_INV) shr 37\r\n         mul     edx\r\n-        shr     edx, 5 // now edx=Y div 100\r\n+        shr     edx, 5          // now edx=Y div 100\r\n         movzx   eax, word ptr [TwoDigitLookup + edx * 2]\r\n         imul    edx, -200\r\n         movzx   edx, word ptr [TwoDigitLookup + ecx * 2 + edx]\r\n@@ -2797,7 +2797,7 @@ asm\n         mov     dword ptr [edx].TDiv100Rec.M, eax\r\n         mov     ecx, edx\r\n         mov     edx, eax\r\n-        mov     eax, DIV100_INV\r\n+        mov     eax, DIV100_INV // Y div 100 = (QWord(Y) * DIV100_INV) shr 37\r\n         mul     edx\r\n         shr     edx, 5\r\n         mov     dword ptr [ecx].TDiv100Rec.D, edx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 3,
+          "patch": "@@ -1274,8 +1274,10 @@ procedure ToHumanHexP(hex: PAnsiChar; bin: PByte; len: PtrInt;\n      '70', '71', '72', '73', '74', '75', '76', '77', '78', '79',\r\n      '80', '81', '82', '83', '84', '85', '86', '87', '88', '89',\r\n      '90', '91', '92', '93', '94', '95', '96', '97', '98', '99');\r\n-  /// 1 mod 2^32 reciprocal for unsigned div 100\r\n+  /// 1 mod 2^32 reciprocal for unsigned div 100 in 32-bit range [0..4908534098]\r\n   DIV100_INV = $51eb851f;\r\n+  /// 1 mod 2^32 reciprocal for unsigned div 10 in 32-bit range [0..4294967295]\r\n+  DIV10_INV = $cccccccd;\r\n \r\n var\r\n   /// fast lookup table for converting any decimal number from\r\n@@ -13432,11 +13434,11 @@ procedure YearToPChar(Y: PtrUInt; P: PUtf8Char);\n   tab: PWordArray;\r\n begin\r\n   tab := @TwoDigitLookupW;\r\n-  {$ifdef WIN64DELPHI}\r\n+  {$ifdef CPU64}\r\n   d100 := (QWord(Y) * DIV100_INV) shr 37; // we can avoid div on Delphi Win64\r\n   {$else}\r\n   d100 := Y div 100; // FPC will use fast reciprocal (and x86 has its own asm)\r\n-  {$endif WIN64DELPHI}\r\n+  {$endif CPU64}\r\n   PCardinal(P)^ := tab[d100];\r\n   PWordArray(P)[1] := tab[Y - (d100 * 100)];\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 54,
+          "deletions": 43,
+          "patch": "@@ -1606,11 +1606,11 @@ function EncodeGregorian(Year, Month, Day: cardinal; var Greg: cardinal): boolea\n      (Day = 0) or             // 1..xx\r\n      (cardinal(Year - 1) >= 9999) then  // 1..9999 as FPC RTL itself\r\n     exit;\r\n-  {$ifdef WIN64DELPHI}\r\n+  {$ifdef CPU64}\r\n   d := (QWord(Year) * DIV100_INV) shr 37; // we can avoid div on Delphi Win64\r\n   {$else}\r\n   d := Year div 100; // use fast reciprocal on FPC, plain div on Delphi Win32\r\n-  {$endif WIN64DELPHI}\r\n+  {$endif CPU64}\r\n   m := Year - (d * 100);\r\n   if Day > DaysPerMonth[(Year and 3 = 0) and // inlined IsLeapYear()\r\n             ((m <> 0) or ((d and 3) = 0))][Month] then\r\n@@ -2076,16 +2076,19 @@ procedure IntervalTextToDateTimeVar(Text: PUtf8Char;\n     unaligned(result) := date + Time;\r\n end;\r\n \r\n-{$ifndef CPUX86NOTPIC}\r\n-procedure YearToPChar2(tab: PWordArray; Y: PtrUInt; P: PUtf8Char); inline;\r\n+procedure YearToPCharTab(tab: PWordArray; Y: PtrUInt; P: PUtf8Char);\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n var\r\n-  d100: TDiv100Rec;\r\n+  d100: PtrUInt;\r\n begin\r\n-  Div100(Y, d100{%H-});\r\n-  PWordArray(P)[0] := tab[d100.D];\r\n-  PWordArray(P)[1] := tab[d100.M];\r\n+  {$ifdef CPU64}\r\n+  d100 := (Y * DIV100_INV) shr 37; // we can avoid div on Delphi Win64\r\n+  {$else}\r\n+  d100 := Y div 100; // FPC use fast reciprocal (and x86 has YearToPChar asm)\r\n+  {$endif CPU64}\r\n+  PCardinal(P)^ := tab[d100];\r\n+  PCardinal(P + 2)^ := tab[Y - (d100 * 100)];\r\n end;\r\n-{$endif CPUX86NOTPIC}\r\n \r\n function DateToIso8601PChar(P: PUtf8Char; Expanded: boolean;\r\n   Y, M, D: PtrUInt): PUtf8Char;\r\n@@ -2101,22 +2104,22 @@ function DateToIso8601PChar(P: PUtf8Char; Expanded: boolean;\n   YearToPChar(Y, P);\r\n   {$else}\r\n   tab := @TwoDigitLookupW;\r\n-  YearToPChar2(tab, Y, P);\r\n+  YearToPCharTab(tab, Y, P);\r\n   {$endif CPUX86NOTPIC}\r\n   inc(P, 4);\r\n   if Expanded then\r\n   begin\r\n     P^ := '-';\r\n     inc(P);\r\n   end;\r\n-  PWord(P)^ := tab[M];\r\n+  PCardinal(P)^ := tab[M];\r\n   inc(P, 2);\r\n   if Expanded then\r\n   begin\r\n     P^ := '-';\r\n     inc(P);\r\n   end;\r\n-  PWord(P)^ := tab[D];\r\n+  PCardinal(P)^ := tab[D];\r\n   result := P + 2;\r\n end;\r\n \r\n@@ -2138,28 +2141,28 @@ function TimeToIso8601PChar(P: PUtf8Char; Expanded: boolean;\n   {$ifndef CPUX86NOTPIC}\r\n   tab := @TwoDigitLookupW;\r\n   {$endif CPUX86NOTPIC}\r\n-  PWord(P)^ := tab[H];\r\n+  PCardinal(P)^ := tab[H];\r\n   inc(P, 2);\r\n   if Expanded then\r\n   begin\r\n     P^ := ':';\r\n     inc(P);\r\n   end;\r\n-  PWord(P)^ := tab[M];\r\n+  PCardinal(P)^ := tab[M];\r\n   inc(P, 2);\r\n   if Expanded then\r\n   begin\r\n     P^ := ':';\r\n     inc(P);\r\n   end;\r\n-  PWord(P)^ := tab[S];\r\n+  PCardinal(P)^ := tab[S];\r\n   inc(P, 2);\r\n   if WithMS then\r\n   begin\r\n     {$ifdef CPUX86NOTPIC}\r\n     YearToPChar(MS, P);\r\n     {$else}\r\n-    YearToPChar2(tab, MS, P);\r\n+    YearToPCharTab(tab, MS, P);\r\n     {$endif CPUX86NOTPIC}\r\n     P^ := '.'; // override first digit\r\n     inc(P, 4);\r\n@@ -3218,26 +3221,25 @@ procedure TSynSystemTime.AddIsoDateTime(WR: TTextWriter;\n \r\n procedure TSynSystemTime.ToLogTime(Dest: PUtf8Char);\r\n var\r\n-  d100: TDiv100Rec;\r\n   {$ifdef CPUX86NOTPIC}\r\n   tab: TWordArray absolute TwoDigitLookupW;\r\n   {$else}\r\n   tab: PWordArray;\r\n   {$endif CPUX86NOTPIC}\r\n begin\r\n-  Div100(Year, d100{%H-});\r\n-  {$ifndef CPUX86NOTPIC}\r\n+  {$ifdef CPUX86NOTPIC}\r\n+  YearToPChar(Year, Dest);\r\n+  {$else}\r\n   tab := @TwoDigitLookupW;\r\n+  YearToPCharTab(tab, Year, Dest);\r\n   {$endif CPUX86NOTPIC}\r\n-  PWord(Dest)^     := tab[d100.D];\r\n-  PWord(Dest + 2)^ := tab[d100.M];\r\n-  PWord(Dest + 4)^ := tab[PtrUInt(Month)];\r\n-  PWord(Dest + 6)^ := tab[PtrUInt(Day)];\r\n+  PCardinal(Dest + 4)^ := tab[PtrUInt(Month)];\r\n+  PCardinal(Dest + 6)^ := tab[PtrUInt(Day)];\r\n   Dest[8] := ' ';\r\n-  PWord(Dest + 9)^  := tab[PtrUInt(Hour)];\r\n-  PWord(Dest + 11)^ := tab[PtrUInt(Minute)];\r\n-  PWord(Dest + 13)^ := tab[PtrUInt(Second)];\r\n-  PWord(Dest + 15)^ := tab[PtrUInt(Millisecond) shr 4]; // rounded in 0..62 range\r\n+  PCardinal(Dest + 9)^  := tab[PtrUInt(Hour)];\r\n+  PCardinal(Dest + 11)^ := tab[PtrUInt(Minute)];\r\n+  PCardinal(D\n... [truncated, 2903 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1489,7 +1489,7 @@ function TBigInt.IntDivMod10: PtrUInt;\n     d := (v * PtrUInt($cccd)) shr 19;\r\n     Value[i] := HalfUInt(result * PtrUInt($1999) + d);\r\n     {$else}\r\n-    d := (v * PtrUInt($cccccccd)) shr 35;\r\n+    d := (v * DIV10_INV) shr 35;\r\n     Value[i] := HalfUInt(result * PtrUInt($19999999) + d);\r\n     {$endif CPU32}\r\n     result := v - d * 10;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17609\n+17612",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17609'\r\n+'2.4.17612'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86",
+        "mormot.core.datetime",
+        "mormot.crypt.rsa"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
