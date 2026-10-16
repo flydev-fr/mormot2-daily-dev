@@ -1,0 +1,954 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-15",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-16T08:21:53Z",
+  "range": {
+    "since": "2026-10-14T22:00:00Z",
+    "until": "2026-10-15T22:00:00Z",
+    "base_sha": "c35132cf6eecfbfc86c7e4c7ed43a1c7db970bc7",
+    "head_sha": "3a4443f95bf880537f9420d93ae471f14b487c7f"
+  },
+  "version": {
+    "after": "2.4.17647",
+    "before": "2.4.17634"
+  },
+  "totals": {
+    "commits": 16,
+    "additions": 1092,
+    "deletions": 575
+  },
+  "commits": [
+    {
+      "sha": "3a4443f95bf880537f9420d93ae471f14b487c7f",
+      "short_sha": "3a4443f9",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T19:35:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3a4443f95bf880537f9420d93ae471f14b487c7f",
+      "parents": [
+        "adb3f46ca23c642a6e6b0b30debd20fc00ee6067",
+        "0c93ac8417d3d62d3f7bdde9cda9cce4a6103917"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 0,
+          "patch": "@@ -406,6 +406,14 @@   TSqlDBProxyStatement = class(TSqlDBProxyStatementAbstract)\n     // - this overriden method will return the integer value returned by\r\n     // cExecute command\r\n     function UpdateCount: integer; override;\r\n+    /// release the result buffer received by ExecutePrepared\r\n+    // - this overriden method will release the binary rows data and the\r\n+    // columns description, so that this instance could be executed again\r\n+    procedure ReleaseRows; override;\r\n+    /// reset the statement, to be executed again with new bound parameters\r\n+    // - allow the usual Bind() + ExecutePrepared + Step() + Reset loop on\r\n+    // the same TSqlDBProxyStatement instance, as with the other providers\r\n+    procedure Reset; override;\r\n     /// force no UpdateCount method call on server side\r\n     // - may be needed to reduce server load, if this information is not needed\r\n     property ForceNoUpdateCount: boolean\r\n@@ -1764,6 +1772,28 @@ function TSqlDBProxyStatement.UpdateCount: integer;\n   result := fUpdateCount;\r\n end;\r\n \r\n+procedure TSqlDBProxyStatement.ReleaseRows;\r\n+begin\r\n+  // release the binary buffer and its columns - otherwise ParamsToCommand\r\n+  // would raise 'Invalid ExecutePrepared* call' on the next execution\r\n+  fDataInternalCopy := '';\r\n+  fDataRowCount := 0;\r\n+  fDataRowReaderOrigin := nil;\r\n+  fDataRowReader := nil;\r\n+  fDataCurrentRowValuesStart := nil;\r\n+  fCurrentRow := 0;\r\n+  ClearColumns;\r\n+  fColumnCount := 0;\r\n+  inherited ReleaseRows;\r\n+end;\r\n+\r\n+procedure TSqlDBProxyStatement.Reset;\r\n+begin\r\n+  ReleaseRows;\r\n+  fUpdateCount := 0;\r\n+  inherited Reset;\r\n+end;\r\n+\r\n procedure TSqlDBProxyStatement.ExecutePreparedAndFetchAllAsJson(\r\n   Expanded: boolean; out Json: RawUtf8; ReturnedRowCount: PPtrInt);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -916,6 +916,7 @@ procedure TTestExternalDatabase._SynDBRemote;\n       IDs: TIntegerDynArray;\r\n       Row, RowDoc, all: variant;\r\n       r, v: PDocVariantData;\r\n+      stmt: ISqlDBStatement;\r\n \r\n       procedure DoInsert;\r\n       var\r\n@@ -945,6 +946,18 @@ procedure TTestExternalDatabase._SynDBRemote;\n       TSynLogTestLog.EnterLocal(log, proxy, msg);\r\n       if proxy <> Props then\r\n         Check(proxy.UserID = 'user');\r\n+      // the same statement instance should be executable several times\r\n+      stmt := proxy.NewThreadSafeStatementPrepared(\r\n+        'select count(*) from People where YearOfDeath=?', true, true);\r\n+      for i := 1 to 3 do\r\n+      begin\r\n+        stmt.Bind(1, 1519);\r\n+        stmt.ExecutePrepared;\r\n+        Check(stmt.Step, 'reuse');\r\n+        CheckEqual(stmt.ColumnInt(0), DoCount, 'reuse');\r\n+        stmt.Instance.Reset;\r\n+      end;\r\n+      stmt := nil;\r\n       proxy.ExecuteNoResult('delete from people where ID>=?', [50000]);\r\n       res := proxy.Execute('select * from People where YearOfDeath=?', [1519]);\r\n       Check(res <> nil);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "adb3f46ca23c642a6e6b0b30debd20fc00ee6067",
+      "short_sha": "adb3f46c",
+      "subject": "db: fixed TSqlDBColumnDefine/TSqlDBIndexDefine type fields",
+      "body": "- use plain integer instead of PtrInt to be properly serialized between systems\n- may be a proper fix of #668",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T19:34:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/adb3f46ca23c642a6e6b0b30debd20fc00ee6067",
+      "parents": [
+        "6302d231e9d783f12a66f73b8c6a10f80e1e5389"
+      ],
+      "stats": {
+        "additions": 16,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 8,
+          "patch": "@@ -72,6 +72,7 @@ interface\n   /// used to define a field/column layout in a table schema\r\n   // - for TSqlDBConnectionProperties.SqlCreate to describe the new table\r\n   // - for TSqlDBConnectionProperties.GetFields to retrieve the table layout\r\n+  // - defined as \"packed\" for binary serialization over mormot.db.proxy\r\n   TSqlDBColumnDefine = packed record\r\n     /// the Column name\r\n     ColumnName: RawUtf8;\r\n@@ -83,14 +84,14 @@ interface\n     /// the Column default width (in chars or bytes) of ftUtf8 or ftBlob\r\n     // - can be set to value <0 for CLOB or BLOB column type, i.e. for\r\n     // a value without any maximal length\r\n-    ColumnLength: PtrInt;\r\n+    ColumnLength: integer;\r\n     /// the Column data precision\r\n     // - used e.g. for numerical values\r\n-    ColumnPrecision: PtrInt;\r\n+    ColumnPrecision: integer;\r\n     /// the Column data scale\r\n     // - used e.g. for numerical values\r\n     // - may be -1 if the metadata SQL statement returned NULL\r\n-    ColumnScale: PtrInt;\r\n+    ColumnScale: integer;\r\n     /// the Column type, as recognized by our mormot.db.sql classes\r\n     // - should not be ftUnknown nor ftNull\r\n     ColumnType: TSqlDBFieldType;\r\n@@ -103,6 +104,7 @@ interface\n   TSqlDBColumnDefineDynArray = array of TSqlDBColumnDefine;\r\n \r\n   /// used to describe extended Index definition of a table schema\r\n+  // - defined as \"packed\" for binary serialization over mormot.db.proxy\r\n   TSqlDBIndexDefine = packed record\r\n     /// name of the index\r\n     IndexName: RawUtf8;\r\n@@ -147,14 +149,14 @@ interface\n     /// the Column default width (in chars or bytes) of ftUtf8 or ftBlob\r\n     // - can be set to value <0 for CLOB or BLOB column type, i.e. for\r\n     // a value without any maximal length\r\n-    ColumnLength: PtrInt;\r\n+    ColumnLength: integer;\r\n     /// the Column data precision\r\n     // - used e.g. for numerical values\r\n-    ColumnPrecision: PtrInt;\r\n+    ColumnPrecision: integer;\r\n     /// the Column data scale\r\n     // - used e.g. for numerical values\r\n     // - may be -1 if the metadata SQL statement returned NULL\r\n-    ColumnScale: PtrInt;\r\n+    ColumnScale: integer;\r\n     /// the Column type, as recognized by our mormot.db.sql classes\r\n     // - should not be ftUnknown nor ftNull\r\n     ColumnType: TSqlDBFieldType;\r\n@@ -8500,13 +8502,17 @@ function TSqlDBStatementWithParamsAndColumns.ColumnType(\n const\r\n   // used e.g. by TRestStorageExternal.LogFields() to log external columns info\r\n   __TSqlDBColumnDefine = 'ColumnName,ColumnTypeNative:RawUtf8 ' +\r\n-    'ColumnLength,ColumnPrecision,ColumnScale:PtrInt ' +\r\n+    'ColumnLength,ColumnPrecision,ColumnScale:integer ' +\r\n     'ColumnType:TSqlDBFieldType ColumnIndexed:boolean';\r\n+  __TSqlDBIndexDefine = 'IndexName,TypeDesc,Filter,KeyColumns,IncludedColumns:RawUtf8 ' +\r\n+    'IsUnique,IsPrimaryKey,IsUniqueConstraint:boolean';\r\n \r\n initialization\r\n   assert(SizeOf(TSqlDBColumnProperty) = SizeOf(PtrUInt) * 2 + 20);\r\n   Rtti.RegisterType(TypeInfo(TSqlDBFieldType));\r\n-  Rtti.RegisterFromText(TypeInfo(TSqlDBColumnDefine), __TSqlDBColumnDefine);\r\n+  Rtti.RegisterFromText([\r\n+    TypeInfo(TSqlDBColumnDefine), __TSqlDBColumnDefine,\r\n+    TypeInfo(TSqlDBIndexDefine),  __TSqlDBIndexDefine]);\r\n \r\n end.\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17646\n+17647",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17646'\r\n+'2.4.17647'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0c93ac8417d3d62d3f7bdde9cda9cce4a6103917",
+      "short_sha": "0c93ac84",
+      "subject": "Merge pull request #667 from tobfel/fix/dbproxy-statement-reset",
+      "body": "db: TSqlDBProxyStatement can now be executed several times",
+      "author": "ab",
+      "date": "2026-10-15T19:17:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0c93ac8417d3d62d3f7bdde9cda9cce4a6103917",
+      "parents": [
+        "6302d231e9d783f12a66f73b8c6a10f80e1e5389",
+        "d33bf358112ecddf51fe77bf97b8f4b4c834ca95"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 0,
+          "patch": "@@ -406,6 +406,14 @@   TSqlDBProxyStatement = class(TSqlDBProxyStatementAbstract)\n     // - this overriden method will return the integer value returned by\r\n     // cExecute command\r\n     function UpdateCount: integer; override;\r\n+    /// release the result buffer received by ExecutePrepared\r\n+    // - this overriden method will release the binary rows data and the\r\n+    // columns description, so that this instance could be executed again\r\n+    procedure ReleaseRows; override;\r\n+    /// reset the statement, to be executed again with new bound parameters\r\n+    // - allow the usual Bind() + ExecutePrepared + Step() + Reset loop on\r\n+    // the same TSqlDBProxyStatement instance, as with the other providers\r\n+    procedure Reset; override;\r\n     /// force no UpdateCount method call on server side\r\n     // - may be needed to reduce server load, if this information is not needed\r\n     property ForceNoUpdateCount: boolean\r\n@@ -1764,6 +1772,28 @@ function TSqlDBProxyStatement.UpdateCount: integer;\n   result := fUpdateCount;\r\n end;\r\n \r\n+procedure TSqlDBProxyStatement.ReleaseRows;\r\n+begin\r\n+  // release the binary buffer and its columns - otherwise ParamsToCommand\r\n+  // would raise 'Invalid ExecutePrepared* call' on the next execution\r\n+  fDataInternalCopy := '';\r\n+  fDataRowCount := 0;\r\n+  fDataRowReaderOrigin := nil;\r\n+  fDataRowReader := nil;\r\n+  fDataCurrentRowValuesStart := nil;\r\n+  fCurrentRow := 0;\r\n+  ClearColumns;\r\n+  fColumnCount := 0;\r\n+  inherited ReleaseRows;\r\n+end;\r\n+\r\n+procedure TSqlDBProxyStatement.Reset;\r\n+begin\r\n+  ReleaseRows;\r\n+  fUpdateCount := 0;\r\n+  inherited Reset;\r\n+end;\r\n+\r\n procedure TSqlDBProxyStatement.ExecutePreparedAndFetchAllAsJson(\r\n   Expanded: boolean; out Json: RawUtf8; ReturnedRowCount: PPtrInt);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -916,6 +916,7 @@ procedure TTestExternalDatabase._SynDBRemote;\n       IDs: TIntegerDynArray;\r\n       Row, RowDoc, all: variant;\r\n       r, v: PDocVariantData;\r\n+      stmt: ISqlDBStatement;\r\n \r\n       procedure DoInsert;\r\n       var\r\n@@ -945,6 +946,18 @@ procedure TTestExternalDatabase._SynDBRemote;\n       TSynLogTestLog.EnterLocal(log, proxy, msg);\r\n       if proxy <> Props then\r\n         Check(proxy.UserID = 'user');\r\n+      // the same statement instance should be executable several times\r\n+      stmt := proxy.NewThreadSafeStatementPrepared(\r\n+        'select count(*) from People where YearOfDeath=?', true, true);\r\n+      for i := 1 to 3 do\r\n+      begin\r\n+        stmt.Bind(1, 1519);\r\n+        stmt.ExecutePrepared;\r\n+        Check(stmt.Step, 'reuse');\r\n+        CheckEqual(stmt.ColumnInt(0), DoCount, 'reuse');\r\n+        stmt.Instance.Reset;\r\n+      end;\r\n+      stmt := nil;\r\n       proxy.ExecuteNoResult('delete from people where ID>=?', [50000]);\r\n       res := proxy.Execute('select * from People where YearOfDeath=?', [1519]);\r\n       Check(res <> nil);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": 667,
+      "is_merge": true
+    },
+    {
+      "sha": "6302d231e9d783f12a66f73b8c6a10f80e1e5389",
+      "short_sha": "6302d231",
+      "subject": "db: new TSqlDataBase.LoadExtension wrapper method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T17:33:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6302d231e9d783f12a66f73b8c6a10f80e1e5389",
+      "parents": [
+        "77b0d3ee7eb803b0854fde445e496e8b485699b1"
+      ],
+      "stats": {
+        "additions": 71,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.sqlite3.pas",
+          "status": "modified",
+          "additions": 69,
+          "deletions": 5,
+          "patch": "@@ -202,7 +202,7 @@ interface\n \r\n   /// possible error codes for sqlite_exec() and sqlite3.step()\r\n   // - as verified by sqlite3_check()\r\n-  SQLITE_ERRORS = [SQLITE_ERROR .. SQLITE_ROW-1];\r\n+  SQLITE_ERRORS = [SQLITE_ERROR .. SQLITE_ROW - 1];\r\n \r\n \r\n   /// The sqlite3.load_extension() interface loads an extension into a single database connection.\r\n@@ -2657,7 +2657,7 @@   TSqlite3Library = class(TSynPersistent)\n     // - SQL must contains an UTF-8 encoded null-terminated string query\r\n     // - SQL_bytes contains -1 (to stop at the null char) or the number of bytes in\r\n     // the input string, including the null terminator\r\n-    // - Return SQLITE_OK on success or an error code - see SQLITE_* and sqlite3.errmsg()\r\n+    // - return SQLITE_OK on success or an error code - see SQLITE_* and sqlite3.errmsg()\r\n     // - S will contain an handle of the resulting statement (an opaque sqlite3.stmt\r\n     // object) on success, or will 0 on error - the calling procedure is responsible\r\n     // for deleting the compiled SQL statement using sqlite3.finalize() after it has\r\n@@ -4291,7 +4291,7 @@   ESqlite3Exception = class(ECoreDBException)\n     DB: TSqlite3DB;\r\n     /// create the exception, getting the message from DB\r\n     constructor Create(aDB: TSqlite3DB; aErrorCode: integer;\r\n-      const aSql: RawUtf8); reintroduce; overload;\r\n+      const aContext: RawUtf8); reintroduce; overload;\r\n   published\r\n     /// the corresponding error code, e.g. 21 (for SQLITE_MISUSE)\r\n     property ErrorCode: integer\r\n@@ -5165,6 +5165,13 @@   TSqlDataBase = class(TObjectOSLock)\n     procedure RegisterSQLFunction(aDynArrayTypeInfo: PRttiInfo;\r\n       aCompare: TDynArraySortCompare;\r\n       const aFunctionName: RawUtf8 = ''); overload;\r\n+    /// load a trusted SQLite extension shared library\r\n+    // - aPath is a local filename, including its .dll/.so/.dylib suffix\r\n+    // - temporarily enables the C extension-loading API if necessary\r\n+    // - never enables the SQL load_extension() function\r\n+    // - restores the previous C-API loading state afterwards\r\n+    // - raises ESqlite3Exception on error\r\n+    procedure LoadExtension(const aPath: TFileName; const aEntryPoint: RawUtf8 = '');\r\n \r\n     /// open a BLOB incrementally for read[/write] access\r\n     // - find a BLOB located in row RowID, column ColumnName, table TableName\r\n@@ -5795,14 +5802,14 @@ procedure JsonToSQlite3Context(json: PUtf8Char;\n { ESqlite3Exception }\r\n \r\n constructor ESqlite3Exception.Create(aDB: TSqlite3DB; aErrorCode: integer;\r\n-  const aSql: RawUtf8);\r\n+  const aContext: RawUtf8);\r\n var\r\n   er: integer;\r\n begin\r\n   fErrorCode := aErrorCode;\r\n   fSQLite3ErrorCode := sqlite3_resultToErrorCode(aErrorCode);\r\n   FormatUtf8('Error % (%) [%] using %', [ErrorCodeToText(SQLite3ErrorCode),\r\n-    aErrorCode, aSql, sqlite3.VersionText], fMessageUtf8);\r\n+    aErrorCode, aContext, sqlite3.VersionText], fMessageUtf8);\r\n   if aDB = 0 then\r\n     fMessageUtf8 := fMessageUtf8 + ' with aDB=nil'\r\n   else\r\n@@ -7324,6 +7331,63 @@ procedure TSqlDataBase.UnLockJson(const aSql, aJsonResult: RawUtf8;\n   end;\r\n end;\r\n \r\n+procedure TSqlDataBase.LoadExtension(const aPath: TFileName;\r\n+  const aEntryPoint: RawUtf8);\r\n+var\r\n+  bak, enabled, res: integer;\r\n+  fn: RawUtf8;\r\n+  msg: PUtf8Char;\r\n+begin\r\n+  if self = nil then\r\n+    exit;\r\n+  if aPath = '' then\r\n+    ESqlite3Exception.RaiseUtf8('%.LoadExtension: missing filename', [self]);\r\n+  fLog.Add.Log(sllSQL, 'LoadExtension % [%]', [aPath, aEntryPoint], self);\r\n+  LockAndFlushCache;\r\n+  try\r\n+    if (fDB = 0) or\r\n+       (sqlite3 = nil) then\r\n+      ESqlite3Exception.RaiseUtf8('%.LoadExtension: database not open', [self]);\r\n+    if not Assigned(sqlite3.db_config) or\r\n+       not Assigned(sqlite3.load_extension) or\r\n+       not Assigned(sqlite3.free_) then\r\n+      ESqlite3Exception.RaiseUtf8(\r\n+        '%.LoadExtension: SQLite API unavailable', [self]);\r\n+    // remember the current state of the C extension-loading API\r\n+    bak := 0;\r\n+    sqlite3_check(fDB, sqli\n... [truncated, 1166 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17645\n+17646",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17645'\r\n+'2.4.17646'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.sqlite3"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "77b0d3ee7eb803b0854fde445e496e8b485699b1",
+      "short_sha": "77b0d3ee",
+      "subject": "test: coverage of partial SynLZDecompress1() output",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T17:29:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/77b0d3ee7eb803b0854fde445e496e8b485699b1",
+      "parents": [
+        "f08998d826244509e9b5e147b469f83b298dbb26"
+      ],
+      "stats": {
+        "additions": 76,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17644\n+17645",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17644'\r\n+'2.4.17645'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 74,
+          "deletions": 0,
+          "patch": "@@ -11734,6 +11734,33 @@ procedure TTestCoreCompression._SynLZ;\n     Check(t = v);\r\n   end;\r\n \r\n+  procedure TestPartial(const hexa, suffix, expected: RawByteString;\r\n+    maxOut: integer);\r\n+  var\r\n+    buffer: array[0..191] of byte;\r\n+    count, k: integer;\r\n+    outbuf: PAnsiChar;\r\n+    compressed: RawByteString;\r\n+  begin\r\n+    compressed := Join([HumanHexToBin(hexa), suffix]);\r\n+    Check((maxOut >= 0) and (maxOut <= SizeOf(buffer) - 16),\r\n+      'partial test bound');\r\n+    if (maxOut < 0) or (maxOut > SizeOf(buffer) - 16) then\r\n+      exit;\r\n+    outbuf := @buffer[16]; // guard 16 bytes before the output\r\n+    FillCharFast(buffer, SizeOf(buffer), $A5);\r\n+    count := SynLZDecompress1partial(pointer(compressed), length(compressed),\r\n+      outbuf, maxOut);\r\n+    CheckEqual(count, length(expected), 'partial count');\r\n+    if expected <> '' then\r\n+      Check(CompareMem(outbuf, pointer(expected), length(expected)),\r\n+        'partial content');\r\n+    for k := 0 to 15 do\r\n+      CheckEqual(buffer[k], $A5, 'partial output underflow');\r\n+    for k := 16 + maxOut to high(buffer) do\r\n+      CheckEqual(buffer[k], $A5, 'partial output overflow');\r\n+  end;\r\n+\r\n var\r\n   s, t: RawByteString;\r\n   i, j, k, n, complen2: integer;\r\n@@ -11809,6 +11836,53 @@ procedure TTestCoreCompression._SynLZ;\n   dec1[0] := 0;\r\n   CheckEqual(SynLZDecompress1partial(pointer(s), length(s), Pointer(dec1), 0), 0);\r\n   CheckEqual(dec1[0], 0, 'partial0');\r\n+  // in the ABC fixtures, hash('ABC') = $675, so 5167 encodes a 3-byte match\r\n+  // and 506702 encodes an extended 20-byte match\r\n+  TestPartial('', '', '',\r\n+    8); // missing header\r\n+  TestPartial('00', '', '',\r\n+    8); // short header\r\n+  TestPartial('0000', '', '',\r\n+    8); // header alone\r\n+  TestPartial('00000000', '', '',\r\n+    8); // partial CW\r\n+  TestPartial('008000', '', '',\r\n+    8); // short extended header\r\n+  TestPartial('010000000000', 'ABC', 'ABC',\r\n+    16); // ignore advertised size\r\n+  TestPartial('0080000000000000', 'ABC', 'ABC',\r\n+    16); // extended header\r\n+  TestPartial('000001000000', '', '',\r\n+    8);  // missing match token\r\n+  TestPartial('00000100000010', '', '',\r\n+    8);  // one-byte token\r\n+  TestPartial('0000010000000000', '', '',\r\n+    8);  // unset hash entry\r\n+  TestPartial('0000080000004142430000', '', 'ABC',\r\n+    16); // invalid after literals\r\n+  TestPartial('0000080000004142435067', '', 'ABC',\r\n+    16); // missing length byte\r\n+  TestPartial('0000080000004142435167', '', 'ABCABC',\r\n+    6);  // final 2-byte token\r\n+  TestPartial('0000080000004142435167', '', 'ABCABC',\r\n+    16); // count < maxOut\r\n+  TestPartial('0000080000004142435367', '', 'ABCABCAB',\r\n+    16); // overlap\r\n+  TestPartial('000008000000414243506702',  '','ABCABCABCABCABCABCABCAB',\r\n+    23); // final 3-byte token\r\n+  TestPartial('000008000000414243506702', '', 'ABCA',\r\n+    4);  // clipped match\r\n+  TestPartial('000008000000414243506702', '', 'ABCABCA',\r\n+    7);\r\n+  TestPartial('00001800000041424351675167', '', 'ABCABCABC',\r\n+    16); // consecutive matches/hash\r\n+  TestPartial('0000080000004142435167', '123456789', 'ABCABC123456789',\r\n+   15);  // 8-byte match fast path\r\n+  // literal runs across a 32-bit control-word boundary\r\n+  TestPartial('000000000000',\r\n+    RawUtf8OfChar('A', 32) + HumanHexToBin('00000000') + 'Z',\r\n+    RawUtf8OfChar('A', 32) + 'Z', 64);\r\n+  TestPartial('000008000000414243506702', '', '', 0); // no writes\r\n end;\r\n \r\n procedure TTestCoreCompression._TAlgoCompress;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f08998d826244509e9b5e147b469f83b298dbb26",
+      "short_sha": "f08998d8",
+      "subject": "db: fixed SQLite3 transaction status with TSqlDatabase",
+      "body": "- or previous flag was buggy so we rely on internal SQLite3 state\n- also refactored the internal locking mechanism",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T16:45:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f08998d826244509e9b5e147b469f83b298dbb26",
+      "parents": [
+        "5de5c1b778c10538d1ceb562ef0b9e6b8d22ca6c"
+      ],
+      "stats": {
+        "additions": 123,
+        "deletions": 88,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.sqlite3.pas",
+          "status": "modified",
+          "additions": 121,
+          "deletions": 86,
+          "patch": "@@ -4512,7 +4512,7 @@   TSqlRequest = record\n     // - Close is always called internally\r\n     // - raise an ESqlite3Exception on any error\r\n     procedure Execute(aDB: TSqlite3DB; const aSql: RawUtf8;\r\n-      out aValue: RawUtf8); overload;\r\n+      var aValue: RawUtf8); overload;\r\n     /// Execute a SQL statement to return TEXT from the aSql UTF-8 encoded string\r\n     // - Execute the first statement in aSql\r\n     // - this statement must get (at least) one field/column result of TEXT\r\n@@ -4916,7 +4916,6 @@   TSqlDataBase = class(TObjectOSLock)\n     fFileDefaultCacheSize: integer;\r\n     fIsMemory: boolean;\r\n     fPassword: SpiUtf8;\r\n-    fTransactionActive: boolean;\r\n     /// if not nil, cache is used - see UseCache property\r\n     fCache: TSynCache;\r\n     fInternalState: PCardinal;\r\n@@ -4926,8 +4925,8 @@   TSqlDataBase = class(TObjectOSLock)\n     fBackupBackgroundLastTime: RawUtf8;\r\n     fBackupBackgroundLastFileName: TFileName;\r\n     fUseCacheSize: integer;\r\n-    fStatementMaxMemory: PtrUInt;\r\n     fLogResultMaximumSize: integer;\r\n+    fStatementMaxMemory: PtrUInt;\r\n     fLog: TSynLogClass;\r\n     /// store TSqlDataBaseSQLFunction instances\r\n     fSqlFunctions: TSynObjectList;\r\n@@ -4955,6 +4954,9 @@   TSqlDataBase = class(TObjectOSLock)\n     function GetBackupBackgroundInProcess: boolean;\r\n     function SqlShouldBeLogged(const aSql: RawUtf8): boolean;\r\n     function GetSqlite3Library: TSqlite3Library; // class function = bug in D2005\r\n+    function LockedGetTransactionActive: boolean;\r\n+    function GetTransactionActive: boolean;\r\n+    procedure LockedExecute(const aSql: RawUtf8);\r\n   public\r\n     /// enter the internal mutex: called before any DB access\r\n     // - provide the SQL statement about to be executed: handle proper caching\r\n@@ -5071,7 +5073,7 @@   TSqlDataBase = class(TObjectOSLock)\n     // - this statement must get a one field/column result of TEXT in aValue\r\n     // - raise an ESqlite3Exception on any error\r\n     procedure Execute(const aSql: RawUtf8;\r\n-      out aValue: RawUtf8; NoLog: boolean = false); overload;\r\n+      var aValue: RawUtf8; NoLog: boolean = false); overload;\r\n     /// Execute one SQL statements in aSql UTF-8 encoded string\r\n     // - can be prepared with TransactionBegin()\r\n     // - raise no Exception on error, but returns FALSE in such case\r\n@@ -5322,9 +5324,11 @@   TSqlDataBase = class(TObjectOSLock)\n     // - default is 16MB\r\n     property UseCacheSize: integer\r\n       read fUseCacheSize write fUseCacheSize;\r\n-    /// return TRUE if a Transaction begun\r\n+    /// TRUE if SQLite has an active transaction on this connection\r\n+    // - reflects the actual SQLite state, even after SQL errors\r\n+    // - also detects transactions started with direct SQL\r\n     property TransactionActive: boolean\r\n-      read fTransactionActive;\r\n+      read GetTransactionActive;\r\n     /// sets a busy handler that sleeps for a specified amount of time\r\n     // (in milliseconds) when a table is locked, before returning an error\r\n     // - let SQLite3 intercept SQLITE_BUSY errors using busy_timeout() handler\r\n@@ -6731,62 +6735,6 @@ procedure InternalUnicodeUpper(Context: TSqlite3FunctionContext; argc: integer;\n \r\n { TSqlDataBase }\r\n \r\n-function TSqlDataBase.Blob(const DBName, TableName, ColumnName: RawUtf8;\r\n-  RowID: Int64; ReadWrite: boolean): TSqlBlobStream;\r\n-begin\r\n-  if self = nil then\r\n-  begin\r\n-    result := nil;\r\n-    exit; // avoid GPF in case of call from a static-only server\r\n-  end;\r\n-  Lock;\r\n-  try\r\n-    if RowID = 0 then\r\n-      RowID := sqlite3.last_insert_rowid(DB); // warning: not multi-thread safe\r\n-    result := TSqlBlobStream.Create(DB, DBName, TableName, ColumnName, RowID, ReadWrite);\r\n-  finally\r\n-    UnLock;\r\n-  end;\r\n-end;\r\n-\r\n-procedure TSqlDataBase.RollBack;\r\n-begin\r\n-  if (self = nil) or\r\n-     not fTransactionActive then\r\n-    exit;\r\n-  Execute('ROLLBACK TRANSACTION;');\r\n-  fTransactionActive := false;\r\n-end;\r\n-\r\n-procedure TSqlDataBase.TransactionBegin(aBehavior: TSqlDataBaseTransaction\n... [truncated, 6060 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17643\n+17644",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17643'\r\n+'2.4.17644'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.sqlite3"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5de5c1b778c10538d1ceb562ef0b9e6b8d22ca6c",
+      "short_sha": "5de5c1b7",
+      "subject": "core: SynLZdecompress1partial() returns bytes written in dst[]",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T16:10:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5de5c1b778c10538d1ceb562ef0b9e6b8d22ca6c",
+      "parents": [
+        "1c41026cf4d347546ffb35a25c65c25a5c0fd60f"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 24,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 21,
+          "patch": "@@ -4223,6 +4223,7 @@ function SynLZdecompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): int\n // - it will also check for dst buffer overflow and detect invalid input\r\n // - so will be more secure than other functions, which expect the content to be\r\n // from a trusted source and verified ahead of time e.g. via a CRC/GMAC\r\n+// - returns the number of bytes <= maxDst successfully uncompressed into dst[]\r\n function SynLZdecompress1partial(src: PAnsiChar; size: integer; dst: PAnsiChar;\r\n   maxDst: integer): integer;\r\n \r\n@@ -12134,7 +12135,7 @@ function SynLZdecompressdestlen(in_p: PAnsiChar): integer;\n     result := (result and $7fff) or (integer(PWord(in_p + 2)^) shl 15);\r\n end;\r\n \r\n-type\r\n+type // state machine used by SynLZ[de]compress1pas[partial]sub() functions\r\n   TSynLzContext = record\r\n     src, srcend, srcendmatch, dst, dstend: PAnsiChar;\r\n     cwpoint: PCardinal;\r\n@@ -12420,7 +12421,7 @@ function SynLZdecompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): int\n   SynLZdecompress1passub(ctx);\r\n end;\r\n \r\n-procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\r\n+function SynLZdecompress1partialsub(var ctx: TSynLzContext): PtrInt;\r\n var\r\n   src, dst, o, hashed: PAnsiChar;\r\n   cw: cardinal;\r\n@@ -12466,7 +12467,7 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n       continue;\r\n     end;\r\n     // match token: first register all preceding literal positions\r\n-    if src + 2 >= ctx.srcend then\r\n+    if src + 2 > ctx.srcend then\r\n       break;\r\n     hashed := SynLzHash(hashed, dst - 3, ctx.offset^);\r\n     run := (PtrUInt(PByte(src)^) and 15) + 2;\r\n@@ -12476,7 +12477,7 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n     inc(src, 2);\r\n     if run = 2 then\r\n     begin\r\n-      if src + 1 >= ctx.srcend then\r\n+      if src >= ctx.srcend then\r\n         break;\r\n       run := ord(src^) + 18;\r\n       inc(src);\r\n@@ -12485,6 +12486,7 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n     if run >= t then // avoid buffer overflow by all means\r\n     begin\r\n       MoveByOne(o, dst, t);\r\n+      inc(dst, t);\r\n       break;\r\n     end\r\n     else if (t < 8) or\r\n@@ -12497,16 +12499,17 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n       PPtrUInt(dst + run - SizeOf(o))^ := PPtrUInt(o + run - SizeOf(o))^;\r\n       MoveByPtr(pointer(o), pointer(dst), run - 1);\r\n     end;\r\n+    inc(dst, run);\r\n     if src >= ctx.srcend then\r\n       break;\r\n     // need post-match hash synchronization\r\n-    SynLzHash(hashed, dst, ctx.offset^);\r\n-    inc(dst, run);\r\n+    SynLzHash(hashed, dst - run, ctx.offset^);\r\n     hashed := dst - 1;\r\n     // consume the single match bit\r\n     cw := cw shr 1;\r\n     dec(bits);\r\n   end;\r\n+  result := dst - ctx.dst;\r\n end;\r\n \r\n function SynLZdecompress1partial(src: PAnsiChar; size: integer; dst: PAnsiChar;\r\n@@ -12519,28 +12522,20 @@ function SynLZdecompress1partial(src: PAnsiChar; size: integer; dst: PAnsiChar;\n   if (maxDst <= 0) or\r\n      (size < 2) then\r\n     exit;\r\n-  result := PWord(src)^;\r\n-  if result = 0 then\r\n-    exit;\r\n   ctx.srcend := src + size;\r\n-  inc(src, 2);\r\n-  if result and $8000 <> 0 then\r\n-  begin\r\n+  if PWord(src)^ and $8000 <> 0 then // actual stored length is just skipped\r\n     if size < 4 then\r\n-      exit;\r\n-    result := (result and $7fff) or (integer(PWord(src)^) shl 15);\r\n+      exit\r\n+    else\r\n+      inc(src, 4)\r\n+  else\r\n     inc(src, 2);\r\n-  end;\r\n-  if maxDst < result then\r\n-    result := maxDst;\r\n-  if result <= 0 then\r\n-    exit;\r\n   FillCharFast(offset, SizeOf(offset), 0); // reset to 0 to detect invalid input\r\n   ctx.src := src;\r\n   ctx.dst := dst;\r\n-  ctx.dstend := dst + result;\r\n+  ctx.dstend := dst + maxDst;\r\n   ctx.offset := @offset;\r\n-  SynLZdecompress1partialsub(ctx);\r\n+  result := SynLZdecompress1partialsub(ctx); // returns bytes written in dst[]\r\n end;\r\n \r\n function CompressSynLZ(var Data: RawByteString; Compress: boolean): RawUtf8;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17642\n+17643",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17642'\r\n+'2.4.17643'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 1,
+          "patch": "@@ -11800,7 +11800,15 @@ procedure TTestCoreCompression._SynLZ;\n   Check(CompressSynLZ(s, true) = 'synlz');\r\n   Check(Length(s) < Length(Data), 'exelen');\r\n   Check(CompressSynLZ(s, false) = 'synlz');\r\n-  Check(s = Data);\r\n+  CheckEqual(s, Data);\r\n+  s := HumanHexToBin('0A000000000041');\r\n+  CheckEqual(SynLZDecompressdestlen(pointer(s)), 10);\r\n+  dec1[0] := 0;\r\n+  CheckEqual(SynLZDecompress1partial(pointer(s), length(s), Pointer(dec1), length(dec1)), 1);\r\n+  CheckEqual(dec1[0], $41, 'truncated');\r\n+  dec1[0] := 0;\r\n+  CheckEqual(SynLZDecompress1partial(pointer(s), length(s), Pointer(dec1), 0), 0);\r\n+  CheckEqual(dec1[0], 0, 'partial0');\r\n end;\r\n \r\n procedure TTestCoreCompression._TAlgoCompress;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1c41026cf4d347546ffb35a25c65c25a5c0fd60f",
+      "short_sha": "1c41026c",
+      "subject": "core: SSE2 version of x64 asm SynLZ decompression function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T15:36:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1c41026cf4d347546ffb35a25c65c25a5c0fd60f",
+      "parents": [
+        "80d4fded50b4e80870c3df2589c10867101b02c5"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 26,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 24,
+          "patch": "@@ -4023,7 +4023,7 @@ asm // rcx=src, edx=size, r8=dest\n         xor     eax, edx\r\n         and     eax, 4095              // rax=h\r\n         mov     r12, rdx\r\n-        //lea [off + rax * 8] pre-compute is not faster: 2 AGUs since Nehalem\r\n+        // lea [off + rax * 8] pre-compute is not faster: 2 AGUs since Nehalem\r\n         mov     r13, qword ptr [off + rax * 8]    // r13=o\r\n         mov     edx, dword ptr [cache + rax * 4]\r\n         mov     qword ptr [off + rax * 8], rbx\r\n@@ -4222,32 +4222,20 @@ asm\n         mov     rbx, r8\r\n         sub     rbx, r13               // distance = dst - match source\r\n         cmp     rbx, r11\r\n-        jb      @m2\r\n-        cmp     r11, 8\r\n-        jbe     @m3\r\n-        mov     rbx, qword ptr [r13 + r11 - 8] // final word - may overlap\r\n+        jb      @by1                   // MoveByOne is needed\r\n+        cmp     r11, 8                 // same 8-byte fast path as Pascal PInt64\r\n+        jbe     @ms\r\n+        cmp     r11, 16\r\n+        ja      @m128\r\n+        mov     rbx, qword ptr [r13 + r11 - 8] // 3..16 = two overlapping 64-bit\r\n         mov     qword ptr [r8 + r11 - 8], rbx\r\n-        lea     r12, [r11 - 1]\r\n-        shr     r12, 3                 // at least one word\r\n-        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n-@ms:    dec     r12\r\n-        mov     rbx, qword ptr [r13 + r12 * 8]\r\n-        mov     qword ptr [r8 + r12 * 8], rbx\r\n-        jnz     @ms\r\n-        jmp     @mok\r\n-@m3:    mov     rbx, qword ptr [r13]\r\n-        mov     qword ptr [r8], rbx    // same 8-byte fast path as Pascal PInt64\r\n-        jmp     @mok\r\n-@m2:    xor     edx, edx               // forward byte copy for overlap\r\n-@mb:    mov     bl, byte ptr [r13 + rdx]\r\n-        mov     byte ptr [r8 + rdx], bl\r\n-        inc     rdx\r\n-        cmp     rdx, r11\r\n-        jne     @mb\r\n+@ms:    mov     rbx, qword ptr [r13]\r\n+        mov     qword ptr [r8], rbx\r\n @mok:   cmp     rsi, r9\r\n         jae     @done                  // last token: no further hashing\r\n-        cmp     rax, r8\r\n+@hash:  cmp     rax, r8\r\n         jae     @hash3\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n @hash2: inc     rax\r\n         mov     ebx, dword ptr [rax]\r\n         mov     ecx, ebx\r\n@@ -4262,7 +4250,25 @@ asm\n         shr     edi, 1\r\n         dec     r10d\r\n         jmp     @main\r\n-@done:  pop     rax                     // decompressed size\r\n+@by1:   xor     edx, edx               // forward byte copy\r\n+@mb:    mov     bl, byte ptr [r13 + rdx]\r\n+        mov     byte ptr [r8 + rdx], bl\r\n+        inc     rdx\r\n+        cmp     rdx, r11\r\n+        jne     @mb\r\n+        jmp     @mok\r\n+@m128:  movdqu  xmm0, dqword ptr [r13 + r11 - 16] // ending overlapping 128-bit\r\n+        movdqu  dqword ptr [r8 + r11 - 16], xmm0\r\n+        lea     r12, [r11 - 1]\r\n+        and     r12, -16               // 16 * ((len - 1) div 16) >= 16\r\n+        {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n+@sse2:  sub     r12, 16                // SSE2 128-bit move\r\n+        movdqu  xmm0, dqword ptr [r13 + r12]\r\n+        movdqu  dqword ptr [r8 + r12], xmm0\r\n+        jnz     @sse2\r\n+        cmp     rsi, r9\r\n+        jb      @hash\r\n+@done:  pop     rax                    // decompressed size\r\n @empty: pop     r13\r\n         pop     r12\r\n         pop     rbx\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17641\n+17642",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17641'\r\n+'2.4.17642'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "80d4fded50b4e80870c3df2589c10867101b02c5",
+      "short_sha": "80d4fded",
+      "subject": "core: i386 asm using BSF opcode of SynLZdecompress1()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T14:50:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/80d4fded50b4e80870c3df2589c10867101b02c5",
+      "parents": [
+        "5380c908ab177d2395b2ea74c71e763b5e62a0fc"
+      ],
+      "stats": {
+        "additions": 147,
+        "deletions": 106,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4236,7 +4236,7 @@ asm\n         jnz     @ms\r\n         jmp     @mok\r\n @m3:    mov     rbx, qword ptr [r13]\r\n-        mov     qword ptr [r8], rbx    // same 8-byte fast path as Pascal\r\n+        mov     qword ptr [r8], rbx    // same 8-byte fast path as Pascal PInt64\r\n         jmp     @mok\r\n @m2:    xor     edx, edx               // forward byte copy for overlap\r\n @mb:    mov     bl, byte ptr [r13 + rdx]\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 144,
+          "deletions": 103,
+          "patch": "@@ -2140,10 +2140,18 @@ end; // the x64 asm returns the very same value - no further optimization needed\n function SynLZdecompress1(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;\r\n {$ifdef FPC}nostackframe; assembler;{$endif}\r\n asm\r\n+        //   [esp]      = returned uncompressed size\r\n+        //   [esp+04H]  = compressed input end (src_end)\r\n+        //   [esp+08H]  = remaining control-word bits\r\n+        //   [esp+0CH]  = match length\r\n+        //   [esp+10H]  = literal run length\r\n+        //   [esp+1CH]  = TOffsets[0..4095] (16KB)\r\n+        // registers: ebx=src, esi=dst, ebp=last_hashed, edi=shifted CW\r\n         push    ebp\r\n         push    ebx\r\n         push    esi\r\n         push    edi\r\n+        // touch successive pages for Win32 stack guard growth\r\n         push    eax\r\n         add     esp, -4092\r\n         push    eax\r\n@@ -2153,82 +2161,115 @@ asm\n         push    eax\r\n         add     esp, -4092\r\n         push    eax\r\n-        add     esp, -24\r\n-        mov     esi, ecx\r\n-        mov     ebx, eax\r\n+        add     esp, -24            // total 16412 bytes\r\n+        mov     esi, ecx            // dst\r\n+        mov     ebx, eax            // src\r\n         add     edx, eax\r\n-        mov     [esp+8H], esi\r\n-        mov     [esp+10H], edx\r\n+        mov     [esp+04H], edx      // src_end\r\n         movzx   eax, word ptr [ebx]\r\n-        mov     [esp], eax\r\n-        or      eax,eax\r\n-        je      @@0917\r\n+        mov     [esp], eax          // result\r\n+        test    eax, eax\r\n+        jz      @done\r\n         add     ebx, 2\r\n-        mov     eax, [esp]\r\n-        test    ah, 80H\r\n-        jz      @@0907\r\n-        and     eax, 7FFFH\r\n+        test    eax, $8000\r\n+        jz      @size\r\n+        and     eax, $7fff\r\n         movzx   edx, word ptr [ebx]\r\n         shl     edx, 15\r\n         or      eax, edx\r\n         mov     [esp], eax\r\n         add     ebx, 2\r\n-@@0907: lea     ebp, [esi - 1]\r\n-@@0908: mov     ecx, [ebx]\r\n+@size:  lea     ebp, [esi - 1]\r\n+        mov     dword ptr [esp + 08H], 0 // bits\r\n+        xor     edi, edi\r\n+        {$ifdef FPC} align 16 {$else} {$ifdef ASMALIGN} .align 16 {$endif}{$endif}\r\n+@main:  cmp     ebx, [esp + 04H]      // src_end\r\n+        jae     @done\r\n+        cmp     dword ptr [esp + 08H], 0\r\n+        jne     @token\r\n+        mov     edi, [ebx]          // next 32 control bits\r\n         add     ebx, 4\r\n-        mov     [esp+14H], ecx\r\n-        mov     edi, 1             // edi=CWbit\r\n-        cmp     ebx, [esp+10H]\r\n-        jnc     @@0917\r\n-@@0909: mov     ecx, [esp+14H]\r\n-@@090A: test    ecx, edi\r\n-        jnz     @@0911\r\n-        mov     al, [ebx]\r\n-        inc     ebx\r\n-        mov     [esi], al\r\n-        inc     esi\r\n-        cmp     ebx, [esp+10H]\r\n-        lea     eax, [esi-3]\r\n-        jnc     @@0917\r\n-        cmp     eax, ebp\r\n-        jbe     @@0910\r\n-        inc     ebp\r\n+        mov     dword ptr [esp + 08H], 32\r\n+        cmp     ebx, [esp+04H]\r\n+        jae     @done\r\n+@token: test    edi, 1\r\n+        jnz     @match\r\n+        // consecutive zero control bits = literal run (max 32)\r\n+        mov     ecx, [esp + 08H]\r\n+        test    edi, edi\r\n+        jz      @litcnt            // all remaining bits are literals\r\n+        bsf     ecx, edi           // guaranteed nonzero\r\n+@litcnt:mov     edx, [esp + 04H]     // src_end\r\n+        sub     edx, ebx           // compressed bytes remaining\r\n+        cmp     ecx, edx\r\n+        jbe     @litcap\r\n+        mov     ecx, edx\r\n+@litcap:mov     [esp + 10H], ecx      // save run\r\n+        cmp     ecx, 4\r\n+        jb      @litb\r\n+        // final dword first, then backwards by dwords\r\n+        mov     eax, [ebx + ecx - 4]\r\n+        mov     [esi + ecx - 4], eax\r\n+        lea     edx, [ecx - 1]\r\n+        shr     edx, 2\r\n+        jz      @litok\r\n+        {$ifdef FPC} align 16 {$else} {$ifdef ASMALIGN} .align 16 {$endif}{$endif}\r\n+@lit4:  dec     edx\r\n+        mov     eax, [ebx + edx * 4]\r\n+        mov     [esi + edx * 4], eax\r\n+      \n... [truncated, 9228 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17640\n+17641",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17640'\r\n+'2.4.17641'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5380c908ab177d2395b2ea74c71e763b5e62a0fc",
+      "short_sha": "5380c908",
+      "subject": "test: more complete SynLZDecompress1partial() testing",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T14:17:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5380c908ab177d2395b2ea74c71e763b5e62a0fc",
+      "parents": [
+        "8aad19cd3099b03b947c39220d8a624eb4093315"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17639\n+17640",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17639'\r\n+'2.4.17640'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "patch": "@@ -11736,7 +11736,7 @@ procedure TTestCoreCompression._SynLZ;\n \r\n var\r\n   s, t: RawByteString;\r\n-  i, j, complen2: integer;\r\n+  i, j, k, n, complen2: integer;\r\n   comp2, dec1: array of byte;\r\n   {$ifdef ASMINTEL}\r\n   comp1, dec2: array of byte;\r\n@@ -11787,8 +11787,14 @@ procedure TTestCoreCompression._SynLZ;\n   for j := 0 to length(t) - 1 do\r\n   begin\r\n     FillCharFast(pointer(dec1)^, length(t), 0);\r\n-    Check(SynLZDecompress1partial(pointer(comp2), complen2, Pointer(dec1), j) = j);\r\n+    CheckEqual(SynLZDecompress1partial(pointer(comp2), complen2, Pointer(dec1), j), j);\r\n     Check(CompareMem(pointer(dec1), pointer(t), j));\r\n+    CheckEqual(StrLen(pointer(dec1)), j, 'underflow');\r\n+    n := 0;\r\n+    for k := j to length(t) - 1 do\r\n+      if dec1[k] <> 0 then\r\n+        inc(n);\r\n+    CheckEqual(n, 0, 'overflow');\r\n   end;\r\n   s := Data;\r\n   Check(CompressSynLZ(s, true) = 'synlz');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8aad19cd3099b03b947c39220d8a624eb4093315",
+      "short_sha": "8aad19cd",
+      "subject": "core: rewritten SynLZdecompress1() x64 asm to use BSF opcode",
+      "body": "- just like the pascal version - only slightly faster than FPC pure pascal :)",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T14:09:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8aad19cd3099b03b947c39220d8a624eb4093315",
+      "parents": [
+        "160086316412d249468a67722fe32f8317e49d15"
+      ],
+      "stats": {
+        "additions": 128,
+        "deletions": 99,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 126,
+          "deletions": 97,
+          "patch": "@@ -4121,123 +4121,152 @@ end;\n \r\n function SynLZdecompress1(src: PAnsiChar; size: integer; dst: PAnsiChar): integer;\r\n var\r\n-  off: TOffsets; // pointers are faster and use only 32KB on stack\r\n-asm     // rcx=src, edx=size, r8=dest\r\n-        {$ifdef ABIWINX64} // additional registers to preserve\r\n+  off: TOffsets; // 4096 pointers, allocated on the stack\r\n+asm\r\n+        {$ifdef ABIWINX64}\r\n         push    rsi\r\n         push    rdi\r\n-        {$else} // Linux 64-bit ABI\r\n-        mov     r8, rdx\r\n-        mov     rdx, rsi\r\n-        mov     rcx, rdi\r\n+        mov     rsi, rcx               // rsi = src\r\n+        {$else} // System V x86-64: rdi=src, esi=size, rdx=dst\r\n+        mov     r8, rdx                // r8 = dst\r\n+        mov     edx, esi               // edx = compressed size\r\n+        mov     rsi, rdi               // rsi = src\r\n         {$endif ABIWINX64}\r\n         push    rbx\r\n         push    r12\r\n         push    r13\r\n-        movzx   eax, word ptr [rcx]    // rcx=src   eax=result\r\n-        lea     r9, [rcx + rdx]        // r9=src_end\r\n+        movzx   eax, word ptr [rsi]    // uncompressed size header\r\n+        lea     r9, [rsi + rdx]        // r9 = src_end\r\n         test    eax, eax\r\n-        je      @36\r\n-        add     rcx, 2\r\n-        mov     r10d, eax\r\n-        and     r10d, $8000\r\n-        jz      @21                   // dest size < 32768\r\n-        movzx   ebx, word ptr [rcx]\r\n+        jz      @empty\r\n+        add     rsi, 2\r\n+        test    eax, $8000\r\n+        jz      @size\r\n+        movzx   ebx, word ptr [rsi]\r\n         shl     ebx, 15\r\n         and     eax, $7fff\r\n         or      eax, ebx\r\n-        add     rcx, 2\r\n-@21:    push    rax                    // save result for function exit\r\n-        lea     rax, [r8 - 1]          // rax=last_hashed  r8=dest\r\n-@22:    mov     edi, dword ptr [rcx]   // edi=CW\r\n-        add     rcx, 4\r\n-        mov     r10d, 1                // r10d=CWBit\r\n-        cmp     rcx, r9\r\n-        jnc     @35\r\n+        add     rsi, 2\r\n+@size:  push    rax                    // save return value\r\n+        lea     rax, [r8 - 1]          // rax = last_hashed\r\n+        xor     r10d, r10d             // remaining control bits = 0\r\n+@main:  cmp     rsi, r9\r\n+        jae     @done\r\n+        test    r10d, r10d\r\n+        jnz     @token\r\n+        mov     edi, dword ptr [rsi]   // shifted control word\r\n+        add     rsi, 4\r\n+        mov     r10d, 32\r\n+        cmp     rsi, r9\r\n+        jae     @done\r\n         {$ifdef FPC} align 16 {$else} .align 16 {$endif}\r\n-@23:    test    r10d, edi\r\n-        jnz     @25\r\n-        mov     bl, byte ptr [rcx]    // CWBit was not set: copy byte and hash\r\n-        mov     byte ptr [r8], bl\r\n-        add     rcx, 1\r\n-        lea     rbx, [r8 - 2]\r\n-        add     r8, 1\r\n-        cmp     rcx, r9\r\n-        jnc     @35\r\n-        cmp     rbx, rax\r\n-        jbe     @24\r\n-        add     rax, 1\r\n-        mov     esi, dword ptr [rax]\r\n-        mov     ebx, esi\r\n-        shr     esi, 12\r\n-        xor     ebx, esi\r\n-        and     ebx, 4095\r\n-        mov     qword ptr [off + rbx * 8], rax\r\n-@24:    shl     r10d, 1\r\n-        jnz     @23\r\n-        jmp     @22\r\n-@25:    movzx   rbx, word ptr [rcx] // CWBit was set: copy bytes from offset\r\n-        add     rcx, 2\r\n-        mov     r11, rbx\r\n-        shr     ebx, 4                 // ebx=h\r\n-        and     r11, 0FH               // r11=t\r\n-        lea     r11, [r11 + 2]\r\n-        jnz     @26\r\n-        movzx   r11, byte ptr [rcx]\r\n-        add     rcx, 1\r\n-        lea     r11, [r11 + (16 + 2)]\r\n-@26:    mov     r13, qword ptr [off + rbx * 8] // r13=o\r\n-        mov     rbx, r8\r\n-        xor     rsi, rsi\r\n-        sub     rbx, r13\r\n+@token: test    edi, 1\r\n+        jnz     @match\r\n+        mov     r11d, r10d             // run = remaining bits\r\n+        test    edi, edi\r\n+        jz      @litcnt                // entire remaining word is literals\r\n+        bsf     r11d, edi              // edi <> 0: run = trailing zeros\r\n+@\n... [truncated, 5208 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17638\n+17639",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17638'\r\n+'2.4.17639'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base.asmx64"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "160086316412d249468a67722fe32f8317e49d15",
+      "short_sha": "16008631",
+      "subject": "core: hardened SynLZdecompress1partial() from invalid input",
+      "body": "- previous code could still make some GPF or silent buffer overflow",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T14:06:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/160086316412d249468a67722fe32f8317e49d15",
+      "parents": [
+        "d9df19364a81a4fd64fb20f3bdb54a3cada69563"
+      ],
+      "stats": {
+        "additions": 30,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 13,
+          "patch": "@@ -4220,8 +4220,9 @@ function SynLZdecompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): int\n /// SynLZ decompression algorithm with memory boundaries check\r\n // - this function is slower, but will allow to uncompress only the start\r\n // of the content (e.g. to read some metadata header)\r\n-// - it will also check for dst buffer overflow, so will be more secure than\r\n-// other functions, which expect the content to be verified (e.g. via CRC)\r\n+// - it will also check for dst buffer overflow and detect invalid input\r\n+// - so will be more secure than other functions, which expect the content to be\r\n+// from a trusted source and verified ahead of time e.g. via a CRC/GMAC\r\n function SynLZdecompress1partial(src: PAnsiChar; size: integer; dst: PAnsiChar;\r\n   maxDst: integer): integer;\r\n \r\n@@ -12341,11 +12342,11 @@ procedure SynLZdecompress1passub(var ctx: TSynLzContext);\n     // read a control word once exhausting its 32 bits\r\n     if bits = 0 then\r\n     begin\r\n+      if src + 4 >= ctx.srcend then\r\n+        break; // avoid buffer overflow\r\n       cw := PCardinal(src)^;\r\n       inc(src, 4);\r\n       bits := 32;\r\n-      if src >= ctx.srcend then\r\n-        break;\r\n     end;\r\n     if cw and 1 = 0 then\r\n     begin\r\n@@ -12430,16 +12431,16 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n   hashed := dst - 1;\r\n   cw := 0;\r\n   bits := 0;\r\n-  while src < ctx.srcend do\r\n+  while dst < ctx.dstend do\r\n   begin\r\n     // read a control word once exhausting its 32 bits\r\n     if bits = 0 then\r\n     begin\r\n+      if src + 4 >= ctx.srcend then\r\n+        break;\r\n       cw := PCardinal(src)^;\r\n       inc(src, 4);\r\n       bits := 32;\r\n-      if src >= ctx.srcend then\r\n-        break;\r\n     end;\r\n     if cw and 1 = 0 then\r\n     begin\r\n@@ -12454,24 +12455,29 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n       t := ctx.dstend - dst;\r\n       if run > t then\r\n         run := t;\r\n+      if run = 0 then\r\n+        break;\r\n       // move all litterals at once - don't hash them yet\r\n       MoveSynLzLiterals(pointer(src), pointer(dst), run);\r\n       inc(src, run);\r\n       inc(dst, run);\r\n       dec(bits, run);\r\n       cw := cw shr run;\r\n-      if (src >= ctx.srcend) or\r\n-         (dst >= ctx.dstend) then\r\n-        break;\r\n       continue;\r\n     end;\r\n     // match token: first register all preceding literal positions\r\n+    if src + 2 >= ctx.srcend then\r\n+      break;\r\n     hashed := SynLzHash(hashed, dst - 3, ctx.offset^);\r\n     run := (PtrUInt(PByte(src)^) and 15) + 2;\r\n     o := ctx.offset^[PWord(src)^ shr 4];\r\n+    if o = nil then\r\n+      break; // invalid input\r\n     inc(src, 2);\r\n     if run = 2 then\r\n     begin\r\n+      if src + 1 >= ctx.srcend then\r\n+        break;\r\n       run := ord(src^) + 18;\r\n       inc(src);\r\n     end;\r\n@@ -12480,10 +12486,12 @@ procedure SynLZdecompress1partialsub(var ctx: TSynLzContext);\n     begin\r\n       MoveByOne(o, dst, t);\r\n       break;\r\n-    end;\r\n-    if (run <= 8) or\r\n-       (PtrUInt(dst - o) < run) then\r\n+    end\r\n+    else if (t < 8) or\r\n+            (PtrUInt(dst - o) < run) then\r\n       MoveByOne(o, dst, run)\r\n+    else if run <= 8 then\r\n+      PInt64(dst)^ := PInt64(o)^\r\n     else\r\n     begin\r\n       PPtrUInt(dst + run - SizeOf(o))^ := PPtrUInt(o + run - SizeOf(o))^;\r\n@@ -12507,20 +12515,27 @@ function SynLZdecompress1partial(src: PAnsiChar; size: integer; dst: PAnsiChar;\n   offset: TOffsets;\r\n   ctx: TSynLzContext;\r\n begin\r\n+  result := 0;\r\n+  if (maxDst <= 0) or\r\n+     (size < 2) then\r\n+    exit;\r\n   result := PWord(src)^;\r\n   if result = 0 then\r\n     exit;\r\n   ctx.srcend := src + size;\r\n   inc(src, 2);\r\n   if result and $8000 <> 0 then\r\n   begin\r\n+    if size < 4 then\r\n+      exit;\r\n     result := (result and $7fff) or (integer(PWord(src)^) shl 15);\r\n     inc(src, 2);\r\n   end;\r\n   if maxDst < result then\r\n     result := maxDst;\r\n   if result <= 0 then\r\n     exit;\r\n+  FillCharFast(offset, SizeOf(offset), 0); // reset to 0 to detect invalid input\r\n   ctx.src := src;\r\n   ctx.d\n... [truncated, 43 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17637\n+17638",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17637'\r\n+'2.4.17638'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d9df19364a81a4fd64fb20f3bdb54a3cada69563",
+      "short_sha": "d9df1936",
+      "subject": "core: faster SynLZ decompression in pure pascal",
+      "body": "- using BSF opcode makes the pascal code faster than the x64 asm\n- our manual i386 asm is still faster",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T13:17:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d9df19364a81a4fd64fb20f3bdb54a3cada69563",
+      "parents": [
+        "6ee066546823dbcec902f9fdcc95665d1bf31f73"
+      ],
+      "stats": {
+        "additions": 213,
+        "deletions": 142,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -4358,6 +4358,12 @@ asm\n         mov     eax, 255\r\n @nz:\r\n end;\r\n+\r\n+function CountTrailingZeros32(c: cardinal): PtrUInt;\r\n+asm\r\n+        // called internally from SynLZdecompress1pas on oldest Delphi\r\n+        bsf     eax, eax\r\n+end;\r\n {$endif HASBITINTRINSICS}\r\n \r\n // FPC will properly inline multiplication by reciprocal\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -2827,6 +2827,12 @@ asm\n @high:  add     eax, 32\r\n @done:\r\n end;\r\n+\r\n+function CountTrailingZeros32(c: cardinal): PtrUInt;\r\n+asm\r\n+        // called internally from SynLZdecompress1pas on oldest Delphi\r\n+        bsf     eax, eax\r\n+end;\r\n {$endif HASBITINTRINSICS}\r\n \r\n {$ifndef ISDELPHIXE2}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 199,
+          "deletions": 140,
+          "patch": "@@ -12135,7 +12135,7 @@ function SynLZdecompressdestlen(in_p: PAnsiChar): integer;\n \r\n type\r\n   TSynLzContext = record\r\n-    src, srcend, srcendmatch, dst: PAnsiChar;\r\n+    src, srcend, srcendmatch, dst, dstend: PAnsiChar;\r\n     cwpoint: PCardinal;\r\n     cwmask: cardinal;\r\n     offset: ^TOffsets;\r\n@@ -12273,7 +12273,8 @@ function SynLZcompress1pas(src: PAnsiChar; size: integer; dst: PAnsiChar): integ\n   result := dst - dstbeg;\r\n end;\r\n \r\n-procedure MoveByPtr(src, dst: PPtrUIntArray; max: PtrUInt); inline;\r\n+procedure MoveByPtr(src, dst: PPtrUIntArray; max: PtrUInt);\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n var\r\n   i, c: PtrUInt; // RISC targets are likely to have more registers\r\n begin\r\n@@ -12286,177 +12287,230 @@ procedure MoveByPtr(src, dst: PPtrUIntArray; max: PtrUInt); inline;\n   until i = max; // this loop pattern is faster than -count + inc(count) on RISC\r\n end;\r\n \r\n-procedure SynLZdecompress1passub(src, src_end, dst: PAnsiChar; var offset: TOffsets);\r\n+procedure MoveSynLzLiterals(src, dst: PAnsiChar; n: PtrUInt);\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n var\r\n-  last_hashed, o: PAnsiChar;\r\n-  cw, cwbit, v: cardinal;\r\n-  t: PtrUInt;\r\n-begin // better code generation with sub-functions for raw decoding\r\n-  last_hashed := dst - 1;\r\n-  cw := PCardinal(src)^;\r\n-  inc(src, 4);\r\n-  cwbit := 1;\r\n-  if src < src_end then\r\n+  c: PtrUInt;\r\n+begin\r\n+  if n < SizeOf(c) then\r\n+  begin\r\n     repeat\r\n-      if cw and cwbit = 0 then\r\n-      begin\r\n-        dst^ := src^;\r\n-        inc(src);\r\n-        inc(dst);\r\n-        if src >= src_end then\r\n-          break;\r\n-        if last_hashed < dst - 3 then\r\n-        begin\r\n-          inc(last_hashed);\r\n-          v := PCardinal(last_hashed)^;\r\n-          offset[((v shr 12) xor v) and 4095] := last_hashed;\r\n-        end;\r\n-        cwbit := cwbit shl 1;\r\n-        if cwbit <> 0 then\r\n-          continue;\r\n-      end\r\n-      else\r\n-      begin\r\n-        t := (PtrUInt(PByte(src)^) and 15) + 2;\r\n-        o := offset[PWord(src)^ shr 4];\r\n-        inc(src, 2);\r\n-        if t = 2 then\r\n-        begin\r\n-          t := ord(src^) + (16 + 2);\r\n-          inc(src);\r\n-        end;\r\n-        if PtrUInt(dst - o) < t then // overlap -> move byte-by-byte\r\n-          MoveByOne(o, dst, t)\r\n-        else if t <= 8 then\r\n-          PInt64(dst)^ := PInt64(o)^ // safe since src_endmatch := src_end-(6+5)\r\n-        else\r\n-        begin\r\n-          MoveByPtr(pointer(o), pointer(dst), t - 1);\r\n-          PPtrUInt(dst + t - SizeOf(o))^ := PPtrUInt(o + t - SizeOf(o))^;\r\n-        end;\r\n-        if src >= src_end then\r\n-          break;\r\n-        if last_hashed < dst then\r\n-          repeat // decompressed bytes should update the hash table\r\n-            inc(last_hashed);\r\n-            v := PCardinal(last_hashed)^;\r\n-            offset[((v shr 12) xor v) and 4095] := last_hashed;\r\n-          until last_hashed >= dst;\r\n-        inc(dst, t);\r\n-        last_hashed := dst - 1;\r\n-        cwbit := cwbit shl 1;\r\n-        if cwbit <> 0 then\r\n-          continue;\r\n-      end;\r\n+      dec(n);\r\n+      dst[n] := src[n];\r\n+    until n = 0;\r\n+    exit;\r\n+  end;\r\n+  c := PPtrUInt(src + n - SizeOf(c))^;\r\n+  PPtrUInt(dst + n - SizeOf(c))^ := c;\r\n+  n := (n - 1) shr POINTERSHR;\r\n+  while n <> 0 do\r\n+  begin\r\n+    dec(n);\r\n+    c := PPtrUIntArray(src)[n];\r\n+    PPtrUIntArray(dst)[n] := c;\r\n+  end;\r\n+end;\r\n+\r\n+function SynLzHash(last, dst: PAnsiChar; var offset: TOffsets): PAnsiChar;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n+var\r\n+  v: cardinal;\r\n+begin\r\n+  if last < dst then\r\n+    repeat\r\n+      inc(last);\r\n+      v := PCardinal(last)^;\r\n+      offset[((v shr 12) xor v) and 4095] := last;\r\n+    until last >= dst;\r\n+  result := last;\r\n+end;\r\n+\r\n+procedure SynLZdecompress1passub(var ctx: TSynLzContext);\r\n+var\r\n+  src, dst, o, hashed: PAnsiChar;\r\n+  cw: cardinal;\r\n+  bits, run, t: PtrUInt;\r\n+begin\r\n+  src := ctx.src;\r\n+  dst := ctx.dst;\r\n+  hashed := dst - 1;\r\n+  cw := 0;\r\n+  bits := 0;\r\n+  while src < ctx.srcend do\r\n+  begin\r\n+    // read a cont\n... [truncated, 7804 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17636\n+17637",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17636'\r\n+'2.4.17637'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6ee066546823dbcec902f9fdcc95665d1bf31f73",
+      "short_sha": "6ee06654",
+      "subject": "core: properly use CountTrailingZeros32() intrinsic on Delphi 10.4 and up",
+      "body": "- new HASBITINTRINSICS conditional",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T13:15:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6ee066546823dbcec902f9fdcc95665d1bf31f73",
+      "parents": [
+        "e7802a7fb3c4f6d0b568dd793aedcee747207a1c"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 50,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.asmx64.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -4337,8 +4337,8 @@ end;\n \r\n {$ifdef ISDELPHI}\r\n \r\n-// those functions are intrinsics with FPC :)\r\n-\r\n+{$ifndef HASBITINTRINSICS}\r\n+// those functions are intrinsics with FPC and since Delphi 10.4\r\n function BSRdword(c: cardinal): cardinal;\r\n asm\r\n         .noframe\r\n@@ -4358,6 +4358,7 @@ asm\n         mov     eax, 255\r\n @nz:\r\n end;\r\n+{$endif HASBITINTRINSICS}\r\n \r\n // FPC will properly inline multiplication by reciprocal\r\n procedure Div100(Y: cardinal; var res: TDiv100Rec);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 11,
+          "patch": "@@ -2805,8 +2805,8 @@ asm\n         sub     dword ptr [ecx].TDiv100Rec.M, eax\r\n end;\r\n \r\n-// those functions are intrinsics with FPC :)\r\n-\r\n+{$ifndef HASBITINTRINSICS}\r\n+// those functions are intrinsics with FPC and since Delphi 10.4\r\n function BSRdword(c: cardinal): cardinal;\r\n asm\r\n         bsr     eax, eax\r\n@@ -2815,16 +2815,19 @@ asm\n @nz:\r\n end;\r\n \r\n-function BSRqword(const q: qword): cardinal;\r\n-var\r\n-  c: cardinal; // CPU32 and inlining friendly\r\n-begin\r\n-  c := q shr 32;\r\n-  if c = 0  then\r\n-    result := BsrDword(cardinal(q)) // search in lowest 32-bit\r\n-  else\r\n-    result := BsrDword(c) or 32;   // search in highest 32-bit\r\n+function BSRqword(const q: QWord): cardinal;\r\n+asm\r\n+        lea     edx, q          // pointer passed on stack with Delphi i386 ABI\r\n+        bsr     eax, [edx + 4]  // high DWORD\r\n+        jnz     @high\r\n+        bsr     eax, [edx]      // low DWORD\r\n+        jnz     @done\r\n+        mov     eax, 255\r\n+        jmp     @done\r\n+@high:  add     eax, 32\r\n+@done:\r\n end;\r\n+{$endif HASBITINTRINSICS}\r\n \r\n {$ifndef ISDELPHIXE2}\r\n function ReturnAddress: pointer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 34,
+          "patch": "@@ -3138,13 +3138,12 @@ function LockedReset32(Target: PInteger; New: integer = 0): integer;\n /// return the position of the leftmost set bit in a 32-bit value\r\n // - returns 255 if c equals 0\r\n // - mimics the FPC intrinsic, via asm on Intel or optimized pure pascal\r\n-function BSRdword(c: cardinal): cardinal;\r\n+function BSRdword(c: cardinal): cardinal; {$ifdef HASBITINTRINSICS} inline; {$endif}\r\n \r\n /// return the position of the leftmost set bit in a 64-bit value\r\n // - returns 255 if q equals 0\r\n // - mimics the FPC intrinsic, via asm on Intel x64 or optimized pure pascal\r\n-function BSRqword(const q: Qword): cardinal;\r\n-  {$ifndef ASMX64} {$ifdef HASINLINE} inline; {$endif} {$endif}\r\n+function BSRqword(const q: Qword): cardinal; {$ifdef HASBITINTRINSICS} inline; {$endif}\r\n \r\n {$endif ISDELPHI}\r\n \r\n@@ -11639,37 +11638,6 @@ procedure bswap32array(a: PCardinalArray; n: PtrInt);\n   until n = 0;\r\n end;\r\n \r\n-function BSRdword(c: cardinal): cardinal;\r\n-const\r\n-  _debruijn32: array[0..31] of byte = (\r\n-    0, 9, 1, 10, 13, 21, 2, 29, 11, 14, 16, 18, 22, 25, 3, 30,\r\n-    8, 12, 20, 28, 15, 17, 24, 7, 19, 27, 23, 6, 26, 5, 4, 31);\r\n-begin // http://graphics.stanford.edu/~seander/bithacks.html#IntegerLogDeBruijn\r\n-  if c <> 0 then\r\n-  begin\r\n-    c := c or (c shr 1);\r\n-    c := c or (c shr 2);\r\n-    c := c or (c shr 4);\r\n-    c := c or (c shr 8);\r\n-    c := c or (c shr 16);\r\n-    c := c * $07c4acdd; // explicit step for 32-bit truncation\r\n-    result := _debruijn32[c shr 27];\r\n-  end\r\n-  else\r\n-    result := 255;\r\n-end;\r\n-\r\n-function BSRqword(const q: Qword): cardinal;\r\n-var\r\n-  c: cardinal; // CPU32 friendly, but fast also on CPU64\r\n-begin\r\n-  c := q shr 32;\r\n-  if c = 0  then\r\n-    result := BsrDword(cardinal(q)) // search in lowest 32-bit\r\n-  else\r\n-    result := BsrDword(c) or 32;   // search in highest 32-bit\r\n-end;\r\n-\r\n procedure mul64x64(const left, right: QWord; out product: THash128Rec);\r\n var\r\n   l: TQWordRec absolute left;\r\n@@ -12008,6 +11976,26 @@ procedure Div100(Y: cardinal; var res: TDiv100Rec);\n \r\n {$endif ASMINTELNOTPIC}\r\n \r\n+{$ifdef ISDELPHI}\r\n+{$ifdef HASBITINTRINSICS} // Delphi 10.4 introduced them\r\n+function BSRdword(c: cardinal): cardinal;\r\n+begin\r\n+  if c = 0 then\r\n+    result := 255\r\n+  else\r\n+    result := 31 - CountLeadingZeros32(c);\r\n+end;\r\n+\r\n+function BSRqword(const q: qword): cardinal;\r\n+begin\r\n+  if q = 0 then\r\n+    result := 255\r\n+  else\r\n+    result := 63 - CountLeadingZeros64(q);\r\n+end;\r\n+{$endif HASBITINTRINSICS} // Delphi < 10.4 will use asmx86/x64.inc functions\r\n+{$endif ISDELPHI}\r\n+\r\n \r\n { ************ Buffers (e.g. Hashing and SynLZ compression) Raw Functions }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17635\n+17636",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17635'\r\n+'2.4.17636'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -152,7 +152,7 @@\n     HASCODEPAGE HASVARUSTRING STRCNT32 DACNT32 HASDYNARRAYTYPE HASQWORD\r\n     HASITERATORS HASIMPLICITOPERATOR HASDBFTWIDE HASDBFNEW\r\n     HASTTHREADSTART HASTTHREADTERMINATESET HASINTERFACEASTOBJECT\r\n-    HASEXTRECORDRTTI HASSLOWMUL64\r\n+    HASEXTRECORDRTTI HASSLOWMUL64 HASBITINTRINSICS\r\n     HAS_UI HAS_UI_VCL_LCL HAS_UI_PDF\r\n     CPU32 CPU64\r\n     CPUINTEL CPUX86 CPUX64 CPUARM3264 CPUARM CPUAARCH64 CPUX86NOTPIC\r\n@@ -207,6 +207,7 @@\n   {$define NODELPHIASM}       // avoid e.g. low-level System.@LStrFromPCharLen\r\n   {$define HASDYNARRAYTYPE}   // eltype2 field, used e.g. for T*ObjArray\r\n   {$define HASQWORD}\r\n+  {$define HASBITINTRINSICS}  // e.g. BsfDWord()\r\n   {$define HASITERATORS}\r\n   {$define HASSAFEITERATORS}\r\n   {$define HASIMPLICITOPERATOR}\r\n@@ -795,6 +796,7 @@\n     {$if CompilerVersion >= 34.0} // = Delphi 10.4\r\n       {$define ISDELPHI104}\r\n       {$define HASCACHEDRESSTRING} // introducing LoadResStringFunc()\r\n+      {$define HASBITINTRINSICS}   // introducing CountTrailingZeros32()\r\n     {$ifend}\r\n     {$if CompilerVersion >= 35.0} // = Delphi 11.x Alexandria\r\n       {$define ISDELPHI11}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 43,
+          "deletions": 0,
+          "patch": "@@ -545,6 +545,33 @@ function BSRdwordPurePascal(c: cardinal): cardinal;\n     result := 255;\r\n end;\r\n \r\n+function BSRqwordPurePascal(const q: Qword): cardinal;\r\n+var\r\n+  c: cardinal;\r\n+begin\r\n+  c := q shr 32;\r\n+  if c = 0  then\r\n+    result := BsrDwordPurePascal(cardinal(q)) // search in lowest 32-bit\r\n+  else\r\n+    result := BsrDwordPurePascal(c) or 32;   // search in highest 32-bit\r\n+end;\r\n+\r\n+function BsfDWordPurePascal(c: cardinal): cardinal; // not published yet\r\n+const\r\n+  _debruijn32: array[0..31] of byte = (\r\n+    0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,\r\n+    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9);\r\n+begin\r\n+  if c <> 0 then\r\n+  begin\r\n+    c := c and not (c - 1); // isolate lowest set bit\r\n+    c := c * $077cb531;     // truncate to 32 bits\r\n+    result := _debruijn32[c shr 27];\r\n+  end\r\n+  else\r\n+    result := 255;\r\n+end;\r\n+\r\n procedure TTestCoreBase.Bits;\r\n const\r\n   N = 1000000;\r\n@@ -631,8 +658,24 @@ procedure TTestCoreBase.Bits;\n       {$ifdef FPC}\r\n       CheckEqual(popcnt(v), c);\r\n       {$endif FPC}\r\n+      {$ifdef CPU32}\r\n+      v := v or (QWord(rnd.Next) shl 32);\r\n+      {$endif CPU32}\r\n+      CheckEqual(BSRqwordPurePascal(v), BSRqword(v), 'bsrq3');\r\n     end;\r\n     CheckEqual(BSRdwordPurePascal(0), BSRdword(0));\r\n+    CheckEqual(BSRqwordPurePascal(0), BSRqword(0));\r\n+    CheckEqual(BSRdword(0), 255);\r\n+    CheckEqual(BSRqword(0), 255);\r\n+    for i := 1 to 15 do\r\n+    begin\r\n+      v := i;\r\n+      repeat\r\n+        CheckEqual(BSRdwordPurePascal(v), BSRdword(v), 'bsrdi');\r\n+        CheckEqual(BSRqwordPurePascal(v), BSRqword(v), 'bsrqi');\r\n+        v := v shl 1;\r\n+      until v = 0; // all 64-bit\r\n+    end;\r\n     timer.Start;\r\n     for i := 1 to N do\r\n       GetBitsCountPtrInt(i);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Other",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.base.asmx64",
+        "mormot.core.base.asmx86",
+        "mormot.defines"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e7802a7fb3c4f6d0b568dd793aedcee747207a1c",
+      "short_sha": "e7802a7f",
+      "subject": "net: fixed TPollSocketPoll.Subscribe",
+      "body": "- should fix MacOS and BSD network process edge cases",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-15T08:51:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e7802a7fb3c4f6d0b568dd793aedcee747207a1c",
+      "parents": [
+        "c35132cf6eecfbfc86c7e4c7ed43a1c7db970bc7"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17634\n+17635",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17634'\r\n+'2.4.17635'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -1695,6 +1695,7 @@ begin\n         else if fd < 0 then\r\n           // found a void entry\r\n           new := i;\r\n+        inc(p);\r\n       end;\r\n   if new < 0 then\r\n   begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d33bf358112ecddf51fe77bf97b8f4b4c834ca95",
+      "short_sha": "d33bf358",
+      "subject": "db: TSqlDBProxyStatement can now be executed several times",
+      "body": "- TSqlDBProxyStatement keeps the whole response of ExecutePrepared in its\n  fDataInternalCopy buffer, which was never released before the instance\n  destruction: so a second ExecutePrepared on the same instance always raised\n  ESqlDBRemote 'Invalid TSqlDBProxyStatement.ExecutePrepared* call', even\n  after Reset or ReleaseRows\n- overriden ReleaseRows to release the binary buffer and its columns, and\n  Reset to also clear UpdateCount - so the usual Bind() + ExecutePrepared +\n  Step() + Reset loop works on a single instance, as with other providers\n- the ParamsToCommand() check is kept, so executing again without Reset or\n  ReleaseRows still raises an explicit exception\n- added a statement reuse regression check to TTestExternalDatabase._SynDBRemote\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "tobfel",
+      "date": "2026-10-10T17:22:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d33bf358112ecddf51fe77bf97b8f4b4c834ca95",
+      "parents": [
+        "80d4fded50b4e80870c3df2589c10867101b02c5"
+      ],
+      "stats": {
+        "additions": 43,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 0,
+          "patch": "@@ -406,6 +406,14 @@   TSqlDBProxyStatement = class(TSqlDBProxyStatementAbstract)\n     // - this overriden method will return the integer value returned by\r\n     // cExecute command\r\n     function UpdateCount: integer; override;\r\n+    /// release the result buffer received by ExecutePrepared\r\n+    // - this overriden method will release the binary rows data and the\r\n+    // columns description, so that this instance could be executed again\r\n+    procedure ReleaseRows; override;\r\n+    /// reset the statement, to be executed again with new bound parameters\r\n+    // - allow the usual Bind() + ExecutePrepared + Step() + Reset loop on\r\n+    // the same TSqlDBProxyStatement instance, as with the other providers\r\n+    procedure Reset; override;\r\n     /// force no UpdateCount method call on server side\r\n     // - may be needed to reduce server load, if this information is not needed\r\n     property ForceNoUpdateCount: boolean\r\n@@ -1764,6 +1772,28 @@ function TSqlDBProxyStatement.UpdateCount: integer;\n   result := fUpdateCount;\r\n end;\r\n \r\n+procedure TSqlDBProxyStatement.ReleaseRows;\r\n+begin\r\n+  // release the binary buffer and its columns - otherwise ParamsToCommand\r\n+  // would raise 'Invalid ExecutePrepared* call' on the next execution\r\n+  fDataInternalCopy := '';\r\n+  fDataRowCount := 0;\r\n+  fDataRowReaderOrigin := nil;\r\n+  fDataRowReader := nil;\r\n+  fDataCurrentRowValuesStart := nil;\r\n+  fCurrentRow := 0;\r\n+  ClearColumns;\r\n+  fColumnCount := 0;\r\n+  inherited ReleaseRows;\r\n+end;\r\n+\r\n+procedure TSqlDBProxyStatement.Reset;\r\n+begin\r\n+  ReleaseRows;\r\n+  fUpdateCount := 0;\r\n+  inherited Reset;\r\n+end;\r\n+\r\n procedure TSqlDBProxyStatement.ExecutePreparedAndFetchAllAsJson(\r\n   Expanded: boolean; out Json: RawUtf8; ReturnedRowCount: PPtrInt);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -916,6 +916,7 @@ procedure TTestExternalDatabase._SynDBRemote;\n       IDs: TIntegerDynArray;\r\n       Row, RowDoc, all: variant;\r\n       r, v: PDocVariantData;\r\n+      stmt: ISqlDBStatement;\r\n \r\n       procedure DoInsert;\r\n       var\r\n@@ -945,6 +946,18 @@ procedure TTestExternalDatabase._SynDBRemote;\n       TSynLogTestLog.EnterLocal(log, proxy, msg);\r\n       if proxy <> Props then\r\n         Check(proxy.UserID = 'user');\r\n+      // the same statement instance should be executable several times\r\n+      stmt := proxy.NewThreadSafeStatementPrepared(\r\n+        'select count(*) from People where YearOfDeath=?', true, true);\r\n+      for i := 1 to 3 do\r\n+      begin\r\n+        stmt.Bind(1, 1519);\r\n+        stmt.ExecutePrepared;\r\n+        Check(stmt.Step, 'reuse');\r\n+        CheckEqual(stmt.ColumnInt(0), DoCount, 'reuse');\r\n+        stmt.Instance.Reset;\r\n+      end;\r\n+      stmt := nil;\r\n       proxy.ExecuteNoResult('delete from people where ID>=?', [50000]);\r\n       res := proxy.Execute('select * from People where YearOfDeath=?', [1519]);\r\n       Check(res <> nil);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
