@@ -1,0 +1,488 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-15",
+  "edition_title": {
+    "en": "SynLZ hardening closes invalid-input crashes and overruns",
+    "fr": "Le durcissement de SynLZ corrige les plantages et débordements",
+    "zh": "SynLZ 加固修复无效输入导致的崩溃与越界",
+    "ru": "Усиление SynLZ устраняет сбои и переполнение на неверном вводе"
+  },
+  "intro": {
+    "en": "The safe partial SynLZ decoder is hardened against malformed input and now reports the bytes actually produced, making this an important update for services that accept compressed data from untrusted sources. SQLite transaction tracking, SQL proxy statement reuse, POSIX polling and cross-bitness database metadata also receive production-facing fixes. Delphi and FPC teams should land on the final build and recompile code that exposes the changed public record fields or Execute overloads.",
+    "fr": "Le décodeur partiel sécurisé SynLZ est renforcé face aux entrées mal formées et renvoie désormais le nombre d’octets réellement produits : cette mise à jour est importante pour les services qui acceptent des données compressées non fiables. Le suivi des transactions SQLite, la réutilisation des requêtes proxy SQL, le polling POSIX et les métadonnées de base entre architectures reçoivent aussi des corrections destinées à la production. Les équipes Delphi et FPC doivent adopter le build final et recompiler le code qui expose les champs de record publics ou les surcharges Execute modifiés.",
+    "zh": "安全的 SynLZ 部分解码器已针对畸形输入加固，并会返回实际生成的字节数；对接收不可信压缩数据的服务而言，这是一次重要更新。SQLite 事务跟踪、SQL 代理语句复用、POSIX 轮询以及跨位数数据库元数据也获得了面向生产环境的修复。Delphi 与 FPC 团队应升级到最终 build，并重新编译暴露已变更公开记录字段或 Execute 重载的代码。",
+    "ru": "Безопасный частичный декодер SynLZ усилен против повреждённого ввода и теперь возвращает фактическое число полученных байтов, поэтому обновление важно для сервисов, принимающих недоверенные сжатые данные. Также исправлены отслеживание транзакций SQLite, повторное использование SQL proxy statements, POSIX polling и метаданные БД между 32- и 64-битными системами. Командам Delphi и FPC следует перейти на финальный build и пересобрать код, который использует изменённые публичные поля records или перегрузки Execute."
+  },
+  "risk_level": "act-now",
+  "tldr": {
+    "en": [
+      "Upgrade services that call SynLZdecompress1partial on untrusted data: malformed streams could previously crash or overrun a buffer.",
+      "SynLZdecompress1partial now returns the bytes actually written, not the advertised or requested size.",
+      "SQLite transaction state now follows sqlite3_get_autocommit, including transactions opened by direct SQL and state changes after errors.",
+      "TSqlDBProxyStatement can be reset and reused without retaining rows, columns or an update count.",
+      "Database column size fields now use integer so proxy metadata serializes consistently between 32-bit and 64-bit peers.",
+      "Use build 2.4.17647 for the complete fixes, including POSIX polling and the new trusted-library LoadExtension wrapper."
+    ],
+    "fr": [
+      "Mettez à jour les services qui appellent SynLZdecompress1partial sur des données non fiables : un flux mal formé pouvait auparavant provoquer un plantage ou un débordement.",
+      "SynLZdecompress1partial renvoie maintenant les octets réellement écrits, et non la taille annoncée ou demandée.",
+      "L’état des transactions SQLite suit désormais sqlite3_get_autocommit, y compris après un BEGIN SQL direct ou une erreur.",
+      "TSqlDBProxyStatement peut être réinitialisé et réutilisé sans conserver lignes, colonnes ni compteur de mises à jour.",
+      "Les champs de taille des colonnes utilisent maintenant integer afin de sérialiser les métadonnées proxy de façon identique entre pairs 32 et 64 bits.",
+      "Utilisez le build 2.4.17647 pour l’ensemble des corrections, dont le polling POSIX et le nouveau wrapper LoadExtension pour bibliothèques approuvées."
+    ],
+    "zh": [
+      "凡是在不可信数据上调用 SynLZdecompress1partial 的服务都应升级：畸形流此前可能导致崩溃或缓冲区越界。",
+      "SynLZdecompress1partial 现在返回实际写入的字节数，而非声明或请求的大小。",
+      "SQLite 事务状态现在取自 sqlite3_get_autocommit，涵盖直接 SQL 开启的事务及错误后的状态变化。",
+      "TSqlDBProxyStatement 现在可重置并复用，不会残留行、列或更新计数。",
+      "数据库列尺寸字段现在使用 integer，使代理元数据在 32 位与 64 位节点之间保持一致序列化。",
+      "请使用 build 2.4.17647，以获得完整修复，包括 POSIX 轮询和面向可信库的新 LoadExtension 封装。"
+    ],
+    "ru": [
+      "Обновите сервисы, вызывающие SynLZdecompress1partial для недоверенных данных: повреждённый поток раньше мог вызвать сбой или выход за границы буфера.",
+      "SynLZdecompress1partial теперь возвращает фактически записанное число байтов, а не заявленный или запрошенный размер.",
+      "Состояние транзакции SQLite теперь определяется через sqlite3_get_autocommit, включая прямой SQL BEGIN и изменения после ошибок.",
+      "TSqlDBProxyStatement можно сбрасывать и использовать повторно без сохранения строк, столбцов или счётчика обновлений.",
+      "Поля размеров столбцов теперь имеют тип integer, поэтому proxy-метаданные одинаково сериализуются между 32- и 64-битными узлами.",
+      "Используйте build 2.4.17647 со всеми исправлениями, включая POSIX polling и новый LoadExtension wrapper для доверенных библиотек."
+    ]
+  },
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17647, not an intermediate SynLZ optimization revision. Recompile Delphi and FPC database/proxy code, verify any code that depends on PtrInt-sized TSqlDBColumnDefine or TSqlDBProcColumnDefine fields, and test partial decompression with truncated input, direct-SQL SQLite transactions, repeated TSqlDBProxyStatement reuse and POSIX socket subscription holes.",
+    "fr": "Passez directement au build 2.4.17647, pas à une révision intermédiaire d’optimisation SynLZ. Recompilez le code base/proxy Delphi et FPC, vérifiez tout code dépendant de champs TSqlDBColumnDefine ou TSqlDBProcColumnDefine de taille PtrInt, puis testez la décompression partielle avec une entrée tronquée, les transactions SQLite ouvertes par SQL direct, la réutilisation répétée de TSqlDBProxyStatement et les trous d’abonnement de sockets POSIX.",
+    "zh": "请直接升级到 build 2.4.17647，不要停留在 SynLZ 优化的中间修订。重新编译 Delphi/FPC 数据库与代理代码，检查依赖 TSqlDBColumnDefine 或 TSqlDBProcColumnDefine 字段为 PtrInt 大小的代码，并测试截断输入的部分解压、直接 SQL 开启的 SQLite 事务、TSqlDBProxyStatement 重复复用以及 POSIX 套接字订阅空洞。",
+    "ru": "Переходите сразу на build 2.4.17647, а не на промежуточную оптимизацию SynLZ. Пересоберите Delphi/FPC код БД и proxy, проверьте зависимости от PtrInt-размера полей TSqlDBColumnDefine или TSqlDBProcColumnDefine и протестируйте частичную распаковку усечённого ввода, транзакции SQLite через прямой SQL, повторное использование TSqlDBProxyStatement и пустые позиции подписок POSIX sockets."
+  },
+  "entries": [
+    {
+      "sha": "adb3f46ca23c642a6e6b0b30debd20fc00ee6067",
+      "headline": {
+        "en": "Database metadata now crosses 32-bit and 64-bit proxies consistently",
+        "fr": "Les métadonnées de base passent désormais correctement entre proxies 32 et 64 bits",
+        "zh": "数据库元数据现可在 32 位与 64 位代理间一致传输",
+        "ru": "Метаданные БД теперь согласованно передаются между 32- и 64-битными proxy"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "ColumnLength, ColumnPrecision and ColumnScale in TSqlDBColumnDefine and TSqlDBProcColumnDefine changed from PtrInt to integer, and TSqlDBIndexDefine gained RTTI registration for proxy serialization.",
+        "fr": "ColumnLength, ColumnPrecision et ColumnScale de TSqlDBColumnDefine et TSqlDBProcColumnDefine passent de PtrInt à integer, et TSqlDBIndexDefine reçoit un enregistrement RTTI pour la sérialisation proxy.",
+        "zh": "TSqlDBColumnDefine 与 TSqlDBProcColumnDefine 中的 ColumnLength、ColumnPrecision、ColumnScale 从 PtrInt 改为 integer，同时为 TSqlDBIndexDefine 注册 RTTI 以供代理序列化。",
+        "ru": "Поля ColumnLength, ColumnPrecision и ColumnScale в TSqlDBColumnDefine и TSqlDBProcColumnDefine изменены с PtrInt на integer, а TSqlDBIndexDefine получил RTTI-регистрацию для proxy-сериализации."
+      },
+      "impact": {
+        "en": "Proxy metadata no longer changes wire width with the process bitness. The public packed-record layout changes on 64-bit Delphi and FPC targets, so code relying on PtrInt fields or binary record layout must be rebuilt and reviewed.",
+        "fr": "La largeur des métadonnées proxy ne dépend plus de l’architecture du processus. Le layout des records packed publics change sur les cibles Delphi/FPC 64 bits ; le code dépendant de champs PtrInt ou du layout binaire doit être recompilé et vérifié.",
+        "zh": "代理元数据的线上宽度不再随进程位数变化。公开 packed record 在 64 位 Delphi/FPC 目标上的布局发生变化；依赖 PtrInt 字段或二进制布局的代码必须重新编译并检查。",
+        "ru": "Ширина proxy-метаданных больше не зависит от разрядности процесса. Разметка публичных packed records меняется на 64-битных Delphi/FPC целях; код, зависящий от PtrInt или бинарной разметки, нужно пересобрать и проверить."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Rebuild both ends of any SQL proxy connection on build 2.4.17647 and test metadata exchange between 32-bit and 64-bit processes.",
+        "fr": "Recompilez les deux extrémités des connexions proxy SQL avec le build 2.4.17647 et testez l’échange de métadonnées entre processus 32 et 64 bits.",
+        "zh": "在 build 2.4.17647 上重新编译 SQL 代理连接两端，并测试 32 位与 64 位进程之间的元数据交换。",
+        "ru": "Пересоберите обе стороны SQL proxy-соединения на build 2.4.17647 и проверьте обмен метаданными между 32- и 64-битными процессами."
+      },
+      "units": ["mormot.db.core", "mormot.db.sql"],
+      "api_changes": [
+        {"symbol": "TSqlDBColumnDefine.ColumnLength/ColumnPrecision/ColumnScale", "change": "signature-changed", "note": {"en": "Field type changed from PtrInt to integer.", "fr": "Le type de champ passe de PtrInt à integer.", "zh": "字段类型从 PtrInt 改为 integer。", "ru": "Тип полей изменён с PtrInt на integer."}},
+        {"symbol": "TSqlDBProcColumnDefine.ColumnLength/ColumnPrecision/ColumnScale", "change": "signature-changed", "note": {"en": "Field type changed from PtrInt to integer.", "fr": "Le type de champ passe de PtrInt à integer.", "zh": "字段类型从 PtrInt 改为 integer。", "ru": "Тип полей изменён с PtrInt на integer."}},
+        {"symbol": "TSqlDBIndexDefine", "change": "behaviour-changed", "note": {"en": "RTTI metadata is now registered for proxy serialization.", "fr": "Les métadonnées RTTI sont enregistrées pour la sérialisation proxy.", "zh": "现已注册 RTTI 元数据用于代理序列化。", "ru": "RTTI-метаданные теперь регистрируются для proxy-сериализации."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6302d231e9d783f12a66f73b8c6a10f80e1e5389",
+      "headline": {
+        "en": "SQLite extensions can be loaded without exposing the SQL loader",
+        "fr": "Les extensions SQLite se chargent sans exposer le chargeur SQL",
+        "zh": "SQLite 扩展可在不开放 SQL 加载器的情况下加载",
+        "ru": "Расширения SQLite загружаются без открытия SQL-загрузчика"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDataBase.LoadExtension loads a trusted library through sqlite3_load_extension, temporarily enables only the C API when required, restores the prior setting and raises ESqlite3Exception on failure.",
+        "fr": "TSqlDataBase.LoadExtension charge une bibliothèque approuvée via sqlite3_load_extension, n’active temporairement que l’API C si nécessaire, restaure le réglage précédent et lève ESqlite3Exception en cas d’échec.",
+        "zh": "TSqlDataBase.LoadExtension 通过 sqlite3_load_extension 加载可信库，仅在需要时临时启用 C API，随后恢复原设置，并在失败时抛出 ESqlite3Exception。",
+        "ru": "TSqlDataBase.LoadExtension загружает доверенную библиотеку через sqlite3_load_extension, при необходимости временно включает только C API, восстанавливает прежнюю настройку и при ошибке вызывает ESqlite3Exception."
+      },
+      "impact": {
+        "en": "Delphi and FPC applications gain a locked wrapper that does not enable the SQL load_extension function. Runtime SQLite builds still need the db_config, load_extension and free entry points.",
+        "fr": "Les applications Delphi/FPC disposent d’un wrapper verrouillé qui n’active pas la fonction SQL load_extension. Le runtime SQLite doit toujours fournir les entrées db_config, load_extension et free.",
+        "zh": "Delphi/FPC 应用获得带锁封装，且不会启用 SQL 的 load_extension 函数。运行时 SQLite 仍须提供 db_config、load_extension 与 free 入口。",
+        "ru": "Delphi/FPC приложения получают wrapper с блокировкой, который не включает SQL-функцию load_extension. Runtime SQLite всё ещё должен предоставлять db_config, load_extension и free."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Use only trusted extension paths and verify that the deployed SQLite library exposes the required C entry points.",
+        "fr": "N’utilisez que des chemins d’extensions approuvés et vérifiez que la bibliothèque SQLite déployée expose les entrées C requises.",
+        "zh": "只使用可信扩展路径，并确认部署的 SQLite 库提供所需 C 入口。",
+        "ru": "Используйте только доверенные пути расширений и проверьте наличие нужных C entry points в SQLite."
+      },
+      "units": ["mormot.db.raw.sqlite3"],
+      "api_changes": [
+        {"symbol": "TSqlDataBase.LoadExtension", "change": "added", "note": {"en": "Adds aPath and optional aEntryPoint parameters.", "fr": "Ajoute aPath et le paramètre optionnel aEntryPoint.", "zh": "新增 aPath 与可选 aEntryPoint 参数。", "ru": "Добавлены aPath и необязательный aEntryPoint."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "77b0d3ee7eb803b0854fde445e496e8b485699b1",
+      "headline": {
+        "en": "Partial SynLZ output guards receive malformed-stream coverage",
+        "fr": "Les garde-fous de sortie SynLZ partielle couvrent les flux mal formés",
+        "zh": "SynLZ 部分输出边界新增畸形流测试覆盖",
+        "ru": "Защита частичного вывода SynLZ покрыта тестами повреждённых потоков"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "Tests now exercise truncated control words, incomplete matches, overlap and destination boundaries while checking returned byte counts and guard bytes.",
+        "fr": "Les tests couvrent désormais les mots de contrôle tronqués, les correspondances incomplètes, les chevauchements et les limites de destination, avec vérification du nombre d’octets et des octets sentinelles.",
+        "zh": "测试现覆盖截断控制字、不完整匹配、重叠与目标边界，并检查返回字节数和守卫字节。",
+        "ru": "Тесты теперь проверяют усечённые управляющие слова, неполные совпадения, перекрытие и границы назначения, включая число байтов и guard bytes."
+      },
+      "impact": {
+        "en": "No Delphi or FPC application API changes; the regression suite better protects the safe partial decoder contract.",
+        "fr": "Aucun changement d’API applicative Delphi/FPC ; la suite de régression protège mieux le contrat du décodeur partiel sécurisé.",
+        "zh": "Delphi/FPC 应用 API 不变；回归测试更完整地保护安全部分解码器的契约。",
+        "ru": "API Delphi/FPC приложений не меняется; regression suite лучше защищает контракт безопасного частичного декодера."
+      },
+      "action": "none",
+      "units": ["test.core.base"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f08998d826244509e9b5e147b469f83b298dbb26",
+      "headline": {
+        "en": "SQLite transaction state now follows the engine",
+        "fr": "L’état des transactions SQLite suit désormais le moteur",
+        "zh": "SQLite 事务状态现与引擎保持一致",
+        "ru": "Состояние транзакций SQLite теперь берётся из движка"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TransactionActive now reads sqlite3_get_autocommit under the database lock instead of a local flag. Begin, commit and rollback use the same locked state, while scalar Execute overloads change their output parameter from out to var.",
+        "fr": "TransactionActive lit maintenant sqlite3_get_autocommit sous le verrou de base au lieu d’un drapeau local. Begin, commit et rollback utilisent le même état verrouillé, tandis que les surcharges Execute scalaires passent leur paramètre de sortie de out à var.",
+        "zh": "TransactionActive 现在在数据库锁内读取 sqlite3_get_autocommit，而非本地标志。Begin、commit 与 rollback 使用相同的锁定状态；标量 Execute 重载的输出参数由 out 改为 var。",
+        "ru": "TransactionActive теперь читает sqlite3_get_autocommit под блокировкой БД вместо локального флага. Begin, commit и rollback используют то же защищённое состояние, а выходной параметр скалярных Execute изменён с out на var."
+      },
+      "impact": {
+        "en": "Transactions opened through direct SQL and state changes caused by SQL errors are now visible, so commit and rollback are no longer skipped because of stale wrapper state. Normal variable call sites remain straightforward, but method references or overrides matching the out signature require review in Delphi and FPC.",
+        "fr": "Les transactions ouvertes par SQL direct et les changements d’état dus aux erreurs SQL sont désormais visibles ; commit et rollback ne sont plus ignorés à cause d’un état local obsolète. Les appels avec variable restent simples, mais les références de méthodes ou overrides reprenant la signature out doivent être vérifiés sous Delphi et FPC.",
+        "zh": "通过直接 SQL 开启的事务以及 SQL 错误引起的状态变化现在都可见，因此 commit/rollback 不会再因封装层状态过期而被跳过。普通变量调用不受影响，但匹配旧 out 签名的方法引用或 override 需在 Delphi/FPC 中检查。",
+        "ru": "Транзакции, открытые прямым SQL, и изменения после SQL-ошибок теперь видны, поэтому commit и rollback не пропускаются из-за устаревшего состояния wrapper. Обычные вызовы с переменной остаются простыми, но method references или overrides со старой out-сигнатурой нужно проверить в Delphi/FPC."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade to build 2.4.17647, recompile database code and test BEGIN/COMMIT/ROLLBACK issued both through methods and direct SQL, including an error path.",
+        "fr": "Passez au build 2.4.17647, recompilez le code de base et testez BEGIN/COMMIT/ROLLBACK via les méthodes comme via SQL direct, y compris après une erreur.",
+        "zh": "升级到 build 2.4.17647，重新编译数据库代码，并测试通过方法和直接 SQL 发出的 BEGIN/COMMIT/ROLLBACK，包括错误路径。",
+        "ru": "Обновитесь до build 2.4.17647, пересоберите код БД и проверьте BEGIN/COMMIT/ROLLBACK через методы и прямой SQL, включая путь ошибки."
+      },
+      "units": ["mormot.db.raw.sqlite3"],
+      "api_changes": [
+        {"symbol": "TSqlDataBase.TransactionActive", "change": "behaviour-changed", "note": {"en": "State is derived from sqlite3_get_autocommit.", "fr": "L’état provient de sqlite3_get_autocommit.", "zh": "状态取自 sqlite3_get_autocommit。", "ru": "Состояние определяется через sqlite3_get_autocommit."}},
+        {"symbol": "TSqlDataBase.Execute(aSql; var aValue; NoLog)", "change": "signature-changed", "note": {"en": "aValue changed from out to var.", "fr": "aValue passe de out à var.", "zh": "aValue 从 out 改为 var。", "ru": "aValue изменён с out на var."}},
+        {"symbol": "TSqlRequest.Execute(aDB; aSql; var aValue)", "change": "signature-changed", "note": {"en": "aValue changed from out to var.", "fr": "aValue passe de out à var.", "zh": "aValue 从 out 改为 var。", "ru": "aValue изменён с out на var."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5de5c1b778c10538d1ceb562ef0b9e6b8d22ca6c",
+      "headline": {
+        "en": "Partial SynLZ decompression reports only completed output",
+        "fr": "La décompression SynLZ partielle ne compte que la sortie produite",
+        "zh": "SynLZ 部分解压只报告实际完成的输出",
+        "ru": "Частичная распаковка SynLZ сообщает только готовый вывод"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SynLZdecompress1partial now limits work by maxDst, tightens source-boundary checks and returns the number of bytes successfully written even for truncated or malformed input.",
+        "fr": "SynLZdecompress1partial limite désormais le travail à maxDst, renforce les contrôles de limite source et renvoie le nombre d’octets effectivement écrits, même pour une entrée tronquée ou mal formée.",
+        "zh": "SynLZdecompress1partial 现在按 maxDst 限制处理，收紧源边界检查，并在输入截断或畸形时返回成功写入的实际字节数。",
+        "ru": "SynLZdecompress1partial теперь ограничивает работу maxDst, строже проверяет границы источника и возвращает фактически записанное число байтов даже для усечённого или повреждённого ввода."
+      },
+      "impact": {
+        "en": "Callers no longer receive the requested or header-advertised size when fewer bytes were decoded. Delphi and FPC code that assumed the old return value must consume only Result bytes.",
+        "fr": "Les appelants ne reçoivent plus la taille demandée ou annoncée par l’en-tête quand moins d’octets ont été décodés. Le code Delphi/FPC qui supposait l’ancienne valeur doit ne consommer que Result octets.",
+        "zh": "当实际解码字节较少时，调用方不再收到请求值或头部声明值。依赖旧返回值的 Delphi/FPC 代码只能消费 Result 指定的字节数。",
+        "ru": "Если декодировано меньше данных, вызывающий код больше не получает запрошенный или объявленный в заголовке размер. Delphi/FPC код со старым предположением должен использовать только Result байтов."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade to build 2.4.17647 and audit every SynLZdecompress1partial caller to use its return value as the authoritative output length.",
+        "fr": "Passez au build 2.4.17647 et vérifiez que chaque appel à SynLZdecompress1partial utilise sa valeur de retour comme longueur de sortie faisant foi.",
+        "zh": "升级到 build 2.4.17647，并检查所有 SynLZdecompress1partial 调用方，以其返回值作为权威输出长度。",
+        "ru": "Обновитесь до build 2.4.17647 и проверьте, что каждый вызов SynLZdecompress1partial считает возвращаемое значение фактической длиной вывода."
+      },
+      "units": ["mormot.core.compress"],
+      "api_changes": [
+        {"symbol": "SynLZdecompress1partial", "change": "behaviour-changed", "note": {"en": "Result is the actual byte count written within maxDst.", "fr": "Result est le nombre d’octets réellement écrits dans maxDst.", "zh": "Result 为 maxDst 范围内实际写入的字节数。", "ru": "Result равен фактически записанным в пределах maxDst байтам."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1c41026cf4d347546ffb35a25c65c25a5c0fd60f",
+      "headline": {
+        "en": "The x64 SynLZ decoder copies long matches with SSE2",
+        "fr": "Le décodeur SynLZ x64 copie les longues correspondances avec SSE2",
+        "zh": "x64 SynLZ 解码器使用 SSE2 复制长匹配",
+        "ru": "x64-декодер SynLZ копирует длинные совпадения через SSE2"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The x64 assembly decoder uses overlapping 64-bit copies for short matches and MOVDQU SSE2 loops for matches longer than 16 bytes.",
+        "fr": "Le décodeur assembleur x64 utilise des copies 64 bits chevauchantes pour les petites correspondances et des boucles MOVDQU SSE2 au-delà de 16 octets.",
+        "zh": "x64 汇编解码器对短匹配使用重叠 64 位复制，对超过 16 字节的匹配使用 MOVDQU SSE2 循环。",
+        "ru": "x64 assembler decoder использует перекрывающиеся 64-битные копии для коротких совпадений и циклы MOVDQU SSE2 для совпадений длиннее 16 байт."
+      },
+      "impact": {
+        "en": "Only the x64 assembly backend changes; compressed format, public API and Delphi/FPC application code are unchanged.",
+        "fr": "Seul le backend assembleur x64 change ; le format compressé, l’API publique et le code applicatif Delphi/FPC restent identiques.",
+        "zh": "仅 x64 汇编后端发生变化；压缩格式、公开 API 与 Delphi/FPC 应用代码不变。",
+        "ru": "Меняется только x64 assembler backend; формат, публичный API и код Delphi/FPC приложений остаются прежними."
+      },
+      "action": "none",
+      "units": ["mormot.core.compress"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "80d4fded50b4e80870c3df2589c10867101b02c5",
+      "headline": {
+        "en": "The i386 SynLZ decoder consumes literal runs in bulk",
+        "fr": "Le décodeur SynLZ i386 traite les suites littérales en bloc",
+        "zh": "i386 SynLZ 解码器批量处理字面量序列",
+        "ru": "i386-декодер SynLZ обрабатывает серии литералов блоками"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The 32-bit Intel assembly path was rewritten to count literal runs with BSF and copy them in dword blocks before resuming match decoding.",
+        "fr": "Le chemin assembleur Intel 32 bits compte désormais les suites littérales avec BSF et les copie par blocs dword avant de reprendre les correspondances.",
+        "zh": "32 位 Intel 汇编路径改为用 BSF 统计字面量序列，并以 dword 块复制后继续匹配解码。",
+        "ru": "32-битный Intel assembler path переписан: BSF считает серии литералов, затем они копируются блоками dword до продолжения match-декодирования."
+      },
+      "impact": {
+        "en": "Win32 and other i386 builds get a decoder optimization; the SynLZ stream format and Delphi/FPC APIs do not change.",
+        "fr": "Win32 et les autres builds i386 gagnent une optimisation du décodeur ; le format SynLZ et les API Delphi/FPC ne changent pas.",
+        "zh": "Win32 与其他 i386 build 获得解码器优化；SynLZ 流格式和 Delphi/FPC API 不变。",
+        "ru": "Win32 и другие i386 builds получают оптимизацию декодера; формат SynLZ и API Delphi/FPC не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.core.compress"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5380c908ab177d2395b2ea74c71e763b5e62a0fc",
+      "headline": {
+        "en": "Every requested SynLZ prefix length is now regression-tested",
+        "fr": "Chaque longueur de préfixe SynLZ demandée est désormais testée",
+        "zh": "所有请求的 SynLZ 前缀长度现均有回归测试",
+        "ru": "Теперь тестируется каждая запрошенная длина префикса SynLZ"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The suite requests every possible partial output length and verifies the exact return count, decoded bytes and untouched guard regions.",
+        "fr": "La suite demande chaque longueur de sortie partielle possible et vérifie le compte exact, les octets décodés et les zones sentinelles intactes.",
+        "zh": "测试套件请求每一种可能的部分输出长度，并核对精确返回计数、解码内容及未改动的守卫区域。",
+        "ru": "Набор тестов запрашивает каждую возможную длину частичного вывода и проверяет точный результат, декодированные байты и неизменённые guard regions."
+      },
+      "impact": {
+        "en": "No application-code impact; Delphi and FPC regression coverage now detects underwrites and overwrites at every partial length.",
+        "fr": "Aucun impact applicatif ; la couverture Delphi/FPC détecte maintenant les écritures insuffisantes ou excessives pour chaque longueur partielle.",
+        "zh": "不影响应用代码；Delphi/FPC 回归覆盖现在可检测每种部分长度下的少写或越界写入。",
+        "ru": "Влияния на приложение нет; Delphi/FPC regression coverage теперь выявляет недозапись и перезапись для каждой частичной длины."
+      },
+      "action": "none",
+      "units": ["test.core.base"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8aad19cd3099b03b947c39220d8a624eb4093315",
+      "headline": {
+        "en": "The x64 SynLZ loop skips literal runs with BSF",
+        "fr": "La boucle SynLZ x64 saute les suites littérales avec BSF",
+        "zh": "x64 SynLZ 循环借助 BSF 跳过字面量序列",
+        "ru": "Цикл SynLZ для x64 пропускает серии литералов через BSF"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The x64 assembly decompressor was rewritten to find consecutive literal bits with BSF and perform bulk copies before processing the next match.",
+        "fr": "Le décompresseur assembleur x64 trouve désormais les bits littéraux consécutifs avec BSF et effectue des copies en bloc avant la correspondance suivante.",
+        "zh": "x64 汇编解压器改为用 BSF 查找连续字面量位，并在处理下一次匹配前批量复制。",
+        "ru": "x64 assembler decompressor переписан: BSF находит последовательные literal bits, после чего выполняется пакетное копирование до следующего совпадения."
+      },
+      "impact": {
+        "en": "This is an x64 backend optimization with no stream-format or public-API change; the commit notes only a small gain over the pure Pascal path.",
+        "fr": "Il s’agit d’une optimisation du backend x64 sans changement de format ni d’API publique ; le commit ne signale qu’un faible gain sur le chemin Pascal pur.",
+        "zh": "这是 x64 后端优化，不改变流格式或公开 API；提交说明相对纯 Pascal 路径仅有小幅提升。",
+        "ru": "Это оптимизация x64 backend без изменения формата или публичного API; commit отмечает лишь небольшой выигрыш относительно pure Pascal path."
+      },
+      "action": "none",
+      "units": ["mormot.core.compress"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "160086316412d249468a67722fe32f8317e49d15",
+      "headline": {
+        "en": "Malformed SynLZ input can no longer overrun the safe decoder",
+        "fr": "Une entrée SynLZ mal formée ne déborde plus le décodeur sécurisé",
+        "zh": "畸形 SynLZ 输入不再使安全解码器越界",
+        "ru": "Повреждённый SynLZ больше не переполняет безопасный декодер"
+      },
+      "category": "security",
+      "severity": "high",
+      "what_changed": {
+        "en": "SynLZdecompress1partial now validates control words, match tokens, extended lengths and hash offsets before reading or copying, clips writes to maxDst and rejects invalid input with a zero result.",
+        "fr": "SynLZdecompress1partial valide désormais les mots de contrôle, tokens de correspondance, longueurs étendues et offsets de hash avant lecture ou copie, limite les écritures à maxDst et rejette l’entrée invalide avec un résultat nul.",
+        "zh": "SynLZdecompress1partial 现在会在读取或复制前校验控制字、匹配 token、扩展长度和哈希偏移，将写入限制在 maxDst，并以零结果拒绝无效输入。",
+        "ru": "SynLZdecompress1partial теперь проверяет управляющие слова, match tokens, расширенные длины и hash offsets до чтения или копирования, ограничивает запись maxDst и возвращает ноль для неверного ввода."
+      },
+      "impact": {
+        "en": "The function documented for untrusted input no longer follows paths that could cause a general protection fault or silently write past the destination. The protection applies to both Delphi and FPC pure-Pascal builds.",
+        "fr": "La fonction prévue pour des données non fiables n’emprunte plus de chemins pouvant provoquer une faute de protection générale ou écrire silencieusement au-delà de la destination. La protection concerne les builds Pascal pur Delphi et FPC.",
+        "zh": "这个面向不可信输入的函数不再走入可能导致通用保护错误或静默写越目标缓冲区的路径。该保护适用于 Delphi 与 FPC 的纯 Pascal build。",
+        "ru": "Функция для недоверенного ввода больше не идёт по путям, способным вызвать general protection fault или незаметную запись за границу назначения. Защита действует в pure-Pascal builds Delphi и FPC."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Prioritize build 2.4.17647 wherever SynLZdecompress1partial sees external data, and add truncated and malformed corpus cases to service-level tests.",
+        "fr": "Priorisez le build 2.4.17647 partout où SynLZdecompress1partial traite des données externes, et ajoutez des cas tronqués ou mal formés aux tests de service.",
+        "zh": "凡 SynLZdecompress1partial 处理外部数据的场景都应优先升级到 build 2.4.17647，并在服务级测试中加入截断与畸形样本。",
+        "ru": "Приоритетно установите build 2.4.17647 везде, где SynLZdecompress1partial получает внешние данные, и добавьте усечённые и повреждённые образцы в service-level tests."
+      },
+      "units": ["mormot.core.compress"],
+      "api_changes": [
+        {"symbol": "SynLZdecompress1partial", "change": "behaviour-changed", "note": {"en": "Malformed input is rejected instead of reading or writing out of bounds.", "fr": "L’entrée mal formée est rejetée au lieu de lire ou écrire hors limites.", "zh": "畸形输入会被拒绝，不再发生越界读写。", "ru": "Повреждённый ввод отклоняется вместо чтения или записи за границами."}}
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d9df19364a81a4fd64fb20f3bdb54a3cada69563",
+      "headline": {
+        "en": "Pure Pascal SynLZ decoding batches consecutive literals",
+        "fr": "Le décodage SynLZ en Pascal pur regroupe les littéraux consécutifs",
+        "zh": "纯 Pascal SynLZ 解码批量处理连续字面量",
+        "ru": "Pure-Pascal декодер SynLZ группирует последовательные литералы"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The pure Pascal decoders use bit-scan helpers to identify literal runs, copy them in batches and share new context helpers across full and partial decoding.",
+        "fr": "Les décodeurs Pascal pur utilisent des helpers de bit-scan pour identifier les suites littérales, les copier en bloc et partager un nouveau contexte entre décodage complet et partiel.",
+        "zh": "纯 Pascal 解码器使用位扫描 helper 识别字面量序列，批量复制，并在完整与部分解码间共享新的上下文 helper。",
+        "ru": "Pure-Pascal декодеры используют bit-scan helpers для поиска серий литералов, пакетного копирования и общего контекста полного и частичного декодирования."
+      },
+      "impact": {
+        "en": "Pure Pascal Delphi and FPC paths get faster without a format or signature change. Later commits in the same edition complete the invalid-input and return-count behavior, so deploy the final build rather than this intermediate revision.",
+        "fr": "Les chemins Pascal pur Delphi/FPC accélèrent sans changement de format ni de signature. Des commits ultérieurs de la même édition finalisent le comportement sur entrée invalide et le compte retourné ; déployez donc le build final plutôt que cette révision intermédiaire.",
+        "zh": "Delphi/FPC 纯 Pascal 路径提速，格式和签名不变。同一期后续提交完善了无效输入与返回计数行为，因此应部署最终 build，而非此中间修订。",
+        "ru": "Pure-Pascal пути Delphi/FPC ускорены без изменения формата или сигнатуры. Последующие commits этого выпуска завершают обработку неверного ввода и возвращаемого размера, поэтому ставьте финальный build."
+      },
+      "action": "none",
+      "units": ["mormot.core.compress"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6ee066546823dbcec902f9fdcc95665d1bf31f73",
+      "headline": {
+        "en": "Modern Delphi builds use native bit-scan intrinsics",
+        "fr": "Les builds Delphi récents utilisent les intrinsics de bit-scan",
+        "zh": "新版 Delphi build 使用原生位扫描 intrinsic",
+        "ru": "Современные Delphi builds используют встроенные bit-scan intrinsics"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "Delphi 10.4 and newer use CountLeadingZeros32/64 under HASBITINTRINSICS, while older Delphi keeps assembly paths and the Delphi i386 BSRqword implementation is corrected.",
+        "fr": "Delphi 10.4 et suivants utilisent CountLeadingZeros32/64 sous HASBITINTRINSICS ; les anciens Delphi conservent les chemins assembleur et l’implémentation Delphi i386 de BSRqword est corrigée.",
+        "zh": "Delphi 10.4 及更高版本在 HASBITINTRINSICS 下使用 CountLeadingZeros32/64；旧版 Delphi 保留汇编路径，同时修正 Delphi i386 的 BSRqword 实现。",
+        "ru": "Delphi 10.4+ использует CountLeadingZeros32/64 при HASBITINTRINSICS, старые Delphi сохраняют assembler paths, а реализация BSRqword для Delphi i386 исправлена."
+      },
+      "impact": {
+        "en": "Modern Delphi gets compiler intrinsics and Delphi i386 gets the corrected fallback; FPC already follows its intrinsic path. Public signatures are unchanged.",
+        "fr": "Les Delphi récents utilisent les intrinsics du compilateur et Delphi i386 obtient le fallback corrigé ; FPC suit déjà son chemin intrinsic. Les signatures publiques ne changent pas.",
+        "zh": "新版 Delphi 获得编译器 intrinsic，Delphi i386 获得修正后的后备实现；FPC 已使用其 intrinsic 路径。公开签名不变。",
+        "ru": "Современный Delphi получает compiler intrinsics, Delphi i386 — исправленный fallback, а FPC уже использует свой intrinsic path. Публичные сигнатуры не меняются."
+      },
+      "action": "none",
+      "units": ["mormot.core.base", "test.core.base"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e7802a7fb3c4f6d0b568dd793aedcee747207a1c",
+      "headline": {
+        "en": "POSIX socket subscriptions advance past vacant poll slots",
+        "fr": "Les abonnements socket POSIX dépassent désormais les cases poll vacantes",
+        "zh": "POSIX 套接字订阅现会越过空置 poll 槽位",
+        "ru": "Подписки POSIX sockets теперь проходят пустые poll slots"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPollSocketPoll.Subscribe now advances its pollfd pointer while scanning a list containing vacant entries; the old loop repeatedly inspected the same slot.",
+        "fr": "TPollSocketPoll.Subscribe avance désormais son pointeur pollfd lors du parcours d’une liste contenant des entrées vacantes ; l’ancienne boucle relisait toujours la même case.",
+        "zh": "TPollSocketPoll.Subscribe 在扫描含空置条目的列表时现在会推进 pollfd 指针；旧循环会反复检查同一槽位。",
+        "ru": "TPollSocketPoll.Subscribe теперь продвигает указатель pollfd при обходе списка с пустыми элементами; старый цикл повторно проверял один и тот же slot."
+      },
+      "impact": {
+        "en": "On macOS, BSD and other poll-based POSIX backends, later sockets and free slots are found correctly, avoiding duplicate or misplaced subscriptions after holes appear.",
+        "fr": "Sur macOS, BSD et les autres backends POSIX fondés sur poll, les sockets et cases libres suivantes sont correctement trouvées, évitant les abonnements dupliqués ou mal placés après l’apparition de trous.",
+        "zh": "在 macOS、BSD 及其他基于 poll 的 POSIX 后端上，后续套接字与空闲槽位现可被正确找到，避免出现空洞后重复或错误放置订阅。",
+        "ru": "На macOS, BSD и других POSIX backends на базе poll корректно находятся следующие sockets и свободные slots, что предотвращает дублирование или неверное размещение подписок после появления пустот."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Use build 2.4.17647 and stress subscribe/unsubscribe cycles that leave holes in the poll array on each POSIX target you ship.",
+        "fr": "Utilisez le build 2.4.17647 et testez intensivement les cycles subscribe/unsubscribe qui laissent des trous dans le tableau poll sur chaque cible POSIX livrée.",
+        "zh": "使用 build 2.4.17647，并在每个交付的 POSIX 目标上压力测试会在 poll 数组中留下空洞的 subscribe/unsubscribe 循环。",
+        "ru": "Используйте build 2.4.17647 и нагрузочно проверьте циклы subscribe/unsubscribe, оставляющие пустоты в poll array, на всех поставляемых POSIX целях."
+      },
+      "units": ["mormot.net.sock"],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d33bf358112ecddf51fe77bf97b8f4b4c834ca95",
+      "headline": {
+        "en": "Prepared SQL proxy statements can be reset and executed again",
+        "fr": "Les requêtes préparées du proxy SQL peuvent être réinitialisées et rejouées",
+        "zh": "SQL 代理预处理语句现可重置并再次执行",
+        "ru": "Подготовленные SQL proxy statements можно сбрасывать и выполнять снова"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TSqlDBProxyStatement now overrides ReleaseRows and Reset to clear buffered rows, readers, column metadata and the update count before delegating to inherited cleanup.",
+        "fr": "TSqlDBProxyStatement redéfinit désormais ReleaseRows et Reset afin d’effacer les lignes en mémoire, readers, métadonnées de colonnes et compteur de mises à jour avant le nettoyage hérité.",
+        "zh": "TSqlDBProxyStatement 现在 override ReleaseRows 与 Reset，在调用继承清理前清除缓冲行、reader、列元数据及更新计数。",
+        "ru": "TSqlDBProxyStatement теперь переопределяет ReleaseRows и Reset, очищая буфер строк, readers, метаданные столбцов и update count до унаследованной очистки."
+      },
+      "impact": {
+        "en": "The normal Bind, ExecutePrepared, Step, Reset loop works repeatedly instead of retaining the previous result and raising an Invalid ExecutePrepared call. The behavior is shared by Delphi and FPC proxy clients.",
+        "fr": "La boucle normale Bind, ExecutePrepared, Step, Reset fonctionne plusieurs fois au lieu de conserver le résultat précédent puis lever Invalid ExecutePrepared. Ce comportement est commun aux clients proxy Delphi et FPC.",
+        "zh": "标准的 Bind、ExecutePrepared、Step、Reset 循环现在可重复工作，不会保留上次结果并抛出 Invalid ExecutePrepared。Delphi 与 FPC 代理客户端均受益。",
+        "ru": "Обычный цикл Bind, ExecutePrepared, Step, Reset теперь повторяется без сохранения прежнего результата и ошибки Invalid ExecutePrepared. Исправление общее для Delphi и FPC proxy clients."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade to build 2.4.17647 and rerun each reusable proxy statement with different parameter values and result shapes.",
+        "fr": "Passez au build 2.4.17647 et rejouez chaque requête proxy réutilisable avec différentes valeurs de paramètres et formes de résultat.",
+        "zh": "升级到 build 2.4.17647，并用不同参数值和结果形状重复运行每个可复用代理语句。",
+        "ru": "Обновитесь до build 2.4.17647 и повторно запускайте каждый reusable proxy statement с разными параметрами и формами результата."
+      },
+      "units": ["mormot.db.proxy", "test.db.proxy"],
+      "api_changes": [
+        {"symbol": "TSqlDBProxyStatement.ReleaseRows", "change": "behaviour-changed", "note": {"en": "Proxy row and column state is cleared before inherited cleanup.", "fr": "L’état des lignes et colonnes proxy est effacé avant le nettoyage hérité.", "zh": "继承清理前会清除代理行列状态。", "ru": "Состояние строк и столбцов proxy очищается до унаследованной очистки."}},
+        {"symbol": "TSqlDBProxyStatement.Reset", "change": "behaviour-changed", "note": {"en": "Reset now clears rows, columns and fUpdateCount for reuse.", "fr": "Reset efface maintenant lignes, colonnes et fUpdateCount pour la réutilisation.", "zh": "Reset 现在清除行、列与 fUpdateCount 以供复用。", "ru": "Reset теперь очищает строки, столбцы и fUpdateCount для повторного использования."}}
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
