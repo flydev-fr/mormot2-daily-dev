@@ -1,0 +1,1222 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-16",
+  "edition_title": {
+    "en": "DuckDB lands as a native 64-bit SQL provider",
+    "fr": "DuckDB arrive comme provider SQL natif 64 bits",
+    "zh": "DuckDB 作为原生 64 位 SQL provider 落地",
+    "ru": "DuckDB появился как нативный 64-битный SQL provider"
+  },
+  "intro": {
+    "en": "A native in-process DuckDB provider is the main change, followed by a full day of ABI, conversion and allocation refinements before build 2.4.17677. SQL proxy metadata also moves to a versioned, cross-architecture format, with fixes for foreign keys and mixed-version replies. Delphi and FPC teams adopting DuckDB, using remote SQL metadata or calling TSynNameValue JSON parsing directly should review this edition.",
+    "fr": "Le changement principal est un provider DuckDB natif en processus, suivi d’une journée complète d’ajustements ABI, conversions et allocations jusqu’au build 2.4.17677. Les métadonnées SQL proxy passent aussi à un format versionné et portable entre architectures, avec des corrections pour les clés étrangères et les réponses de versions mixtes. Les équipes Delphi et FPC qui adoptent DuckDB, utilisent les métadonnées SQL distantes ou appellent directement l’analyse JSON de TSynNameValue doivent examiner cette édition.",
+    "zh": "本期核心变更是新增原生进程内 DuckDB provider，随后同一天持续完善 ABI、转换与内存分配，最终到达 build 2.4.17677。SQL 代理元数据也改为带版本且可跨架构的格式，并修复外键及混合版本响应。准备采用 DuckDB、使用远程 SQL 元数据或直接调用 TSynNameValue JSON 解析的 Delphi/FPC 团队应审阅本期。",
+    "ru": "Главное изменение — нативный in-process provider DuckDB, после чего в течение дня до build 2.4.17677 уточнялись ABI, преобразования и выделения памяти. Metadata SQL proxy также переведены на версионируемый межархитектурный формат с исправлениями внешних ключей и ответов разных версий. Командам Delphi/FPC, внедряющим DuckDB, использующим удалённые SQL metadata или напрямую вызывающим JSON-разбор TSynNameValue, стоит изучить эту редакцию."
+  },
+  "tldr": {
+    "en": [
+      "mormot.db.raw.duckdb and mormot.db.sql.duckdb add dynamic 64-bit DuckDB access, prepared statements, transactions, nested types, array binding and an Appender.",
+      "Official DuckDB binaries are 64-bit only; the Lazarus package now includes both units and tests skip cleanly when the local library is absent.",
+      "SQL proxy metadata protocol version 2 uses fixed integer layouts and JSON foreign keys across 32-bit and 64-bit peers.",
+      "SQLite GetIndexes now uses direct PRAGMA queries, avoiding fragile table-valued PRAGMA support in external providers.",
+      "TSynNameValue gains safe RawUtf8 JSON parsing; callers of the old mutable PUtf8Char overload must migrate to InitFromJsonBuffer.",
+      "Use build 2.4.17677, after the day's DuckDB conversion and allocation refinements and the proxy compatibility fix."
+    ],
+    "fr": [
+      "mormot.db.raw.duckdb et mormot.db.sql.duckdb ajoutent l’accès dynamique DuckDB 64 bits, requêtes préparées, transactions, types imbriqués, tableaux liés et Appender.",
+      "Les binaires DuckDB officiels sont uniquement 64 bits ; le paquet Lazarus inclut les deux unités et les tests s’ignorent proprement sans bibliothèque locale.",
+      "Le protocole de métadonnées SQL proxy version 2 utilise des dispositions integer fixes et des clés étrangères JSON entre pairs 32 et 64 bits.",
+      "SQLite GetIndexes utilise maintenant des PRAGMA directs, sans dépendre du support fragile des PRAGMA table-valued par les providers externes.",
+      "TSynNameValue gagne une analyse JSON RawUtf8 sûre ; les appels à l’ancienne surcharge PUtf8Char mutable doivent migrer vers InitFromJsonBuffer.",
+      "Utilisez le build 2.4.17677, après les raffinements DuckDB de conversion et d’allocation et la correction de compatibilité proxy."
+    ],
+    "zh": [
+      "mormot.db.raw.duckdb 与 mormot.db.sql.duckdb 新增动态 64 位 DuckDB 访问、预处理语句、事务、嵌套类型、数组绑定及 Appender。",
+      "官方 DuckDB 二进制仅支持 64 位；Lazarus 软件包现包含两个 unit，本地库缺失时测试会干净跳过。",
+      "SQL 代理元数据协议版本 2 在 32/64 位节点间使用固定 integer 布局及 JSON 外键。",
+      "SQLite GetIndexes 现使用直接 PRAGMA 查询，避免依赖外部 provider 中不稳定的表值 PRAGMA 支持。",
+      "TSynNameValue 新增安全 RawUtf8 JSON 解析；旧的可变 PUtf8Char 重载调用者必须迁移到 InitFromJsonBuffer。",
+      "请使用 build 2.4.17677，其中包含当天全部 DuckDB 转换与分配优化以及代理兼容性修复。"
+    ],
+    "ru": [
+      "mormot.db.raw.duckdb и mormot.db.sql.duckdb добавляют динамический 64-битный DuckDB, prepared statements, транзакции, вложенные типы, массивы и Appender.",
+      "Официальные binaries DuckDB только 64-битные; пакет Lazarus включает обе units, а тесты корректно пропускаются без локальной библиотеки.",
+      "Протокол metadata SQL proxy версии 2 использует фиксированные integer-layout и JSON-внешние ключи между 32- и 64-битными peers.",
+      "SQLite GetIndexes теперь использует прямые PRAGMA и не зависит от нестабильной поддержки table-valued PRAGMA внешними providers.",
+      "TSynNameValue получает безопасный JSON-разбор RawUtf8; вызовы старой изменяемой перегрузки PUtf8Char нужно перенести на InitFromJsonBuffer.",
+      "Используйте build 2.4.17677 после всех дневных улучшений преобразований DuckDB и исправления совместимости proxy."
+    ]
+  },
+  "risk_level": "worth-a-look",
+  "upgrade_advice": {
+    "en": "Land on build 2.4.17677. Do not stop on the first DuckDB merge or the intermediate proxy-metadata builds: the Lazarus package, C record layouts, temporal and UUID conversion, scalar allocation paths and response-version handling all changed later in the same batch. Recompile Delphi/FPC consumers, migrate mutable TSynNameValue.InitFromJson(PUtf8Char) calls, and test DuckDB plus mixed-bitness proxy metadata before production.",
+    "fr": "Passez au build 2.4.17677. Ne vous arrêtez pas au premier merge DuckDB ni aux builds intermédiaires de métadonnées proxy : paquet Lazarus, disposition des records C, conversions temporelles et UUID, allocations des scalaires et gestion de la version de réponse ont encore changé dans le même lot. Recompilez les consommateurs Delphi/FPC, migrez les appels TSynNameValue.InitFromJson(PUtf8Char) mutables et testez DuckDB ainsi que les métadonnées proxy entre architectures avant production.",
+    "zh": "请落在 build 2.4.17677。不要停留在最初 DuckDB merge 或中间代理元数据 build：同一批次后续仍修改了 Lazarus 软件包、C record 布局、时间与 UUID 转换、标量分配路径及响应版本处理。请重新编译 Delphi/FPC 使用方，迁移可变 TSynNameValue.InitFromJson(PUtf8Char) 调用，并在生产前测试 DuckDB 及混合位数代理元数据。",
+    "ru": "Переходите на build 2.4.17677. Не останавливайтесь на первом merge DuckDB или промежуточных builds proxy metadata: в том же пакете позднее менялись пакет Lazarus, layout C-records, даты и UUID, выделения для скаляров и обработка версии ответа. Пересоберите Delphi/FPC, перенесите изменяемые вызовы TSynNameValue.InitFromJson(PUtf8Char) и проверьте DuckDB и mixed-bitness metadata до production."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Native DuckDB provider",
+        "fr": "Provider DuckDB natif",
+        "zh": "原生 DuckDB provider",
+        "ru": "Нативный provider DuckDB"
+      },
+      "summary": {
+        "en": "A new dynamically loaded 64-bit SynDB provider lands with prepared statements, transactions, nested values, bulk array binding and an Appender, then receives package, ABI, temporal, UUID and allocation refinements through build 2.4.17677.",
+        "fr": "Un nouveau provider SynDB 64 bits chargé dynamiquement arrive avec requêtes préparées, transactions, valeurs imbriquées, tableaux liés et Appender, puis reçoit des ajustements de paquet, ABI, temps, UUID et allocations jusqu’au build 2.4.17677.",
+        "zh": "新的动态加载 64 位 SynDB provider 带来预处理语句、事务、嵌套值、批量数组绑定及 Appender，随后持续完善软件包、ABI、时间、UUID 与分配路径，直至 build 2.4.17677。",
+        "ru": "Новый динамически загружаемый 64-битный SynDB provider приносит prepared statements, транзакции, вложенные значения, массивы и Appender, затем получает улучшения пакета, ABI, времени, UUID и выделений до build 2.4.17677."
+      },
+      "shas": [
+        "a5f9533aeb32a63b231c9498308ef5307054d0c6",
+        "cfbbf36e4eec12f42bc3193244518e1af3db27a9",
+        "345840ea148a7c31614ffbd1572dba06a678108a",
+        "2d1593c578b98585f8e50019c6d75ba5d5029542",
+        "63abf24158665bfc9dfa5f2b9e1253e64e8e8740",
+        "ff06cee083e6039c33a76e46be96558060aed1df",
+        "f5de6dc85a66b4a34c4dd043f986e3ff09388774",
+        "31fadd70cf431d9e82a4bb065026162949b81c23",
+        "04c52594d90231dbf555b53e1bbcba0c5fbb0cf4",
+        "0bed0d4d8d5d1c3cd0aabf35e16fe090b3c64a01",
+        "ae7ce1bcb0e38e5c9e94ea05dc0563c2318035f3",
+        "1080dd731d158955b4c763da7d8d171d31b0e5e4",
+        "6d39910a42861e46970e46914df064c2735bb43a",
+        "587ce16741a610dc1a84c86d2687063b5af5da6b"
+      ]
+    },
+    {
+      "title": {
+        "en": "Portable SQL proxy metadata",
+        "fr": "Métadonnées SQL proxy portables",
+        "zh": "可移植 SQL 代理元数据",
+        "ru": "Переносимые metadata SQL proxy"
+      },
+      "summary": {
+        "en": "Foreign keys move to JSON and protocol magic version 2 identifies the fixed metadata layout across 32-bit and 64-bit peers. The final compatibility fix decodes replies according to the response header.",
+        "fr": "Les clés étrangères passent en JSON et le magic protocolaire version 2 identifie la disposition fixe entre pairs 32 et 64 bits. La correction finale décode les réponses selon leur propre en-tête.",
+        "zh": "外键改用 JSON，协议 magic 版本 2 标识 32/64 位节点间的固定元数据布局。最终兼容性修复依据响应自身头部进行解码。",
+        "ru": "Внешние ключи переведены в JSON, а magic протокола версии 2 определяет фиксированный layout между 32- и 64-битными peers. Финальное исправление декодирует ответ по его заголовку."
+      },
+      "shas": [
+        "2b91c9f5125795b2272e3fad21612052e3ed7cc4",
+        "5e767fc32427fa7746d9805e541d4351aec73483",
+        "4b8c5202c060254df61c31532409aa124b5db1e3",
+        "9c267e234337c74b89e1ff7c78e4b4f9272f5cac",
+        "cf83b2ce7242be983192e8739578a52efd8e1a09"
+      ]
+    },
+    {
+      "title": {
+        "en": "Safer JSON and richer SQL helpers",
+        "fr": "JSON plus sûr et helpers SQL enrichis",
+        "zh": "更安全的 JSON 与更丰富的 SQL 辅助功能",
+        "ru": "Безопаснее JSON и новые SQL helpers"
+      },
+      "summary": {
+        "en": "TSynNameValue gets a non-destructive RawUtf8 parser with an explicit mutable-buffer method, while SQL code gains ExecuteFmt, safer FPC variants and direct SQLite index PRAGMAs.",
+        "fr": "TSynNameValue reçoit un parseur RawUtf8 non destructif et une méthode explicite pour buffer mutable, tandis que SQL gagne ExecuteFmt, des variants FPC plus sûrs et des PRAGMA directs pour les index SQLite.",
+        "zh": "TSynNameValue 新增不破坏输入的 RawUtf8 解析器及显式可变缓冲区方法；SQL 侧新增 ExecuteFmt、更安全的 FPC variant 及直接 SQLite 索引 PRAGMA。",
+        "ru": "TSynNameValue получает недеструктивный parser RawUtf8 и явный метод изменяемого буфера, а SQL — ExecuteFmt, безопасные FPC variants и прямые PRAGMA индексов SQLite."
+      },
+      "shas": [
+        "1f058393ab8ad0e0c7186ef013a0ea260319a01f",
+        "114b07244aaef945c592d00c91f8f8188f514dca",
+        "9922dc1bb07c6ec2eb2dd5b52cf450e018e31f9b",
+        "4b4c0a257469106d47a3eec2743ed46d036c88b6",
+        "1eb18cfc4da624a0d586bf8607d23318a9d57d40",
+        "8cd3d20bd37f3e20c04b44c7ee9bb41a5424f7dc",
+        "6cd37aff946ecc372578fe50136867fc61b9d044"
+      ]
+    }
+  ],
+  "notes": {
+    "en": "The two DuckDB feature commits were authored on 2026-10-15 but entered the monitored main-line history through the 2026-10-16 merge. At review time, upstream master was still 587ce167 and the raw payload listed no superseded_by successors.",
+    "fr": "Les deux commits initiaux DuckDB ont été écrits le 15 octobre 2026 mais sont entrés dans l’historique surveillé de main via le merge du 16 octobre. Au moment de la revue, upstream master était toujours 587ce167 et le payload ne listait aucun successeur superseded_by.",
+    "zh": "两个初始 DuckDB 功能提交虽写于 2026-10-15，但通过 2026-10-16 的合并进入受监控主线。审阅时 upstream master 仍为 587ce167，原始 payload 未列出任何 superseded_by 后继。",
+    "ru": "Два исходных commit DuckDB были созданы 15 октября 2026 года, но вошли в отслеживаемую main-историю через merge 16 октября. На момент обзора upstream master оставался 587ce167, а raw payload не содержал successors superseded_by."
+  },
+  "entries": [
+    {
+      "sha": "587ce16741a610dc1a84c86d2687063b5af5da6b",
+      "headline": {
+        "en": "DuckDB tests now report conversion and bulk-operation timings",
+        "fr": "Les tests DuckDB mesurent désormais les conversions et opérations en masse",
+        "zh": "DuckDB 测试现会报告转换与批量操作耗时",
+        "ru": "Тесты DuckDB теперь измеряют преобразования и массовые операции"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.db.duckdb adds boundary cases for DuckHugeIntToTextBuf and DuckUuidToTextBuf, then uses TPrecisionTimer and NotifyTestSpeed around prepared inserts, grouping, full reads, array binding and TSqlDBDuckDBAppender loading.",
+        "fr": "test.db.duckdb ajoute des cas limites pour DuckHugeIntToTextBuf et DuckUuidToTextBuf, puis mesure avec TPrecisionTimer et NotifyTestSpeed les insertions préparées, groupements, lectures complètes, tableaux liés et chargements TSqlDBDuckDBAppender.",
+        "zh": "test.db.duckdb 为 DuckHugeIntToTextBuf 与 DuckUuidToTextBuf 增加边界用例，并以 TPrecisionTimer 和 NotifyTestSpeed 计时预处理插入、分组、完整读取、数组绑定及 TSqlDBDuckDBAppender 加载。",
+        "ru": "test.db.duckdb добавляет граничные проверки DuckHugeIntToTextBuf и DuckUuidToTextBuf, затем измеряет через TPrecisionTimer и NotifyTestSpeed подготовленные вставки, группировку, полное чтение, привязку массивов и загрузку TSqlDBDuckDBAppender."
+      },
+      "impact": {
+        "en": "Application code is unchanged. Test runs with a local 64-bit DuckDB library now expose useful throughput numbers while retaining correctness checks.",
+        "fr": "Le code applicatif ne change pas. Les tests avec une bibliothèque DuckDB 64 bits locale donnent maintenant des mesures de débit utiles tout en conservant les contrôles fonctionnels.",
+        "zh": "应用代码不变。安装本地 64 位 DuckDB 库后，测试会在保留正确性检查的同时给出有用的吞吐量数据。",
+        "ru": "Код приложений не меняется. При наличии локальной 64-битной библиотеки DuckDB тесты теперь показывают полезные показатели производительности, сохраняя проверки корректности."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "test.db.duckdb"
+      ]
+    },
+    {
+      "sha": "6d39910a42861e46970e46914df064c2735bb43a",
+      "headline": {
+        "en": "DuckDB row conversion avoids most temporary strings",
+        "fr": "La conversion des lignes DuckDB évite la plupart des chaînes temporaires",
+        "zh": "DuckDB 行转换避免了大多数临时字符串",
+        "ru": "Преобразование строк DuckDB избегает большинства временных строк"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.sql.duckdb adds DuckDBVectorValueToTextBuf for stack-buffer conversion of scalar values, caches type and validity data, writes JSON scalars directly, reuses one buffer for array binding and gives TSqlDBDuckDBAppender a pointer-and-length AddText overload. DuckDBTypeToField is no longer exported.",
+        "fr": "mormot.db.sql.duckdb ajoute DuckDBVectorValueToTextBuf pour convertir les scalaires dans un tampon de pile, met en cache types et validité, écrit directement les scalaires JSON, réutilise un tampon pour les tableaux liés et ajoute à TSqlDBDuckDBAppender une surcharge AddText pointeur-longueur. DuckDBTypeToField n’est plus exporté.",
+        "zh": "mormot.db.sql.duckdb 新增 DuckDBVectorValueToTextBuf，以栈缓冲区转换标量值，缓存类型与有效性信息，直接写入 JSON 标量，复用数组绑定缓冲区，并为 TSqlDBDuckDBAppender 增加指针加长度的 AddText 重载。DuckDBTypeToField 不再导出。",
+        "ru": "mormot.db.sql.duckdb добавляет DuckDBVectorValueToTextBuf для преобразования скаляров в стековый буфер, кэширует типы и validity, напрямую пишет JSON-скаляры, повторно использует буфер для массивов и добавляет TSqlDBDuckDBAppender перегрузку AddText с указателем и длиной. DuckDBTypeToField больше не экспортируется."
+      },
+      "impact": {
+        "en": "DuckDB-backed Delphi and FPC services should allocate less while reading, exporting JSON, binding arrays and appending text. Code that used the provisional DuckDBTypeToField helper must stop calling it.",
+        "fr": "Сервисы Delphi и FPC на DuckDB должны выполнять меньше выделений памяти при чтении, экспорте JSON, привязке массивов и добавлении текста. Код, использовавший предварительный DuckDBTypeToField, должен отказаться от него.",
+        "zh": "使用 DuckDB 的 Delphi/FPC 服务在读取、导出 JSON、绑定数组和追加文本时应减少内存分配。调用临时公开的 DuckDBTypeToField 的代码必须停止使用它。",
+        "ru": "Сервисы Delphi и FPC с DuckDB должны реже выделять память при чтении, экспорте JSON, привязке массивов и добавлении текста. Код, использовавший предварительный DuckDBTypeToField, должен отказаться от него."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Benchmark representative queries and remove any direct DuckDBTypeToField call before updating.",
+        "fr": "Mesurez des requêtes représentatives et supprimez tout appel direct à DuckDBTypeToField avant la mise à jour.",
+        "zh": "升级前请对代表性查询做基准测试，并移除所有直接 DuckDBTypeToField 调用。",
+        "ru": "Перед обновлением измерьте типичные запросы и удалите прямые вызовы DuckDBTypeToField."
+      },
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckDBVectorValueToTextBuf",
+          "change": "added",
+          "note": {
+            "en": "Adds stack-buffer conversion for simple DuckDB vector values.",
+            "fr": "Ajoute la conversion des valeurs simples DuckDB dans un tampon de pile.",
+            "zh": "新增 DuckDB 简单向量值的栈缓冲区转换。",
+            "ru": "Добавляет преобразование простых значений DuckDB в стековый буфер."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBAppender.AddText(PUtf8Char, PtrInt)",
+          "change": "added",
+          "note": {
+            "en": "Adds a no-copy pointer-and-length text overload.",
+            "fr": "Ajoute une surcharge texte pointeur-longueur sans copie.",
+            "zh": "新增无需复制的指针加长度文本重载。",
+            "ru": "Добавляет перегрузку текста с указателем и длиной без копирования."
+          }
+        },
+        {
+          "symbol": "DuckDBTypeToField",
+          "change": "removed",
+          "note": {
+            "en": "The helper is now internal to mormot.db.sql.duckdb.",
+            "fr": "La fonction devient interne à mormot.db.sql.duckdb.",
+            "zh": "该辅助函数现为 mormot.db.sql.duckdb 内部实现。",
+            "ru": "Функция стала внутренней для mormot.db.sql.duckdb."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "1080dd731d158955b4c763da7d8d171d31b0e5e4",
+      "headline": {
+        "en": "DuckDB date, interval and UUID conversion moves to stack buffers",
+        "fr": "Les conversions DuckDB de dates, intervalles et UUID passent sur la pile",
+        "zh": "DuckDB 日期、区间与 UUID 转换改用栈缓冲区",
+        "ru": "Преобразования дат, интервалов и UUID DuckDB перенесены в стековые буферы"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb removes DuckApplyScale, emits microseconds and interval parts through short stack strings, uses MicroSecsPerMilliSec for timestamp conversion and changes DuckUuidToGuid to pointer parameters with byte-wise field reconstruction.",
+        "fr": "mormot.db.raw.duckdb supprime DuckApplyScale, produit microsecondes et parties d’intervalle via de courtes chaînes sur la pile, utilise MicroSecsPerMilliSec pour les timestamps et passe DuckUuidToGuid à des paramètres pointeurs avec reconstruction octet par octet.",
+        "zh": "mormot.db.raw.duckdb 移除 DuckApplyScale，使用栈上短字符串生成微秒和区间各部分，以 MicroSecsPerMilliSec 转换时间戳，并将 DuckUuidToGuid 改为指针参数及逐字节重建。",
+        "ru": "mormot.db.raw.duckdb удаляет DuckApplyScale, формирует микросекунды и части интервала через короткие стековые строки, использует MicroSecsPerMilliSec для timestamps и переводит DuckUuidToGuid на указатели с побайтовой реконструкцией."
+      },
+      "impact": {
+        "en": "Normal TSqlDBDuckDBStatement callers keep the same high-level API. Direct users of the low-level conversion helpers must recompile and adapt the removed or changed declarations, then retest dates, intervals and UUIDs.",
+        "fr": "Les utilisateurs ordinaires de TSqlDBDuckDBStatement conservent la même API haut niveau. Les appels directs aux helpers bas niveau doivent être recompilés et adaptés, puis les dates, intervalles et UUID retestés.",
+        "zh": "普通 TSqlDBDuckDBStatement 调用者的高级 API 不变。直接使用底层转换辅助函数的代码需重新编译并适配被删除或修改的声明，再测试日期、区间和 UUID。",
+        "ru": "Обычные пользователи TSqlDBDuckDBStatement сохраняют прежний высокоуровневый API. Прямые вызовы низкоуровневых функций нужно пересобрать и адаптировать, затем повторно проверить даты, интервалы и UUID."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Recompile code that imports mormot.db.raw.duckdb directly and test mixed date-time intervals plus UUID round trips.",
+        "fr": "Recompilez le code important directement mormot.db.raw.duckdb et testez les intervalles date-heure mixtes ainsi que les allers-retours UUID.",
+        "zh": "请重新编译直接引用 mormot.db.raw.duckdb 的代码，并测试混合日期时间区间及 UUID 往返转换。",
+        "ru": "Пересоберите код с прямым импортом mormot.db.raw.duckdb и проверьте смешанные интервалы даты-времени и round-trip UUID."
+      },
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckApplyScale",
+          "change": "removed",
+          "note": {
+            "en": "Scaling is performed directly by DuckHugeIntToTextBuf.",
+            "fr": "La mise à l’échelle est intégrée à DuckHugeIntToTextBuf.",
+            "zh": "缩放现由 DuckHugeIntToTextBuf 直接完成。",
+            "ru": "Масштабирование теперь выполняет DuckHugeIntToTextBuf."
+          }
+        },
+        {
+          "symbol": "DuckUuidToGuid",
+          "change": "signature-changed",
+          "note": {
+            "en": "Parameters changed from const/var values to PDuckDBHugeInt and PGuid.",
+            "fr": "Les paramètres const/var deviennent PDuckDBHugeInt et PGuid.",
+            "zh": "参数由 const/var 值改为 PDuckDBHugeInt 与 PGuid。",
+            "ru": "Параметры const/var заменены на PDuckDBHugeInt и PGuid."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "ae7ce1bcb0e38e5c9e94ea05dc0563c2318035f3",
+      "headline": {
+        "en": "DuckDB UUID values gain direct TGuid conversion",
+        "fr": "Les UUID DuckDB gagnent une conversion directe vers TGuid",
+        "zh": "DuckDB UUID 新增直接 TGuid 转换",
+        "ru": "UUID DuckDB получили прямое преобразование в TGuid"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb adds DuckUuidToGuid and DuckUuidToTextBuf. They undo DuckDB's high-bit flip, rebuild native TGuid fields and format lowercase UUID text without allocating a temporary hexadecimal string.",
+        "fr": "mormot.db.raw.duckdb ajoute DuckUuidToGuid et DuckUuidToTextBuf. Ils annulent l’inversion du bit de poids fort de DuckDB, reconstruisent les champs TGuid et formatent l’UUID en minuscules sans chaîne hexadécimale temporaire.",
+        "zh": "mormot.db.raw.duckdb 新增 DuckUuidToGuid 与 DuckUuidToTextBuf。它们撤销 DuckDB 的最高位翻转，重建原生 TGuid 字段，并在不分配临时十六进制字符串的情况下生成小写 UUID。",
+        "ru": "mormot.db.raw.duckdb добавляет DuckUuidToGuid и DuckUuidToTextBuf. Они отменяют инверсию старшего бита DuckDB, восстанавливают поля TGuid и форматируют UUID в нижнем регистре без временной hex-строки."
+      },
+      "impact": {
+        "en": "DuckDB UUID columns can be converted consistently to mORMot text or TGuid values. Existing backends not using the new DuckDB provider are unaffected.",
+        "fr": "Les colonnes UUID DuckDB se convertissent désormais de façon cohérente en texte mORMot ou en TGuid. Les backends qui n’utilisent pas le nouveau provider DuckDB ne sont pas affectés.",
+        "zh": "DuckDB UUID 列现可一致转换为 mORMot 文本或 TGuid。未使用新 DuckDB provider 的后端不受影响。",
+        "ru": "Столбцы UUID DuckDB теперь согласованно преобразуются в текст mORMot или TGuid. Backend без нового provider DuckDB не затронуты."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckUuidToTextBuf",
+          "change": "added",
+          "note": {
+            "en": "Formats a DuckDB UUID into TTemp47.",
+            "fr": "Formate un UUID DuckDB dans TTemp47.",
+            "zh": "将 DuckDB UUID 格式化到 TTemp47。",
+            "ru": "Форматирует UUID DuckDB в TTemp47."
+          }
+        },
+        {
+          "symbol": "DuckUuidToGuid",
+          "change": "added",
+          "note": {
+            "en": "Converts DuckDB's HUGEINT representation to TGuid.",
+            "fr": "Convertit la représentation HUGEINT de DuckDB en TGuid.",
+            "zh": "将 DuckDB 的 HUGEINT 表示转换为 TGuid。",
+            "ru": "Преобразует представление HUGEINT DuckDB в TGuid."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "0bed0d4d8d5d1c3cd0aabf35e16fe090b3c64a01",
+      "headline": {
+        "en": "DuckDB text bindings now declare UTF-8 pointers explicitly",
+        "fr": "Les liaisons texte DuckDB déclarent explicitement les pointeurs UTF-8",
+        "zh": "DuckDB 文本绑定现显式声明 UTF-8 指针",
+        "ru": "Текстовые привязки DuckDB явно объявляют UTF-8 указатели"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb changes text-bearing C callbacks and DuckStringPtr from PAnsiChar to PUtf8Char, while conversion errors now raise ESqlDBDuckDB with contextual values. mormot.db.sql.duckdb follows the same pointer type consistently.",
+        "fr": "mormot.db.raw.duckdb passe les callbacks C textuels et DuckStringPtr de PAnsiChar à PUtf8Char, tandis que les erreurs de conversion lèvent ESqlDBDuckDB avec les valeurs de contexte. mormot.db.sql.duckdb adopte le même type de pointeur.",
+        "zh": "mormot.db.raw.duckdb 将含文本的 C 回调及 DuckStringPtr 从 PAnsiChar 改为 PUtf8Char，转换错误则以包含上下文值的 ESqlDBDuckDB 抛出。mormot.db.sql.duckdb 同步采用该指针类型。",
+        "ru": "mormot.db.raw.duckdb меняет текстовые C callbacks и DuckStringPtr с PAnsiChar на PUtf8Char, а ошибки преобразования теперь поднимают ESqlDBDuckDB с контекстными значениями. mormot.db.sql.duckdb использует тот же тип указателя."
+      },
+      "impact": {
+        "en": "The binary ABI remains pointer-compatible, but Delphi and FPC source that directly references the provisional low-level declarations may require a cast or recompilation. High-level provider use is unchanged.",
+        "fr": "Двоичный ABI остаётся совместимым по указателям, но исходный код Delphi/FPC с прямыми ссылками на предварительные низкоуровневые объявления может потребовать приведения типа или перекомпиляции. Высокоуровневое использование provider не меняется.",
+        "zh": "二进制 ABI 的指针仍兼容，但直接引用临时底层声明的 Delphi/FPC 源码可能需要类型转换或重新编译。高级 provider 用法不变。",
+        "ru": "Двоичный ABI сохраняет совместимость указателей, но исходникам Delphi/FPC с прямыми ссылками на предварительные низкоуровневые объявления может понадобиться приведение типа или пересборка. Высокоуровневое использование provider не меняется."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckStringPtr",
+          "change": "signature-changed",
+          "note": {
+            "en": "Return type changed from PAnsiChar to PUtf8Char.",
+            "fr": "Le type de retour passe de PAnsiChar à PUtf8Char.",
+            "zh": "返回类型由 PAnsiChar 改为 PUtf8Char。",
+            "ru": "Возвращаемый тип изменён с PAnsiChar на PUtf8Char."
+          }
+        },
+        {
+          "symbol": "TDuckDBLib text callbacks",
+          "change": "signature-changed",
+          "note": {
+            "en": "Text parameters and results now use PUtf8Char.",
+            "fr": "Les paramètres et résultats texte utilisent désormais PUtf8Char.",
+            "zh": "文本参数及返回值现使用 PUtf8Char。",
+            "ru": "Текстовые параметры и результаты теперь используют PUtf8Char."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "04c52594d90231dbf555b53e1bbcba0c5fbb0cf4",
+      "headline": {
+        "en": "DuckDB tests skip unsupported or misplaced libraries cleanly",
+        "fr": "Les tests DuckDB ignorent proprement les bibliothèques incompatibles ou mal placées",
+        "zh": "DuckDB 测试会干净跳过不支持或位置错误的库",
+        "ru": "Тесты DuckDB корректно пропускают неподдерживаемые или неверно размещённые библиотеки"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.db.duckdb makes TTestDuckDB.Prepare return false outside CPU64 and requires DuckDBLibraryName beside the executable before attempting to load it. A failed load is reported as a skipped test suite.",
+        "fr": "test.db.duckdb fait renvoyer false à TTestDuckDB.Prepare hors CPU64 et exige DuckDBLibraryName à côté de l’exécutable avant chargement. Un échec de chargement devient un test ignoré.",
+        "zh": "test.db.duckdb 使 TTestDuckDB.Prepare 在非 CPU64 下返回 false，并要求 DuckDBLibraryName 位于可执行文件旁才尝试加载。加载失败会被报告为跳过测试套件。",
+        "ru": "test.db.duckdb заставляет TTestDuckDB.Prepare возвращать false вне CPU64 и требует DuckDBLibraryName рядом с executable до загрузки. Неудачная загрузка отмечается как пропуск набора тестов."
+      },
+      "impact": {
+        "en": "CI and local 32-bit runs no longer log expected DuckDB loading failures. Production loading rules for the provider itself are unchanged.",
+        "fr": "Les exécutions CI et locales 32 bits ne journalisent plus des échecs DuckDB attendus. Les règles de chargement du provider en production ne changent pas.",
+        "zh": "CI 与本地 32 位测试不再记录预期的 DuckDB 加载失败。provider 的生产加载规则不变。",
+        "ru": "CI и локальные 32-битные запуски больше не журналируют ожидаемые ошибки DuckDB. Правила загрузки provider в production не меняются."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "test.db.duckdb"
+      ]
+    },
+    {
+      "sha": "31fadd70cf431d9e82a4bb065026162949b81c23",
+      "headline": {
+        "en": "DuckDB 128-bit decimals format directly into a bounded buffer",
+        "fr": "Les décimaux 128 bits DuckDB sont formatés directement dans un tampon borné",
+        "zh": "DuckDB 128 位十进制直接格式化到有界缓冲区",
+        "ru": "128-битные десятичные DuckDB форматируются прямо в ограниченный буфер"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb adds DuckHugeIntToTextBuf with signed, unsigned and scale handling in TTemp47, and extends DuckHugeIntToText with an optional Scale parameter. mormot.core.base exposes TTemp47 and BSON reuses it for TDecimal128Str.",
+        "fr": "mormot.db.raw.duckdb ajoute DuckHugeIntToTextBuf avec gestion signé, non signé et échelle dans TTemp47, et étend DuckHugeIntToText par un paramètre Scale optionnel. mormot.core.base expose TTemp47 et BSON le réutilise pour TDecimal128Str.",
+        "zh": "mormot.db.raw.duckdb 新增 DuckHugeIntToTextBuf，在 TTemp47 中处理有符号、无符号及缩放，并为 DuckHugeIntToText 增加可选 Scale 参数。mormot.core.base 公开 TTemp47，BSON 将其复用于 TDecimal128Str。",
+        "ru": "mormot.db.raw.duckdb добавляет DuckHugeIntToTextBuf с обработкой знака и Scale в TTemp47 и расширяет DuckHugeIntToText необязательным Scale. mormot.core.base публикует TTemp47, а BSON переиспользует его для TDecimal128Str."
+      },
+      "impact": {
+        "en": "DuckDB HUGEINT, UHUGEINT and DECIMAL conversion avoids intermediate heap strings and preserves scaled output. The added optional parameter is source-compatible with existing calls.",
+        "fr": "La conversion DuckDB HUGEINT, UHUGEINT et DECIMAL évite les chaînes intermédiaires sur le tas et conserve l’échelle. Le paramètre optionnel reste compatible avec les appels existants.",
+        "zh": "DuckDB HUGEINT、UHUGEINT 与 DECIMAL 转换避免中间堆字符串并保留缩放结果。新增可选参数与既有调用源码兼容。",
+        "ru": "Преобразование DuckDB HUGEINT, UHUGEINT и DECIMAL обходится без промежуточных heap-строк и сохраняет масштаб. Новый необязательный параметр совместим с прежними вызовами."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.core.base",
+        "mormot.db.nosql.bson",
+        "mormot.db.raw.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TTemp47",
+          "change": "added",
+          "note": {
+            "en": "Adds a 48-byte temporary character buffer type.",
+            "fr": "Ajoute un type de tampon temporaire de 48 octets.",
+            "zh": "新增 48 字节临时字符缓冲区类型。",
+            "ru": "Добавляет тип временного символьного буфера на 48 байт."
+          }
+        },
+        {
+          "symbol": "DuckHugeIntToTextBuf",
+          "change": "added",
+          "note": {
+            "en": "Formats signed, unsigned or scaled 128-bit values into TTemp47.",
+            "fr": "Formate les valeurs 128 bits signées, non signées ou mises à l’échelle dans TTemp47.",
+            "zh": "将有符号、无符号或缩放后的 128 位值格式化到 TTemp47。",
+            "ru": "Форматирует знаковые, беззнаковые или масштабированные 128-битные значения в TTemp47."
+          }
+        },
+        {
+          "symbol": "DuckHugeIntToText",
+          "change": "signature-changed",
+          "note": {
+            "en": "Adds optional Scale: integer = 0.",
+            "fr": "Ajoute Scale: integer = 0 optionnel.",
+            "zh": "新增可选 Scale: integer = 0。",
+            "ru": "Добавляет необязательный Scale: integer = 0."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "f5de6dc85a66b4a34c4dd043f986e3ff09388774",
+      "headline": {
+        "en": "DuckDB failures stay covered without polluting test logs",
+        "fr": "Les erreurs DuckDB restent testées sans polluer les journaux",
+        "zh": "DuckDB 失败测试不再污染日志",
+        "ru": "Ошибки DuckDB проверяются без загрязнения журналов"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.db.duckdb suppresses expected exception logging while probing the library, duplicate-key rollback and missing-table errors. It also checks all DuckDB record sizes before database-dependent tests run.",
+        "fr": "test.db.duckdb masque la journalisation des exceptions attendues lors de la détection de la bibliothèque, du rollback sur clé dupliquée et des erreurs de table absente. Il vérifie aussi la taille des records DuckDB avant les tests dépendants de la base.",
+        "zh": "test.db.duckdb 在探测库、重复键回滚和缺失表错误时抑制预期异常日志，并在依赖数据库的测试前检查所有 DuckDB record 大小。",
+        "ru": "test.db.duckdb подавляет ожидаемое журналирование исключений при поиске библиотеки, rollback после дубликата ключа и отсутствии таблицы, а также проверяет размеры records DuckDB до тестов БД."
+      },
+      "impact": {
+        "en": "Only test output changes. ABI layout mistakes in the new DuckDB records should now fail early even when no DuckDB library is available.",
+        "fr": "Seule la sortie des tests change. Les erreurs de disposition ABI des nouveaux records DuckDB doivent désormais échouer tôt, même sans bibliothèque DuckDB.",
+        "zh": "仅测试输出发生变化。即使没有 DuckDB 库，新 DuckDB record 的 ABI 布局错误也应能更早失败。",
+        "ru": "Меняется только вывод тестов. Ошибки ABI-layout новых records DuckDB теперь должны выявляться рано даже без библиотеки DuckDB."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.sql.duckdb",
+        "test.db.duckdb"
+      ]
+    },
+    {
+      "sha": "ff06cee083e6039c33a76e46be96558060aed1df",
+      "headline": {
+        "en": "DuckDB 128-bit integer formatting divides nine digits at a time",
+        "fr": "Le formatage des entiers 128 bits DuckDB traite neuf chiffres à la fois",
+        "zh": "DuckDB 128 位整数格式化每次处理九位数字",
+        "ru": "Форматирование 128-битных чисел DuckDB обрабатывает по девять цифр"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "DuckHugeIntToText replaces repeated base-10 division with DivU128By1B, extracting groups of nine decimal digits before formatting them into the destination buffer.",
+        "fr": "DuckHugeIntToText remplace les divisions décimales répétées par DivU128By1B, qui extrait des groupes de neuf chiffres avant leur formatage dans le tampon de destination.",
+        "zh": "DuckHugeIntToText 用 DivU128By1B 替代逐次十进制除法，每次提取九位十进制数字并写入目标缓冲区。",
+        "ru": "DuckHugeIntToText заменяет повторное деление на 10 функцией DivU128By1B, извлекающей группы по девять цифр перед записью в буфер."
+      },
+      "impact": {
+        "en": "HUGEINT and UHUGEINT text conversion becomes faster without changing output or the public signature at this revision. Other database providers are unaffected.",
+        "fr": "La conversion texte HUGEINT et UHUGEINT accélère sans modifier le résultat ni la signature publique à cette révision. Les autres providers ne sont pas affectés.",
+        "zh": "HUGEINT 与 UHUGEINT 文本转换加快，此修订不改变输出或公共签名。其他数据库 provider 不受影响。",
+        "ru": "Преобразование HUGEINT и UHUGEINT в текст ускоряется без изменения результата или публичной сигнатуры на этой ревизии. Другие providers не затронуты."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.raw.duckdb"
+      ]
+    },
+    {
+      "sha": "63abf24158665bfc9dfa5f2b9e1253e64e8e8740",
+      "headline": {
+        "en": "DuckDB temporal values now use mORMot's system-time conversions",
+        "fr": "Les valeurs temporelles DuckDB utilisent désormais les conversions système de mORMot",
+        "zh": "DuckDB 时间值现使用 mORMot 系统时间转换",
+        "ru": "Временные значения DuckDB используют системные преобразования mORMot"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb replaces custom calendar arithmetic with TSynSystemTime, adds floor division for negative timestamps, preserves microseconds in text, rounds TDateTime to the nearest millisecond and rejects dates outside supported year ranges.",
+        "fr": "mormot.db.raw.duckdb remplace l’arithmétique calendaire maison par TSynSystemTime, ajoute une division plancher pour les timestamps négatifs, conserve les microsecondes en texte, arrondit TDateTime à la milliseconde la plus proche et rejette les dates hors plage.",
+        "zh": "mormot.db.raw.duckdb 以 TSynSystemTime 替代自定义日历运算，为负时间戳增加向下取整除法，文本保留微秒，将 TDateTime 四舍五入到最近毫秒，并拒绝超出支持年份范围的日期。",
+        "ru": "mormot.db.raw.duckdb заменяет собственную календарную арифметику на TSynSystemTime, добавляет floor division для отрицательных timestamps, сохраняет микросекунды в тексте, округляет TDateTime до миллисекунды и отклоняет даты вне поддерживаемого диапазона."
+      },
+      "impact": {
+        "en": "DuckDB dates from year 0000-03-01 through 9999 can be rendered as text, while TDateTime conversion accepts years 1 through 9999. Backends using negative timestamps should retest round trips and millisecond rounding.",
+        "fr": "Les dates DuckDB de 0000-03-01 à 9999 sont rendues en texte, tandis que la conversion TDateTime accepte les années 1 à 9999. Les backends utilisant des timestamps négatifs doivent retester les allers-retours et l’arrondi à la milliseconde.",
+        "zh": "DuckDB 日期文本支持 0000-03-01 至 9999 年，TDateTime 转换支持 1 至 9999 年。使用负时间戳的后端应重新测试往返转换及毫秒舍入。",
+        "ru": "Текст DuckDB поддерживает даты от 0000-03-01 до 9999 года, а TDateTime — годы 1–9999. Backend с отрицательными timestamps следует повторно проверить round-trip и округление до миллисекунд."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Test pre-1970 timestamps, sub-millisecond values and boundary dates if those values can reach your DuckDB columns.",
+        "fr": "Testez les timestamps antérieurs à 1970, les valeurs sous la milliseconde et les dates limites si elles peuvent atteindre vos colonnes DuckDB.",
+        "zh": "若 DuckDB 列可能接收这些值，请测试 1970 年前时间戳、亚毫秒值及边界日期。",
+        "ru": "Проверьте timestamps до 1970 года, субмиллисекундные значения и граничные даты, если они возможны в ваших столбцах DuckDB."
+      },
+      "units": [
+        "mormot.db.raw.duckdb"
+      ]
+    },
+    {
+      "sha": "2d1593c578b98585f8e50019c6d75ba5d5029542",
+      "headline": {
+        "en": "DuckDB C records avoid packed access penalties on ARM",
+        "fr": "Les records C DuckDB évitent le coût de packed sur ARM",
+        "zh": "DuckDB C record 避免 ARM 上的 packed 访问开销",
+        "ru": "C-records DuckDB избегают штрафа packed-доступа на ARM"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.raw.duckdb removes packed from TDuckDBStringT, TDuckDBHugeInt, TDuckDBInterval and TDuckDBListEntry while preserving their 16-byte layouts. TDuckDBStringT now stores three cardinal words and its accessors use explicit pointer arithmetic.",
+        "fr": "mormot.db.raw.duckdb retire packed de TDuckDBStringT, TDuckDBHugeInt, TDuckDBInterval et TDuckDBListEntry tout en conservant leurs dispositions de 16 octets. TDuckDBStringT stocke trois cardinal et ses accesseurs utilisent une arithmétique de pointeurs explicite.",
+        "zh": "mormot.db.raw.duckdb 从 TDuckDBStringT、TDuckDBHugeInt、TDuckDBInterval 与 TDuckDBListEntry 移除 packed，同时保持 16 字节布局。TDuckDBStringT 现存储三个 cardinal，并由访问器显式进行指针运算。",
+        "ru": "mormot.db.raw.duckdb убирает packed у TDuckDBStringT, TDuckDBHugeInt, TDuckDBInterval и TDuckDBListEntry, сохраняя 16-байтовую раскладку. TDuckDBStringT хранит три cardinal, а доступ выполняется явной арифметикой указателей."
+      },
+      "impact": {
+        "en": "ARM32 and AArch64 Delphi/FPC code should avoid slower unaligned packed-field access while retaining the DuckDB C ABI. Applications that inspect TDuckDBStringT fields directly must use the new Data layout or the accessors.",
+        "fr": "Код Delphi/FPC для ARM32 и AArch64 избегает более медленного доступа к packed-полям при сохранении DuckDB C ABI. Приложения, напрямую читающие TDuckDBStringT, должны использовать Data или accessors.",
+        "zh": "ARM32 与 AArch64 的 Delphi/FPC 代码可避免较慢的非对齐 packed 字段访问，同时保持 DuckDB C ABI。直接检查 TDuckDBStringT 字段的应用需使用新 Data 布局或访问器。",
+        "ru": "Код Delphi/FPC для ARM32 и AArch64 избегает медленного невыравненного доступа к packed-полям при сохранении DuckDB C ABI. Приложения с прямым доступом к TDuckDBStringT должны использовать Data или accessors."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Recompile all code using the DuckDB units; replace direct TDuckDBStringT variant-field access with DuckStringPtr.",
+        "fr": "Recompilez tout code utilisant les unités DuckDB et remplacez l’accès direct aux variantes TDuckDBStringT par DuckStringPtr.",
+        "zh": "重新编译所有使用 DuckDB unit 的代码，并以 DuckStringPtr 替代直接访问 TDuckDBStringT 变体字段。",
+        "ru": "Пересоберите весь код с DuckDB units и замените прямой доступ к вариантным полям TDuckDBStringT на DuckStringPtr."
+      },
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDuckDBStringT",
+          "change": "signature-changed",
+          "note": {
+            "en": "Prefix, Ptr and Inlined variants are replaced by Data: array[0..2] of cardinal.",
+            "fr": "Варианты Prefix, Ptr et Inlined sont remplacés par Data: array[0..2] of cardinal.",
+            "zh": "Prefix、Ptr 与 Inlined 变体改为 Data: array[0..2] of cardinal。",
+            "ru": "Варианты Prefix, Ptr и Inlined заменены на Data: array[0..2] of cardinal."
+          }
+        },
+        {
+          "symbol": "TDuckDBHugeInt/TDuckDBInterval/TDuckDBListEntry",
+          "change": "signature-changed",
+          "note": {
+            "en": "Records are no longer declared packed, while tested sizes remain 16 bytes.",
+            "fr": "Les records ne sont plus packed, avec une taille testée de 16 octets.",
+            "zh": "这些 record 不再声明为 packed，但测试尺寸仍为 16 字节。",
+            "ru": "Records больше не объявлены packed, при этом проверяемый размер остаётся 16 байт."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "345840ea148a7c31614ffbd1572dba06a678108a",
+      "headline": {
+        "en": "Lazarus packages now include both DuckDB units",
+        "fr": "Les paquets Lazarus incluent désormais les deux unités DuckDB",
+        "zh": "Lazarus 软件包现包含两个 DuckDB unit",
+        "ru": "Пакеты Lazarus теперь включают оба DuckDB unit"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "packages/lazarus/mormot2.lpk and mormot2.pas register mormot.db.raw.duckdb and mormot.db.sql.duckdb, increasing the package unit count from 125 to 127.",
+        "fr": "packages/lazarus/mormot2.lpk et mormot2.pas enregistrent mormot.db.raw.duckdb et mormot.db.sql.duckdb, faisant passer le paquet de 125 à 127 unités.",
+        "zh": "packages/lazarus/mormot2.lpk 与 mormot2.pas 注册 mormot.db.raw.duckdb 和 mormot.db.sql.duckdb，使软件包 unit 数由 125 增至 127。",
+        "ru": "packages/lazarus/mormot2.lpk и mormot2.pas регистрируют mormot.db.raw.duckdb и mormot.db.sql.duckdb, увеличивая число units пакета с 125 до 127."
+      },
+      "impact": {
+        "en": "Lazarus/FPC users can import the new DuckDB provider through the standard mormot2 package. Builds before this commit contained the source files but did not expose them through that package.",
+        "fr": "Les utilisateurs Lazarus/FPC peuvent importer le nouveau provider DuckDB via le paquet mormot2 standard. Les builds précédents contenaient les sources sans les exposer dans ce paquet.",
+        "zh": "Lazarus/FPC 用户现可通过标准 mormot2 软件包引用新 DuckDB provider。此前 build 虽含源码，但未通过该软件包公开。",
+        "ru": "Пользователи Lazarus/FPC могут подключать новый provider DuckDB через стандартный пакет mormot2. Предыдущие builds содержали исходники, но не включали их в пакет."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Regenerate or reopen the Lazarus package before compiling code that uses the DuckDB units.",
+        "fr": "Avant de compiler du code DuckDB, régénérez ou rouvrez le paquet Lazarus.",
+        "zh": "编译使用 DuckDB unit 的代码前，请重新生成或重新打开 Lazarus 软件包。",
+        "ru": "Перед сборкой кода с DuckDB units пересоздайте или переоткройте пакет Lazarus."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ]
+    },
+    {
+      "sha": "6cd37aff946ecc372578fe50136867fc61b9d044",
+      "headline": {
+        "en": "A test case can now skip all published methods before setup",
+        "fr": "Un cas de test peut désormais ignorer toutes ses méthodes avant Setup",
+        "zh": "测试用例现可在 Setup 前跳过所有 published 方法",
+        "ru": "Тестовый класс может пропустить все published-методы до Setup"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.test adds virtual TSynTestCase.Prepare, called immediately after construction and before iterating published tests. Returning false bypasses the entire test class; the default implementation returns true.",
+        "fr": "mormot.core.test ajoute TSynTestCase.Prepare, appelée juste après construction et avant les tests publiés. Renvoyer false ignore toute la classe ; l’implémentation par défaut renvoie true.",
+        "zh": "mormot.core.test 新增虚方法 TSynTestCase.Prepare，在构造后、遍历 published 测试前调用。返回 false 会跳过整个测试类；默认返回 true。",
+        "ru": "mormot.core.test добавляет виртуальный TSynTestCase.Prepare, вызываемый после создания и до published-тестов. false пропускает весь класс; реализация по умолчанию возвращает true."
+      },
+      "impact": {
+        "en": "Custom Delphi/FPC test suites can cheaply skip a class when an optional dependency is unavailable. Existing TSynTestCase descendants retain their prior behavior.",
+        "fr": "Les suites de tests Delphi/FPC peuvent ignorer une classe si une dépendance optionnelle manque. Les descendants TSynTestCase existants gardent leur comportement.",
+        "zh": "Delphi/FPC 自定义测试套件可在可选依赖缺失时低成本跳过整个类。现有 TSynTestCase 子类行为不变。",
+        "ru": "Пользовательские тесты Delphi/FPC могут пропускать класс при отсутствии необязательной зависимости. Существующие потомки TSynTestCase сохраняют прежнее поведение."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.core.test"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynTestCase.Prepare",
+          "change": "added",
+          "note": {
+            "en": "Virtual hook returns whether the whole test case should run.",
+            "fr": "Le hook virtuel indique si tout le cas de test doit s’exécuter.",
+            "zh": "该虚方法决定整个测试用例是否运行。",
+            "ru": "Виртуальный hook определяет, запускать ли весь тестовый класс."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "cf83b2ce7242be983192e8739578a52efd8e1a09",
+      "headline": {
+        "en": "SQL proxy metadata decoding now follows the response protocol version",
+        "fr": "Le décodage des métadonnées proxy suit désormais la version de la réponse",
+        "zh": "SQL 代理元数据解码现遵循响应协议版本",
+        "ru": "Декодирование metadata SQL proxy следует версии ответа"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.db.proxy makes legacy servers return empty field and index payloads instead of serializing incompatible layouts, and the client branches on outheader.Magic rather than its request header when decoding fields, indexes and foreign keys.",
+        "fr": "mormot.db.proxy fait renvoyer aux serveurs legacy des payloads vides pour champs et index au lieu de sérialiser des dispositions incompatibles, et le client utilise outheader.Magic plutôt que l’en-tête de requête pour décoder champs, index et clés étrangères.",
+        "zh": "mormot.db.proxy 让旧版服务器对字段和索引返回空 payload，而非序列化不兼容布局；客户端解码字段、索引及外键时改用 outheader.Magic，而不是请求头版本。",
+        "ru": "mormot.db.proxy заставляет legacy-серверы возвращать пустые payload для полей и индексов вместо несовместимой сериализации, а клиент декодирует поля, индексы и внешние ключи по outheader.Magic, а не по заголовку запроса."
+      },
+      "impact": {
+        "en": "Mixed-version 32-bit and 64-bit SQL proxy peers no longer choose a metadata decoder from the wrong message version. Legacy peers keep basic compatibility, but version-1 field and index metadata remains deliberately unsupported.",
+        "fr": "Les pairs SQL proxy 32/64 bits de versions différentes ne choisissent plus le décodeur depuis la mauvaise version. La compatibilité de base legacy demeure, mais les métadonnées champs/index de version 1 restent volontairement non prises en charge.",
+        "zh": "混合版本的 32/64 位 SQL 代理节点不再依据错误的消息版本选择元数据解码器。旧版节点保留基本兼容，但版本 1 的字段和索引元数据仍明确不受支持。",
+        "ru": "SQL proxy peers разных версий и разрядности больше не выбирают decoder по неверной версии сообщения. Базовая legacy-совместимость сохраняется, но metadata полей и индексов версии 1 намеренно не поддерживается."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade both proxy ends to build 2.4.17661 or later and test GetFields, GetIndexes and GetForeignKey across every supported bitness pairing.",
+        "fr": "Mettez à jour les deux côtés du proxy vers le build 2.4.17661 ou ultérieur, puis testez GetFields, GetIndexes et GetForeignKey pour chaque combinaison 32/64 bits.",
+        "zh": "将代理两端都升级到 build 2.4.17661 或更高，并对所有支持的位数组合测试 GetFields、GetIndexes 与 GetForeignKey。",
+        "ru": "Обновите обе стороны proxy до build 2.4.17661 или новее и проверьте GetFields, GetIndexes и GetForeignKey для всех сочетаний разрядности."
+      },
+      "units": [
+        "mormot.db.proxy"
+      ]
+    },
+    {
+      "sha": "9c267e234337c74b89e1ff7c78e4b4f9272f5cac",
+      "headline": {
+        "en": "Remote database tests cover fields, indexes and reusable statements",
+        "fr": "Les tests de base distante couvrent champs, index et requêtes réutilisables",
+        "zh": "远程数据库测试覆盖字段、索引及可复用语句",
+        "ru": "Тесты удалённой БД покрывают поля, индексы и повторное использование statements"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.orm.extdb compares remote and local TSqlDBColumnDefine arrays, checks JSON field metadata, table and index definitions, and retains repeated execution coverage for one prepared proxy statement.",
+        "fr": "test.orm.extdb compare les tableaux TSqlDBColumnDefine distants et locaux, vérifie les métadonnées JSON, tables et index, et conserve la couverture d’exécutions répétées d’une même requête proxy préparée.",
+        "zh": "test.orm.extdb 对比远程与本地 TSqlDBColumnDefine 数组，检查 JSON 字段元数据、表与索引定义，并保留同一预处理代理语句重复执行的覆盖。",
+        "ru": "test.orm.extdb сравнивает удалённые и локальные массивы TSqlDBColumnDefine, проверяет JSON metadata, таблицы и индексы и сохраняет проверку повторного выполнения одного prepared proxy statement."
+      },
+      "impact": {
+        "en": "Application behavior is unchanged. Regressions in cross-process metadata transport and statement reuse should now be caught by the main external-database tests.",
+        "fr": "Le comportement applicatif ne change pas. Les régressions de transport de métadonnées interprocessus et de réutilisation des requêtes doivent maintenant être détectées.",
+        "zh": "应用行为不变。跨进程元数据传输及语句复用的回归现应由主外部数据库测试捕获。",
+        "ru": "Поведение приложений не меняется. Регрессии межпроцессной передачи metadata и повторного использования statements теперь должны выявляться основными тестами внешних БД."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "test.orm.extdb"
+      ]
+    },
+    {
+      "sha": "8cd3d20bd37f3e20c04b44c7ee9bb41a5424f7dc",
+      "headline": {
+        "en": "SQLite index metadata now uses direct PRAGMA queries",
+        "fr": "Метадonnées d’index SQLite utilisent désormais des PRAGMA directs",
+        "zh": "SQLite 索引元数据现使用直接 PRAGMA 查询",
+        "ru": "Metadata индексов SQLite теперь использует прямые PRAGMA-запросы"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBConnectionProperties.GetIndexes receives a dedicated dSQLite path using PRAGMA index_list and PRAGMA index_info, with quoted identifiers and the same exception fallback as GetFields. The earlier table-valued SqlGetIndex query becomes a seldom-used fallback.",
+        "fr": "TSqlDBConnectionProperties.GetIndexes reçoit un chemin dSQLite dédié avec PRAGMA index_list et PRAGMA index_info, des identifiants cités et le même fallback sur exception que GetFields. La requête SqlGetIndex table-valued précédente devient un fallback rare.",
+        "zh": "TSqlDBConnectionProperties.GetIndexes 新增专用 dSQLite 路径，使用 PRAGMA index_list 与 PRAGMA index_info，正确引用标识符，并采用与 GetFields 相同的异常回退。此前基于表值函数的 SqlGetIndex 查询成为少用后备路径。",
+        "ru": "TSqlDBConnectionProperties.GetIndexes получает отдельный путь dSQLite через PRAGMA index_list и PRAGMA index_info с quoted-идентификаторами и тем же fallback по исключению, что GetFields. Предыдущий table-valued SqlGetIndex остаётся редким fallback."
+      },
+      "impact": {
+        "en": "SQLite-backed Delphi/FPC services get index names, uniqueness, origin and ordered key columns without depending on table-valued PRAGMA functions that some external providers handle poorly.",
+        "fr": "Сервисы Delphi/FPC на SQLite получают имена индексов, уникальность, происхождение и порядок ключевых столбцов без зависимости от table-valued PRAGMA, плохо поддерживаемых некоторыми внешними providers.",
+        "zh": "基于 SQLite 的 Delphi/FPC 服务无需依赖某些外部 provider 支持不佳的表值 PRAGMA，即可获取索引名、唯一性、来源及有序键列。",
+        "ru": "Сервисы Delphi/FPC на SQLite получают имена индексов, уникальность, происхождение и порядок ключевых столбцов без table-valued PRAGMA, которые плохо работают в некоторых внешних providers."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "If your tooling consumes GetIndexes on SQLite, retest expression, partial and composite indexes after upgrading.",
+        "fr": "Si vos outils utilisent GetIndexes sur SQLite, retestez les index d’expression, partiels et composites après mise à jour.",
+        "zh": "若工具使用 SQLite 的 GetIndexes，升级后请重新测试表达式索引、部分索引与复合索引。",
+        "ru": "Если инструменты используют GetIndexes для SQLite, после обновления проверьте expression, partial и composite indexes."
+      },
+      "units": [
+        "mormot.db.sql"
+      ]
+    },
+    {
+      "sha": "1eb18cfc4da624a0d586bf8607d23318a9d57d40",
+      "headline": {
+        "en": "SQL text assembly avoids avoidable RawUtf8 temporaries",
+        "fr": "L’assemblage SQL évite des temporaires RawUtf8 inutiles",
+        "zh": "SQL 文本组装减少不必要的 RawUtf8 临时值",
+        "ru": "Сборка SQL избегает лишних временных RawUtf8"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.db.sql and mormot.db.proxy switch integer, floating-point, quoting, schema-prefix and array-binding paths to destination-buffer overloads such as Int64ToUtf8, DoubleToStr, Join and QuotedStr.",
+        "fr": "mormot.db.sql et mormot.db.proxy passent les chemins entiers, flottants, citations, préfixes de schéma et tableaux liés aux surcharges avec tampon de destination comme Int64ToUtf8, DoubleToStr, Join et QuotedStr.",
+        "zh": "mormot.db.sql 与 mormot.db.proxy 将整数、浮点、引用、schema 前缀及数组绑定路径改用 Int64ToUtf8、DoubleToStr、Join 和 QuotedStr 等目标缓冲区重载。",
+        "ru": "mormot.db.sql и mormot.db.proxy переводят обработку чисел, quoting, schema-префиксов и массивов на overloads с буфером назначения: Int64ToUtf8, DoubleToStr, Join и QuotedStr."
+      },
+      "impact": {
+        "en": "Application SQL and results should remain identical, with fewer temporary strings during parameter binding and proxy value conversion on both Delphi and FPC.",
+        "fr": "Le SQL et les résultats applicatifs restent identiques, avec moins de chaînes temporaires pendant la liaison des paramètres et la conversion proxy sous Delphi comme FPC.",
+        "zh": "应用 SQL 与结果应保持一致，同时 Delphi/FPC 参数绑定及代理值转换期间的临时字符串更少。",
+        "ru": "SQL и результаты приложений остаются прежними, но при привязке параметров и proxy-преобразовании в Delphi/FPC создаётся меньше временных строк."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.proxy",
+        "mormot.db.sql"
+      ]
+    },
+    {
+      "sha": "4b4c0a257469106d47a3eec2743ed46d036c88b6",
+      "headline": {
+        "en": "Connection properties can execute formatted SQL directly",
+        "fr": "Les propriétés de connexion peuvent exécuter directement du SQL formaté",
+        "zh": "连接属性现可直接执行格式化 SQL",
+        "ru": "Свойства соединения могут напрямую выполнять форматированный SQL"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.db.sql adds TSqlDBConnectionProperties.ExecuteFmt, which applies FormatUtf8 and executes the result without bound parameters. Execute also skips Bind when its open-array parameter list is empty.",
+        "fr": "mormot.db.sql ajoute TSqlDBConnectionProperties.ExecuteFmt, qui applique FormatUtf8 puis exécute le résultat sans paramètres liés. Execute évite aussi Bind lorsque la liste de paramètres est vide.",
+        "zh": "mormot.db.sql 新增 TSqlDBConnectionProperties.ExecuteFmt，使用 FormatUtf8 后无绑定参数执行结果。Execute 在开放数组参数为空时也会跳过 Bind。",
+        "ru": "mormot.db.sql добавляет TSqlDBConnectionProperties.ExecuteFmt: FormatUtf8 формирует SQL, который выполняется без bound-параметров. Execute также пропускает Bind при пустом массиве параметров."
+      },
+      "impact": {
+        "en": "Delphi and FPC code gains a concise helper for trusted formatted SQL. Values from untrusted input should still be bound or quoted explicitly because ExecuteFmt performs textual formatting.",
+        "fr": "Les codes Delphi et FPC gagnent un helper concis pour du SQL formaté de confiance. Les valeurs non fiables doivent toujours être liées ou citées explicitement car ExecuteFmt fait un formatage textuel.",
+        "zh": "Delphi/FPC 代码获得用于可信格式化 SQL 的简洁辅助方法。非可信输入仍应绑定或显式引用，因为 ExecuteFmt 只做文本格式化。",
+        "ru": "Код Delphi/FPC получает удобный helper для доверенного форматированного SQL. Недоверенные значения следует по-прежнему связывать или явно quoting, поскольку ExecuteFmt выполняет текстовое форматирование."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.sql"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBConnectionProperties.ExecuteFmt",
+          "change": "added",
+          "note": {
+            "en": "Formats SQL with FormatUtf8 and returns ISqlDBRows.",
+            "fr": "Formate le SQL avec FormatUtf8 et renvoie ISqlDBRows.",
+            "zh": "以 FormatUtf8 格式化 SQL 并返回 ISqlDBRows。",
+            "ru": "Форматирует SQL через FormatUtf8 и возвращает ISqlDBRows."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "9922dc1bb07c6ec2eb2dd5b52cf450e018e31f9b",
+      "headline": {
+        "en": "SQL variants transfer string ownership without extra copies",
+        "fr": "Les variants SQL transfèrent les chaînes sans copie supplémentaire",
+        "zh": "SQL variant 直接转移字符串所有权以避免额外复制",
+        "ru": "SQL variants передают владение строками без лишних копий"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBStatement.ColumnToVariant now transfers temporary ftBlob and ForceUtf8 buffers directly into the destination variant, preserves varSynUnicode as the default text representation and explicitly uses varString for nil UTF-8 values to avoid an FPC invalid-variant error.",
+        "fr": "TSqlDBStatement.ColumnToVariant transfère directement les tampons temporaires ftBlob et ForceUtf8 au variant destination, conserve varSynUnicode par défaut et utilise explicitement varString pour les valeurs UTF-8 nulles afin d’éviter une erreur FPC de variant invalide.",
+        "zh": "TSqlDBStatement.ColumnToVariant 现将临时 ftBlob 与 ForceUtf8 缓冲区直接转移到目标 variant，默认仍使用 varSynUnicode，并对 nil UTF-8 值显式使用 varString，以避免 FPC 无效 variant 错误。",
+        "ru": "TSqlDBStatement.ColumnToVariant напрямую передаёт временные буферы ftBlob и ForceUtf8 в Variant, сохраняет varSynUnicode по умолчанию и явно использует varString для nil UTF-8, предотвращая ошибку invalid variant в FPC."
+      },
+      "impact": {
+        "en": "FPC callers reading nullable UTF-8 SQL columns should no longer hit the invalid variant type case, and Delphi/FPC blob or forced-UTF8 reads allocate less. Text remains Unicode unless ForceUtf8 is true.",
+        "fr": "Les appelants FPC lisant des colonnes UTF-8 nulles ne devraient plus rencontrer le type de variant invalide, et les lectures blob ou ForceUtf8 allouent moins sous Delphi/FPC. Le texte reste Unicode sauf avec ForceUtf8.",
+        "zh": "FPC 调用者读取可空 UTF-8 SQL 列时不应再遇到无效 variant 类型；Delphi/FPC 的 blob 或强制 UTF-8 读取分配更少。除 ForceUtf8=true 外，文本仍为 Unicode。",
+        "ru": "FPC-код при чтении nullable UTF-8 столбцов больше не должен получать invalid variant type; чтение blob и ForceUtf8 в Delphi/FPC создаёт меньше выделений. Текст остаётся Unicode, если ForceUtf8=false."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest nullable text, blobs and ColumnVariant(..., ForceUtf8=true) on every compiler/backend combination you ship.",
+        "fr": "Retestez les textes nullables, blobs et ColumnVariant(..., ForceUtf8=true) sur chaque combinaison compilateur/backend livrée.",
+        "zh": "请在每个发布的编译器与后端组合上重新测试可空文本、blob 及 ColumnVariant(..., ForceUtf8=true)。",
+        "ru": "Повторно проверьте nullable-текст, blobs и ColumnVariant(..., ForceUtf8=true) на всех поддерживаемых сочетаниях compiler/backend."
+      },
+      "units": [
+        "mormot.db.core",
+        "mormot.db.sql"
+      ]
+    },
+    {
+      "sha": "114b07244aaef945c592d00c91f8f8188f514dca",
+      "headline": {
+        "en": "SQLite index discovery first gains a table-valued PRAGMA query",
+        "fr": "SQLite reçoit d’abord une requête PRAGMA table-valued pour découvrir les index",
+        "zh": "SQLite 索引发现最初加入表值 PRAGMA 查询",
+        "ru": "Для SQLite сначала добавлен table-valued PRAGMA-запрос индексов"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "Despite the commit subject, the diff changes TSqlDBConnectionProperties.SqlGetIndex: dSQLite receives a query built from pragma_index_list and pragma_index_xinfo, including uniqueness, origin and ordered key columns.",
+        "fr": "Malgré le sujet du commit, le diff modifie TSqlDBConnectionProperties.SqlGetIndex : dSQLite reçoit une requête fondée sur pragma_index_list et pragma_index_xinfo, avec unicité, origine et colonnes clés ordonnées.",
+        "zh": "尽管提交标题如此，实际 diff 修改的是 TSqlDBConnectionProperties.SqlGetIndex：dSQLite 获得基于 pragma_index_list 与 pragma_index_xinfo 的查询，包含唯一性、来源及有序键列。",
+        "ru": "Несмотря на заголовок commit, diff меняет TSqlDBConnectionProperties.SqlGetIndex: для dSQLite добавлен запрос через pragma_index_list и pragma_index_xinfo с уникальностью, происхождением и порядком ключевых столбцов."
+      },
+      "impact": {
+        "en": "This intermediate implementation improves SQLite index metadata but is replaced later in the same edition by direct PRAGMA calls in GetIndexes for broader provider compatibility.",
+        "fr": "Cette implémentation intermédiaire améliore les métadonnées d’index SQLite, mais elle est remplacée plus tard dans l’édition par des appels PRAGMA directs dans GetIndexes pour mieux couvrir les providers.",
+        "zh": "该中间实现改善了 SQLite 索引元数据，但同一版本稍后以 GetIndexes 中的直接 PRAGMA 调用替代，以兼容更多 provider。",
+        "ru": "Промежуточная реализация улучшает metadata индексов SQLite, но позже в этой же редакции заменена прямыми PRAGMA в GetIndexes для совместимости с providers."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.sql"
+      ]
+    },
+    {
+      "sha": "4b8c5202c060254df61c31532409aa124b5db1e3",
+      "headline": {
+        "en": "SQL proxy protocol version 2 preserves a legacy fallback",
+        "fr": "Le protocole SQL proxy version 2 conserve un fallback legacy",
+        "zh": "SQL 代理协议版本 2 保留旧版回退",
+        "ru": "Протокол SQL proxy версии 2 сохраняет legacy fallback"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.db.proxy separates the encryption marker from protocol magic, introduces MAGIC_METADATA version 2 and accepts versions 1 and 2. Version 2 transports integer-layout fields and JSON foreign keys; version 1 retains binary foreign keys while fields and indexes are rejected as unsupported.",
+        "fr": "mormot.db.proxy sépare le marqueur de chiffrement du magic protocolaire, introduit MAGIC_METADATA version 2 et accepte les versions 1 et 2. La version 2 transporte les champs au format integer et les clés étrangères JSON ; la version 1 conserve les clés binaires, mais champs et index sont refusés.",
+        "zh": "mormot.db.proxy 将加密标记与协议 magic 分离，引入 MAGIC_METADATA 版本 2，并接受版本 1 与 2。版本 2 传输 integer 布局字段及 JSON 外键；版本 1 保留二进制外键，但字段与索引被明确拒绝。",
+        "ru": "mormot.db.proxy отделяет маркер шифрования от magic протокола, вводит MAGIC_METADATA версии 2 и принимает версии 1 и 2. Версия 2 передаёт поля с integer-layout и JSON-внешние ключи; версия 1 сохраняет бинарные ключи, но поля и индексы отклоняются."
+      },
+      "impact": {
+        "en": "Current peers can exchange metadata consistently across 32-bit and 64-bit systems. Mixed-version deployments retain limited legacy operation, so metadata calls need explicit testing during a rolling upgrade.",
+        "fr": "Les pairs actuels échangent les métadonnées de façon cohérente entre systèmes 32 et 64 bits. Les déploiements mixtes gardent une compatibilité legacy limitée ; les appels de métadonnées doivent être testés pendant une mise à jour progressive.",
+        "zh": "当前节点可在 32/64 位系统间一致交换元数据。混合版本部署只保留有限旧版操作，因此滚动升级期间需明确测试元数据调用。",
+        "ru": "Текущие peers согласованно обмениваются metadata между 32- и 64-битными системами. При смешанных версиях сохраняется ограниченный legacy-режим, поэтому metadata-вызовы нужно тестировать при rolling upgrade."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade server and client together when possible; do not rely on GetFields or GetIndexes against a version-1 peer.",
+        "fr": "Mettez à jour serveur et client ensemble si possible ; ne comptez pas sur GetFields ou GetIndexes face à un pair version 1.",
+        "zh": "尽可能同时升级服务端与客户端；不要依赖针对版本 1 节点的 GetFields 或 GetIndexes。",
+        "ru": "По возможности обновляйте сервер и клиент вместе; не полагайтесь на GetFields или GetIndexes при работе с peer версии 1."
+      },
+      "units": [
+        "mormot.db.proxy"
+      ]
+    },
+    {
+      "sha": "5e767fc32427fa7746d9805e541d4351aec73483",
+      "headline": {
+        "en": "SQL proxy foreign keys switch to portable JSON metadata",
+        "fr": "Les clés étrangères du proxy SQL passent à des métadonnées JSON portables",
+        "zh": "SQL 代理外键改用可移植 JSON 元数据",
+        "ru": "Внешние ключи SQL proxy переведены на переносимый JSON"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The cGetForeignKeys server command now appends ForeignKeysJson. The client detects a zero-terminated JSON payload and calls TSynNameValue.InitFromJsonBuffer, while retaining the old system-specific binary decoder as a fallback.",
+        "fr": "La commande serveur cGetForeignKeys ajoute désormais ForeignKeysJson. Le client détecte un payload JSON terminé par zéro et appelle TSynNameValue.InitFromJsonBuffer, tout en conservant l’ancien décodeur binaire spécifique au système.",
+        "zh": "cGetForeignKeys 服务端命令现附加 ForeignKeysJson。客户端检测以零结尾的 JSON payload 并调用 TSynNameValue.InitFromJsonBuffer，同时保留旧的系统相关二进制解码作为回退。",
+        "ru": "Серверная команда cGetForeignKeys теперь добавляет ForeignKeysJson. Клиент распознаёт JSON payload с нулевым окончанием и вызывает TSynNameValue.InitFromJsonBuffer, сохраняя старый системно-зависимый бинарный decoder как fallback."
+      },
+      "impact": {
+        "en": "Foreign-key metadata can cross process and architecture boundaries without depending on an in-memory binary layout. SQL proxy users should update because the immediately preceding build exposed JSON storage but still sent the old format.",
+        "fr": "Les métadonnées de clés étrangères traversent processus et architectures sans dépendre d’une disposition binaire mémoire. Les utilisateurs du proxy SQL doivent mettre à jour, car le build précédent exposait le stockage JSON tout en envoyant encore l’ancien format.",
+        "zh": "外键元数据可跨进程与架构传输，不再依赖内存二进制布局。SQL 代理用户应升级，因为紧邻前一个 build 虽公开 JSON 存储，却仍发送旧格式。",
+        "ru": "Metadata внешних ключей теперь проходит между процессами и архитектурами без зависимости от бинарного layout в памяти. Пользователям SQL proxy следует обновиться: предыдущий build уже публиковал JSON-хранилище, но ещё отправлял старый формат."
+      },
+      "action": "upgrade-recommended",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Take build 2.4.17653 or later and verify cGetForeignKeys between every client/server architecture you support.",
+        "fr": "Utilisez le build 2.4.17653 ou ultérieur et vérifiez cGetForeignKeys entre toutes les architectures client et serveur prises en charge.",
+        "zh": "升级到 build 2.4.17653 或更高，并在所有支持的客户端/服务端架构间验证 cGetForeignKeys。",
+        "ru": "Установите build 2.4.17653 или новее и проверьте cGetForeignKeys для всех поддерживаемых архитектур клиента и сервера."
+      },
+      "units": [
+        "mormot.db.proxy",
+        "test.orm.extdb"
+      ]
+    },
+    {
+      "sha": "2b91c9f5125795b2272e3fad21612052e3ed7cc4",
+      "headline": {
+        "en": "Connection properties expose foreign keys as JSON",
+        "fr": "Les propriétés de connexion exposent les clés étrangères en JSON",
+        "zh": "连接属性现以 JSON 公开外键",
+        "ru": "Свойства соединения публикуют внешние ключи как JSON"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBConnectionProperties adds ForeignKeysJson. The getter lazily initializes and loads fForeignKeys before returning TSynNameValue.AsJson; the setter rebuilds the cache through InitFromJson.",
+        "fr": "TSqlDBConnectionProperties ajoute ForeignKeysJson. Le getter initialise et charge paresseusement fForeignKeys avant de renvoyer TSynNameValue.AsJson ; le setter reconstruit le cache avec InitFromJson.",
+        "zh": "TSqlDBConnectionProperties 新增 ForeignKeysJson。getter 延迟初始化并加载 fForeignKeys 后返回 TSynNameValue.AsJson；setter 通过 InitFromJson 重建缓存。",
+        "ru": "TSqlDBConnectionProperties добавляет ForeignKeysJson. Getter лениво инициализирует и загружает fForeignKeys перед возвратом TSynNameValue.AsJson; setter восстанавливает кэш через InitFromJson."
+      },
+      "impact": {
+        "en": "Delphi/FPC applications and proxies can persist foreign-key metadata in a portable textual form instead of ForeignKeysData's system-specific binary blob. Existing ForeignKeysData callers remain supported.",
+        "fr": "Приложения Delphi/FPC и proxy могут хранить metadata внешних ключей в переносимом текстовом формате вместо системно-зависимого ForeignKeysData. Существующие вызовы ForeignKeysData сохраняются.",
+        "zh": "Delphi/FPC 应用及代理可使用可移植文本形式保存外键元数据，而非 ForeignKeysData 的系统相关二进制 blob。现有 ForeignKeysData 调用仍受支持。",
+        "ru": "Приложения Delphi/FPC и proxy могут хранить metadata внешних ключей в переносимом текстовом виде вместо системно-зависимого ForeignKeysData. Существующие вызовы ForeignKeysData поддерживаются."
+      },
+      "action": "none",
+      "confidence": "confirmed",
+      "units": [
+        "mormot.db.sql"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBConnectionProperties.ForeignKeysJson",
+          "change": "added",
+          "note": {
+            "en": "Reads or writes cached foreign-key metadata as JSON.",
+            "fr": "Lit ou écrit le cache des clés étrangères en JSON.",
+            "zh": "以 JSON 读写缓存的外键元数据。",
+            "ru": "Читает и записывает кэш metadata внешних ключей как JSON."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "1f058393ab8ad0e0c7186ef013a0ea260319a01f",
+      "headline": {
+        "en": "TSynNameValue separates safe strings from destructive JSON buffers",
+        "fr": "TSynNameValue sépare les chaînes sûres des buffers JSON modifiés",
+        "zh": "TSynNameValue 区分安全字符串与就地修改 JSON 缓冲区",
+        "ru": "TSynNameValue разделяет безопасные строки и изменяемые JSON-буферы"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.core.search adds InitFromJson(const RawUtf8), which copies through TSynTempBuffer before parsing, and renames the in-place PUtf8Char overload to InitFromJsonBuffer. TSynTempBuffer.Init(RawByteString) now returns its buffer pointer.",
+        "fr": "mormot.core.search ajoute InitFromJson(const RawUtf8), qui copie via TSynTempBuffer avant analyse, et renomme la surcharge PUtf8Char modifiée en place en InitFromJsonBuffer. TSynTempBuffer.Init(RawByteString) renvoie désormais son pointeur de buffer.",
+        "zh": "mormot.core.search 新增 InitFromJson(const RawUtf8)，先通过 TSynTempBuffer 复制再解析，并将会就地修改的 PUtf8Char 重载重命名为 InitFromJsonBuffer。TSynTempBuffer.Init(RawByteString) 现返回缓冲区指针。",
+        "ru": "mormot.core.search добавляет InitFromJson(const RawUtf8), копирующий данные через TSynTempBuffer, и переименовывает изменяющую PUtf8Char-перегрузку в InitFromJsonBuffer. TSynTempBuffer.Init(RawByteString) теперь возвращает указатель на буфер."
+      },
+      "impact": {
+        "en": "Most callers gain a safer non-destructive API. Source that passed a PUtf8Char to TSynNameValue.InitFromJson may no longer compile and must either call InitFromJsonBuffer explicitly or pass a RawUtf8 value.",
+        "fr": "La plupart des appelants gagnent une API sûre et non destructive. Le code passant un PUtf8Char à TSynNameValue.InitFromJson peut ne plus compiler et doit appeler InitFromJsonBuffer ou fournir un RawUtf8.",
+        "zh": "多数调用者获得更安全且不破坏输入的 API。向 TSynNameValue.InitFromJson 传递 PUtf8Char 的源码可能无法编译，必须显式调用 InitFromJsonBuffer 或传入 RawUtf8。",
+        "ru": "Большинство вызовов получает безопасный недеструктивный API. Код, передававший PUtf8Char в TSynNameValue.InitFromJson, может перестать компилироваться и должен вызвать InitFromJsonBuffer либо передать RawUtf8."
+      },
+      "action": "migration-required",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Search for InitFromJson calls whose argument type is PUtf8Char. Rename destructive calls to InitFromJsonBuffer(Json, false), or pass RawUtf8 to the new copying overload.",
+        "fr": "Recherchez les appels InitFromJson dont l’argument est PUtf8Char. Renommez les appels destructifs en InitFromJsonBuffer(Json, false), ou passez un RawUtf8 à la nouvelle surcharge avec copie.",
+        "zh": "搜索参数类型为 PUtf8Char 的 InitFromJson 调用。将原地修改调用改为 InitFromJsonBuffer(Json, false)，或向新的复制重载传入 RawUtf8。",
+        "ru": "Найдите вызовы InitFromJson с аргументом PUtf8Char. Переименуйте изменяющие вызовы в InitFromJsonBuffer(Json, false) либо передайте RawUtf8 новой копирующей перегрузке."
+      },
+      "units": [
+        "mormot.core.base",
+        "mormot.core.search",
+        "mormot.net.dhcp"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynNameValue.InitFromJson(const RawUtf8, boolean)",
+          "change": "added",
+          "note": {
+            "en": "Adds a copying, non-destructive overload.",
+            "fr": "Ajoute une surcharge avec copie, non destructive.",
+            "zh": "新增复制输入且不就地修改的重载。",
+            "ru": "Добавляет копирующую недеструктивную перегрузку."
+          }
+        },
+        {
+          "symbol": "TSynNameValue.InitFromJson(PUtf8Char, boolean)",
+          "change": "renamed",
+          "note": {
+            "en": "Renamed to InitFromJsonBuffer to make in-place mutation explicit.",
+            "fr": "Renommée InitFromJsonBuffer pour rendre la modification en place explicite.",
+            "zh": "重命名为 InitFromJsonBuffer，以明确表示会就地修改。",
+            "ru": "Переименована в InitFromJsonBuffer, чтобы явно показать изменение на месте."
+          }
+        },
+        {
+          "symbol": "TSynTempBuffer.Init(const RawByteString)",
+          "change": "signature-changed",
+          "note": {
+            "en": "Now returns PUtf8Char instead of being a procedure.",
+            "fr": "Devient une fonction renvoyant PUtf8Char.",
+            "zh": "由 procedure 改为返回 PUtf8Char 的函数。",
+            "ru": "Теперь это функция, возвращающая PUtf8Char."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "cfbbf36e4eec12f42bc3193244518e1af3db27a9",
+      "headline": {
+        "en": "The dependency guide lists the new DuckDB units",
+        "fr": "Le guide des dépendances répertorie les nouvelles unités DuckDB",
+        "zh": "依赖指南列出新的 DuckDB unit",
+        "ru": "Руководство зависимостей перечисляет новые DuckDB units"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "src/FOLDER-DEPENDENCIES.md adds mormot.db.raw.duckdb under raw database APIs and mormot.db.sql.duckdb under SQL database connectors.",
+        "fr": "src/FOLDER-DEPENDENCIES.md ajoute mormot.db.raw.duckdb aux API brutes de base et mormot.db.sql.duckdb aux connecteurs SQL.",
+        "zh": "src/FOLDER-DEPENDENCIES.md 在数据库原始 API 下加入 mormot.db.raw.duckdb，并在 SQL 数据库连接器下加入 mormot.db.sql.duckdb。",
+        "ru": "src/FOLDER-DEPENDENCIES.md добавляет mormot.db.raw.duckdb в raw API баз данных и mormot.db.sql.duckdb в SQL connectors."
+      },
+      "impact": {
+        "en": "No application code changes. Developers can locate the DuckDB layers in the documented folder hierarchy.",
+        "fr": "Aucun code applicatif ne change. Les développeurs peuvent repérer les couches DuckDB dans la hiérarchie documentée.",
+        "zh": "应用代码不变。开发者可在文档化的目录层级中找到 DuckDB 各层。",
+        "ru": "Код приложений не меняется. Разработчики могут найти слои DuckDB в документированной иерархии."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a5f9533aeb32a63b231c9498308ef5307054d0c6",
+      "headline": {
+        "en": "A native in-process DuckDB provider joins SynDB",
+        "fr": "Un provider DuckDB natif en processus rejoint SynDB",
+        "zh": "SynDB 新增原生进程内 DuckDB provider",
+        "ru": "В SynDB появился нативный in-process provider DuckDB"
+      },
+      "category": "feature",
+      "severity": "high",
+      "what_changed": {
+        "en": "The new mormot.db.raw.duckdb dynamically binds the 64-bit DuckDB C API, while mormot.db.sql.duckdb implements TSqlDBDuckDBConnectionProperties, thread-safe connections, prepared statements, transactions, array binding, nested-type JSON conversion and TSqlDBDuckDBAppender. test.db.duckdb adds optional regression coverage.",
+        "fr": "Le nouveau mormot.db.raw.duckdb lie dynamiquement l’API C DuckDB 64 bits, tandis que mormot.db.sql.duckdb fournit TSqlDBDuckDBConnectionProperties, connexions thread-safe, requêtes préparées, transactions, tableaux liés, conversion JSON des types imbriqués et TSqlDBDuckDBAppender. test.db.duckdb ajoute une couverture optionnelle.",
+        "zh": "新的 mormot.db.raw.duckdb 动态绑定 64 位 DuckDB C API；mormot.db.sql.duckdb 实现 TSqlDBDuckDBConnectionProperties、线程安全连接、预处理语句、事务、数组绑定、嵌套类型 JSON 转换及 TSqlDBDuckDBAppender。test.db.duckdb 增加可选回归测试。",
+        "ru": "Новый mormot.db.raw.duckdb динамически связывает 64-битный C API DuckDB, а mormot.db.sql.duckdb реализует TSqlDBDuckDBConnectionProperties, thread-safe соединения, prepared statements, транзакции, массивы, JSON для вложенных типов и TSqlDBDuckDBAppender. test.db.duckdb добавляет необязательные тесты."
+      },
+      "impact": {
+        "en": "Delphi 7 through Delphi 13 and FPC 3.2+ can run analytical SQL in process when a compatible 64-bit DuckDB library is deployed. Official DuckDB binaries do not support Win32, and the database handle is shared while each thread connection gets its own duckdb_connection.",
+        "fr": "Delphi 7 à Delphi 13 et FPC 3.2+ peuvent exécuter du SQL analytique en processus avec une bibliothèque DuckDB 64 bits compatible. Les binaires officiels ne prennent pas en charge Win32 ; le handle de base est partagé et chaque connexion de thread reçoit son propre duckdb_connection.",
+        "zh": "Delphi 7 至 Delphi 13 及 FPC 3.2+ 可在部署兼容 64 位 DuckDB 库后于进程内运行分析 SQL。官方 DuckDB 二进制不支持 Win32；数据库 handle 共享，而每个线程连接拥有独立 duckdb_connection。",
+        "ru": "Delphi 7–13 и FPC 3.2+ могут выполнять аналитический SQL в процессе при наличии совместимой 64-битной библиотеки DuckDB. Официальные binaries не поддерживают Win32; database handle общий, а каждый thread получает собственный duckdb_connection."
+      },
+      "action": "review",
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Treat the provider as new code: deploy the matching 64-bit DuckDB library, run test.db.duckdb on every target compiler and platform, and benchmark representative data before production use.",
+        "fr": "Considérez ce provider comme nouveau : déployez la bibliothèque DuckDB 64 bits correspondante, exécutez test.db.duckdb sur chaque compilateur et plateforme cible, puis mesurez vos données avant production.",
+        "zh": "请将该 provider 视为新代码：部署匹配的 64 位 DuckDB 库，在每个目标编译器与平台上运行 test.db.duckdb，并在生产使用前对代表性数据做基准测试。",
+        "ru": "Считайте provider новым кодом: установите подходящую 64-битную библиотеку DuckDB, запустите test.db.duckdb на каждом целевом compiler/platform и измерьте типичные данные до production."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb",
+        "test.db.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "mormot.db.raw.duckdb",
+          "change": "added",
+          "note": {
+            "en": "Adds dynamic DuckDB C API types, loader and conversion helpers.",
+            "fr": "Ajoute les types, le chargeur dynamique et les helpers de conversion de l’API C DuckDB.",
+            "zh": "新增 DuckDB C API 类型、动态加载器及转换辅助函数。",
+            "ru": "Добавляет типы C API DuckDB, динамический loader и функции преобразования."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBConnectionProperties",
+          "change": "added",
+          "note": {
+            "en": "Adds the SynDB connection-properties provider for files or :memory:.",
+            "fr": "Ajoute le provider SynDB pour fichiers ou :memory:.",
+            "zh": "新增用于文件或 :memory: 的 SynDB 连接属性 provider。",
+            "ru": "Добавляет SynDB provider для файлов или :memory:."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBConnection",
+          "change": "added",
+          "note": {
+            "en": "Adds per-thread DuckDB connections, transactions, scripts and interruption.",
+            "fr": "Ajoute connexions DuckDB par thread, transactions, scripts et interruption.",
+            "zh": "新增每线程 DuckDB 连接、事务、脚本及中断。",
+            "ru": "Добавляет DuckDB-соединения на thread, транзакции, scripts и interruption."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBStatement",
+          "change": "added",
+          "note": {
+            "en": "Adds prepared statements, array binding and typed or JSON result access.",
+            "fr": "Ajoute requêtes préparées, tableaux liés et accès typé ou JSON aux résultats.",
+            "zh": "新增预处理语句、数组绑定及类型化或 JSON 结果访问。",
+            "ru": "Добавляет prepared statements, привязку массивов и типизированный либо JSON-доступ."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBAppender",
+          "change": "added",
+          "note": {
+            "en": "Adds high-throughput row loading through DuckDB's Appender API.",
+            "fr": "Ajoute le chargement rapide via l’API Appender de DuckDB.",
+            "zh": "新增基于 DuckDB Appender API 的高吞吐行加载。",
+            "ru": "Добавляет высокоскоростную загрузку строк через Appender API DuckDB."
+          }
+        }
+      ]
+    }
+  ]
+}
