@@ -1,0 +1,1648 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-16",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-17T03:38:28Z",
+  "range": {
+    "since": "2026-10-15T22:00:00Z",
+    "until": "2026-10-16T22:00:00Z",
+    "base_sha": "3a4443f95bf880537f9420d93ae471f14b487c7f",
+    "head_sha": "587ce16741a610dc1a84c86d2687063b5af5da6b"
+  },
+  "version": {
+    "after": "2.4.17677",
+    "before": "2.4.17647"
+  },
+  "totals": {
+    "commits": 27,
+    "additions": 6941,
+    "deletions": 702
+  },
+  "commits": [
+    {
+      "sha": "587ce16741a610dc1a84c86d2687063b5af5da6b",
+      "short_sha": "587ce167",
+      "subject": "test: let DuckDB coverage give some numbers",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T15:12:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/587ce16741a610dc1a84c86d2687063b5af5da6b",
+      "parents": [
+        "6d39910a42861e46970e46914df064c2735bb43a"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 17,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17676\n+17677",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17676'\r\n+'2.4.17677'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 85,
+          "deletions": 15,
+          "patch": "@@ -22,6 +22,7 @@ interface\n   mormot.core.json,\n   mormot.core.variants,\n   mormot.core.log,\n+  mormot.core.perf,\n   mormot.core.test,\n   mormot.db.core,\n   mormot.db.sql,\n@@ -79,17 +80,70 @@ procedure TTestDuckDB.CleanUp;\n   FreeAndNil(fProps);\n end;\n \n+\n procedure TTestDuckDB.BasicTypes;\n var\n   rows: ISqlDBRows;\n   dt: TDateTime;\n+  h: TDuckDBHugeInt;\n+  buf: TTemp47;\n+  n: PtrInt;\n+\n+  procedure Test(const Expected: RawUtf8);\n+  var\n+    actual: RawUtf8;\n+  begin\n+    FastSetString(actual, @buf[0], n);\n+    CheckEqual(actual, Expected);\n+    Check(buf[n] = #0, 'Missing buffer terminator');\n+    FillCharFast(buf, SizeOf(buf), 255);\n+  end;\n+\n begin\n   CheckEqual(SizeOf(TDuckDBStringT),   16, 'SizeOf(TDuckDBStringT)');\n   CheckEqual(SizeOf(TDuckDBHugeInt),   16, 'SizeOf(TDuckDBHugeInt)');\n   CheckEqual(SizeOf(TDuckDBInterval),  16, 'SizeOf(TDuckDBInterval)');\n   CheckEqual(SizeOf(TDuckDBListEntry), 16, 'SizeOf(TDuckDBListEntry)');\n   CheckEqual(SizeOf(TDuckDBResult),\n     3 * SizeOf(TDuckIdx) + 3 * SizeOf(pointer), 'SizeOf(TDuckDBResult)');\n+  FillCharFast(buf, SizeOf(buf), 255);\n+  h.Lower := 12345;\n+  h.Upper := 0;\n+  n := DuckHugeIntToTextBuf(h, true, 0, buf);\n+  Test('12345');\n+  n := DuckHugeIntToTextBuf(h, true, 2, buf);\n+  Test('123.45');\n+  n := DuckHugeIntToTextBuf(h, true, 5, buf);\n+  Test('0.12345');\n+  n := DuckHugeIntToTextBuf(h, true, 7, buf);\n+  Test('0.0012345');\n+  h.Lower := -12345;\n+  h.Upper := -1;\n+  n := DuckHugeIntToTextBuf(h, true, 2, buf);\n+  Test('-123.45');\n+  h.Lower := 0;\n+  h.Upper := 0;\n+  n := DuckHugeIntToTextBuf(h, true, 4, buf);\n+  Test('0.0000');\n+  h.Lower := -1;\n+  h.Upper := -1;\n+  n := DuckHugeIntToTextBuf(h, false, 0, buf);\n+  Test('340282366920938463463374607431768211455');\n+  n := DuckHugeIntToTextBuf(h, true, 0, buf);\n+  Test('-1');\n+  h.Lower := 0;\n+  h.Upper := low(Int64);\n+  n := DuckHugeIntToTextBuf(h, true, 0, buf);\n+  Test('-170141183460469231731687303715884105728');\n+  h.Upper := high(Int64);\n+  h.Lower := -1;\n+  n := DuckHugeIntToTextBuf(h, true, 0, buf);\n+  Test('170141183460469231731687303715884105727');\n+  // UUID representation with DuckDB's highest-bit flip\n+  h.Upper := Int64($8011223344556677);\n+  h.Lower := Int64($8899AABBCCDDEEFF);\n+  n := DuckUuidToTextBuf(h, buf);\n+  Test('00112233-4455-6677-8899-aabbccddeeff');\n   if fProps = nil then\n     exit;\n   rows := fProps.Execute(\n@@ -271,8 +325,7 @@ procedure TTestDuckDB.Json;\n     ExecutePreparedAndFetchAllAsJson(true, json);\n   end;\n   doc.InitJson(json, JSON_FAST);\n-  CheckEqual(doc.Count, 2, 'json rows');\n-  if doc.Count = 2 then\n+  if CheckEqual(doc.Count, 2, 'json rows') then\n   begin\n     CheckEqual(_Safe(doc.Values[1])^.U['name'], 'O''Neil ? -- #2', 'json text');\n     CheckEqual(_Safe(doc.Values[0])^.U['born'], '2000-01-01', 'json date');\n@@ -321,20 +374,24 @@ procedure TTestDuckDB.Metadata;\n end;\n \n procedure TTestDuckDB.Bulk;\n+const\n+  COUNT = 1000;\n var\n   conn: TSqlDBConnection;\n   st: ISqlDBStatement;\n   i: integer;\n   rows: ISqlDBRows;\n   n: integer;\n+  timer: TPrecisionTimer;\n begin\n   if fProps = nil then\n     exit;\n   conn := fProps.ThreadSafeConnection;\n   fProps.ExecuteNoResult('create or replace table bulk (id INTEGER, v DOUBLE, t VARCHAR)', []);\n+  timer.Start;\n   conn.StartTransaction;\n   st := conn.NewStatementPrepared('insert into bulk values (?,?,?)', false, true);\n-  for i := 1 to 10000 do\n+  for i := 1 to COUNT do\n   begin\n     st.Bind(1, i);\n     st.Bind(2, i * 0.5);\n@@ -343,21 +400,26 @@ procedure TTestDuckDB.Bulk;\n     st.Instance.Reset;\n   end;\n   conn.Commit;\n+  NotifyTestSpeed('insert', COUNT, 0, @timer);\n+  timer.Start;\n   rows := fProps.Execute('select t, count(*), sum(v) from bulk group by t order by t', []);\n   n := 0;\n   while rows.Step do\n     inc(n);\n   CheckEqual(n, 7, 'group by');\n+  NotifyTestSpeed('group by', COUNT, 0, @timer);\n+  timer.Start;\n   rows := fProps.Execute('select * from bulk order by id', []);\n   n := 0;\n   while rows.Step do\n     inc(n);\n-  CheckEqual(n, 10000,\n... [truncated, 3142 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6d39910a42861e46970e46914df064c2735bb43a",
+      "short_sha": "6d39910a",
+      "subject": "db: lots of DuckDB client side optimizations",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T15:11:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6d39910a42861e46970e46914df064c2735bb43a",
+      "parents": [
+        "1080dd731d158955b4c763da7d8d171d31b0e5e4"
+      ],
+      "stats": {
+        "additions": 288,
+        "deletions": 164,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 286,
+          "deletions": 162,
+          "patch": "@@ -119,14 +119,21 @@   TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n \n   /// cached information about one DuckDB result column\n   TDuckDBColumnInfo = record\n+    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n     TypeId: TDuckDBType;\n-    Internal: TDuckDBType; // storage type for DECIMAL and ENUM\n-    Scale: integer;        // for DECIMAL\n+    /// number precision retrieved for DECIMAL - 0 means integer\n+    Scale: integer;\n+    /// internal nested storage type for DECIMAL and ENUM\n+    Internal: TDuckDBType;\n+    /// DuckDB type info structure\n     LogicalType: TDuckDBLogicalType;\n+    /// internal cache of ENUM values\n     EnumValues: TRawUtf8DynArray;\n-    // current chunk content\n+    /// current chunk content\n     Vector: TDuckDBVector;\n+    /// current position in the data buffer\n     Data: pointer;\n+    /// cached vector_get_validity() values\n     Validity: PDuckI64Array;\n   end;\n   PDuckDBColumnInfo = ^TDuckDBColumnInfo;\n@@ -145,7 +152,7 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n-    procedure BindArrayRow(Row: integer);\n+    procedure BindArrayRow(Row: integer; var Temp: RawUtf8);\n     procedure ExecuteArray;\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n@@ -201,6 +208,8 @@   TSqlDBDuckDBAppender = class\n     fRowCount: Int64;\n     fTable: RawUtf8;\n     procedure Check(res: TDuckDBState; const ctxt: RawUtf8);\n+      {$ifdef HASINLINE} inline; {$endif}\n+    procedure Failed(res: TDuckDBState; const ctxt: RawUtf8);\n   public\n     /// create an appender for a given table of an opened connection\n     constructor Create(aConnection: TSqlDBDuckDBConnection;\n@@ -220,7 +229,10 @@   TSqlDBDuckDBAppender = class\n     /// append a TDateTime value as TIMESTAMP\n     procedure AddDateTime(Value: TDateTime);\n     /// append some UTF-8 text - also usable for any castable column type\n-    procedure AddText(const Value: RawUtf8);\n+    procedure AddText(const Value: RawUtf8); overload;\n+      {$ifdef HASINLINE} inline; {$endif}\n+    /// append some UTF-8 text - also usable for any castable column type\n+    procedure AddText(Value: PUtf8Char; Len: PtrInt); overload;\n     /// append some binary content\n     procedure AddBlob(const Value: RawByteString);\n     /// append all values of a row, from Delphi values\n@@ -238,19 +250,22 @@   TSqlDBDuckDBAppender = class\n   end;\n \n \n-/// map a DuckDB logical type into a mORMot field type\n-function DuckDBTypeToField(lt: TDuckDBLogicalType): TSqlDBFieldType;\n-\n /// append the value at Row of a DuckDB vector as JSON\n // - handles all scalar types, and nested LIST/ARRAY/STRUCT/MAP/UNION\n procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n   row: PtrInt; W: TJsonWriter);\n \n+\n /// return the value at Row of a DuckDB vector as text\n // - scalar values in DuckDB text format, nested values as JSON\n procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n   row: PtrInt; var result: RawUtf8);\n \n+/// fill the simple value at Row of a DuckDB vector into a text buffer\n+// - returns the number of bytes written, or -1 if this type is not supported\n+function DuckDBVectorValueToTextBuf(vec: TDuckDBVector;  lt: TDuckDBLogicalType;\n+  row: PtrInt; var Buffer: TTemp47): PtrInt;\n+\n \n implementation\n \n@@ -270,9 +285,9 @@ function IsValid(validity: PDuckI64Array; row: PtrInt): boolean;\n             ((validity^[row shr 6] shr (row and 63)) and 1 <> 0);\n end;\n \n-function DuckDBTypeToField(lt: TDuckDBLogicalType): TSqlDBFieldType;\n+function DuckDBTypeToField(typeid: TDuckDBType; scale: integer): TSqlDBFieldType;\n begin\n-  case DuckDB.get_type_id(lt) of\n+  case typeid of\n     DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n     DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n     DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER, DUCKDB_TYPE_UBIGINT,\n@@ -281,7 +296,7 @@ function\n... [truncated, 24990 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17675\n+17676",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17675'\r\n+'2.4.17676'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1080dd731d158955b4c763da7d8d171d31b0e5e4",
+      "short_sha": "1080dd73",
+      "subject": "db: rewritten date/time and UUID DuckDB logic",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T14:09:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1080dd731d158955b4c763da7d8d171d31b0e5e4",
+      "parents": [
+        "ae7ce1bcb0e38e5c9e94ea05dc0563c2318035f3"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 76,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 60,
+          "deletions": 74,
+          "patch": "@@ -349,10 +349,6 @@ function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n   var result: RawUtf8; Scale: integer = 0);\n \n-/// convert an integer mantissa text into a decimal number text with scale\n-// - e.g. ('-12345', 2) -> '-123.45'\n-procedure DuckApplyScale(var Text: RawUtf8; Scale: integer);\n-\n /// return TRUE if the hugeint fits into an Int64\n function DuckHugeIntIsInt64(const v: TDuckDBHugeInt; Signed: boolean): boolean;\n \n@@ -385,7 +381,7 @@ function DuckUuidToTextBuf(const v: TDuckDBHugeInt; var Buffer: TTemp47): PtrInt\n procedure DuckUuidToText(const v: TDuckDBHugeInt; var result: RawUtf8);\n \n // reconstruct regular TGuid fields from a DuckDB UUID to match expected text output\n-procedure DuckUuidToGuid(const v: TDuckDBHugeInt; var g: TGuid);\n+procedure DuckUuidToGuid(v: PDuckDBHugeInt; g: PGuid);\n \n /// convert a DuckDB BIT string_t content into '0101...' text\n procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n@@ -686,28 +682,6 @@ function DuckHugeIntIsInt64(const v: TDuckDBHugeInt; Signed: boolean): boolean;\n     result := (v.Upper = 0) and (v.Lower >= 0);\n end;\n \n-procedure DuckApplyScale(var Text: RawUtf8; Scale: integer);\n-var\n-  neg: boolean;\n-  digits: RawUtf8;\n-begin\n-  if Scale <= 0 then\n-    exit;\n-  neg := (Text <> '') and (Text[1] = '-');\n-  if neg then\n-    digits := copy(Text, 2, maxInt)\n-  else\n-    digits := Text;\n-  while length(digits) <= Scale do\n-    digits := '0' + digits;\n-  digits := copy(digits, 1, length(digits) - Scale) + '.' +\n-            copy(digits, length(digits) - Scale + 1, Scale);\n-  if neg then\n-    Text := '-' + digits\n-  else\n-    Text := digits;\n-end;\n-\n const\n   // TSynSystemTime.FromUnixTime supports year 0000 only from March onward\n   // - all earlier dates and years >= 10000 are outside this unit's scope\n@@ -765,17 +739,17 @@ procedure DuckDateToText(Days: integer; var result: RawUtf8);\n \n procedure DuckAppendMicroFraction(Micro: Int64; var result: RawUtf8);\n var\n-  s: RawUtf8;\n+  tmp: TShort31;\n begin\n-  // TSynSystemTime handles milliseconds; preserve DuckDB's full microseconds.\n-  if Micro <> 0 then\n-  begin\n-    s := Int64ToUtf8(Micro + DUCKDB_MICROSPERSEC);\n-    s[1] := '.';\n-    while s[length(s)] = '0' do\n-      SetLength(s, length(s) - 1);\n-    result := result + s;\n-  end;\n+  // TSynSystemTime handles milliseconds; preserve DuckDB's full microseconds\n+  if Micro = 0 then\n+    exit;\n+  tmp[0] := #0;\n+  AppendShortQWord(Micro + DUCKDB_MICROSPERSEC, tmp);\n+  tmp[1] := '.'; // replace first '1' = DUCKDB_MICROSPERSEC\n+  while tmp[length(tmp)] = '0' do\n+    dec(tmp[0]);\n+  Append(result, @tmp[1], length(tmp));\n end;\n \n procedure DuckTimeToText(Micros: Int64; var result: RawUtf8);\n@@ -815,7 +789,8 @@ procedure DuckTimestampToText(Micros: Int64; var result: RawUtf8);\n     DuckCheckDay(days);\n     st.FromUnixTime(secs);\n     st.ToIsoDateTime(result, ' ');\n-    DuckAppendMicroFraction(micro, result);\n+    if micro <> 0 then\n+      DuckAppendMicroFraction(micro, result);\n   end;\n end;\n \n@@ -824,7 +799,7 @@ function DuckTimestampToDateTime(Micros: Int64): TDateTime;\n   st: TSynSystemTime;\n   ms, micro, days, rem: Int64;\n begin\n-  FloorDivMod(Micros, 1000, ms, micro);\n+  FloorDivMod(Micros, MicroSecsPerMilliSec, ms, micro);\n   if micro >= 500 then\n     inc(ms); // nearest millisecond (TDateTime cannot store microseconds)\n   FloorDivMod(ms, MSecsPerDay, days, rem);\n@@ -845,56 +820,67 @@ function DateTimeToDuckTimestamp(Value: TDateTime): Int64;\n   if (st.Year = 0) or\n      (st.Year > 9999) then\n     ESqlDBDuckDB.RaiseUtf8('TDateTime year=% outside 1..9999', [st.Year]);\n-  result := st.ToUnixMsTime * 1000;\n+  result := st.ToUnixMsTime * MicroSecsPerMilliSec;\n end;\n \n-procedure AddIntervalPart(var result: RawUtf8; n: integer; const unitname: RawUtf8);\n-var\n-  s: RawUtf8;\n+procedure AddIntervalPart(var result: ShortString; n: integer;\n+  const unitname: ShortString);\n begin\n   if n = 0 t\n... [truncated, 2795 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17674\n+17675",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17674'\r\n+'2.4.17675'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ae7ce1bcb0e38e5c9e94ea05dc0563c2318035f3",
+      "short_sha": "ae7ce1bc",
+      "subject": "db: enhanced DuckDB UUID support",
+      "body": "- with proper TGuid compatibility functions",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T13:28:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ae7ce1bcb0e38e5c9e94ea05dc0563c2318035f3",
+      "parents": [
+        "0bed0d4d8d5d1c3cd0aabf35e16fe090b3c64a01"
+      ],
+      "stats": {
+        "additions": 41,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 13,
+          "patch": "@@ -378,9 +378,15 @@ function DateTimeToDuckTimestamp(Value: TDateTime): Int64;\n /// convert a DuckDB INTERVAL into its DuckDB-like text representation\n procedure DuckIntervalToText(const v: TDuckDBInterval; var result: RawUtf8);\n \n+/// convert a DuckDB UUID (hugeint with flipped sign bit) into a text buffer\n+function DuckUuidToTextBuf(const v: TDuckDBHugeInt; var Buffer: TTemp47): PtrInt;\n+\n /// convert a DuckDB UUID (hugeint with flipped sign bit) into its text\n procedure DuckUuidToText(const v: TDuckDBHugeInt; var result: RawUtf8);\n \n+// reconstruct regular TGuid fields from a DuckDB UUID to match expected text output\n+procedure DuckUuidToGuid(const v: TDuckDBHugeInt; var g: TGuid);\n+\n /// convert a DuckDB BIT string_t content into '0101...' text\n procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n \n@@ -875,23 +881,43 @@ procedure DuckIntervalToText(const v: TDuckDBInterval; var result: RawUtf8);\n   end;\n end;\n \n-procedure DuckUuidToText(const v: TDuckDBHugeInt; var result: RawUtf8);\n+procedure DuckUuidToGuid(const v: TDuckDBHugeInt; var g: TGuid);\n var\n-  b: array[0..15] of byte;\n+  hi, lo: QWord;\n   i: PtrInt;\n-  hi, lo: Int64;\n-  h: RawUtf8;\n begin\n-  hi := v.Upper xor Int64($8000000000000000); // DuckDB flips the top bit\n-  lo := v.Lower;\n+  // DuckDB flips the highest bit of its UUID HUGEINT\n+  hi := QWord(v.Upper) xor (QWord(1) shl 63);\n+  lo := QWord(v.Lower);\n+  // reconstruct native TGuid fields in their correct order\n+  g.D1 := cardinal(hi shr 32);\n+  g.D2 := word(hi shr 16);\n+  g.D3 := word(hi);\n   for i := 0 to 7 do\n-  begin\n-    b[7 - i] := byte(hi shr (i * 8));\n-    b[15 - i] := byte(lo shr (i * 8));\n-  end;\n-  h := LowerCase(BinToHex(@b, 16));\n-  result := Join([copy(h, 1, 8), '-', copy(h, 9, 4), '-', copy(h, 13, 4), '-',\n-    copy(h, 17, 4), '-', copy(h, 21, 12)]);\n+    g.D4[i] := byte(lo shr ((7 - i) * 8));\n+end;\n+\n+function DuckUuidToTextBuf(const v: TDuckDBHugeInt; var Buffer: TTemp47): PtrInt;\n+var\n+  g: TGuid;\n+  p: PUtf8Char;\n+begin\n+  // reconstruct native TGuid fields in their correct order\n+  DuckUuidToGuid(v, g);\n+  // same 8-4-4-4-12 format as DuckDB, lowercase, without braces\n+  p := GuidToText(@Buffer[0], @g, @TwoDigitsHexLower);\n+  p^ := #0;\n+  result := p - PUtf8Char(@Buffer[0]);\n+end;\n+\n+procedure DuckUuidToText(const v: TDuckDBHugeInt;\n+  var result: RawUtf8);\n+var\n+  tmp: TTemp47;\n+  len: PtrInt;\n+begin\n+  len := DuckUuidToTextBuf(v, tmp);\n+  FastSetString(result, @tmp[0], len);\n end;\n \n procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17673\n+17674",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17673'\r\n+'2.4.17674'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0bed0d4d8d5d1c3cd0aabf35e16fe090b3c64a01",
+      "short_sha": "0bed0d4d",
+      "subject": "db: fixed DuckDB type usage",
+      "body": "- favor explicit PUtf8Char for consistency",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:55:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0bed0d4d8d5d1c3cd0aabf35e16fe090b3c64a01",
+      "parents": [
+        "04c52594d90231dbf555b53e1bbcba0c5fbb0cf4"
+      ],
+      "stats": {
+        "additions": 46,
+        "deletions": 46,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 27,
+          "patch": "@@ -63,7 +63,7 @@   TDuckDBResult = record\n     deprecated_row_count: TDuckIdx;\n     deprecated_rows_changed: TDuckIdx;\n     deprecated_columns: pointer;\n-    deprecated_error_message: PAnsiChar;\n+    deprecated_error_message: PUtf8Char;\n     internal_data: pointer;\n   end;\n   PDuckDBResult = ^TDuckDBResult;\n@@ -193,8 +193,8 @@   TDuckDBListEntry = record\n   // - the field order should match DUCKDB_ENTRIES[] below\n   TDuckDBLib = class(TSynLibrary)\n   public\n-    library_version: function: PAnsiChar; cdecl;\n-    open_ext: function(path: PAnsiChar; out database: TDuckDBDatabase;\n+    library_version: function: PUtf8Char; cdecl;\n+    open_ext: function(path: PUtf8Char; out database: TDuckDBDatabase;\n       config: TDuckDBConfig; out_error: PPAnsiChar): TDuckDBState; cdecl;\n     close: procedure(var database: TDuckDBDatabase); cdecl;\n     connect: function(database: TDuckDBDatabase;\n@@ -203,18 +203,18 @@   TDuckDBLib = class(TSynLibrary)\n     interrupt: procedure(connection: TDuckDBConnection); cdecl;\n     create_config: function(out config: TDuckDBConfig): TDuckDBState; cdecl;\n     set_config: function(config: TDuckDBConfig;\n-      name, option: PAnsiChar): TDuckDBState; cdecl;\n+      name, option: PUtf8Char): TDuckDBState; cdecl;\n     destroy_config: procedure(var config: TDuckDBConfig); cdecl;\n-    query: function(connection: TDuckDBConnection; sql: PAnsiChar;\n+    query: function(connection: TDuckDBConnection; sql: PUtf8Char;\n       out_result: PDuckDBResult): TDuckDBState; cdecl;\n     destroy_result: procedure(res: PDuckDBResult); cdecl;\n-    column_name: function(res: PDuckDBResult; col: TDuckIdx): PAnsiChar; cdecl;\n+    column_name: function(res: PDuckDBResult; col: TDuckIdx): PUtf8Char; cdecl;\n     column_type: function(res: PDuckDBResult; col: TDuckIdx): TDuckDBType; cdecl;\n     column_logical_type: function(res: PDuckDBResult;\n       col: TDuckIdx): TDuckDBLogicalType; cdecl;\n     column_count: function(res: PDuckDBResult): TDuckIdx; cdecl;\n     rows_changed: function(res: PDuckDBResult): TDuckIdx; cdecl;\n-    result_error: function(res: PDuckDBResult): PAnsiChar; cdecl;\n+    result_error: function(res: PDuckDBResult): PUtf8Char; cdecl;\n     // C prototype is duckdb_fetch_chunk(duckdb_result result) i.e. BY VALUE\n     fetch_chunk: function(res: TDuckDBResult): TDuckDBDataChunk; cdecl;\n     data_chunk_get_size: function(chunk: TDuckDBDataChunk): TDuckIdx; cdecl;\n@@ -234,27 +234,27 @@   TDuckDBLib = class(TSynLibrary)\n     enum_internal_type: function(lt: TDuckDBLogicalType): TDuckDBType; cdecl;\n     enum_dictionary_size: function(lt: TDuckDBLogicalType): cardinal; cdecl;\n     enum_dictionary_value: function(lt: TDuckDBLogicalType;\n-      index: TDuckIdx): PAnsiChar; cdecl;\n+      index: TDuckIdx): PUtf8Char; cdecl;\n     list_type_child_type: function(lt: TDuckDBLogicalType): TDuckDBLogicalType; cdecl;\n     array_type_child_type: function(lt: TDuckDBLogicalType): TDuckDBLogicalType; cdecl;\n     array_type_array_size: function(lt: TDuckDBLogicalType): TDuckIdx; cdecl;\n     struct_type_child_count: function(lt: TDuckDBLogicalType): TDuckIdx; cdecl;\n     struct_type_child_name: function(lt: TDuckDBLogicalType;\n-      index: TDuckIdx): PAnsiChar; cdecl;\n+      index: TDuckIdx): PUtf8Char; cdecl;\n     struct_type_child_type: function(lt: TDuckDBLogicalType;\n       index: TDuckIdx): TDuckDBLogicalType; cdecl;\n     map_type_key_type: function(lt: TDuckDBLogicalType): TDuckDBLogicalType; cdecl;\n     map_type_value_type: function(lt: TDuckDBLogicalType): TDuckDBLogicalType; cdecl;\n     union_type_member_count: function(lt: TDuckDBLogicalType): TDuckIdx; cdecl;\n     union_type_member_name: function(lt: TDuckDBLogicalType;\n-      index: TDuckIdx): PAnsiChar; cdecl;\n+      index: TDuckIdx): PUtf8Char; cdecl;\n     union_type_member_type: function(lt: TDuckDBLogicalType;\n       index: TDuckIdx): TDuckDBLogicalType; cdecl;\n     destroy_logical_type: procedure(var lt: TDuckDBLogicalType); cdecl;\n-    prepare: function(connection: TDuckDB\n... [truncated, 5517 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 17,
+          "patch": "@@ -362,11 +362,11 @@ procedure EnumValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n   var result: RawUtf8);\n var\n   idx: Int64;\n-  p: PAnsiChar;\n+  p: PUtf8Char;\n begin\n   idx := ReadIntegral(DuckDB.enum_internal_type(lt), data, row);\n   p := DuckDB.enum_dictionary_value(lt, idx);\n-  result := RawUtf8(p);\n+  FastSetString(result, p, StrLen(p));\n   DuckDB.free_(p);\n end;\n \n@@ -375,8 +375,8 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n var\n   data: pointer;\n   typeid: TDuckDBType;\n-  len, scale, offs: integer;\n-  p: PAnsiChar;\n+  len, scale, offs: integer; // not PtrInt\n+  p: PUtf8Char;\n   h: TDuckDBHugeInt;\n   us: Int64;\n   W: TJsonWriter;\n@@ -485,10 +485,9 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n   clt, klt: TDuckDBLogicalType;\n   e: PDuckDBListEntry;\n   i, n, size: PtrInt; // no Int64 for-loop variable on Delphi 7\n-  name: PAnsiChar;\n+  name, p: pointer;\n   txt: RawUtf8;\n-  len, scale: integer;\n-  p: PAnsiChar;\n+  len, scale: integer; // not PtrInt\n   h: TDuckDBHugeInt;\n   tag: integer;\n   kvec, vvec: TDuckDBVector;\n@@ -580,7 +579,7 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n         for i := 0 to n - 1 do\n         begin\n           name := DuckDB.struct_type_child_name(lt, i);\n-          W.AddProp(pointer(name), StrLen(name));\n+          W.AddProp(name, StrLen(name));\n           DuckDB.free_(name);\n           clt := DuckDB.struct_type_child_type(lt, i);\n           DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, i), clt, row, W);\n@@ -653,7 +652,7 @@ function TSqlDBDuckDBConnectionProperties.LibraryVersion: RawUtf8;\n function TSqlDBDuckDBConnectionProperties.Database: TDuckDBDatabase;\n var\n   cfg: TDuckDBConfig;\n-  path, err: PAnsiChar;\n+  path, err: PUtf8Char;\n   name, value, msg: RawUtf8;\n   p: PUtf8Char;\n   pair: RawUtf8;\n@@ -1321,8 +1320,8 @@ function TSqlDBDuckDBStatement.ColumnDateTime(Col: integer): TDateTime;\n function TSqlDBDuckDBStatement.ColumnUtf8(Col: integer): RawUtf8;\n var\n   c: PDuckDBColumnInfo;\n-  p: PAnsiChar;\n-  len: integer;\n+  p: PUtf8Char;\n+  len: integer; // not PtrInt\n   idx: Int64;\n   i: PtrInt;\n begin\n@@ -1362,8 +1361,8 @@ function TSqlDBDuckDBStatement.ColumnUtf8(Col: integer): RawUtf8;\n function TSqlDBDuckDBStatement.ColumnBlob(Col: integer): RawByteString;\n var\n   c: PDuckDBColumnInfo;\n-  p: PAnsiChar;\n-  len: integer;\n+  p: PUtf8Char;\n+  len: integer; // not PtrInt\n begin\n   c := CheckCol(Col);\n   result := '';\n@@ -1381,7 +1380,7 @@ function TSqlDBDuckDBStatement.ColumnBlob(Col: integer): RawByteString;\n procedure TSqlDBDuckDBStatement.ColumnToJson(Col: integer; W: TJsonWriter);\n var\n   c: PDuckDBColumnInfo;\n-  p: PAnsiChar;\n+  p: pointer;\n   len: integer; // not PtrInt\n begin\n   c := CheckCol(Col);\n@@ -1435,7 +1434,7 @@ procedure TSqlDBDuckDBStatement.ColumnToJson(Col: integer; W: TJsonWriter);\n constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   const aTable, aSchema: RawUtf8);\n var\n-  schema: PAnsiChar;\n+  schema: PUtf8Char;\n begin\n   inherited Create;\n   if not DuckDB.HasAppender then\n@@ -1446,8 +1445,8 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   schema := nil;\n   if aSchema <> '' then\n     schema := pointer(aSchema);\n-  if DuckDB.appender_create(aConnection.fConn, schema, pointer(aTable),\n-       fAppender) <> DuckDBSuccess then\n+  if DuckDB.appender_create(aConnection.fConn,\n+       schema, pointer(aTable), fAppender) <> DuckDBSuccess then\n   begin\n     try\n       Check(DuckDBError, 'create');",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17672\n+17673",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17672'\r\n+'2.4.17673'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -18,6 +18,7 @@ interface\n   mormot.core.unicode,\n   mormot.core.text,\n   mormot.core.datetime,\n+  mormot.core.rtti,\n   mormot.core.json,\n   mormot.core.variants,\n   mormot.core.log,",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "04c52594d90231dbf555b53e1bbcba0c5fbb0cf4",
+      "short_sha": "04c52594",
+      "subject": "test: cleaner DuckDB library detection",
+      "body": "- never on 32-bit, and should be within the executable itself",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:45:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/04c52594d90231dbf555b53e1bbcba0c5fbb0cf4",
+      "parents": [
+        "31fadd70cf431d9e82a4bb065026162949b81c23"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17671\n+17672",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17671'\r\n+'2.4.17672'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 1,
+          "patch": "@@ -54,6 +54,12 @@ implementation\n \n function TTestDuckDB.Prepare: boolean;\n begin\n+  result := false;\n+  {$ifdef CPU64}\n+  // our tests require a local 64-bit DuckDB library within the main executable\n+  if not FileExists(Executable.ProgramFilePath + DuckDBLibraryName) then\n+    exit;\n+  // try to initialize this instance\n   TSynLog.Family.ExceptionIgnoreCurrentThread := true;\n   try\n     if DuckDBLibraryAvailable then\n@@ -63,7 +69,8 @@ function TTestDuckDB.Prepare: boolean;\n   end;\n   result := fProps <> nil;\n   if not result then\n-    NotifyProgress(['DuckDB library not available - tests skipped']);\n+    NotifyProgress(['DuckDB library failed to load - tests skipped']);\n+  {$endif CPU64}\n end;\n \n procedure TTestDuckDB.CleanUp;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "31fadd70cf431d9e82a4bb065026162949b81c23",
+      "short_sha": "31fadd70",
+      "subject": "db: rewritten DuckDB HugeInt to text conversion",
+      "body": "- to have an internal \"Scale\" parameter",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:31:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/31fadd70cf431d9e82a4bb065026162949b81c23",
+      "parents": [
+        "f5de6dc85a66b4a34c4dd043f986e3ff09388774"
+      ],
+      "stats": {
+        "additions": 70,
+        "deletions": 18,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -3732,6 +3732,7 @@ function EventEquals(const eventA, eventB): boolean;\n   TTemp16  = array[0..15] of AnsiChar;\r\n   TTemp24  = array[0..23] of AnsiChar;\r\n   TTemp32  = array[0..31] of AnsiChar;\r\n+  TTemp47  = array[0..47] of AnsiChar;\r\n   TTemp64  = array[0..63] of AnsiChar;\r\n   TTemp128 = array[0..127] of AnsiChar;\r\n   TTemp256 = array[0..255] of AnsiChar;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.nosql.bson.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -58,7 +58,7 @@   TDecimal128Bits = record\n   PDecimal128Bits = ^TDecimal128Bits;\r\n \r\n   /// enough characters to contain any TDecimal128 text representation\r\n-  TDecimal128Str = array[0..42] of AnsiChar;\r\n+  TDecimal128Str = TTemp47;\r\n \r\n   /// some special 128-bit decimal values\r\n   // - see TDecimal128.SetSpecial to set the corresponding value\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 66,
+          "deletions": 15,
+          "patch": "@@ -337,9 +337,18 @@ function DuckStringPtr(s: PDuckDBStringT; var len: integer): PAnsiChar;\n function DuckStringAt(data: pointer; row: PtrInt): PDuckDBStringT;\n   {$ifdef HASINLINE} inline; {$endif}\n \n-/// convert a signed 128-bit hugeint into its decimal text\n+\n+/// convert a signed/unsigned hugeint into a text buffer\n+// - Scale=0 for HUGEINT/UHUGEINT, 0..38 for DECIMAL\n+// - returns the text length, excluding the trailing #0\n+// - fill directly a TTemp47 stack structure with no heap allocation\n+function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n+  Signed: boolean; Scale: integer; var Buffer: TTemp47): PtrInt;\n+\n+/// convert a signed 128-bit hugeint into its decimal RawUtf8 text\n+// - default Scale=0 for HUGEINT/UHUGEINT, 0..38 for DECIMAL\n procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n-  var result: RawUtf8);\n+  var result: RawUtf8; Scale: integer = 0);\n \n /// convert an integer mantissa text into a decimal number text with scale\n // - e.g. ('-12345', 2) -> '-123.45'\n@@ -575,28 +584,31 @@ function DivU128By1B(var u: TU128): cardinal;\n   result := cardinal(r);\n end;\n \n-procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n-  var result: RawUtf8);\n+function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n+  Signed: boolean; Scale: integer; var Buffer: TTemp47): PtrInt;\n var\n   u: TU128;\n   neg: boolean;\n-  i: PtrInt;\n+  i, digits: PtrInt;\n   n, q: cardinal;\n-  tmp: array[0..47] of AnsiChar; // up to 38 digits anyway\n-  p: PAnsiChar;\n+  p, first, last: PAnsiChar;\n begin\n+  if Scale < 0 then\n+    Scale := 0\n+  else if Scale > 38 then\n+    raise ERangeError.Create('Invalid DuckDB decimal scale');\n   PInt64(@u[0])^ := v.Lower;\n   PInt64(@u[2])^ := v.Upper;\n   neg := Signed and (v.Upper < 0);\n   if neg then\n     U128Negate(u);\n-  p := @tmp[pred(high(tmp))];\n+  // reserve one byte for the terminating #0\n+  last := @Buffer[high(Buffer)];\n+  p := last - 1;\n   repeat\n-    // extract next 9 decimal digits during each iteration\n     n := DivU128By1B(u);\n     if (u[0] or u[1] or u[2] or u[3]) = 0 then\n     begin\n-      // most significant group: no leading zeros\n       repeat\n         q := n div 10;\n         p^ := AnsiChar(ord('0') + n - q * 10);\n@@ -605,7 +617,6 @@ procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n       until n = 0;\n       break;\n     end;\n-    // remaining groups: always emit exactly 9 digits\n     for i := 1 to 9 do\n     begin\n       q := n div 10;\n@@ -614,11 +625,51 @@ procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n       n := q;\n     end;\n   until false;\n+  first := p + 1;\n+  digits := last - first;\n+  // apply the DECIMAL scale directly within the stack buffer\n+  if Scale > 0 then\n+  begin\n+    if digits > Scale then\n+    begin\n+      // move the integer part left to insert '.'\n+      MoveFast(first^, (first - 1)^, digits - Scale);\n+      dec(first);\n+      first[digits - Scale] := '.';\n+    end\n+    else\n+    begin\n+      // e.g. 12 with Scale=4 -> 0.0012\n+      p := first - 1;\n+      for i := 1 to Scale - digits do\n+      begin\n+        p^ := '0';\n+        dec(p);\n+      end;\n+      p^ := '.';\n+      dec(p);\n+      p^ := '0';\n+      first := p;\n+    end;\n+  end;\n   if neg then\n-    p^ := '-'\n-  else\n-    inc(p);\n-  FastSetString(result, p, @tmp[high(tmp)]);\n+  begin\n+    dec(first);\n+    first^ := '-';\n+  end;\n+  result := last - first;\n+  MoveFast(first^, Buffer[0], result);\n+  Buffer[result] := #0;\n+end;\n+\n+procedure DuckHugeIntToText(const v: TDuckDBHugeInt;\n+  Signed: boolean; var result: RawUtf8; Scale: integer);\n+var\n+  tmp: TTemp47;\n+  len: PtrInt;\n+begin\n+  len := DuckHugeIntToTextBuf(v, Signed, Scale, tmp);\n+  FastSetString(result, @tmp[0], len);\n end;\n \n function DuckHugeIntIsInt64(const v: TDuckDBHugeInt; Signed: boolean): boolean;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17670\n+17671",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17670'\r\n+'2.4.17671'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.db.nosql.bson",
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f5de6dc85a66b4a34c4dd043f986e3ff09388774",
+      "short_sha": "f5de6dc8",
+      "subject": "test: refined DuckDB coverage - no exception logged",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:03:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f5de6dc85a66b4a34c4dd043f986e3ff09388774",
+      "parents": [
+        "ff06cee083e6039c33a76e46be96558060aed1df"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 15,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 5,
+          "patch": "@@ -389,10 +389,7 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n   typeid := DuckDB.get_type_id(lt);\n   case typeid of\n     DUCKDB_TYPE_BOOLEAN:\n-      if PDuckU8Array(data)^[row] <> 0 then\n-        result := 'true'\n-      else\n-        result := 'false';\n+      result := BOOL_UTF8[PDuckU8Array(data)^[row] <> 0];\n     DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT, DUCKDB_TYPE_INTEGER,\n     DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_USMALLINT,\n     DUCKDB_TYPE_UINTEGER:\n@@ -1385,7 +1382,7 @@ procedure TSqlDBDuckDBStatement.ColumnToJson(Col: integer; W: TJsonWriter);\n var\n   c: PDuckDBColumnInfo;\n   p: PAnsiChar;\n-  len: integer;\n+  len: integer; // not PtrInt\n begin\n   c := CheckCol(Col);\n   if not IsValid(c^.Validity, fChunkRow) then",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17669\n+17670",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17669'\r\n+'2.4.17670'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 8,
+          "patch": "@@ -20,6 +20,7 @@ interface\n   mormot.core.datetime,\n   mormot.core.json,\n   mormot.core.variants,\n+  mormot.core.log,\n   mormot.core.test,\n   mormot.db.core,\n   mormot.db.sql,\n@@ -31,7 +32,7 @@ interface\n   TTestDuckDB = class(TSynTestCase)\n   protected\n     fProps: TSqlDBDuckDBConnectionProperties;\n-    procedure Setup; override;\n+    function Prepare: boolean; override;\n     procedure CleanUp; override;\n   published\n     procedure BasicTypes;\n@@ -51,11 +52,17 @@ implementation\n \n { TTestDuckDB }\n \n-procedure TTestDuckDB.Setup;\n+function TTestDuckDB.Prepare: boolean;\n begin\n-  if DuckDBLibraryAvailable then\n-    fProps := TSqlDBDuckDBConnectionProperties.Create(':memory:', '', '', '')\n-  else\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := true;\n+  try\n+    if DuckDBLibraryAvailable then\n+      fProps := TSqlDBDuckDBConnectionProperties.Create(':memory:', '', '', '')\n+  finally\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := false;\n+  end;\n+  result := fProps <> nil;\n+  if not result then\n     NotifyProgress(['DuckDB library not available - tests skipped']);\n end;\n \n@@ -69,6 +76,12 @@ procedure TTestDuckDB.BasicTypes;\n   rows: ISqlDBRows;\n   dt: TDateTime;\n begin\n+  CheckEqual(SizeOf(TDuckDBStringT),   16, 'SizeOf(TDuckDBStringT)');\n+  CheckEqual(SizeOf(TDuckDBHugeInt),   16, 'SizeOf(TDuckDBHugeInt)');\n+  CheckEqual(SizeOf(TDuckDBInterval),  16, 'SizeOf(TDuckDBInterval)');\n+  CheckEqual(SizeOf(TDuckDBListEntry), 16, 'SizeOf(TDuckDBListEntry)');\n+  CheckEqual(SizeOf(TDuckDBResult),\n+    3 * SizeOf(TDuckIdx) + 3 * SizeOf(pointer), 'SizeOf(TDuckDBResult)');\n   if fProps = nil then\n     exit;\n   rows := fProps.Execute(\n@@ -198,6 +211,7 @@ procedure TTestDuckDB.Transactions;\n   // failing commit (constraint) keeps data unchanged\n   fProps.ExecuteNoResult('create or replace table txu (id INTEGER primary key)', []);\n   conn.StartTransaction;\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := true;\n   try\n     fProps.ExecuteNoResult('insert into txu values (?)', [1]);\n     fProps.ExecuteNoResult('insert into txu values (?)', [1]); // duplicate\n@@ -211,6 +225,7 @@ procedure TTestDuckDB.Transactions;\n         conn.Rollback;\n     end;\n   end;\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := false;\n   rows := fProps.Execute('select count(*) from txu', []);\n   Check(rows.Step and (rows.ColumnInt(0) = 0), 'atomic failure');\n end;\n@@ -264,13 +279,15 @@ procedure TTestDuckDB.Errors;\n begin\n   if fProps = nil then\n     exit;\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := true;\n   raised := false;\n   try\n     fProps.Execute('select * from table_does_not_exist', []);\n   except\n     on E: ESqlDBException do\n-      raised := PosEx('table_does_not_exist', StringToUtf8(E.Message)) > 0;\n+      raised := Pos('table_does_not_exist', E.Message) > 0;\n   end;\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := false;\n   Check(raised, 'missing table error');\n   // connection is still usable after an error\n   with fProps.Execute('select 1', []) do\n@@ -287,8 +304,7 @@ procedure TTestDuckDB.Metadata;\n   fProps.GetTableNames(tables);\n   Check(FindRawUtf8(tables, 'main.people', false) >= 0, 'GetTableNames');\n   fProps.GetFields('people', fields);\n-  CheckEqual(length(fields), 7, 'GetFields count');\n-  if length(fields) = 7 then\n+  if CheckEqual(length(fields), 7, 'GetFields count') then\n   begin\n     CheckEqual(fields[0].ColumnName, 'id', 'field name');\n     Check(fields[1].ColumnType = ftUtf8, 'field type text');",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff06cee083e6039c33a76e46be96558060aed1df",
+      "short_sha": "ff06cee0",
+      "subject": "db: much faster DuckHugeIntToText() function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:03:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff06cee083e6039c33a76e46be96558060aed1df",
+      "parents": [
+        "63abf24158665bfc9dfa5f2b9e1253e64e8e8740"
+      ],
+      "stats": {
+        "additions": 47,
+        "deletions": 18,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 45,
+          "deletions": 16,
+          "patch": "@@ -557,39 +557,68 @@ procedure U128Negate(var v: TU128);\n   end;\n end;\n \n+function DivU128By1B(var u: TU128): cardinal;\n+  {$ifdef HASINLINE} inline; {$endif}\n+var\n+  r, cur: QWord;\n+  i: PtrInt;\n+begin // see mormot.db.nosql.bson's div128bits9digits()\n+  r := 0;\n+  for i := 3 downto 0 do\n+  begin\n+    cur := (r shl 32) or QWord(u[i]);\n+    if cur = 0 then\n+      continue;\n+    u[i] := cardinal(cur div 1000000000);\n+    r := cur - QWord(u[i]) * 1000000000;\n+  end;\n+  result := cardinal(r);\n+end;\n+\n procedure DuckHugeIntToText(const v: TDuckDBHugeInt; Signed: boolean;\n   var result: RawUtf8);\n var\n   u: TU128;\n   neg: boolean;\n   i: PtrInt;\n-  rem, cur: Int64;\n-  tmp: array[0..47] of AnsiChar;\n+  n, q: cardinal;\n+  tmp: array[0..47] of AnsiChar; // up to 38 digits anyway\n   p: PAnsiChar;\n begin\n   PInt64(@u[0])^ := v.Lower;\n   PInt64(@u[2])^ := v.Upper;\n   neg := Signed and (v.Upper < 0);\n   if neg then\n     U128Negate(u);\n-  p := @tmp[high(tmp)];\n+  p := @tmp[pred(high(tmp))];\n   repeat\n-    rem := 0;\n-    for i := 3 downto 0 do\n+    // extract next 9 decimal digits during each iteration\n+    n := DivU128By1B(u);\n+    if (u[0] or u[1] or u[2] or u[3]) = 0 then\n+    begin\n+      // most significant group: no leading zeros\n+      repeat\n+        q := n div 10;\n+        p^ := AnsiChar(ord('0') + n - q * 10);\n+        dec(p);\n+        n := q;\n+      until n = 0;\n+      break;\n+    end;\n+    // remaining groups: always emit exactly 9 digits\n+    for i := 1 to 9 do\n     begin\n-      cur := (rem shl 32) or Int64(u[i]);\n-      u[i] := cardinal(cur div 10);\n-      rem := cur mod 10;\n+      q := n div 10;\n+      p^ := AnsiChar(ord('0') + n - q * 10);\n+      dec(p);\n+      n := q;\n     end;\n-    p^ := AnsiChar(ord('0') + rem);\n-    dec(p);\n-  until (u[0] or u[1] or u[2] or u[3]) = 0;\n+  until false;\n   if neg then\n-  begin\n-    p^ := '-';\n-    dec(p);\n-  end;\n-  FastSetString(result, p + 1, PAnsiChar(@tmp[high(tmp)]) - p);\n+    p^ := '-'\n+  else\n+    inc(p);\n+  FastSetString(result, p, @tmp[high(tmp)]);\n end;\n \n function DuckHugeIntIsInt64(const v: TDuckDBHugeInt; Signed: boolean): boolean;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17668\n+17669",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17668'\r\n+'2.4.17669'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "63abf24158665bfc9dfa5f2b9e1253e64e8e8740",
+      "short_sha": "63abf241",
+      "subject": "db: use TSynSystemTime for DuckDB date/time process",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:02:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/63abf24158665bfc9dfa5f2b9e1253e64e8e8740",
+      "parents": [
+        "2d1593c578b98585f8e50019c6d75ba5d5029542"
+      ],
+      "stats": {
+        "additions": 97,
+        "deletions": 80,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 95,
+          "deletions": 78,
+          "patch": "@@ -348,10 +348,10 @@ procedure DuckApplyScale(var Text: RawUtf8; Scale: integer);\n /// return TRUE if the hugeint fits into an Int64\n function DuckHugeIntIsInt64(const v: TDuckDBHugeInt; Signed: boolean): boolean;\n \n-/// convert a DuckDB DATE (days since 1970-01-01) into Y/M/D\n+/// convert a DuckDB DATE into Y/M/D (years 0000-03-01 through 9999-12-31)\n procedure DuckDaysToYmd(Days: integer; out Y, M, D: integer);\n \n-/// convert a DuckDB DATE (days since 1970-01-01) into 'YYYY-MM-DD'\n+/// convert a DuckDB DATE into ISO-8601 text (years 0000-03-01 .. 9999)\n procedure DuckDateToText(Days: integer; var result: RawUtf8);\n \n /// convert a DuckDB TIME (micros since midnight) into 'hh:mm:ss[.ffffff]'\n@@ -623,118 +623,143 @@ procedure DuckApplyScale(var Text: RawUtf8; Scale: integer);\n     Text := digits;\n end;\n \n+const\n+  // TSynSystemTime.FromUnixTime supports year 0000 only from March onward\n+  // - all earlier dates and years >= 10000 are outside this unit's scope\n+  DUCKDB_FIRST_DAY           = -719468;   // 0000-03-01\n+  DUCKDB_FIRST_TDATETIME_DAY = -719162; // 0001-01-01\n+  DUCKDB_LAST_DAY            = 2932896;   // 9999-12-31\n+  DUCKDB_MICROSPERSEC        = Int64(1000000);\n+  DUCKDB_MICROSPERHOUR       = Int64(3600000000);\n+\n+procedure DuckCheckDay(Days: Int64; ForDateTime: boolean = false);\n+begin\n+  if (Days < DUCKDB_FIRST_DAY) or\n+     (Days > DUCKDB_LAST_DAY) or\n+     (ForDateTime and (Days < DUCKDB_FIRST_TDATETIME_DAY)) then\n+    raise ERangeError.Create('DuckDB date outside TSynSystemTime range');\n+end;\n+\n+procedure FloorDivMod(const a, b: Int64; var q, r: Int64);\n+  {$ifdef HASINLINE} inline; {$endif}\n+begin\n+  q := a div b;\n+  r := a mod b;\n+  if r >= 0 then\n+    exit;\n+  dec(q);\n+  inc(r, b);\n+end;\n+\n procedure DuckDaysToYmd(Days: integer; out Y, M, D: integer);\n var\n-  z, era, doe, yoe, doy, mp: Int64;\n+  st: TSynSystemTime;\n begin\n-  // Howard Hinnant's civil_from_days algorithm - exact for any day number\n-  z := Int64(Days) + 719468;\n-  if z >= 0 then\n-    era := z div 146097\n-  else\n-    era := (z - 146096) div 146097;\n-  doe := z - era * 146097;\n-  yoe := (doe - doe div 1460 + doe div 36524 - doe div 146096) div 365;\n-  doy := doe - (365 * yoe + yoe div 4 - yoe div 100);\n-  mp := (5 * doy + 2) div 153;\n-  D := doy - (153 * mp + 2) div 5 + 1;\n-  if mp < 10 then\n-    M := mp + 3\n-  else\n-    M := mp - 9;\n-  Y := yoe + era * 400;\n-  if M <= 2 then\n-    inc(Y);\n+  DuckCheckDay(Days);\n+  st.FromUnixTime(Int64(Days) * SecsPerDay);\n+  Y := st.Year;\n+  M := st.Month;\n+  D := st.Day;\n end;\n \n procedure DuckDateToText(Days: integer; var result: RawUtf8);\n var\n-  y, m, d: integer;\n+  st: TSynSystemTime;\n begin\n   if Days = $7fffffff then\n     result := 'infinity'\n   else if Days = -$7fffffff then\n     result := '-infinity'\n   else\n   begin\n-    DuckDaysToYmd(Days, y, m, d);\n-    if y < 0 then\n-      FormatUtf8('%-%-% (BC)', [UInt4DigitsToShort(1 - y),\n-        UInt2DigitsToShortFast(m), UInt2DigitsToShortFast(d)], result)\n-    else\n-      FormatUtf8('%-%-%', [UInt4DigitsToShort(y),\n-        UInt2DigitsToShortFast(m), UInt2DigitsToShortFast(d)], result);\n+    DuckCheckDay(Days);\n+    st.FromUnixTime(Int64(Days) * SecsPerDay);\n+    st.ToIsoDate(result);\n   end;\n end;\n \n-procedure DuckTimeToText(Micros: Int64; var result: RawUtf8);\n+procedure DuckAppendMicroFraction(Micro: Int64; var result: RawUtf8);\n var\n-  s, f: Int64;\n-  frac: RawUtf8;\n+  s: RawUtf8;\n begin\n-  s := Micros div 1000000;\n-  f := Micros mod 1000000;\n-  FormatUtf8('%:%:%', [UInt2DigitsToShortFast(s div 3600),\n-    UInt2DigitsToShortFast((s div 60) mod 60),\n-    UInt2DigitsToShortFast(s mod 60)], result);\n-  if f <> 0 then\n+  // TSynSystemTime handles milliseconds; preserve DuckDB's full microseconds.\n+  if Micro <> 0 then\n   begin\n-    frac := Int64ToUtf8(f + 1000000); // '1xxxxxx'\n-    frac[1] := '.';\n-    while frac[length(frac)] = '0' do\n-      SetLength(frac, length(frac) - 1);\n-    result := result + frac;\n+    s := Int64ToUtf8(Micro + DUCKDB_MICROSPERSEC)\n... [truncated, 4308 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17667\n+17668",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17667'\r\n+'2.4.17668'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2d1593c578b98585f8e50019c6d75ba5d5029542",
+      "short_sha": "2d1593c5",
+      "subject": "db: redefined DubkDB struct definitions",
+      "body": "- \"packed record\" is much slower on arm32/aarch64",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T12:01:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2d1593c578b98585f8e50019c6d75ba5d5029542",
+      "parents": [
+        "345840ea148a7c31614ffbd1572dba06a678108a"
+      ],
+      "stats": {
+        "additions": 88,
+        "deletions": 89,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 86,
+          "deletions": 87,
+          "patch": "@@ -1,8 +1,7 @@\n /// DuckDB native C API binding for mORMot 2\n // - dynamic loading of duckdb.dll / libduckdb.so / libduckdb.dylib\n // - Delphi 7 .. Delphi 13 and FPC 3.2+ compatible syntax\n-// - note: official DuckDB binaries are 64-bit only - for Delphi 7 / Win32\n-// use mormot.db.sql.duckdbhttp.pas (HTTP access to a DuckDB CLI process)\n+// - note: official DuckDB binaries are 64-bit only - not for Win32\n unit mormot.db.raw.duckdb;\n \n {\n@@ -46,15 +45,15 @@   ESqlDBDuckDB = class(ESqlDBException);\n   /// duckdb_type enumeration (DUCKDB_TYPE_* constants)\n   TDuckDBType = integer;\n \n-  /// opaque handles - pointers to a struct { void* internal_ptr }\n-  TDuckDBDatabase = type pointer;\n-  TDuckDBConnection = type pointer;\n-  TDuckDBConfig = type pointer;\n+  /// opaque handles - pointers to a struct (void* internal_ptr)\n+  TDuckDBDatabase          = type pointer;\n+  TDuckDBConnection        = type pointer;\n+  TDuckDBConfig            = type pointer;\n   TDuckDBPreparedStatement = type pointer;\n-  TDuckDBLogicalType = type pointer;\n-  TDuckDBDataChunk = type pointer;\n-  TDuckDBVector = type pointer;\n-  TDuckDBAppender = type pointer;\n+  TDuckDBLogicalType       = type pointer;\n+  TDuckDBDataChunk         = type pointer;\n+  TDuckDBVector            = type pointer;\n+  TDuckDBAppender          = type pointer;\n \n   /// duckdb_result C struct - should be kept as-is, 48 bytes on 64-bit\n   // - duckdb_fetch_chunk() expects it BY VALUE: the compiler will follow the\n@@ -69,111 +68,111 @@   TDuckDBResult = record\n   end;\n   PDuckDBResult = ^TDuckDBResult;\n \n-  /// duckdb_string_t internal VARCHAR/BLOB representation (16 bytes)\n+  /// duckdb_string_t internal VARCHAR/BLOB representation (stored as 16 bytes)\n   // - inlined if Length <= 12, otherwise Prefix[] + Ptr\n-  TDuckDBStringT = packed record\n+  // - weird definition, but without \"packed\" usage which is much slower on arm\n+  TDuckDBStringT = record\n     Length: cardinal;\n-    case integer of\n-      0: (Prefix: array[0..3] of AnsiChar;\n-          Ptr: PAnsiChar);\n-      1: (Inlined: array[0..11] of AnsiChar);\n+    Data: array[0..2] of cardinal;\n   end;\n   PDuckDBStringT = ^TDuckDBStringT;\n \n   /// duckdb_hugeint / duckdb_uhugeint 128-bit integers\n-  TDuckDBHugeInt = packed record\n+  // - no \"packed\" usage which is much slower on arm\n+  TDuckDBHugeInt = record\n     Lower: Int64; // actually uint64_t\n     Upper: Int64; // int64_t for hugeint, uint64_t for uhugeint\n   end;\n   PDuckDBHugeInt = ^TDuckDBHugeInt;\n \n-  /// duckdb_interval\n-  TDuckDBInterval = packed record\n+  /// duckdb_interval (stored as 16 bytes)\n+  // - no \"packed\" usage which is much slower on arm\n+  TDuckDBInterval = record\n     Months: integer;\n     Days: integer;\n     Micros: Int64;\n   end;\n   PDuckDBInterval = ^TDuckDBInterval;\n \n-  /// duckdb_list_entry\n-  TDuckDBListEntry = packed record\n+  /// duckdb_list_entry as two 64-bit integers (stored as 16 bytes)\n+  TDuckDBListEntry = record\n     Offset: Int64;\n     Length: Int64;\n   end;\n   PDuckDBListEntry = ^TDuckDBListEntry;\n \n-  /// typed access to DuckDB vector data - no pointer math needed (Delphi 7)\n-  TDuckI8Array = array[0..MaxInt div 8] of ShortInt;\n-  PDuckI8Array = ^TDuckI8Array;\n-  TDuckI16Array = array[0..MaxInt div 8] of SmallInt;\n-  PDuckI16Array = ^TDuckI16Array;\n-  TDuckU16Array = array[0..MaxInt div 8] of word;\n-  PDuckU16Array = ^TDuckU16Array;\n-  TDuckI32Array = array[0..MaxInt div 8] of integer;\n-  PDuckI32Array = ^TDuckI32Array;\n-  TDuckU32Array = array[0..MaxInt div 8] of cardinal;\n-  PDuckU32Array = ^TDuckU32Array;\n-  TDuckI64Array = array[0..MaxInt div 16] of Int64;\n-  PDuckI64Array = ^TDuckI64Array;\n+  /// typed access to DuckDB vector data - no pointer math needed\n+  TDuckI8Array     = array[0..MaxInt div 8] of ShortInt;\n+  PDuckI8Array     = ^TDuckI8Array;\n+  TDuckI16Array    = array[0..MaxInt div 8] of SmallInt;\n+  PDuckI16Array    = ^TDuckI16Array;\n+  TDuckU16Array    = array[0..MaxInt div 8] of word;\n+  PDuckU16Array    = ^TDuckU16Array;\n+  TDuc\n... [truncated, 5388 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17666\n+17667",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17666'\r\n+'2.4.17667'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "345840ea148a7c31614ffbd1572dba06a678108a",
+      "short_sha": "345840ea",
+      "subject": "db: properly add DuckDB units to the Lazarus package",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T10:24:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/345840ea148a7c31614ffbd1572dba06a678108a",
+      "parents": [
+        "6cd37aff946ecc372578fe50136867fc61b9d044"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "packages/lazarus/mormot2.lpk",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 1,
+          "patch": "@@ -49,7 +49,7 @@\n     <Description Value=\"mORMot 2 ORM/SOA/MVC framework\"/>\n     <License Value=\"MPL, GPL or LGPL\"/>\n     <Version Major=\"2\" Minor=\"4\"/>\n-    <Files Count=\"125\">\n+    <Files Count=\"127\">\n       <Item1>\n         <Filename Value=\"../../src/app/mormot.app.console.pas\"/>\n         <UnitName Value=\"mormot.app.console\"/>\n@@ -551,6 +551,14 @@\n         <Filename Value=\"../../src/crypt/mormot.crypt.win.pas\"/>\n         <UnitName Value=\"mormot.crypt.win\"/>\n       </Item125>\n+      <Item126>\n+        <Filename Value=\"../../src/db/mormot.db.raw.duckdb.pas\"/>\n+        <UnitName Value=\"mormot.db.raw.duckdb\"/>\n+      </Item126>\n+      <Item127>\n+        <Filename Value=\"../../src/db/mormot.db.sql.duckdb.pas\"/>\n+        <UnitName Value=\"mormot.db.sql.duckdb\"/>\n+      </Item127>\n     </Files>\n     <CompatibilityMode Value=\"True\"/>\n     <UsageOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "packages/lazarus/mormot2.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -44,7 +44,7 @@ interface\n   mormot.net.openapi, mormot.core.os.security, mormot.tools.mget, \n   mormot.core.mvc, mormot.crypt.other, mormot.net.dhcp, mormot.core.fmt, \n   mormot.core.os.delphi, mormot.core.i18n, mormot.lib.uniscribe, \n-  mormot.crypt.win;\n+  mormot.crypt.win, mormot.db.raw.duckdb, mormot.db.sql.duckdb;\n \n implementation\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17665\n+17666",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17665'\r\n+'2.4.17666'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Packages"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6cd37aff946ecc372578fe50136867fc61b9d044",
+      "short_sha": "6cd37aff",
+      "subject": "core: new TSynTestCase.Prepare virtual method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T10:22:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6cd37aff946ecc372578fe50136867fc61b9d044",
+      "parents": [
+        "1c6a2a670acc8818484b15cede1061dcc76f26f9"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 0,
+          "patch": "@@ -168,6 +168,8 @@   TSynTestCase = class(TSynTest)\n     fCheckLastTix: cardinal;\r\n     /// called before all published properties are executed\r\n     procedure Setup; virtual;\r\n+    /// just like Setup but allow to return false and bypass the whole tests\r\n+    function Prepare: boolean; virtual;\r\n     /// called after all published properties are executed\r\n     // - WARNING: this method should be re-entrant - so using FreeAndNil() is\r\n     // a good idea in this method :)\r\n@@ -797,6 +799,11 @@ procedure TSynTestCase.Setup;\n   // do nothing by default\r\n end;\r\n \r\n+function TSynTestCase.Prepare: boolean;\r\n+begin\r\n+  result := true; // continue by default\r\n+end;\r\n+\r\n procedure TSynTestCase.CleanUp;\r\n begin\r\n   // do nothing by default\r\n@@ -1586,6 +1593,8 @@ function TSynTests.Run: boolean;\n           started := false;\r\n           c := fTestCaseClass[i].Create(self); // add all published methods\r\n           try\r\n+            if not c.Prepare then\r\n+              continue; // by-pass the whole TSynTestCase class\r\n             nfo := nil;\r\n             for t := 0 to c.Count - 1 do\r\n             try\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17661\n+17665",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17661'\r\n+'2.4.17665'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1c6a2a670acc8818484b15cede1061dcc76f26f9",
+      "short_sha": "1c6a2a67",
+      "subject": "Merge pull request #666 from tobfel/feat-duckdb",
+      "body": "db: added DuckDB support (mormot.db.raw.duckdb + mormot.db.sql.duckdb)",
+      "author": "ab",
+      "date": "2026-10-16T09:54:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1c6a2a670acc8818484b15cede1061dcc76f26f9",
+      "parents": [
+        "cf83b2ce7242be983192e8739578a52efd8e1a09",
+        "cfbbf36e4eec12f42bc3193244518e1af3db27a9"
+      ],
+      "stats": {
+        "additions": 2856,
+        "deletions": 1,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "src/FOLDER-DEPENDENCIES.md",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -204,12 +204,14 @@ mORMot2 follows a **strict layered architecture** with 14 source folders organiz\n     - `mormot.db.raw.sqlite3` - SQLite3 API\n     - `mormot.db.raw.sqlite3.static` - Static SQLite3 library\n     - `mormot.db.raw.postgres` - PostgreSQL API\n+    - `mormot.db.raw.duckdb` - DuckDB C API (dynamic duckdb.dll/libduckdb.so)\n     - `mormot.db.raw.oracle` - Oracle OCI\n     - `mormot.db.raw.odbc` - ODBC API\n     - `mormot.db.raw.oledb` - OLE DB API\n   - **SQL Database Connectors:**\n     - `mormot.db.sql.sqlite3` - SQLite3 SQL connector\n     - `mormot.db.sql.postgres` - PostgreSQL SQL connector\n+    - `mormot.db.sql.duckdb` - DuckDB SQL connector (embedded analytics engine)\n     - `mormot.db.sql.oracle` - Oracle SQL connector\n     - `mormot.db.sql.odbc` - ODBC SQL connector\n     - `mormot.db.sql.oledb` - OLE DB SQL connector",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "added",
+          "additions": 839,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,839 @@\n+/// DuckDB native C API binding for mORMot 2\n+// - dynamic loading of duckdb.dll / libduckdb.so / libduckdb.dylib\n+// - Delphi 7 .. Delphi 13 and FPC 3.2+ compatible syntax\n+// - note: official DuckDB binaries are 64-bit only - for Delphi 7 / Win32\n+// use mormot.db.sql.duckdbhttp.pas (HTTP access to a DuckDB CLI process)\n+unit mormot.db.raw.duckdb;\n+\n+{\n+  *****************************************************************************\n+\n+   Native DuckDB C API (v1.1+) - tested with DuckDB v1.4.1\n+    - DuckDB C API Types and Constants\n+    - TDuckDBLib Dynamic Library Loader\n+    - Value Conversion Helpers (hugeint, decimal, date/time, string_t)\n+\n+  *****************************************************************************\n+}\n+\n+interface\n+\n+{$I mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.datetime,\n+  mormot.db.core,\n+  mormot.db.sql;\n+\n+\n+{ ************ DuckDB C API Types and Constants }\n+\n+type\n+  /// exception raised by the DuckDB providers\n+  ESqlDBDuckDB = class(ESqlDBException);\n+\n+  /// DuckDB idx_t - always 64-bit, even on 32-bit platforms\n+  TDuckIdx = Int64;\n+\n+  /// duckdb_state result code\n+  TDuckDBState = integer;\n+\n+  /// duckdb_type enumeration (DUCKDB_TYPE_* constants)\n+  TDuckDBType = integer;\n+\n+  /// opaque handles - pointers to a struct { void* internal_ptr }\n+  TDuckDBDatabase = type pointer;\n+  TDuckDBConnection = type pointer;\n+  TDuckDBConfig = type pointer;\n+  TDuckDBPreparedStatement = type pointer;\n+  TDuckDBLogicalType = type pointer;\n+  TDuckDBDataChunk = type pointer;\n+  TDuckDBVector = type pointer;\n+  TDuckDBAppender = type pointer;\n+\n+  /// duckdb_result C struct - should be kept as-is, 48 bytes on 64-bit\n+  // - duckdb_fetch_chunk() expects it BY VALUE: the compiler will follow the\n+  // platform ABI (pointer to a copy on Win64, stack copy on SysV x86_64)\n+  TDuckDBResult = record\n+    deprecated_column_count: TDuckIdx;\n+    deprecated_row_count: TDuckIdx;\n+    deprecated_rows_changed: TDuckIdx;\n+    deprecated_columns: pointer;\n+    deprecated_error_message: PAnsiChar;\n+    internal_data: pointer;\n+  end;\n+  PDuckDBResult = ^TDuckDBResult;\n+\n+  /// duckdb_string_t internal VARCHAR/BLOB representation (16 bytes)\n+  // - inlined if Length <= 12, otherwise Prefix[] + Ptr\n+  TDuckDBStringT = packed record\n+    Length: cardinal;\n+    case integer of\n+      0: (Prefix: array[0..3] of AnsiChar;\n+          Ptr: PAnsiChar);\n+      1: (Inlined: array[0..11] of AnsiChar);\n+  end;\n+  PDuckDBStringT = ^TDuckDBStringT;\n+\n+  /// duckdb_hugeint / duckdb_uhugeint 128-bit integers\n+  TDuckDBHugeInt = packed record\n+    Lower: Int64; // actually uint64_t\n+    Upper: Int64; // int64_t for hugeint, uint64_t for uhugeint\n+  end;\n+  PDuckDBHugeInt = ^TDuckDBHugeInt;\n+\n+  /// duckdb_interval\n+  TDuckDBInterval = packed record\n+    Months: integer;\n+    Days: integer;\n+    Micros: Int64;\n+  end;\n+  PDuckDBInterval = ^TDuckDBInterval;\n+\n+  /// duckdb_list_entry\n+  TDuckDBListEntry = packed record\n+    Offset: Int64;\n+    Length: Int64;\n+  end;\n+  PDuckDBListEntry = ^TDuckDBListEntry;\n+\n+  /// typed access to DuckDB vector data - no pointer math needed (Delphi 7)\n+  TDuckI8Array = array[0..MaxInt div 8] of ShortInt;\n+  PDuckI8Array = ^TDuckI8Array;\n+  TDuckI16Array = array[0..MaxInt div 8] of SmallInt;\n+  PDuckI16Array = ^TDuckI16Array;\n+  TDuckU16Array = array[0..MaxInt div 8] of word;\n+  PDuckU16Array = ^TDuckU16Array;\n+  TDuckI32Array = array[0..MaxInt div 8] of integer;\n+  PDuckI32Array = ^TDuckI32Array;\n+  TDuckU32Array = array[0..MaxInt div 8] of cardinal;\n+  PDuckU32Array = ^TDuckU32Array;\n+  TDuckI64Array = array[0..MaxInt div 16] of Int64;\n+  PDuckI64Array = ^TDuckI64Array;\n+  TDuckSingleArray = array[0..MaxInt div 8] of single;\n+  PDuckSingleArray = ^TDuckSingleArray;\n+  TDuckDoubleArray = array[0..MaxInt div 16] of double;\n+  PDuckDoubleArray = ^TDuckDoubleArray;\n+  TDuckU8Array = array[0..\n... [truncated, 23636 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "added",
+          "additions": 1592,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,1592 @@\n+/// Database Framework Direct DuckDB Connection via the native C API\n+// - in-process access using duckdb.dll / libduckdb.so (x64)\n+// - Delphi 7 .. Delphi 13 and FPC 3.2+ compatible syntax\n+unit mormot.db.sql.duckdb;\n+\n+{\n+  *****************************************************************************\n+\n+   Direct DuckDB Client Access using mormot.db.raw.duckdb C API Wrapper\n+    - TSqlDBDuckDBConnectionProperties: one shared duckdb_database instance\n+    - TSqlDBDuckDBConnection: one duckdb_connection per (thread) connection\n+    - TSqlDBDuckDBStatement: prepared statements and chunk-based row access\n+\n+  *****************************************************************************\n+\n+  Notes:\n+  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+    TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n+  - one database file can only be opened by ONE process in read/write mode:\n+    the duckdb_database handle is owned by the connection properties instance,\n+    and every TSqlDBConnection runs duckdb_connect() on it\n+  - result sets are materialized by DuckDB, then read chunk by chunk\n+  - complex types (LIST, ARRAY, STRUCT, MAP, UNION) are returned as JSON text\n+}\n+\n+interface\n+\n+{$I mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  classes,\n+  variants,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.buffers,\n+  mormot.core.datetime,\n+  mormot.core.data,\n+  mormot.core.json,\n+  mormot.core.rtti,\n+  mormot.core.log,\n+  mormot.db.core,\n+  mormot.db.sql,\n+  mormot.db.raw.duckdb;\n+\n+\n+{ ************ TSqlDBDuckDBConnection* and TSqlDBDuckDBStatement Classes }\n+\n+type\n+  /// connection properties to an in-process DuckDB database\n+  // - aServerName is the database file name, or '' / ':memory:' for an\n+  // in-memory database shared by all connections of this instance\n+  // - aDatabaseName/aUserID/aPassWord are ignored\n+  TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n+  protected\n+    fDatabase: TDuckDBDatabase;\n+    fDatabaseLock: TLightLock;\n+    fConfig: RawUtf8;\n+    fReadOnly: boolean;\n+    procedure GetForeignKeys; override;\n+  public\n+    /// initialize the properties - the database is opened on first connection\n+    constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n+      override;\n+    /// close the shared duckdb_database instance after all connections\n+    destructor Destroy; override;\n+    /// create a new connection - caller should free it\n+    function NewConnection: TSqlDBConnection; override;\n+    /// return the shared duckdb_database handle, opening it if needed\n+    function Database: TDuckDBDatabase;\n+    /// close the shared database instance\n+    // - all connections should have been released before\n+    procedure CloseDatabase;\n+    /// the DuckDB library version, e.g. 'v1.4.1'\n+    function LibraryVersion: RawUtf8;\n+  published\n+    /// DuckDB configuration options, applied when the database is opened\n+    // - format is 'name1=value1;name2=value2', e.g. 'threads=4;memory_limit=2GB'\n+    // - see https://duckdb.org/docs/stable/configuration/overview\n+    property Config: RawUtf8\n+      read fConfig write fConfig;\n+    /// open the database file in READ_ONLY access mode\n+    // - several processes may open the same file in read-only mode\n+    property ReadOnly: boolean\n+      read fReadOnly write fReadOnly;\n+  end;\n+\n+  /// one connection to the shared DuckDB database instance\n+  TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n+  protected\n+    fConn: TDuckDBConnection;\n+  public\n+    /// connect to the database, i.e. run duckdb_connect()\n+    procedure Connect; override;\n+    /// release the duckdb_connection\n+    procedure Disconnect; override;\n+    /// return TRUE if Connect has been already successfully called\n+    function IsConnected: boolean; override;\n+    /// initialize a new SQL query statement for this connection\n+    func\n... [truncated, 45781 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/mormot2tests.dpr",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -79,6 +79,7 @@ uses\n   test.orm.core            in '.\\test.orm.core.pas',\r\n   test.orm.sqlite3         in '.\\test.orm.sqlite3.pas',\r\n   test.orm.extdb           in '.\\test.orm.extdb.pas',\r\n+  test.db.duckdb           in '.\\test.db.duckdb.pas',\r\n   test.orm.threads         in '.\\test.orm.threads.pas',\r\n   test.orm.network         in '.\\test.orm.network.pas',\r\n   test.soa.core            in '.\\test.soa.core.pas',\r\n@@ -180,6 +181,7 @@ begin\n     TTestSqliteFileMemoryMap,\r\n     TTestSqliteMemory,\r\n     TTestExternalDatabase,\r\n+    TTestDuckDB,\r\n     TTestClientServerAccess,\r\n     TTestMultiThreadProcess\r\n   ]);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/mormot2tests.lpi",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -838,7 +838,7 @@\n         <PackageName Value=\"LCL\"/>\n       </Item3>\n     </RequiredPackages>\n-    <Units Count=\"99\">\n+    <Units Count=\"100\">\n       <Unit0>\n         <Filename Value=\"mormot2tests.dpr\"/>\n         <IsPartOfProject Value=\"True\"/>\n@@ -1235,6 +1235,10 @@\n         <Filename Value=\"..\\src\\script\\mormot.script.quickjs.pas\"/>\n         <IsPartOfProject Value=\"True\"/>\n       </Unit98>\n+      <Unit99>\n+        <Filename Value=\"test.db.duckdb.pas\"/>\n+        <IsPartOfProject Value=\"True\"/>\n+      </Unit99>\n     </Units>\n   </ProjectOptions>\n   <CompilerOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "added",
+          "additions": 416,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,416 @@\n+/// regression tests for the DuckDB SynDB provider\n+// - this unit is a part of the Open Source Synopse mORMot framework 2,\n+// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\n+// - tests are skipped if the DuckDB library (duckdb.dll/libduckdb.so) is not\n+// available on this system\n+unit test.db.duckdb;\n+\n+interface\n+\n+{$I ..\\src\\mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  classes,\n+  variants,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.datetime,\n+  mormot.core.json,\n+  mormot.core.variants,\n+  mormot.core.test,\n+  mormot.db.core,\n+  mormot.db.sql,\n+  mormot.db.raw.duckdb,\n+  mormot.db.sql.duckdb;\n+\n+type\n+  /// regression tests for mormot.db.sql.duckdb.pas\n+  TTestDuckDB = class(TSynTestCase)\n+  protected\n+    fProps: TSqlDBDuckDBConnectionProperties;\n+    procedure Setup; override;\n+    procedure CleanUp; override;\n+  published\n+    procedure BasicTypes;\n+    procedure ParamsAndCrud;\n+    procedure Transactions;\n+    procedure NestedTypes;\n+    procedure Json;\n+    procedure Errors;\n+    procedure Metadata;\n+    procedure Bulk;\n+    procedure BindArrays;\n+    procedure Appender;\n+  end;\n+\n+\n+implementation\n+\n+{ TTestDuckDB }\n+\n+procedure TTestDuckDB.Setup;\n+begin\n+  if DuckDBLibraryAvailable then\n+    fProps := TSqlDBDuckDBConnectionProperties.Create(':memory:', '', '', '')\n+  else\n+    NotifyProgress(['DuckDB library not available - tests skipped']);\n+end;\n+\n+procedure TTestDuckDB.CleanUp;\n+begin\n+  FreeAndNil(fProps);\n+end;\n+\n+procedure TTestDuckDB.BasicTypes;\n+var\n+  rows: ISqlDBRows;\n+  dt: TDateTime;\n+begin\n+  if fProps = nil then\n+    exit;\n+  rows := fProps.Execute(\n+    'select 42::INTEGER as i, 9007199254740993::BIGINT as b, ' +\n+    'true as t, 1.5::DOUBLE as d, 1234.5678::DECIMAL(18,4) as c, ' +\n+    '123456789012.3456::DECIMAL(38,4) as hc, ' +\n+    'decode(fro\n... [truncated, 12421 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Other",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": 666,
+      "is_merge": true
+    },
+    {
+      "sha": "cf83b2ce7242be983192e8739578a52efd8e1a09",
+      "short_sha": "cf83b2ce",
+      "subject": "db: refined mormot.db.proxy version/magic compatibility",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:45:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cf83b2ce7242be983192e8739578a52efd8e1a09",
+      "parents": [
+        "9c267e234337c74b89e1ff7c78e4b4f9272f5cac"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 17,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 15,
+          "patch": "@@ -917,9 +917,9 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n   user: RawUtf8;\r\n   exec: TSqlDBProxyConnectionCommandExecute;\r\n   execwithres: boolean;\r\n-  colarr: TSqlDBColumnDefineDynArray;\r\n-  defarr: TSqlDBIndexDefineDynArray;\r\n-  outarr: TRawUtf8DynArray;\r\n+  cols: TSqlDBColumnDefineDynArray;\r\n+  defs: TSqlDBIndexDefineDynArray;\r\n+  nams: TRawUtf8DynArray;\r\n \r\n   procedure AppendOutput(value: Int64);\r\n   var\r\n@@ -992,23 +992,20 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n         AppendOutput(Connection.ServerTimestamp);\r\n       cGetFields:\r\n         begin\r\n-          Connection.Properties.GetFields(P, colarr);\r\n           if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n-            Append(msgout, DynArraySave(\r\n-              colarr, TypeInfo(TSqlDBColumnDefineDynArray)));\r\n+            Connection.Properties.GetFields(P, cols);\r\n+          Append(msgout, DynArraySave(cols, TypeInfo(TSqlDBColumnDefineDynArray)));\r\n         end;\r\n       cGetIndexes:\r\n         begin\r\n-          Connection.Properties.GetIndexes(P, defarr);\r\n           if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n-            Append(msgout, DynArraySave(\r\n-              defarr, TypeInfo(TSqlDBIndexDefineDynArray)));\r\n+            Connection.Properties.GetIndexes(P, defs);\r\n+          Append(msgout, DynArraySave(defs, TypeInfo(TSqlDBIndexDefineDynArray)));\r\n         end;\r\n       cGetTableNames:\r\n         begin\r\n-          Connection.Properties.GetTableNames(outarr);\r\n-          Append(msgout, DynArraySave(\r\n-            outarr, TypeInfo(TRawUtf8DynArray)));\r\n+          Connection.Properties.GetTableNames(nams);\r\n+          Append(msgout, DynArraySave(nams, TypeInfo(TRawUtf8DynArray)));\r\n         end;\r\n       cGetForeignKeys:\r\n         begin\r\n@@ -1248,19 +1245,19 @@ function TSqlDBRemoteConnectionPropertiesAbstract.Process(\n     cTryStartTransaction:\r\n       outboolean := boolean(msg^);\r\n     cGetFields:\r\n-      if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n+      if outheader.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n         DynArrayLoad(outcolarr, msg, TypeInfo(TSqlDBColumnDefineDynArray), nil, msgmax)\r\n       else\r\n         ESqlDBRemote.RaiseUtf8('Unsupported %.Process(cGetFields)', [self]);\r\n     cGetIndexes:\r\n-      if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n+      if outheader.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n         DynArrayLoad(outindexarr, msg, TypeInfo(TSqlDBIndexDefineDynArray), nil, msgmax)\r\n       else\r\n         ESqlDBRemote.RaiseUtf8('Unsupported %.Process(cGetIndexes)', [self]);\r\n     cGetTableNames:\r\n       DynArrayLoad(outarr, msg, TypeInfo(TRawUtf8DynArray), nil, msgmax);\r\n     cGetForeignKeys:\r\n-      if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n+      if outheader.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n         if StrLen(msg) = msgmax - msg then\r\n           outnamevalue.InitFromJsonBuffer(PUtf8Char(msg), false) // new format\r\n         else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17660\n+17661",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17660'\r\n+'2.4.17661'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9c267e234337c74b89e1ff7c78e4b4f9272f5cac",
+      "short_sha": "9c267e23",
+      "subject": "tests: enhanced Remote DB coverage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:40:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9c267e234337c74b89e1ff7c78e4b4f9272f5cac",
+      "parents": [
+        "8cd3d20bd37f3e20c04b44c7ee9bb41a5424f7dc"
+      ],
+      "stats": {
+        "additions": 37,
+        "deletions": 13,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17659\n+17660",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17659'\r\n+'2.4.17660'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 11,
+          "patch": "@@ -915,9 +915,12 @@ procedure TTestExternalDatabase._SynDBRemote;\n       id, lastid, i, n, n1: integer;\r\n       IDs: TIntegerDynArray;\r\n       names: TRawUtf8DynArray;\r\n+      ndx: TSqlDBIndexDefineDynArray;\r\n       Row, RowDoc, all: variant;\r\n       r, v: PDocVariantData;\r\n       fields, expected: TSqlDBColumnDefineDynArray;\r\n+      f, e: ^TSqlDBColumnDefine;\r\n+      json: RawUtf8;\r\n       stmt: ISqlDBStatement;\r\n \r\n       procedure DoInsert;\r\n@@ -927,7 +930,7 @@ procedure TTestExternalDatabase._SynDBRemote;\n         for i := 0 to high(IDs) do\r\n           Check(proxy.ExecuteNoResult(\r\n             'INSERT INTO People (ID,FirstName,LastName,YearOfBirth,YearOfDeath) ' +\r\n-            'VALUES (?,?,?,?,?)', [IDs[i], 'FirstName New ' + Int32ToUtf8(i),\r\n+            'VALUES (?,?,?,?,?)', [IDs[i], Make(['FirstName New ', i]),\r\n             'New Last', i + 1400, 1519]) = 1);\r\n       end;\r\n \r\n@@ -951,18 +954,32 @@ procedure TTestExternalDatabase._SynDBRemote;\n       // metadata should be transmitted as retrieved on the server side\r\n       proxy.GetFields('CustomProps', fields);\r\n       Props.GetFields('CustomProps', expected);\r\n-      CheckEqual(length(fields), length(expected), 'GetFields');\r\n-      if length(fields) = length(expected) then\r\n-        for i := 0 to high(fields) do\r\n+      f := pointer(fields);\r\n+      e := pointer(expected);\r\n+      if CheckEqual(length(fields), length(expected), 'GetFields') then\r\n+        for i := 1 to length(fields) do\r\n         begin\r\n-          CheckEqual(fields[i].ColumnName, expected[i].ColumnName);\r\n-          CheckEqual(fields[i].ColumnTypeNative, expected[i].ColumnTypeNative);\r\n-          CheckEqual(fields[i].ColumnLength, expected[i].ColumnLength);\r\n-          CheckEqual(fields[i].ColumnPrecision, expected[i].ColumnPrecision);\r\n-          CheckEqual(fields[i].ColumnScale, expected[i].ColumnScale);\r\n-          Check(fields[i].ColumnType = expected[i].ColumnType);\r\n-          Check(fields[i].ColumnIndexed = expected[i].ColumnIndexed);\r\n+          CheckEqual(f^.ColumnName, e^.ColumnName);\r\n+          CheckEqual(f^.ColumnTypeNative, e^.ColumnTypeNative);\r\n+          CheckEqual(f^.ColumnLength, e^.ColumnLength);\r\n+          CheckEqual(f^.ColumnPrecision, e^.ColumnPrecision);\r\n+          CheckEqual(f^.ColumnScale, e^.ColumnScale);\r\n+          Check(f^.ColumnType = e^.ColumnType);\r\n+          Check(f^.ColumnIndexed = e^.ColumnIndexed);\r\n+          inc(f);\r\n+          inc(e);\r\n         end;\r\n+      proxy.GetFields('People', fields);\r\n+      SaveJson(fields, TypeInfo(TSqlDBColumnDefineDynArray),\r\n+        [twoIgnoreDefaultInRecord, twoEnumSetsAsTextInRecord], json);\r\n+      CheckEqual(json,\r\n+       '[{\"ColumnName\":\"ID\",\"ColumnTypeNative\":\"INTEGER\",\"ColumnType\":\"ftInt64\",\"' +\r\n+       'ColumnIndexed\":true},{\"ColumnName\":\"FirstName\",\"ColumnTypeNative\":\"TEXT\",' +\r\n+       '\"ColumnType\":\"ftUtf8\"},{\"ColumnName\":\"LastName\",\"ColumnTypeNative\":\"TEXT\"' +\r\n+       ',\"ColumnType\":\"ftUtf8\"},{\"ColumnName\":\"Data\",\"ColumnTypeNative\":\"BLOB\",\"C' +\r\n+       'olumnType\":\"ftBlob\"},{\"ColumnName\":\"YearOfBirth\",\"ColumnTypeNative\":\"INTE' +\r\n+       'GER\",\"ColumnType\":\"ftInt64\"},{\"ColumnName\":\"YearOfDeath\",\"ColumnTypeNativ' +\r\n+       'e\":\"INTEGER\",\"ColumnType\":\"ftInt64\"}]');\r\n       Check(names = nil);\r\n       proxy.GetTableNames(names);\r\n       CheckEqual(RawUtf8ArrayToCsv(names),\r\n@@ -977,6 +994,13 @@ procedure TTestExternalDatabase._SynDBRemote;\n       CheckEqual(RawUtf8ArrayToCsv(names),\r\n         'ID [INTEGER] *,FirstName [TEXT],LastName [TEXT],Data [BLOB],YearOfBirth [' +\r\n         'INTEGER],YearOfDeath [INTEGER]');\r\n+      proxy.GetIndexes('ADests', ndx);\r\n+      CheckEqual(DynArraySaveJson(ndx, TypeInfo(TSqlDBIndexDefineDynArray)),\r\n+       '[{\"IndexName\":\"IndexADestsDest\",\"TypeDesc\":\"BTREE\",\"Filter\":\"\",\"KeyColumn' +\r\n+       's\":\"Dest\",\"IncludedColumns\":\"\",\"IsUnique\":false,\"IsPrimaryKey\":false,\"IsU' +\r\n+       'niqueConstraint\":false},{\"IndexName\":\"IndexADestsSource\",\"TypeDesc\":\"BTRE' +\r\n+       'E\",\"Filter\":\"\",\n... [truncated, 329 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8cd3d20bd37f3e20c04b44c7ee9bb41a5424f7dc",
+      "short_sha": "8cd3d20b",
+      "subject": "db: specific SQLite3 path for TSqlDBConnectionProperties.GetIndexes",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:39:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8cd3d20bd37f3e20c04b44c7ee9bb41a5424f7dc",
+      "parents": [
+        "1eb18cfc4da624a0d586bf8607d23318a9d57d40"
+      ],
+      "stats": {
+        "additions": 53,
+        "deletions": 24,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 22,
+          "patch": "@@ -4193,12 +4193,12 @@ procedure TSqlDBConnectionProperties.GetFields(const aTableName: RawUtf8;\n begin\r\n   fa.Init(TypeInfo(TSqlDBColumnDefineDynArray), Fields, @n);\r\n   fa.Compare := SortDynArrayAnsiStringI; // fa.Find() case insensitive\r\n-  FillCharFast(f, SizeOf(f), 0);\r\n+  FillCharFast(f, SizeOf(f), 0); // record cleanup\r\n   if fDbms = dSQLite then\r\n   begin\r\n-    // SQLite3 has a specific PRAGMA metadata query\r\n+    // SQLite3 has specific PRAGMA metadata queries\r\n     try\r\n-      with Execute('PRAGMA table_info(`' + aTableName + '`)', []) do\r\n+      with ExecuteFmt('PRAGMA table_info(`%`)', [aTableName]) do\r\n         while Step do\r\n         begin\r\n           // cid=0,name=1,type=2,notnull=3,dflt_value=4,pk=5\r\n@@ -4213,9 +4213,9 @@ procedure TSqlDBConnectionProperties.GetFields(const aTableName: RawUtf8;\n         n := 0; // external SQLite3 providers (e.g. UniDAC) are buggy\r\n     end;\r\n     try\r\n-      with Execute('PRAGMA index_list(`' + aTableName + '`)', []) do\r\n+      with ExecuteFmt('PRAGMA index_list(`%`)', [aTableName]) do\r\n         while Step do        // seq=0,name=1,unique=2\r\n-          with Execute('PRAGMA index_info(' + ColumnUtf8(1) + ')', []) do\r\n+          with ExecuteFmt('PRAGMA index_info(%)', [QuotedStr(ColumnUtf8(1))]) do\r\n             while Step do\r\n             begin\r\n               f.ColumnName := ColumnUtf8(2); // seqno=0,cid=1,name=2\r\n@@ -4264,25 +4264,54 @@ procedure TSqlDBConnectionProperties.GetIndexes(const aTableName: RawUtf8;\n   f: TSqlDBIndexDefine;\r\n   fa: TDynArray;\r\n begin\r\n-  sql := SqlGetIndex(aTableName);\r\n-  if sql = '' then\r\n-    exit;\r\n   fa.Init(TypeInfo(TSqlDBIndexDefineDynArray), Indexes, @n);\r\n-  with Execute(sql, []) do\r\n+  FillCharFast(f, SizeOf(f), 0); // record cleanup\r\n+  if fDbms = dSQLite then\r\n   begin\r\n-    while Step do\r\n+    // SQLite3 has specific PRAGMA metadata queries\r\n+    try\r\n+      with ExecuteFmt('PRAGMA index_list(`%`)', [aTableName]) do\r\n+        while Step do\r\n+        begin\r\n+          // seq=0, name=1, unique=2, origin=3, partial=4\r\n+          f.IndexName := ColumnUtf8(1);\r\n+          f.IsUnique := ColumnInt(2) <> 0;\r\n+          f.TypeDesc := 'BTREE';\r\n+          f.IsPrimaryKey := ColumnUtf8(3) = 'pk';\r\n+          f.IsUniqueConstraint := ColumnUtf8(3) = 'u';\r\n+          FastAssignNew(f.KeyColumns);\r\n+          with ExecuteFmt('PRAGMA index_info(%)', [QuotedStr(f.IndexName)]) do\r\n+            while Step do\r\n+              // seqno=0, cid=1, name=2\r\n+              AddToCsv(ColumnUtf8(2), f.KeyColumns);\r\n+          fa.Add(f);\r\n+        end;\r\n+    except\r\n+      on Exception do\r\n+        n := 0; // same fallback as GetFields()\r\n+    end;\r\n+  end\r\n+  else\r\n+  begin\r\n+    sql := SqlGetIndex(aTableName);\r\n+    if sql = '' then\r\n+      exit;\r\n+    with Execute(sql, []) do\r\n     begin\r\n-      f.IndexName := TrimU(ColumnUtf8(0));\r\n-      f.IsUnique := ColumnInt(1) > 0;\r\n-      f.TypeDesc := TrimU(ColumnUtf8(2));\r\n-      f.IsPrimaryKey := ColumnInt(3) > 0;\r\n-      f.IsUniqueConstraint := ColumnInt(4) > 0;\r\n-      f.Filter := TrimU(ColumnUtf8(5));\r\n-      f.KeyColumns := TrimU(ColumnUtf8(6));\r\n-      f.IncludedColumns := TrimU(ColumnUtf8(7));\r\n-      fa.Add(f);\r\n+      while Step do\r\n+      begin\r\n+        f.IndexName := TrimU(ColumnUtf8(0));\r\n+        f.IsUnique := ColumnInt(1) > 0;\r\n+        f.TypeDesc := TrimU(ColumnUtf8(2));\r\n+        f.IsPrimaryKey := ColumnInt(3) > 0;\r\n+        f.IsUniqueConstraint := ColumnInt(4) > 0;\r\n+        f.Filter := TrimU(ColumnUtf8(5));\r\n+        f.KeyColumns := TrimU(ColumnUtf8(6));\r\n+        f.IncludedColumns := TrimU(ColumnUtf8(7));\r\n+        fa.Add(f);\r\n+      end;\r\n+      ReleaseRows;\r\n     end;\r\n-    ReleaseRows;\r\n   end;\r\n   SetLength(Indexes, n);\r\n end;\r\n@@ -4568,9 +4597,9 @@ function TSqlDBConnectionProperties.SqlGetIndex(const aTableName: RawUtf8): RawU\n begin\r\n   FastAssignNew(result);\r\n   case GetDbms of\r\n-    dSQLite:\r\n+    dSQLite: // normally retrieved using direct #PRAGMA in GetIndexes()\r\n       begin\r\n-        // SQ\n... [truncated, 239 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17658\n+17659",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17658'\r\n+'2.4.17659'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1eb18cfc4da624a0d586bf8607d23318a9d57d40",
+      "short_sha": "1eb18cfc",
+      "subject": "db: RawUtf8 usage cleanup for both FPC and Delphi",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:38:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1eb18cfc4da624a0d586bf8607d23318a9d57d40",
+      "parents": [
+        "4b4c0a257469106d47a3eec2743ed46d036c88b6"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 34,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "@@ -1262,7 +1262,7 @@ function TSqlDBRemoteConnectionPropertiesAbstract.Process(\n     cGetForeignKeys:\r\n       if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n         if StrLen(msg) = msgmax - msg then\r\n-          outnamevalue.InitFromJsonBuffer(msg, false) // new format\r\n+          outnamevalue.InitFromJsonBuffer(PUtf8Char(msg), false) // new format\r\n         else\r\n           ESqlDBRemote.RaiseUtf8('Invalid %.Process(cGetForeignKeys)', [self])\r\n       else\r\n@@ -1702,11 +1702,11 @@ function TSqlDBProxyStatementAbstract.ColumnUtf8(Col: integer): RawUtf8;\n     ftNull:\r\n       FastAssignNew(result);\r\n     ftInt64:\r\n-      result := Int64ToUtf8(FromVarInt64Value(data{%H-}));\r\n+      Int64ToUtf8(FromVarInt64Value(data{%H-}), result);\r\n     ftDouble:\r\n-      result := DoubleToStr(unaligned(PDouble(data)^));\r\n+      DoubleToStr(unaligned(PDouble(data)^), result);\r\n     ftCurrency:\r\n-      result := Curr64ToStr(PInt64(data)^);\r\n+      Curr64ToStr(PInt64(data)^, result);\r\n     ftDate:\r\n       DateTimeToIso8601TextVar(unaligned(PDateTime(data)^), 'T', result);\r\n     ftBlob,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 28,
+          "patch": "@@ -4361,7 +4361,7 @@ procedure TSqlDBConnectionProperties.GetTableNames(out Tables: TRawUtf8DynArray)\n   try\r\n     if FilterTableViewSchemaName and\r\n        (fForcedSchemaName <> '') then\r\n-      checkschema := UpperCase(fForcedSchemaName) + '.';\r\n+      Join([UpperCase(fForcedSchemaName), '.'], checkschema);\r\n     with Execute(sql, []) do\r\n     begin\r\n       count := 0;\r\n@@ -4399,7 +4399,7 @@ procedure TSqlDBConnectionProperties.GetViewNames(out Views: TRawUtf8DynArray);\n   try\r\n     if FilterTableViewSchemaName and\r\n        (fForcedSchemaName <> '') then\r\n-      checkschema := UpperCase(fForcedSchemaName) + '.';\r\n+      Join([UpperCase(fForcedSchemaName), '.'], checkschema);\r\n     with Execute(sql, []) do\r\n     begin\r\n       count := 0;\r\n@@ -4584,8 +4584,7 @@ function TSqlDBConnectionProperties.SqlGetIndex(const aTableName: RawUtf8): RawU\n           '    where key = 1 order by seqno)) as key_columns, ' +\r\n           ' null as included_columns ' +\r\n           'from pragma_index_list(''%'') i ' +\r\n-          'order by i.seq',\r\n-          [StringReplace(aTableName, '''', '''''', [rfReplaceAll])], result);\r\n+          'order by i.seq', [QuotedStr(aTableName)], result);\r\n         exit;\r\n       end;\r\n     dOracle:\r\n@@ -5160,7 +5159,7 @@ function TSqlDBConnectionProperties.SqlAddIndex(const aTableName: RawUtf8;\n       posGlobalBefore:\r\n         AppendShortToUtf8('DESC ', result);\r\n       posWithColumn:\r\n-        coldesc := JoinCsv(' DESC,', aFieldNames) + ' DESC';\r\n+        Join([JoinCsv(' DESC,', aFieldNames), ' DESC'], coldesc);\r\n     end;\r\n   if {%H-}coldesc = '' then\r\n     coldesc := JoinCsv(',', aFieldNames);\r\n@@ -8137,7 +8136,7 @@ procedure TSqlDBStatementWithParams.BindTextS(Param: integer;\n      fConnection.fProperties.StoreVoidStringAsNull then\r\n     CheckParam(Param, ftNull, IO)\r\n   else\r\n-    CheckParam(Param, ftUtf8, IO)^.VData := StringToUtf8(Value);\r\n+    StringToUtf8(Value, RawUtf8(CheckParam(Param, ftUtf8, IO)^.VData));\r\n end;\r\n \r\n procedure TSqlDBStatementWithParams.BindTextU(Param: integer;\r\n@@ -8171,8 +8170,8 @@ procedure TSqlDBStatementWithParams.BindTextW(Param: integer; const Value:\n      fConnection.fProperties.StoreVoidStringAsNull then\r\n     CheckParam(Param, ftNull, IO)\r\n   else\r\n-    CheckParam(Param, ftUtf8, IO)^.VData := RawUnicodeToUtf8(pointer(Value),\r\n-      length(Value));\r\n+    RawUnicodeToUtf8(pointer(Value), length(Value),\r\n+      RawUtf8(CheckParam(Param, ftUtf8, IO)^.VData));\r\n end;\r\n \r\n function TSqlDBStatementWithParams.ParamToVariant(Param: integer;\r\n@@ -8253,7 +8252,7 @@ procedure TSqlDBStatementWithParams.BindArray(Param: integer;\n begin\r\n   with CheckParam(Param, ftDouble, paramIn, length(Values))^ do\r\n     for i := 0 to high(Values) do\r\n-      VArray[i] := DoubleToStr(Values[i]);\r\n+      DoubleToStr(Values[i], VArray[i]);\r\n end;\r\n \r\n procedure TSqlDBStatementWithParams.BindArray(Param: integer;\r\n@@ -8263,7 +8262,7 @@ procedure TSqlDBStatementWithParams.BindArray(Param: integer;\n begin\r\n   with CheckParam(Param, ftInt64, paramIn, length(Values))^ do\r\n     for i := 0 to high(Values) do\r\n-      VArray[i] := Int64ToUtf8(Values[i]);\r\n+      Int64ToUtf8(Values[i], VArray[i]);\r\n end;\r\n \r\n procedure TSqlDBStatementWithParams.BindArray(Param: integer;\r\n@@ -8359,6 +8358,7 @@ procedure TSqlDBStatementWithParams.BindArrayRow(const aValues: array of const);\n var\r\n   i: PtrInt;\r\n   StoreVoidStringAsNull: boolean;\r\n+  V: PRawUtf8;\r\n begin\r\n   if length(aValues) <> fParamCount then\r\n     ESqlDBException.RaiseUtf8('Invalid %.BindArrayRow call', [self]);\r\n@@ -8369,23 +8369,23 @@ procedure TSqlDBStatementWithParams.BindArrayRow(const aValues: array of const);\n     begin\r\n       if length(VArray) <= fParamsArrayCount then\r\n         SetLength(VArray, NextGrow(fParamsArrayCount));\r\n+      V := @VArray[fParamsArrayCount];\r\n       VInt64 := fParamsArrayCount;\r\n       if (VType = ftDate) and\r\n-         (aValues[i].VType = vtExtended) then\r\n-        VArray[fParamsArrayCount] := // direct binding of TDateTime val\n... [truncated, 3182 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17657\n+17658",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17657'\r\n+'2.4.17658'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.proxy",
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4b4c0a257469106d47a3eec2743ed46d036c88b6",
+      "short_sha": "4b4c0a25",
+      "subject": "db: new TSqlDBConnectionProperties.ExecuteFmt() method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:36:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4b4c0a257469106d47a3eec2743ed46d036c88b6",
+      "parents": [
+        "9922dc1bb07c6ec2eb2dd5b52cf450e018e31f9b"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 1,
+          "patch": "@@ -1598,6 +1598,10 @@   TSqlDBConnectionProperties = class\n     // optional parameter\r\n     function Execute(const aSql: RawUtf8; const Params: array of const;\r\n       RowsVariant: PVariant = nil; ForceBlobAsNull: boolean = false): ISqlDBRows;\r\n+    /// execute a SQL query, returning a statement interface instance to retrieve\r\n+    // the result rows corresponding to the supplied SELECT statement\r\n+    // - here the SQL is supplied as FormatUtf8() with no bound parameter\r\n+    function ExecuteFmt(const aFmt: RawUtf8; const aFmtArgs: array of const): ISqlDBRows;\r\n     /// execute a SQL query, without returning any rows\r\n     // - can be used to launch INSERT, DELETE or UPDATE statement, e.g.\r\n     // - will call NewThreadSafeStatement method to retrieve a thread-safe\r\n@@ -3548,7 +3552,8 @@ function TSqlDBConnectionProperties.Execute(const aSql: RawUtf8;\n begin\r\n   stmt := NewThreadSafeStatementPrepared(aSql, {expectres=}true, true);\r\n   stmt.ForceBlobAsNull := ForceBlobAsNull;\r\n-  stmt.Bind(Params);\r\n+  if high(Params) >= 0 then\r\n+    stmt.Bind(Params);\r\n   stmt.ExecutePrepared;\r\n   result := stmt;\r\n   if RowsVariant <> nil then\r\n@@ -3558,6 +3563,15 @@ function TSqlDBConnectionProperties.Execute(const aSql: RawUtf8;\n       RowsVariant^ := result.RowData;\r\n end;\r\n \r\n+function TSqlDBConnectionProperties.ExecuteFmt(const aFmt: RawUtf8;\r\n+  const aFmtArgs: array of const): ISqlDBRows;\r\n+var\r\n+  sql: RawUtf8;\r\n+begin\r\n+  FormatUtf8(aFmt, aFmtArgs, sql);\r\n+  result := Execute(sql, []);\r\n+end;\r\n+\r\n function TSqlDBConnectionProperties.ExecuteNoResult(const aSql: RawUtf8;\r\n   const Params: array of const): integer;\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17656\n+17657",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17656'\r\n+'2.4.17657'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9922dc1bb07c6ec2eb2dd5b52cf450e018e31f9b",
+      "short_sha": "9922dc1b",
+      "subject": "db: enhanced variant values support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T09:35:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9922dc1bb07c6ec2eb2dd5b52cf450e018e31f9b",
+      "parents": [
+        "114b07244aaef945c592d00c91f8f8188f514dca"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.core.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -189,7 +189,8 @@   TSqlVar = record\n     [ftInt64, ftDouble, ftCurrency, ftDate];\r\n \r\n   /// conversion matrix from TSqlDBFieldType into VCL/LCL variant type\r\n-  // - will use varSynUnicode to enhance Delphi and Windows compatibility\r\n+  // - will use SynUnicode to enhance old Delphi and Windows compatibility: set\r\n+  // ForceUtf8=true in TSqlDBStatement.ColumnToVariant() for RawUtf8/varString\r\n   MAP_FIELDTYPE2VARTYPE: array[TSqlDBFieldType] of Word = (\r\n     varEmpty,       // ftUnknown\r\n     varNull,        // ftNull\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 14,
+          "patch": "@@ -120,7 +120,8 @@ interface\n     Filter: RawUtf8;\r\n     /// comma separated list of indexed column names, in order of their definition\r\n     KeyColumns: RawUtf8;\r\n-    /// comma separaded list of a nonkey column added to the index by using the CREATE INDEX INCLUDE clause\r\n+    /// comma separaded list of a nonkey column added to the index by using the\r\n+    // CREATE INDEX INCLUDE clause\r\n     // - only set for MS SQL - not retrieved for other DB types yet\r\n     IncludedColumns: RawUtf8;\r\n     /// if Index is unique\r\n@@ -138,8 +139,10 @@ interface\n   TSqlDBIndexDefineDynArray = array of TSqlDBIndexDefine;\r\n \r\n   /// used to define a parameter/column layout in a stored procedure schema\r\n-  // - for TSqlDBConnectionProperties.GetProcedureParameters to retrieve the stored procedure parameters\r\n-  // - can be extended according to https://msdn.microsoft.com/en-us/library/ms711701(v=vs.85).aspx\r\n+  // - for TSqlDBConnectionProperties.GetProcedureParameters to retrieve the\r\n+  // stored procedure parameters\r\n+  // - can be extended according to\r\n+  // https://learn.microsoft.com/en-us/sql/odbc/reference/syntax/sqlprocedurecolumns-function\r\n   TSqlDBProcColumnDefine = packed record\r\n     /// the Column name\r\n     ColumnName: RawUtf8;\r\n@@ -3460,7 +3463,8 @@ function TSqlDBRowVariantType.IntGet(var Dest: TVarData;\n   ndx := smt.ColumnIndex(col);\r\n   result := ndx >= 0;\r\n   if ndx >= 0 then\r\n-    smt.ColumnToVariant(ndx, Variant(Dest)); // text may be set as varSynUnicode\r\n+    // note: ColumnToVariant() store text as varSynUnicode by default\r\n+    smt.ColumnToVariant(ndx, Variant(Dest));\r\n end;\r\n \r\n \r\n@@ -6147,13 +6151,13 @@ procedure TSqlDBStatement.ColumnBlobFromStream(Col: integer; Stream: TStream);\n \r\n function TSqlDBStatement.ColumnVariant(Col: integer; ForceUtf8: boolean): Variant;\r\n begin\r\n-  ColumnToVariant(Col, result, ForceUtf8); // may be SynUnicode\r\n+  ColumnToVariant(Col, result, ForceUtf8); // SynUnicode unless ForceUtf8=true\r\n end;\r\n \r\n function TSqlDBStatement.ColumnToVariant(Col: integer;\r\n   var Value: Variant; ForceUtf8: boolean): TSqlDBFieldType;\r\n var\r\n-  tmp: RawByteString;\r\n+  tmp: RawByteString; // used for ftUtf8/ftBlob\r\n   V: TSqlVar;\r\n   d: TSynVarData absolute Value;\r\n begin\r\n@@ -6172,16 +6176,19 @@ function TSqlDBStatement.ColumnToVariant(Col: integer;\n       d.VDate := V.VDateTime;\r\n     ftCurrency:\r\n       d.VCurrency := V.VCurrency;\r\n-    ftBlob: // as varString\r\n+    ftBlob: // VType is varString\r\n       begin\r\n         d.VAny := nil; // avoid GPF below\r\n         if V.VBlob <> nil then\r\n           if V.VBlob = pointer(tmp) then\r\n-            RawByteString(d.VAny) := tmp // increment RefCount\r\n-          else\r\n+          begin\r\n+            d.VAny := pointer(tmp); // direct assign with no refcount\r\n+            pointer(tmp) := nil;\r\n+          end\r\n+          else // make full new RawByteString instance\r\n             FastSetRawByteString(RawByteString(d.VAny), V.VBlob, V.VBlobLen);\r\n       end;\r\n-    ftUtf8: // VType is varSynUnicode\r\n+    ftUtf8: // VType is varSynUnicode by default\r\n       begin\r\n         d.VAny := nil; // avoid GPF below\r\n         if V.VText = nil then\r\n@@ -6191,11 +6198,11 @@ function TSqlDBStatement.ColumnToVariant(Col: integer;\n           d.VType := varString;\r\n           if V.VText = pointer(tmp) then\r\n           begin\r\n-            FakeCodePage(tmp, CP_UTF8);\r\n-            d.VAny := pointer(tmp); // direct assign with no refcount\r\n+            FakeCodePage(tmp, CP_UTF8); // to please FPC\r\n+            d.VAny := pointer(tmp);     // direct assign with no refcount\r\n             pointer(tmp) := nil;\r\n           end\r\n-          else\r\n+          else // make full new RawUtf8 instance\r\n             FastSetString(RawUtf8(d.VAny), V.VText, StrLen(V.VText));\r\n         end\r\n         else\r\n@@ -6887,7 +6894,7 @@ function TSqlDBStatement.ColumnVariant(\n end;\r\n \r\n function TSqlDBStatement.GetColumnVariant(const ColName: RawUtf8): Variant;\r\n-begin\r\n+begin // will return text as SynUnicode by \n... [truncated, 88 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17655\n+17656",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17655'\r\n+'2.4.17656'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.core",
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "114b07244aaef945c592d00c91f8f8188f514dca",
+      "short_sha": "114b0724",
+      "subject": "db: preliminary TSqlDBConnectionProperties.GetSqlFields support",
+      "body": "- even if TSqlDBConnectionProperties.GetFields should be the way in",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T08:07:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/114b07244aaef945c592d00c91f8f8188f514dca",
+      "parents": [
+        "4b8c5202c060254df61c31532409aa124b5db1e3"
+      ],
+      "stats": {
+        "additions": 22,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 0,
+          "patch": "@@ -4550,6 +4550,26 @@ function TSqlDBConnectionProperties.SqlGetIndex(const aTableName: RawUtf8): RawU\n begin\r\n   FastAssignNew(result);\r\n   case GetDbms of\r\n+    dSQLite:\r\n+      begin\r\n+        // SQLite 3.16+ supports table-valued PRAGMA functions\r\n+        FormatUtf8(\r\n+          'select i.name as index_name, ' +\r\n+          ' i.\"unique\" as is_unique, ' +\r\n+          ' case i.origin when ''pk'' then ''PRIMARY KEY'' ' +\r\n+          '   else ''BTREE'' end as type_desc, ' +\r\n+          ' case when i.origin = ''pk'' then 1 else 0 end as is_primary_key, ' +\r\n+          ' case when i.origin = ''u'' then 1 else 0 end as unique_constraint, ' +\r\n+          ' null as index_filter, ' +\r\n+          ' (select group_concat(name, '','') from ' +\r\n+          '   (select name from pragma_index_xinfo(i.name) ' +\r\n+          '    where key = 1 order by seqno)) as key_columns, ' +\r\n+          ' null as included_columns ' +\r\n+          'from pragma_index_list(''%'') i ' +\r\n+          'order by i.seq',\r\n+          [StringReplace(aTableName, '''', '''''', [rfReplaceAll])], result);\r\n+        exit;\r\n+      end;\r\n     dOracle:\r\n       fmt :=\r\n         'select  index_name, decode(max(uniqueness),''NONUNIQUE'',0,1) as is_unique, ' +\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17654\n+17655",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17654'\r\n+'2.4.17655'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4b8c5202c060254df61c31532409aa124b5db1e3",
+      "short_sha": "4b8c5202",
+      "subject": "db: maintain some mormot.db.proxy backward compatibility",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T08:05:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4b8c5202c060254df61c31532409aa124b5db1e3",
+      "parents": [
+        "5e767fc32427fa7746d9805e541d4351aec73483"
+      ],
+      "stats": {
+        "additions": 49,
+        "deletions": 22,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 47,
+          "deletions": 20,
+          "patch": "@@ -771,7 +771,16 @@ function ToText(cmd: TSqlDBProxyConnectionCommand): PShortString;\n { ************ Server-Side Proxy Remote Protocol }\r\n \r\n const\r\n-  REMOTE_MAGIC = 1;\r\n+  // version 1 = still legacy SymmetricEncrypt() obfuscation\r\n+  ENCRYPT_OBFUSCATE = 1;\r\n+  // version 1 = initial release\r\n+  MAGIC_LEGACY = 1;\r\n+  // version 2 = changed metadata layout (integer fields, JSON keys)\r\n+  MAGIC_METADATA = 2;\r\n+  // current version\r\n+  REMOTE_MAGIC = MAGIC_METADATA;\r\n+  // compatible/supported versions\r\n+  REMOTE_MAGICS = [MAGIC_LEGACY, MAGIC_METADATA];\r\n \r\n type\r\n   TRemoteMessageHeader = packed record\r\n@@ -885,15 +894,15 @@ function TSqlDBRemoteConnectionProtocol.HandleInput(\n   const input: RawByteString): RawByteString;\r\n begin\r\n   result := input;\r\n-  SymmetricEncrypt(REMOTE_MAGIC, result);\r\n+  SymmetricEncrypt(ENCRYPT_OBFUSCATE, result);\r\n   result := AlgoSynLZ.Decompress(result); // also check crc32c\r\n end;\r\n \r\n function TSqlDBRemoteConnectionProtocol.HandleOutput(\r\n   const output: RawByteString): RawByteString;\r\n begin\r\n   result := AlgoSynLZ.Compress(output); // includes cr32c hashing\r\n-  SymmetricEncrypt(REMOTE_MAGIC, result);\r\n+  SymmetricEncrypt(ENCRYPT_OBFUSCATE, result);\r\n end;\r\n \r\n procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\r\n@@ -929,10 +938,12 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n     ESqlDBRemote.RaiseUtf8('%.RemoteProcessMessage(connection=nil)', [self]);\r\n   msgin := HandleInput(Input);\r\n   header := pointer(msgin);\r\n-  if (header = nil) or\r\n-     (header.Magic <> REMOTE_MAGIC) then\r\n+  if header = nil then\r\n+    ESqlDBRemote.RaiseUtf8('Empty %.RemoteProcessMessage', [self]);\r\n+  if not (header.Magic in REMOTE_MAGICS) then\r\n     ESqlDBRemote.RaiseUtf8(\r\n-      'Incorrect %.RemoteProcessMessage() input magic/version', [self]);\r\n+      'Incorrect %.RemoteProcessMessage() input magic/version=%',\r\n+      [self, header.Magic]);\r\n   if (Authenticate <> nil) and\r\n      (Authenticate.UsersCount > 0) and\r\n      not (header.Command in [cGetToken, cGetDbms]) then\r\n@@ -982,14 +993,16 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n       cGetFields:\r\n         begin\r\n           Connection.Properties.GetFields(P, colarr);\r\n-          Append(msgout, DynArraySave(\r\n-            colarr, TypeInfo(TSqlDBColumnDefineDynArray)));\r\n+          if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n+            Append(msgout, DynArraySave(\r\n+              colarr, TypeInfo(TSqlDBColumnDefineDynArray)));\r\n         end;\r\n       cGetIndexes:\r\n         begin\r\n           Connection.Properties.GetIndexes(P, defarr);\r\n-          Append(msgout, DynArraySave(\r\n-            defarr, TypeInfo(TSqlDBIndexDefineDynArray)));\r\n+          if header.Magic >= MAGIC_METADATA then // version 2 has integer fields\r\n+            Append(msgout, DynArraySave(\r\n+              defarr, TypeInfo(TSqlDBIndexDefineDynArray)));\r\n         end;\r\n       cGetTableNames:\r\n         begin\r\n@@ -999,8 +1012,11 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n         end;\r\n       cGetForeignKeys:\r\n         begin\r\n-          Connection.Properties.GetForeignKey('', ''); // ensure Dest.fForeignKeys exists\r\n-          Append(msgout, Connection.Properties.ForeignKeysJson);\r\n+          Connection.Properties.GetForeignKey('', ''); // fill Dest.fForeignKeys\r\n+          if header.Magic >= MAGIC_METADATA then // version 2 uses JSON\r\n+            Append(msgout, Connection.Properties.ForeignKeysJson)\r\n+          else\r\n+            Append(msgout, Connection.Properties.ForeignKeysData);\r\n         end;\r\n       cExecute,\r\n       cExecuteToBinary,\r\n@@ -1176,7 +1192,7 @@ function TSqlDBRemoteConnectionPropertiesAbstract.Process(\n     ESqlDBRemote.RaiseUtf8('%.Process(%) with no connection',\r\n       [self, ToText(Command)^]);\r\n   // use our optimized RecordLoadSave/DynArrayLoadSave binary serialization\r\n-  header.Magic := REMOTE_MAGIC;\r\n+  header.Magic := REMOTE_MAGIC; // current version\r\n   head\n... [truncated, 2356 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17653\n+17654",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17653'\r\n+'2.4.17654'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5e767fc32427fa7746d9805e541d4351aec73483",
+      "short_sha": "5e767fc3",
+      "subject": "db: fixed cGetForeignKeys DB proxy command",
+      "body": "- as reported by #668",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T07:26:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5e767fc32427fa7746d9805e541d4351aec73483",
+      "parents": [
+        "2b91c9f5125795b2272e3fad21612052e3ed7cc4"
+      ],
+      "stats": {
+        "additions": 38,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 2,
+          "patch": "@@ -1000,7 +1000,7 @@ procedure TSqlDBProxyConnectionProtocol.RemoteProcessMessage(\n       cGetForeignKeys:\r\n         begin\r\n           Connection.Properties.GetForeignKey('', ''); // ensure Dest.fForeignKeys exists\r\n-          Append(msgout, Connection.Properties.ForeignKeysData);\r\n+          Append(msgout, Connection.Properties.ForeignKeysJson);\r\n         end;\r\n       cExecute,\r\n       cExecuteToBinary,\r\n@@ -1236,7 +1236,10 @@ function TSqlDBRemoteConnectionPropertiesAbstract.Process(\n     cGetTableNames:\r\n       DynArrayLoad(outarr, msg, TypeInfo(TRawUtf8DynArray), nil, msgmax);\r\n     cGetForeignKeys:\r\n-      outnamevalue.SetBlobDataPtr(msg, msgmax);\r\n+      if StrLen(msg) = msgmax - msg then\r\n+        outnamevalue.InitFromJsonBuffer(msg, false) // new format\r\n+      else\r\n+        outnamevalue.SetBlobDataPtr(msg, msgmax); // old system-specific binary\r\n     cExecute,\r\n     cExecuteToBinary,\r\n     cExecuteToJson,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17652\n+17653",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17652'\r\n+'2.4.17653'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 0,
+          "patch": "@@ -914,8 +914,10 @@ procedure TTestExternalDatabase._SynDBRemote;\n       res: ISqlDBRows;\r\n       id, lastid, i, n, n1: integer;\r\n       IDs: TIntegerDynArray;\r\n+      names: TRawUtf8DynArray;\r\n       Row, RowDoc, all: variant;\r\n       r, v: PDocVariantData;\r\n+      fields, expected: TSqlDBColumnDefineDynArray;\r\n       stmt: ISqlDBStatement;\r\n \r\n       procedure DoInsert;\r\n@@ -946,6 +948,35 @@ procedure TTestExternalDatabase._SynDBRemote;\n       TSynLogTestLog.EnterLocal(log, proxy, msg);\r\n       if proxy <> Props then\r\n         Check(proxy.UserID = 'user');\r\n+      // metadata should be transmitted as retrieved on the server side\r\n+      proxy.GetFields('CustomProps', fields);\r\n+      Props.GetFields('CustomProps', expected);\r\n+      CheckEqual(length(fields), length(expected), 'GetFields');\r\n+      if length(fields) = length(expected) then\r\n+        for i := 0 to high(fields) do\r\n+        begin\r\n+          CheckEqual(fields[i].ColumnName, expected[i].ColumnName);\r\n+          CheckEqual(fields[i].ColumnTypeNative, expected[i].ColumnTypeNative);\r\n+          CheckEqual(fields[i].ColumnLength, expected[i].ColumnLength);\r\n+          CheckEqual(fields[i].ColumnPrecision, expected[i].ColumnPrecision);\r\n+          CheckEqual(fields[i].ColumnScale, expected[i].ColumnScale);\r\n+          Check(fields[i].ColumnType = expected[i].ColumnType);\r\n+          Check(fields[i].ColumnIndexed = expected[i].ColumnIndexed);\r\n+        end;\r\n+      Check(names = nil);\r\n+      proxy.GetTableNames(names);\r\n+      CheckEqual(RawUtf8ArrayToCsv(names),\r\n+        'ADest,ADests,ASource,AuthGroup,AuthUser,CustomProps,Dali1,Dali2,FtsTest,F' +\r\n+        'tsTest_content,FtsTest_segdir,FtsTest_segments,People,PeopleArray,PeopleO' +\r\n+        'bject,test');\r\n+      proxy.GetFieldDefinitions('PEOPLE', names, {withkeys=}false);\r\n+      CheckEqual(RawUtf8ArrayToCsv(names),\r\n+        'ID [INTEGER] *,FirstName [TEXT],LastName [TEXT],Data [BLOB],YearOfBirth [' +\r\n+        'INTEGER],YearOfDeath [INTEGER]');\r\n+      proxy.GetFieldDefinitions('PEOPLE', names, {withkeys=}true);\r\n+      CheckEqual(RawUtf8ArrayToCsv(names),\r\n+        'ID [INTEGER] *,FirstName [TEXT],LastName [TEXT],Data [BLOB],YearOfBirth [' +\r\n+        'INTEGER],YearOfDeath [INTEGER]');\r\n       // the same statement instance should be executable several times\r\n       stmt := proxy.NewThreadSafeStatementPrepared(\r\n         'select count(*) from People where YearOfDeath=?', true, true);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2b91c9f5125795b2272e3fad21612052e3ed7cc4",
+      "short_sha": "2b91c9f5",
+      "subject": "db: new TSqlDBConnectionProperties.ForeignKeysJson property",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T07:03:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2b91c9f5125795b2272e3fad21612052e3ed7cc4",
+      "parents": [
+        "1f058393ab8ad0e0c7186ef013a0ea260319a01f"
+      ],
+      "stats": {
+        "additions": 24,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 1,
+          "patch": "@@ -1332,6 +1332,8 @@   TSqlDBConnectionProperties = class\n     function GetDbmsName: RawUtf8; virtual;\r\n     function GetForeignKeysData: RawByteString;\r\n     procedure SetForeignKeysData(const Value: RawByteString);\r\n+    function GetForeignKeysJson: RawUtf8;\r\n+    procedure SetForeignKeysJson(const Value: RawUtf8);\r\n     function FieldsFromList(const aFields: TSqlDBColumnDefineDynArray;\r\n       aExcludeTypes: TSqlDBFieldTypes): RawUtf8;\r\n     function GetMainConnection: TSqlDBConnection; virtual;\r\n@@ -1802,10 +1804,14 @@   TSqlDBConnectionProperties = class\n     // PasswordValue in DatabaseName\r\n     property DatabaseName: RawUtf8\r\n       read fDatabaseName;\r\n-    /// can be used to store the fForeignKeys[] data in an external BLOB\r\n+    /// can be used to store the fForeignKeys[] data in an external binary BLOB\r\n     // - since GetForeignKeys can be (somewhat) slow, could save a lot of time\r\n+    // - if you want a cross-system content rather use ForeignKeysJson\r\n     property ForeignKeysData: RawByteString\r\n       read GetForeignKeysData write SetForeignKeysData;\r\n+    /// can be used to store the fForeignKeys[] data as JSON object\r\n+    property ForeignKeysJson: RawUtf8\r\n+      read GetForeignKeysJson write SetForeignKeysJson;\r\n     /// this event handler will be called during all process\r\n     // - can be used e.g. to change the desktop cursor, or be notified\r\n     // on connection/disconnection/reconnection\r\n@@ -4958,6 +4964,21 @@ procedure TSqlDBConnectionProperties.SetForeignKeysData(const Value: RawByteStri\n   fForeignKeys.BlobData := Value;\r\n end;\r\n \r\n+function TSqlDBConnectionProperties.GetForeignKeysJson: RawUtf8;\r\n+begin\r\n+  if not fForeignKeys.Initialized then\r\n+  begin\r\n+    fForeignKeys.Init(false);\r\n+    GetForeignKeys;\r\n+  end;\r\n+  result := fForeignKeys.AsJson;\r\n+end;\r\n+\r\n+procedure TSqlDBConnectionProperties.SetForeignKeysJson(const Value: RawUtf8);\r\n+begin\r\n+  fForeignKeys.InitFromJson(Value, false);\r\n+end;\r\n+\r\n function TSqlDBConnectionProperties.SqlIso8601ToDate(const Iso8601: RawUtf8): RawUtf8;\r\n begin\r\n   result := Iso8601;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17651\n+17652",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17651'\r\n+'2.4.17652'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1f058393ab8ad0e0c7186ef013a0ea260319a01f",
+      "short_sha": "1f058393",
+      "subject": "core: new TSynNameValue.InitFromJsonBuffer() method",
+      "body": "- replace the new TSynNameValue.InitFromJson(RawUtf8) more convenient method",
+      "author": "Arnaud Bouchez",
+      "date": "2026-10-16T07:02:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1f058393ab8ad0e0c7186ef013a0ea260319a01f",
+      "parents": [
+        "3a4443f95bf880537f9420d93ae471f14b487c7f"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 14,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -3787,7 +3787,7 @@   TSynTempBuffer = record\n     tmp: TBuffer4K;\r\n     /// initialize a temporary copy of the content supplied as RawByteString\r\n     // - will also allocate and copy the ending #0 (even for binary)\r\n-    procedure Init(const Source: RawByteString); overload;\r\n+    function Init(const Source: RawByteString): PUtf8Char; overload;\r\n     /// initialize a temporary copy of the supplied text buffer, ending with #0\r\n     function Init(Source: PUtf8Char): PUtf8Char; overload;\r\n     /// initialize a temporary copy of the supplied text buffer\r\n@@ -12803,9 +12803,10 @@ function TSynTempBuffer.InitOnStack: pointer;\n   result := buf;\r\n end;\r\n \r\n-procedure TSynTempBuffer.Init(const Source: RawByteString);\r\n+function TSynTempBuffer.Init(const Source: RawByteString): PUtf8Char;\r\n begin\r\n   Init(pointer(Source), length(Source));\r\n+  result := buf;\r\n end;\r\n \r\n function TSynTempBuffer.Init(Source: PUtf8Char): PUtf8Char;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.search.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 2,
+          "patch": "@@ -187,8 +187,10 @@   TSynNameValue = record\n     // - will first call Init() to initialize the internal array\r\n     // - then parse the incoming JSON object, storing all its field values\r\n     // as RawUtf8, and returning TRUE if the supplied content is correct\r\n+    function InitFromJson(const Json: RawUtf8; aCaseSensitive: boolean = false): boolean;\r\n+    /// reset content, then add all fields from an JSON object\r\n     // - warning: the supplied JSON buffer will be decoded and modified in-place\r\n-    function InitFromJson(Json: PUtf8Char; aCaseSensitive: boolean = false): boolean;\r\n+    function InitFromJsonBuffer(Json: PUtf8Char; aCaseSensitive: boolean): boolean;\r\n     /// reset content, then add all name, value pairs\r\n     // - will first call Init(false) to initialize the internal array\r\n     procedure InitFromNamesValues(const Names, Values: array of RawUtf8);\r\n@@ -2353,7 +2355,7 @@ procedure TSynNameValue.InitFromNamesValues(const Names, Values: array of RawUtf\n     Add(Names[i], Values[i]);\r\n end;\r\n \r\n-function TSynNameValue.InitFromJson(Json: PUtf8Char; aCaseSensitive: boolean): boolean;\r\n+function TSynNameValue.InitFromJsonBuffer(Json: PUtf8Char; aCaseSensitive: boolean): boolean;\r\n var\r\n   N: PUtf8Char;\r\n   nam, val: RawUtf8;\r\n@@ -2390,6 +2392,14 @@ function TSynNameValue.InitFromJson(Json: PUtf8Char; aCaseSensitive: boolean): b\n   result := true;\r\n end;\r\n \r\n+function TSynNameValue.InitFromJson(const Json: RawUtf8; aCaseSensitive: boolean): boolean;\r\n+var\r\n+  tmp: TSynTempBuffer; // local copy for in-place process\r\n+begin\r\n+  result := InitFromJsonBuffer(tmp.Init(json), aCaseSensitive);\r\n+  tmp.Done;\r\n+end;\r\n+\r\n function TSynNameValue.Find(const aName: RawUtf8): PtrInt;\r\n begin\r\n   result := DynArray.FindHashed(aName);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17647\n+17651",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17647'\r\n+'2.4.17651'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -3077,8 +3077,7 @@ function MetricsFromJson(const json: RawUtf8; var m: TDhcpMetrics): boolean;\n   result := false;\r\n   if json = '' then\r\n     exit;\r\n-  tmp.Init(json);\r\n-  result := JsonObjectToRttiArray(tmp.buf,\r\n+  result := JsonObjectToRttiArray(tmp.Init(json),\r\n     @m, @METRIC_TXT, length(m), TypeInfo(QWord)) <> nil;\r\n   tmp.Done;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 3,
+          "patch": "@@ -11986,7 +11986,7 @@ procedure TTestCoreBase._TSynNameValue;\n   checkEqual(nv.AsCsv('=', ';'), 'a=1;b=be;');\r\n   checkEqual(nv.AsJson, '{\"a\":\"1\",\"b\":\"be\"}');\r\n   tmp.Init('{a:10,b:\"bee\"}');\r\n-  check(nv.InitFromJson(tmp.buf));\r\n+  check(nv.InitFromJsonBuffer(tmp.buf, false));\r\n   checkEqual(nv.Count, 2);\r\n   checkEqual(nv.Str['a'], '10');\r\n   checkEqual(nv.Str['b'], 'bee');\r\n@@ -12005,9 +12005,13 @@ procedure TTestCoreBase._TSynNameValue;\n   checkEqual(nv.DeleteByValue('10'), 0);\r\n   checkEqual(nv.Count, 0);\r\n   checkEqual(nv.AsCsv('=', ';'), '');\r\n-  tmp.Init('{\"a\":20,b:\"bi\"]');\r\n-  check(not nv.InitFromJson(tmp.buf));\r\n+  check(not nv.InitFromJson('{\"a\":20,b:\"bi\"]'));\r\n   checkEqual(nv.Count, 0);\r\n+  checkEqual(nv.AsCsv('=', ';'), '');\r\n+  checkEqual(nv.AsJson, '{}');\r\n+  check(nv.InitFromJson('{a:10,b:\"bee\"}', false));\r\n+  checkEqual(nv.Count, 2);\r\n+  checkEqual(nv.AsCsv('=', ';'), 'a=10;b=bee;');\r\n end;\r\n \r\n procedure TTestCoreBase.TSynUniqueIdentifierSlow(Sender: TObject);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -11879,9 +11879,9 @@ procedure TTestCoreCompression._SynLZ;\n   TestPartial('0000080000004142435167', '123456789', 'ABCABC123456789',\r\n    15);  // 8-byte match fast path\r\n   // literal runs across a 32-bit control-word boundary\r\n-  TestPartial('000000000000',\r\n-    RawUtf8OfChar('A', 32) + HumanHexToBin('00000000') + 'Z',\r\n-    RawUtf8OfChar('A', 32) + 'Z', 64);\r\n+  TestPartial('000000000000' +\r\n+    '4141414141414141414141414141414141414141414141414141414141414141' +\r\n+    '00000000', 'Z', Join([RawUtf8OfChar('A', 32), 'Z']), 64);\r\n   TestPartial('000008000000414243506702', '', '', 0); // no writes\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base",
+        "mormot.core.search",
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cfbbf36e4eec12f42bc3193244518e1af3db27a9",
+      "short_sha": "cfbbf36e",
+      "subject": "docs: listed the DuckDB units in FOLDER-DEPENDENCIES",
+      "body": "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-15T15:04:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cfbbf36e4eec12f42bc3193244518e1af3db27a9",
+      "parents": [
+        "a5f9533aeb32a63b231c9498308ef5307054d0c6"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/FOLDER-DEPENDENCIES.md",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -204,12 +204,14 @@ mORMot2 follows a **strict layered architecture** with 14 source folders organiz\n     - `mormot.db.raw.sqlite3` - SQLite3 API\n     - `mormot.db.raw.sqlite3.static` - Static SQLite3 library\n     - `mormot.db.raw.postgres` - PostgreSQL API\n+    - `mormot.db.raw.duckdb` - DuckDB C API (dynamic duckdb.dll/libduckdb.so)\n     - `mormot.db.raw.oracle` - Oracle OCI\n     - `mormot.db.raw.odbc` - ODBC API\n     - `mormot.db.raw.oledb` - OLE DB API\n   - **SQL Database Connectors:**\n     - `mormot.db.sql.sqlite3` - SQLite3 SQL connector\n     - `mormot.db.sql.postgres` - PostgreSQL SQL connector\n+    - `mormot.db.sql.duckdb` - DuckDB SQL connector (embedded analytics engine)\n     - `mormot.db.sql.oracle` - Oracle SQL connector\n     - `mormot.db.sql.odbc` - ODBC SQL connector\n     - `mormot.db.sql.oledb` - OLE DB SQL connector",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "docs",
+        "severity": "low"
+      },
+      "areas": [
+        "Docs",
+        "Other"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a5f9533aeb32a63b231c9498308ef5307054d0c6",
+      "short_sha": "a5f9533a",
+      "subject": "db: added DuckDB support via mormot.db.raw.duckdb and mormot.db.sql.duckdb",
+      "body": "First step of the DuckDB integration proposed in #423:\n- mormot.db.raw.duckdb: dynamic binding of the DuckDB C API (duckdb.dll /\n  libduckdb.so), loaded on demand so no static linking is needed\n- mormot.db.sql.duckdb: TSqlDBDuckDBConnectionProperties as a regular\n  TSqlDBConnectionProperties provider, with native prepared statements,\n  BindArray, transactions, DECIMAL/HUGEINT/nested types and JSON export,\n  plus TSqlDBDuckDBAppender for fast bulk loading\n- test.db.duckdb: regression tests added to mormot2tests, skipped\n  automatically when the DuckDB library is not available\n\nA 32-bit capable proxy wrapper (mormot.db.proxy based) will follow in a\nseparate pull request; it relies on the mormot.db.proxy fixes in the\ntobfel fork branches fix/dbproxy-statement-reset and\nfix/dbproxy-32-64bit-metadata.\n\nRefs #423\nForum: https://synopse.info/forum/viewtopic.php?pid=44890\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-15T15:04:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a5f9533aeb32a63b231c9498308ef5307054d0c6",
+      "parents": [
+        "80d4fded50b4e80870c3df2589c10867101b02c5"
+      ],
+      "stats": {
+        "additions": 2854,
+        "deletions": 1,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "added",
+          "additions": 839,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,839 @@\n+/// DuckDB native C API binding for mORMot 2\n+// - dynamic loading of duckdb.dll / libduckdb.so / libduckdb.dylib\n+// - Delphi 7 .. Delphi 13 and FPC 3.2+ compatible syntax\n+// - note: official DuckDB binaries are 64-bit only - for Delphi 7 / Win32\n+// use mormot.db.sql.duckdbhttp.pas (HTTP access to a DuckDB CLI process)\n+unit mormot.db.raw.duckdb;\n+\n+{\n+  *****************************************************************************\n+\n+   Native DuckDB C API (v1.1+) - tested with DuckDB v1.4.1\n+    - DuckDB C API Types and Constants\n+    - TDuckDBLib Dynamic Library Loader\n+    - Value Conversion Helpers (hugeint, decimal, date/time, string_t)\n+\n+  *****************************************************************************\n+}\n+\n+interface\n+\n+{$I mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.datetime,\n+  mormot.db.core,\n+  mormot.db.sql;\n+\n+\n+{ ************ DuckDB C API Types and Constants }\n+\n+type\n+  /// exception raised by the DuckDB providers\n+  ESqlDBDuckDB = class(ESqlDBException);\n+\n+  /// DuckDB idx_t - always 64-bit, even on 32-bit platforms\n+  TDuckIdx = Int64;\n+\n+  /// duckdb_state result code\n+  TDuckDBState = integer;\n+\n+  /// duckdb_type enumeration (DUCKDB_TYPE_* constants)\n+  TDuckDBType = integer;\n+\n+  /// opaque handles - pointers to a struct { void* internal_ptr }\n+  TDuckDBDatabase = type pointer;\n+  TDuckDBConnection = type pointer;\n+  TDuckDBConfig = type pointer;\n+  TDuckDBPreparedStatement = type pointer;\n+  TDuckDBLogicalType = type pointer;\n+  TDuckDBDataChunk = type pointer;\n+  TDuckDBVector = type pointer;\n+  TDuckDBAppender = type pointer;\n+\n+  /// duckdb_result C struct - should be kept as-is, 48 bytes on 64-bit\n+  // - duckdb_fetch_chunk() expects it BY VALUE: the compiler will follow the\n+  // platform ABI (pointer to a copy on Win64, stack copy on SysV x86_64)\n+  TDuckDBResult = record\n+    deprecated_column_count: TDuckIdx;\n+    deprecated_row_count: TDuckIdx;\n+    deprecated_rows_changed: TDuckIdx;\n+    deprecated_columns: pointer;\n+    deprecated_error_message: PAnsiChar;\n+    internal_data: pointer;\n+  end;\n+  PDuckDBResult = ^TDuckDBResult;\n+\n+  /// duckdb_string_t internal VARCHAR/BLOB representation (16 bytes)\n+  // - inlined if Length <= 12, otherwise Prefix[] + Ptr\n+  TDuckDBStringT = packed record\n+    Length: cardinal;\n+    case integer of\n+      0: (Prefix: array[0..3] of AnsiChar;\n+          Ptr: PAnsiChar);\n+      1: (Inlined: array[0..11] of AnsiChar);\n+  end;\n+  PDuckDBStringT = ^TDuckDBStringT;\n+\n+  /// duckdb_hugeint / duckdb_uhugeint 128-bit integers\n+  TDuckDBHugeInt = packed record\n+    Lower: Int64; // actually uint64_t\n+    Upper: Int64; // int64_t for hugeint, uint64_t for uhugeint\n+  end;\n+  PDuckDBHugeInt = ^TDuckDBHugeInt;\n+\n+  /// duckdb_interval\n+  TDuckDBInterval = packed record\n+    Months: integer;\n+    Days: integer;\n+    Micros: Int64;\n+  end;\n+  PDuckDBInterval = ^TDuckDBInterval;\n+\n+  /// duckdb_list_entry\n+  TDuckDBListEntry = packed record\n+    Offset: Int64;\n+    Length: Int64;\n+  end;\n+  PDuckDBListEntry = ^TDuckDBListEntry;\n+\n+  /// typed access to DuckDB vector data - no pointer math needed (Delphi 7)\n+  TDuckI8Array = array[0..MaxInt div 8] of ShortInt;\n+  PDuckI8Array = ^TDuckI8Array;\n+  TDuckI16Array = array[0..MaxInt div 8] of SmallInt;\n+  PDuckI16Array = ^TDuckI16Array;\n+  TDuckU16Array = array[0..MaxInt div 8] of word;\n+  PDuckU16Array = ^TDuckU16Array;\n+  TDuckI32Array = array[0..MaxInt div 8] of integer;\n+  PDuckI32Array = ^TDuckI32Array;\n+  TDuckU32Array = array[0..MaxInt div 8] of cardinal;\n+  PDuckU32Array = ^TDuckU32Array;\n+  TDuckI64Array = array[0..MaxInt div 16] of Int64;\n+  PDuckI64Array = ^TDuckI64Array;\n+  TDuckSingleArray = array[0..MaxInt div 8] of single;\n+  PDuckSingleArray = ^TDuckSingleArray;\n+  TDuckDoubleArray = array[0..MaxInt div 16] of double;\n+  PDuckDoubleArray = ^TDuckDoubleArray;\n+  TDuckU8Array = array[0..\n... [truncated, 23636 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "added",
+          "additions": 1592,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,1592 @@\n+/// Database Framework Direct DuckDB Connection via the native C API\n+// - in-process access using duckdb.dll / libduckdb.so (x64)\n+// - Delphi 7 .. Delphi 13 and FPC 3.2+ compatible syntax\n+unit mormot.db.sql.duckdb;\n+\n+{\n+  *****************************************************************************\n+\n+   Direct DuckDB Client Access using mormot.db.raw.duckdb C API Wrapper\n+    - TSqlDBDuckDBConnectionProperties: one shared duckdb_database instance\n+    - TSqlDBDuckDBConnection: one duckdb_connection per (thread) connection\n+    - TSqlDBDuckDBStatement: prepared statements and chunk-based row access\n+\n+  *****************************************************************************\n+\n+  Notes:\n+  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+    TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n+  - one database file can only be opened by ONE process in read/write mode:\n+    the duckdb_database handle is owned by the connection properties instance,\n+    and every TSqlDBConnection runs duckdb_connect() on it\n+  - result sets are materialized by DuckDB, then read chunk by chunk\n+  - complex types (LIST, ARRAY, STRUCT, MAP, UNION) are returned as JSON text\n+}\n+\n+interface\n+\n+{$I mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  classes,\n+  variants,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.buffers,\n+  mormot.core.datetime,\n+  mormot.core.data,\n+  mormot.core.json,\n+  mormot.core.rtti,\n+  mormot.core.log,\n+  mormot.db.core,\n+  mormot.db.sql,\n+  mormot.db.raw.duckdb;\n+\n+\n+{ ************ TSqlDBDuckDBConnection* and TSqlDBDuckDBStatement Classes }\n+\n+type\n+  /// connection properties to an in-process DuckDB database\n+  // - aServerName is the database file name, or '' / ':memory:' for an\n+  // in-memory database shared by all connections of this instance\n+  // - aDatabaseName/aUserID/aPassWord are ignored\n+  TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n+  protected\n+    fDatabase: TDuckDBDatabase;\n+    fDatabaseLock: TLightLock;\n+    fConfig: RawUtf8;\n+    fReadOnly: boolean;\n+    procedure GetForeignKeys; override;\n+  public\n+    /// initialize the properties - the database is opened on first connection\n+    constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n+      override;\n+    /// close the shared duckdb_database instance after all connections\n+    destructor Destroy; override;\n+    /// create a new connection - caller should free it\n+    function NewConnection: TSqlDBConnection; override;\n+    /// return the shared duckdb_database handle, opening it if needed\n+    function Database: TDuckDBDatabase;\n+    /// close the shared database instance\n+    // - all connections should have been released before\n+    procedure CloseDatabase;\n+    /// the DuckDB library version, e.g. 'v1.4.1'\n+    function LibraryVersion: RawUtf8;\n+  published\n+    /// DuckDB configuration options, applied when the database is opened\n+    // - format is 'name1=value1;name2=value2', e.g. 'threads=4;memory_limit=2GB'\n+    // - see https://duckdb.org/docs/stable/configuration/overview\n+    property Config: RawUtf8\n+      read fConfig write fConfig;\n+    /// open the database file in READ_ONLY access mode\n+    // - several processes may open the same file in read-only mode\n+    property ReadOnly: boolean\n+      read fReadOnly write fReadOnly;\n+  end;\n+\n+  /// one connection to the shared DuckDB database instance\n+  TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n+  protected\n+    fConn: TDuckDBConnection;\n+  public\n+    /// connect to the database, i.e. run duckdb_connect()\n+    procedure Connect; override;\n+    /// release the duckdb_connection\n+    procedure Disconnect; override;\n+    /// return TRUE if Connect has been already successfully called\n+    function IsConnected: boolean; override;\n+    /// initialize a new SQL query statement for this connection\n+    func\n... [truncated, 45781 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/mormot2tests.dpr",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -79,6 +79,7 @@ uses\n   test.orm.core            in '.\\test.orm.core.pas',\r\n   test.orm.sqlite3         in '.\\test.orm.sqlite3.pas',\r\n   test.orm.extdb           in '.\\test.orm.extdb.pas',\r\n+  test.db.duckdb           in '.\\test.db.duckdb.pas',\r\n   test.orm.threads         in '.\\test.orm.threads.pas',\r\n   test.orm.network         in '.\\test.orm.network.pas',\r\n   test.soa.core            in '.\\test.soa.core.pas',\r\n@@ -180,6 +181,7 @@ begin\n     TTestSqliteFileMemoryMap,\r\n     TTestSqliteMemory,\r\n     TTestExternalDatabase,\r\n+    TTestDuckDB,\r\n     TTestClientServerAccess,\r\n     TTestMultiThreadProcess\r\n   ]);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/mormot2tests.lpi",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -838,7 +838,7 @@\n         <PackageName Value=\"LCL\"/>\n       </Item3>\n     </RequiredPackages>\n-    <Units Count=\"99\">\n+    <Units Count=\"100\">\n       <Unit0>\n         <Filename Value=\"mormot2tests.dpr\"/>\n         <IsPartOfProject Value=\"True\"/>\n@@ -1235,6 +1235,10 @@\n         <Filename Value=\"..\\src\\script\\mormot.script.quickjs.pas\"/>\n         <IsPartOfProject Value=\"True\"/>\n       </Unit98>\n+      <Unit99>\n+        <Filename Value=\"test.db.duckdb.pas\"/>\n+        <IsPartOfProject Value=\"True\"/>\n+      </Unit99>\n     </Units>\n   </ProjectOptions>\n   <CompilerOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "added",
+          "additions": 416,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,416 @@\n+/// regression tests for the DuckDB SynDB provider\n+// - this unit is a part of the Open Source Synopse mORMot framework 2,\n+// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\n+// - tests are skipped if the DuckDB library (duckdb.dll/libduckdb.so) is not\n+// available on this system\n+unit test.db.duckdb;\n+\n+interface\n+\n+{$I ..\\src\\mormot.defines.inc}\n+\n+uses\n+  sysutils,\n+  classes,\n+  variants,\n+  mormot.core.base,\n+  mormot.core.os,\n+  mormot.core.unicode,\n+  mormot.core.text,\n+  mormot.core.datetime,\n+  mormot.core.json,\n+  mormot.core.variants,\n+  mormot.core.test,\n+  mormot.db.core,\n+  mormot.db.sql,\n+  mormot.db.raw.duckdb,\n+  mormot.db.sql.duckdb;\n+\n+type\n+  /// regression tests for mormot.db.sql.duckdb.pas\n+  TTestDuckDB = class(TSynTestCase)\n+  protected\n+    fProps: TSqlDBDuckDBConnectionProperties;\n+    procedure Setup; override;\n+    procedure CleanUp; override;\n+  published\n+    procedure BasicTypes;\n+    procedure ParamsAndCrud;\n+    procedure Transactions;\n+    procedure NestedTypes;\n+    procedure Json;\n+    procedure Errors;\n+    procedure Metadata;\n+    procedure Bulk;\n+    procedure BindArrays;\n+    procedure Appender;\n+  end;\n+\n+\n+implementation\n+\n+{ TTestDuckDB }\n+\n+procedure TTestDuckDB.Setup;\n+begin\n+  if DuckDBLibraryAvailable then\n+    fProps := TSqlDBDuckDBConnectionProperties.Create(':memory:', '', '', '')\n+  else\n+    NotifyProgress(['DuckDB library not available - tests skipped']);\n+end;\n+\n+procedure TTestDuckDB.CleanUp;\n+begin\n+  FreeAndNil(fProps);\n+end;\n+\n+procedure TTestDuckDB.BasicTypes;\n+var\n+  rows: ISqlDBRows;\n+  dt: TDateTime;\n+begin\n+  if fProps = nil then\n+    exit;\n+  rows := fProps.Execute(\n+    'select 42::INTEGER as i, 9007199254740993::BIGINT as b, ' +\n+    'true as t, 1.5::DOUBLE as d, 1234.5678::DECIMAL(18,4) as c, ' +\n+    '123456789012.3456::DECIMAL(38,4) as hc, ' +\n+    'decode(from_hex(''68c3a46c6c6f2077c3b6726c642c2061206c6f6e67657220737472696e67203e203132206368617273'')) as s, ''short'' as ss, ' +\n+    'DATE ''2024-02-29'' as dd, TIMESTAMP ''2024-02-29 13:14:15.678'' as ts, ' +\n+    'TIME ''23:59:58'' as tt, NULL::INTEGER as n, ''\\xAA\\x00\\x5C\\xFF''::BLOB as bl, ' +\n+    'sum(x)::HUGEINT as h, ''8f14e45f-ceea-467a-a5f0-6e0bd3f1d2a1''::UUID as u ' +\n+    'from (values (1),(2)) v(x)', []);\n+  Check(rows.Step, 'step');\n+  CheckEqual(rows.ColumnInt(0), 42, 'integer');\n+  CheckEqual(rows.ColumnInt(1), 9007199254740993, 'bigint');\n+  CheckEqual(rows.ColumnInt(2), 1, 'boolean');\n+  Check(rows.ColumnDouble(3) = 1.5, 'double');\n+  Check(rows.ColumnCurrency(4) = 1234.5678, 'decimal(18,4) currency');\n+  Check(rows.ColumnType(4) = ftCurrency, 'decimal(18,4) type');\n+  Check(rows.ColumnCurrency(5) = 123456789012.3456, 'd\n... [truncated, 11576 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
