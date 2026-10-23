@@ -1,0 +1,194 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-22",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-23T03:41:01Z",
+  "range": {
+    "since": "2026-10-21T22:00:00Z",
+    "until": "2026-10-22T22:00:00Z",
+    "base_sha": "587ce16741a610dc1a84c86d2687063b5af5da6b",
+    "head_sha": "7d6480007c2bb756e51a67342f947ac6c977eeb0"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 3,
+    "additions": 275,
+    "deletions": 47
+  },
+  "commits": [
+    {
+      "sha": "7d6480007c2bb756e51a67342f947ac6c977eeb0",
+      "short_sha": "7d648000",
+      "subject": "Merge pull request #676 from dkounal/sharedtx-commitfail",
+      "body": "db: release the connection transaction when SharedTransaction() Commit fails",
+      "author": "ab",
+      "date": "2026-10-22T18:06:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7d6480007c2bb756e51a67342f947ac6c977eeb0",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b",
+        "1b585fcd7b28f348966b553153b50a75d89c8b11"
+      ],
+      "stats": {
+        "additions": 123,
+        "deletions": 9,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -1322,6 +1322,8 @@   TSqlDBConnectionProperties = class\n     fOnTableAddColumn: TOnTableAddColumn;\r\n     fOnTableCreateMultiIndex: TOnTableCreateMultiIndex;\r\n     procedure UnRegisterSharedTransaction(SessionID: cardinal);\r\n+    /// SharedTransaction() helper after a failed Commit of aConnection\r\n+    procedure ReleaseFailedCommit(aConnection: TSqlDBConnection);\r\n     procedure SetFlag(const flag: TSqlDBConnectionPropertiesFlag; const value: boolean);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetFlag(const flag: TSqlDBConnectionPropertiesFlag): boolean;\r\n@@ -3757,10 +3759,13 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n   i, n: PtrInt;\r\n   found, added: boolean;\r\n   t: ^TSqlDBConnectionTransaction;\r\n+  conn: TSqlDBConnection;\r\n begin\r\n   added := false;\r\n+  conn := nil;\r\n   try\r\n     result := ThreadSafeConnection;\r\n+    conn := result;\r\n     // thread-safe found transactions support\r\n     fSharedTransactionsSafe.Lock;\r\n     try\r\n@@ -3847,13 +3852,37 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n         // the \"found\" branch and just inc(RefCount), letting the caller write\r\n         // OUTSIDE any transaction, silently\r\n         UnRegisterSharedTransaction(SessionID);\r\n+      if (action in [transCommitWithException, transCommitWithoutException]) and\r\n+         (conn <> nil) then\r\n+        // the entry was unregistered above, BEFORE the actual Commit: if it\r\n+        // failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\r\n+        // the Zeos and SQLite3 drivers restore their TransactionCount, and the\r\n+        // database transaction may still be open - nobody would ever close it,\r\n+        // and later statements of this connection would run within it\r\n+        ReleaseFailedCommit(conn);\r\n       result := nil; // result.StartTransaction/Commit/Rollback failed\r\n       if action = transCommitWithException then\r\n         raise;\r\n     end;\r\n   end;\r\n end;\r\n \r\n+procedure TSqlDBConnectionProperties.ReleaseFailedCommit(\r\n+  aConnection: TSqlDBConnection);\r\n+begin\r\n+  if aConnection.fTransactionCount > 1 then\r\n+    // another (nested) transaction is counted on this connection: only release\r\n+    // our own level, and leave the database transaction to its owner\r\n+    dec(aConnection.fTransactionCount)\r\n+  else if aConnection.fTransactionCount = 1 then\r\n+    // only our transaction: roll it back in the database\r\n+    try\r\n+      aConnection.Rollback;\r\n+    except\r\n+      aConnection.fTransactionCount := 0; // flush anyway\r\n+    end;\r\n+end;\r\n+\r\n procedure TSqlDBConnectionProperties.UnRegisterSharedTransaction(\r\n   SessionID: cardinal);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.sqlite3.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -461,11 +461,16 @@ procedure TSqlDBSQLite3Connection.SetSynchronous(Value: TSqlSynchronousMode);\n procedure TSqlDBSQLite3Connection.StartTransaction;\r\n begin\r\n   inherited;\r\n-  fDB.Lock;\r\n   try\r\n-    fDB.TransactionBegin;\r\n-  finally\r\n-    fDB.UnLock;\r\n+    fDB.Lock;\r\n+    try\r\n+      fDB.TransactionBegin;\r\n+    finally\r\n+      fDB.UnLock;\r\n+    end;\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -918,11 +918,16 @@ procedure TSqlDBZeosConnection.StartTransaction;\n begin\r\n   SynDBLog.EnterLocal(log, self, 'StartTransaction');\r\n   inherited StartTransaction;\r\n-  {$ifdef ZEOS73UP}\r\n-  fDatabase.StartTransaction; //returns the txn level\r\n-  {$else}\r\n-  fDatabase.SetAutoCommit(false);\r\n-  {$endif ZEOS73UP}\r\n+  try\r\n+    {$ifdef ZEOS73UP}\r\n+    fDatabase.StartTransaction; //returns the txn level\r\n+    {$else}\r\n+    fDatabase.SetAutoCommit(false);\r\n+    {$endif ZEOS73UP}\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n+  end;\r\n end;\r\n \r\n procedure TSqlDBZeosConnection.Commit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 75,
+          "deletions": 0,
+          "patch": "@@ -78,6 +78,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// SharedTransaction() when the actual Commit fails\r\n+    procedure SharedTransactionCommitFailure;\r\n     /// initialize needed RESTful client (and server) instances\r\n     // - i.e. a RESTful direct access to an external DB\r\n     procedure ExternalRecords;\r\n@@ -1151,6 +1153,79 @@ procedure TTestExternalDatabase.NewStatementFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.SharedTransactionCommitFailure;\r\n+var\r\n+  props: TSqlDBSQLite3ConnectionProperties;\r\n+  conn: TSqlDBConnection;\r\n+  raised: boolean;\r\n+\r\n+  function Count(const table: RawUtf8): integer;\r\n+  begin\r\n+    with props.Execute(FormatUtf8('select count(*) from %', [table]), []) do\r\n+    begin\r\n+      Check(Step, table);\r\n+      result := ColumnInt(0);\r\n+    end;\r\n+  end;\r\n+\r\n+begin\r\n+  // a failed COMMIT (here a SQLite3 deferred foreign key) left the connection\r\n+  // with TransactionCount=1 and the database transaction open, whereas the\r\n+  // shared transaction entry was already removed: nobody would ever close it\r\n+  DeleteFile('sharedtx.db3');\r\n+  props := TSqlDBSQLite3ConnectionProperties.Create('sharedtx.db3', '', '', '');\r\n+  try\r\n+    props.ExecuteNoResult('PRAGMA foreign_keys=ON', []);\r\n+    props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n+    props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n+      'DEFERRABLE INITIALLY DEFERRED)', []);\r\n+    // the COMMIT failures below are expected: no exception logging\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n+    try\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin');\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+      CheckEqual(Count('c'), 0, 'row rolled back');\r\n+      // another transaction counted on the same connection is kept as such\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin 2');\r\n+      conn.StartTransaction;\r\n+      props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+      CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+      Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+      conn.Rollback;\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+      CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+      // with exception: same cleaning, and the error is propagated\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      raised := false;\r\n+      try\r\n+        props.SharedTransaction(1, transCommitWithException);\r\n+      except\r\n+        raised := true;\r\n+      end;\r\n+      Check(raised, 'commit 3 should raise');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    finally\r\n+      TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n+    end;\r\n+    // and a new shared transaction works as usual\r\n+    Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n+    Check(props.SharedTransaction(1, transRollback) <> nil, 'rollback');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 4');\r\n+  finally\r\n+    props.Free;\r\n+    DeleteFile('sharedtx.db3');\r\n+  end;\r\n+end;\r\n+\r\n procedure TTestExternalDatabase.NextIDSelectMaxFailure;\r\n var\r\n   model: TOrmModel;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.sqlite3",
+        "mormot.db.sql.zeos"
+      ],
+      "pr": 676,
+      "is_merge": true
+    },
+    {
+      "sha": "1b585fcd7b28f348966b553153b50a75d89c8b11",
+      "short_sha": "1b585fcd",
+      "subject": "test: no exception logging for the expected COMMIT failures",
+      "body": "as requested in the review of the SharedTransactionCommitFailure test\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-22T17:28:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1b585fcd7b28f348966b553153b50a75d89c8b11",
+      "parents": [
+        "ff3b607304163168890369dc5e08cd815fecf9a7"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 29,
+          "patch": "@@ -1179,37 +1179,43 @@ procedure TTestExternalDatabase.SharedTransactionCommitFailure;\n     props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n     props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n       'DEFERRABLE INITIALLY DEFERRED)', []);\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    Check(conn <> nil, 'begin');\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter');\r\n-    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n-    CheckEqual(Count('c'), 0, 'row rolled back');\r\n-    // another transaction counted on the same connection is kept as such\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    Check(conn <> nil, 'begin 2');\r\n-    conn.StartTransaction;\r\n-    props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n-    CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n-    Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n-    conn.Rollback;\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n-    CheckEqual(Count('p'), 0, 'owner rolled back');\r\n-    // with exception: same cleaning, and the error is propagated\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    raised := false;\r\n+    // the COMMIT failures below are expected: no exception logging\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n     try\r\n-      props.SharedTransaction(1, transCommitWithException);\r\n-    except\r\n-      raised := true;\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin');\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+      CheckEqual(Count('c'), 0, 'row rolled back');\r\n+      // another transaction counted on the same connection is kept as such\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin 2');\r\n+      conn.StartTransaction;\r\n+      props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+      CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+      Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+      conn.Rollback;\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+      CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+      // with exception: same cleaning, and the error is propagated\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      raised := false;\r\n+      try\r\n+        props.SharedTransaction(1, transCommitWithException);\r\n+      except\r\n+        raised := true;\r\n+      end;\r\n+      Check(raised, 'commit 3 should raise');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    finally\r\n+      TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n     end;\r\n-    Check(raised, 'commit 3 should raise');\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n-    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n     // and a new shared transaction works as usual\r\n     Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n     Check(props\n... [truncated, 58 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff3b607304163168890369dc5e08cd815fecf9a7",
+      "short_sha": "ff3b6073",
+      "subject": "db: release the connection transaction when SharedTransaction() Commit fails",
+      "body": "- SharedTransaction() unregisters its entry BEFORE the actual Commit: if the\n  Commit failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\n  the Zeos and SQLite3 drivers restored their TransactionCount (\"still\n  active\"), and the database transaction could stay open - nobody would ever\n  close it, later statements of this connection would run within it, and the\n  final Disconnect raised e.g. \"You cannot use ROLLBACK in AUTOCOMMIT mode\"\n- now ReleaseFailedCommit() rolls back our transaction, or only releases our\n  level when another transaction is still counted on the same connection\n- Zeos and SQLite3 StartTransaction no longer leave TransactionCount\n  incremented when the actual database call fails\n- new TTestExternalDatabase.SharedTransactionCommitFailure test (fails 8/19\n  without the fix)\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-22T10:06:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff3b607304163168890369dc5e08cd815fecf9a7",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b"
+      ],
+      "stats": {
+        "additions": 117,
+        "deletions": 9,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -1322,6 +1322,8 @@   TSqlDBConnectionProperties = class\n     fOnTableAddColumn: TOnTableAddColumn;\r\n     fOnTableCreateMultiIndex: TOnTableCreateMultiIndex;\r\n     procedure UnRegisterSharedTransaction(SessionID: cardinal);\r\n+    /// SharedTransaction() helper after a failed Commit of aConnection\r\n+    procedure ReleaseFailedCommit(aConnection: TSqlDBConnection);\r\n     procedure SetFlag(const flag: TSqlDBConnectionPropertiesFlag; const value: boolean);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetFlag(const flag: TSqlDBConnectionPropertiesFlag): boolean;\r\n@@ -3757,10 +3759,13 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n   i, n: PtrInt;\r\n   found, added: boolean;\r\n   t: ^TSqlDBConnectionTransaction;\r\n+  conn: TSqlDBConnection;\r\n begin\r\n   added := false;\r\n+  conn := nil;\r\n   try\r\n     result := ThreadSafeConnection;\r\n+    conn := result;\r\n     // thread-safe found transactions support\r\n     fSharedTransactionsSafe.Lock;\r\n     try\r\n@@ -3847,13 +3852,37 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n         // the \"found\" branch and just inc(RefCount), letting the caller write\r\n         // OUTSIDE any transaction, silently\r\n         UnRegisterSharedTransaction(SessionID);\r\n+      if (action in [transCommitWithException, transCommitWithoutException]) and\r\n+         (conn <> nil) then\r\n+        // the entry was unregistered above, BEFORE the actual Commit: if it\r\n+        // failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\r\n+        // the Zeos and SQLite3 drivers restore their TransactionCount, and the\r\n+        // database transaction may still be open - nobody would ever close it,\r\n+        // and later statements of this connection would run within it\r\n+        ReleaseFailedCommit(conn);\r\n       result := nil; // result.StartTransaction/Commit/Rollback failed\r\n       if action = transCommitWithException then\r\n         raise;\r\n     end;\r\n   end;\r\n end;\r\n \r\n+procedure TSqlDBConnectionProperties.ReleaseFailedCommit(\r\n+  aConnection: TSqlDBConnection);\r\n+begin\r\n+  if aConnection.fTransactionCount > 1 then\r\n+    // another (nested) transaction is counted on this connection: only release\r\n+    // our own level, and leave the database transaction to its owner\r\n+    dec(aConnection.fTransactionCount)\r\n+  else if aConnection.fTransactionCount = 1 then\r\n+    // only our transaction: roll it back in the database\r\n+    try\r\n+      aConnection.Rollback;\r\n+    except\r\n+      aConnection.fTransactionCount := 0; // flush anyway\r\n+    end;\r\n+end;\r\n+\r\n procedure TSqlDBConnectionProperties.UnRegisterSharedTransaction(\r\n   SessionID: cardinal);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.sqlite3.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -461,11 +461,16 @@ procedure TSqlDBSQLite3Connection.SetSynchronous(Value: TSqlSynchronousMode);\n procedure TSqlDBSQLite3Connection.StartTransaction;\r\n begin\r\n   inherited;\r\n-  fDB.Lock;\r\n   try\r\n-    fDB.TransactionBegin;\r\n-  finally\r\n-    fDB.UnLock;\r\n+    fDB.Lock;\r\n+    try\r\n+      fDB.TransactionBegin;\r\n+    finally\r\n+      fDB.UnLock;\r\n+    end;\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -918,11 +918,16 @@ procedure TSqlDBZeosConnection.StartTransaction;\n begin\r\n   SynDBLog.EnterLocal(log, self, 'StartTransaction');\r\n   inherited StartTransaction;\r\n-  {$ifdef ZEOS73UP}\r\n-  fDatabase.StartTransaction; //returns the txn level\r\n-  {$else}\r\n-  fDatabase.SetAutoCommit(false);\r\n-  {$endif ZEOS73UP}\r\n+  try\r\n+    {$ifdef ZEOS73UP}\r\n+    fDatabase.StartTransaction; //returns the txn level\r\n+    {$else}\r\n+    fDatabase.SetAutoCommit(false);\r\n+    {$endif ZEOS73UP}\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n+  end;\r\n end;\r\n \r\n procedure TSqlDBZeosConnection.Commit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 69,
+          "deletions": 0,
+          "patch": "@@ -78,6 +78,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// SharedTransaction() when the actual Commit fails\r\n+    procedure SharedTransactionCommitFailure;\r\n     /// initialize needed RESTful client (and server) instances\r\n     // - i.e. a RESTful direct access to an external DB\r\n     procedure ExternalRecords;\r\n@@ -1151,6 +1153,73 @@ procedure TTestExternalDatabase.NewStatementFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.SharedTransactionCommitFailure;\r\n+var\r\n+  props: TSqlDBSQLite3ConnectionProperties;\r\n+  conn: TSqlDBConnection;\r\n+  raised: boolean;\r\n+\r\n+  function Count(const table: RawUtf8): integer;\r\n+  begin\r\n+    with props.Execute(FormatUtf8('select count(*) from %', [table]), []) do\r\n+    begin\r\n+      Check(Step, table);\r\n+      result := ColumnInt(0);\r\n+    end;\r\n+  end;\r\n+\r\n+begin\r\n+  // a failed COMMIT (here a SQLite3 deferred foreign key) left the connection\r\n+  // with TransactionCount=1 and the database transaction open, whereas the\r\n+  // shared transaction entry was already removed: nobody would ever close it\r\n+  DeleteFile('sharedtx.db3');\r\n+  props := TSqlDBSQLite3ConnectionProperties.Create('sharedtx.db3', '', '', '');\r\n+  try\r\n+    props.ExecuteNoResult('PRAGMA foreign_keys=ON', []);\r\n+    props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n+    props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n+      'DEFERRABLE INITIALLY DEFERRED)', []);\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    Check(conn <> nil, 'begin');\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+    CheckEqual(Count('c'), 0, 'row rolled back');\r\n+    // another transaction counted on the same connection is kept as such\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    Check(conn <> nil, 'begin 2');\r\n+    conn.StartTransaction;\r\n+    props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+    CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+    Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+    conn.Rollback;\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+    CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+    // with exception: same cleaning, and the error is propagated\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    raised := false;\r\n+    try\r\n+      props.SharedTransaction(1, transCommitWithException);\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+    Check(raised, 'commit 3 should raise');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    // and a new shared transaction works as usual\r\n+    Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n+    Check(props.SharedTransaction(1, transRollback) <> nil, 'rollback');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 4');\r\n+  finally\r\n+    props.Free;\r\n+    DeleteFile('sharedtx.db3');\r\n+  end;\r\n+end;\r\n+\r\n procedure TTestExternalDatabase.NextIDSelectMaxFailure;\r\n var\r\n   model: TOrmModel;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.sqlite3",
+        "mormot.db.sql.zeos"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
