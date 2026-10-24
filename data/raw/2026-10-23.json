@@ -1,0 +1,313 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-23",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-24T03:39:37Z",
+  "range": {
+    "since": "2026-10-22T22:00:00Z",
+    "until": "2026-10-23T22:00:00Z",
+    "base_sha": "7d6480007c2bb756e51a67342f947ac6c977eeb0",
+    "head_sha": "723a3172734c6c8546fb7f4757383d868b06e019"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 6,
+    "additions": 936,
+    "deletions": 692
+  },
+  "commits": [
+    {
+      "sha": "723a3172734c6c8546fb7f4757383d868b06e019",
+      "short_sha": "723a3172",
+      "subject": "Merge pull request #678 from tobfel/cleanup-duckdb",
+      "body": "db: DuckDB cleanup - no BindArray, Appender OnBatchInsert, cached logical types",
+      "author": "ab",
+      "date": "2026-10-23T15:05:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/723a3172734c6c8546fb7f4757383d868b06e019",
+      "parents": [
+        "7d6480007c2bb756e51a67342f947ac6c977eeb0",
+        "288e3cbfa42a498334e9a7fa28a45dd286665c97"
+      ],
+      "stats": {
+        "additions": 462,
+        "deletions": 340,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 183,
+          "deletions": 0,
+          "patch": "@@ -32,6 +32,12 @@ interface\n \n { ************ DuckDB C API Types and Constants }\n \n+const\n+  /// the TSqlDBDefinition used for DuckDB, since its SQL is PostgreSQL-like\n+  // - please use this constant in the DuckDB code instead of dPostgreSQL, in\n+  // case a specific dialect would be needed in the future\n+  dDuckDB = dPostgreSQL;\n+\n type\n   /// exception raised by the DuckDB providers\n   ESqlDBDuckDB = class(ESqlDBException);\n@@ -390,6 +396,50 @@ procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: integer);\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+type\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n+  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n+\n+  /// a DuckDB logical type, parsed once with all its nested types\n+  // - to avoid calling the DuckDB C API for every row of a result set\n+  // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n+  TDuckDBTypeInfo = record\n+    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n+    TypeId: TDuckDBType;\n+    /// internal storage type of a DECIMAL or an ENUM\n+    Internal: TDuckDBType;\n+    /// number of decimals of a DECIMAL, or fixed size of an ARRAY\n+    Scale: integer;\n+    /// number of nested types in Children[]\n+    ChildCount: integer;\n+    /// the DuckDB logical type handle, owned by this structure\n+    Handle: TDuckDBLogicalType;\n+    /// STRUCT field names, or ENUM values (cached on first use)\n+    Names: TRawUtf8DynArray;\n+    /// nested types of a LIST/ARRAY (item), MAP (key, value),\n+    // STRUCT (fields) or UNION (members)\n+    Children: PDuckDBTypeInfoArray;\n+  end;\n+\n+  /// pointer-based array of TDuckDBTypeInfo nested types\n+  TDuckDBTypeInfoArray = array[0..1023] of TDuckDBTypeInfo;\n+\n+/// parse a DuckDB logical type and all its nested types, once\n+// - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+/// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n+procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n+\n+/// retrieve the text of an ENUM value, caching all the ENUM dictionary\n+function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n+\n+/// convert a DuckDB type into the corresponding mormot.db field type\n+function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n+\n+\n implementation\n \n \n@@ -939,6 +989,139 @@ procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: intege\n end;\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+  procedure InitChildren(n: PtrInt);\n+  begin\n+    Info.ChildCount := n;\n+    if n > 0 then\n+    begin\n+      GetMem(Info.Children, n * SizeOf(TDuckDBTypeInfo));\n+      FillCharFast(Info.Children^, n * SizeOf(TDuckDBTypeInfo), 0);\n+    end;\n+  end;\n+\n+var\n+  i: PtrInt;\n+  p: PUtf8Char;\n+begin\n+  FillCharFast(Info, SizeOf(Info), 0);\n+  Info.Handle := Handle;\n+  Info.TypeId := DuckDB.get_type_id(Handle);\n+  case Info.TypeId of\n+    DUCKDB_TYPE_DECIMAL:\n+      begin\n+        Info.Internal := DuckDB.decimal_internal_type(Handle);\n+        Info.Scale := DuckDB.decimal_scale(Handle);\n+      end;\n+    DUCKDB_TYPE_ENUM:\n+      Info.Internal := DuckDB.enum_internal_type(Handle);\n+    DUCKDB_TYPE_LIST:\n+      begin\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.list_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_ARRAY:\n+      begin\n+        Info.Scale := DuckDB.array_type_array_size(Handle);\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.array_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_MAP:\n+      begin\n+        InitChildren(2);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.map_type_key_type(Handle));\n+        DuckDBTypeInf\n... [truncated, 2828 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 218,
+          "deletions": 301,
+          "patch": "@@ -14,7 +14,7 @@\n   *****************************************************************************\n \n   Notes:\n-  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+  - DuckDB SQL is very close to PostgreSQL, so dDuckDB = dPostgreSQL is used as\n     TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n   - one database file can only be opened by ONE process in read/write mode:\n     the duckdb_database handle is owned by the connection properties instance,\n@@ -60,6 +60,13 @@   TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n     fConfig: RawUtf8;\n     fReadOnly: boolean;\n     procedure GetForeignKeys; override;\n+    /// OnBatchInsert implementation using TSqlDBDuckDBAppender\n+    // - fallback to MultipleValuesInsert() if the Appender can't be used\n+    procedure AppendBatchInsert(Props: TSqlDBConnectionProperties;\n+      const TableName: RawUtf8; const FieldNames: TRawUtf8DynArray;\n+      const FieldTypes: TSqlDBFieldTypeArray; RowCount: integer;\n+      const FieldValues: TRawUtf8DynArrayDynArray;\n+      BatchOptions: TRestBatchOptions);\n   public\n     /// initialize the properties - the database is opened on first connection\n     constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n@@ -119,16 +126,9 @@   TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n \n   /// cached information about one DuckDB result column\n   TDuckDBColumnInfo = record\n-    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n-    TypeId: TDuckDBType;\n-    /// number precision retrieved for DECIMAL - 0 means integer\n-    Scale: integer;\n-    /// internal nested storage type for DECIMAL and ENUM\n-    Internal: TDuckDBType;\n-    /// DuckDB type info structure\n-    LogicalType: TDuckDBLogicalType;\n-    /// internal cache of ENUM values\n-    EnumValues: TRawUtf8DynArray;\n+    /// the column type, parsed once with its nested types\n+    Info: TDuckDBTypeInfo;\n+\n     /// current chunk content\n     Vector: TDuckDBVector;\n     /// current position in the data buffer\n@@ -152,8 +152,6 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n-    procedure BindArrayRow(Row: integer; var Temp: RawUtf8);\n-    procedure ExecuteArray;\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -252,18 +250,18 @@   TSqlDBDuckDBAppender = class\n \n /// append the value at Row of a DuckDB vector as JSON\n // - handles all scalar types, and nested LIST/ARRAY/STRUCT/MAP/UNION\n-procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; W: TJsonWriter);\n \n \n /// return the value at Row of a DuckDB vector as text\n // - scalar values in DuckDB text format, nested values as JSON\n-procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToText(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var result: RawUtf8);\n \n /// fill the simple value at Row of a DuckDB vector into a text buffer\n // - returns the number of bytes written, or -1 if this type is not supported\n-function DuckDBVectorValueToTextBuf(vec: TDuckDBVector;  lt: TDuckDBLogicalType;\n+function DuckDBVectorValueToTextBuf(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var Buffer: TTemp47): PtrInt;\n \n \n@@ -278,41 +276,18 @@ implementation\n     1000000000000, 10000000000000, 100000000000000, 1000000000000000,\n     10000000000000000, 100000000000000000, 1000000000000000000);\n \n+  // integer types which can be read by ReadIntegral() as Int64\n+  DUCKDB_INT_TYPES = [DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT,\n+    DUCKDB_TYPE_SMALLINT, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT,\n+    DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER];\n+\n function IsValid(valid\n... [truncated, 29681 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 39,
+          "patch": "@@ -45,7 +45,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure Errors;\n     procedure Metadata;\n     procedure Bulk;\n-    procedure BindArrays;\n+    procedure BatchInsert;\n     procedure Appender;\n   end;\n \n@@ -417,58 +417,80 @@ procedure TTestDuckDB.Bulk;\n   NotifyTestSpeed('read all', COUNT, 0, @timer);\n end;\n \n-procedure TTestDuckDB.BindArrays;\n+procedure TTestDuckDB.BatchInsert;\n const\n   COUNT = 1000;\n var\n-  st: ISqlDBStatement;\n-  ids: array of Int64;\n-  names: TRawUtf8DynArray;\n-  amounts: array of currency;\n-  dates: array of TDateTime;\n-  ratios: array of double;\n-  i: integer;\n+  names, names2: TRawUtf8DynArray;\n+  types: TSqlDBFieldTypeArray;\n+  values, values2: TRawUtf8DynArrayDynArray;\n+  i, pass: integer;\n   rows: ISqlDBRows;\n   timer: TPrecisionTimer;\n begin\n   if fProps = nil then\n     exit;\n+  Check(Assigned(fProps.OnBatchInsert), 'OnBatchInsert');\n+  CheckEqual(ord(fProps.BatchSendingAbilities = [cCreate]), 1);\n   fProps.ExecuteNoResult('create or replace table arr (id INTEGER, ' +\n     'name VARCHAR, amount DECIMAL(19,4), d TIMESTAMP, v DOUBLE)', []);\n-  SetLength(ids, COUNT);\n-  SetLength(names, COUNT);\n-  SetLength(amounts, COUNT);\n-  SetLength(dates, COUNT);\n-  SetLength(ratios, COUNT);\n-  for i := 0 to COUNT - 1 do\n+  SetLength(names, 5);\n+  names[0] := 'id';\n+  names[1] := 'name';\n+  names[2] := 'amount';\n+  names[3] := 'd';\n+  names[4] := 'v';\n+  types[0] := ftInt64;\n+  types[1] := ftUtf8;\n+  types[2] := ftCurrency;\n+  types[3] := ftDate;\n+  types[4] := ftDouble;\n+  SetLength(values, 5);\n+  for i := 0 to 4 do\n+    SetLength(values[i], COUNT);\n+  // pass 0 uses the Appender, pass 1 the multi-values INSERT fallback\n+  // (inserting only id and name for 100 more rows)\n+  for pass := 0 to 1 do\n   begin\n-    ids[i] := i + 1;\n-    names[i] := FormatUtf8('it''s #%', [i + 1]);\n-    amounts[i] := (i + 1) + 0.5;\n-    dates[i] := EncodeDate(2025, 1, 1) + i;\n-    ratios[i] := i / 8;\n+    for i := 0 to COUNT - 1 do\n+    begin\n+      values[0, i] := Int32ToUtf8(pass * COUNT + i + 1);\n+      values[1, i] := QuotedStr(FormatUtf8('it''s #%', [i + 1]), '''');\n+      values[2, i] := Int32ToUtf8(i + 1) + '.5';\n+      values[3, i] := QuotedStr(DateToIso8601Text(EncodeDate(2025, 1, 1) + i), '''');\n+      if i = 0 then\n+        values[4, i] := 'null'\n+      else\n+        values[4, i] := DoubleToStr(i / 8);\n+    end;\n+    timer.Start;\n+    if pass = 0 then\n+      // the ORM supplies schema-qualified table names\n+      fProps.OnBatchInsert(fProps, 'main.arr', names, types, COUNT, values, [])\n+    else\n+    begin\n+      // not all columns: the Appender is not usable -> regular INSERT\n+      SetLength(names2, 2);\n+      SetLength(values2, 2);\n+      for i := 0 to 1 do\n+      begin\n+        names2[i] := names[i];\n+        values2[i] := values[i];\n+      end;\n+      fProps.OnBatchInsert(fProps, 'arr', names2, types, 100, values2, []);\n+    end;\n+    NotifyTestSpeed('insert', COUNT, 0, @timer);\n   end;\n-  timer.Start;\n-  st := fProps.ThreadSafeConnection.NewStatementPrepared(\n-    'insert into arr values (?,?,?,?,?)', false, true);\n-  st.BindArray(1, ids);\n-  st.BindArray(2, names);\n-  st.BindArrayCurrency(3, amounts);\n-  st.BindArrayDateTime(4, dates);\n-  st.BindArray(5, ratios);\n-  st.ExecutePrepared;\n-  CheckEqual(st.UpdateCount, COUNT, 'array updatecount');\n-  NotifyTestSpeed('insert', COUNT, 0, @timer);\n-  st := nil;\n   rows := fProps.Execute('select count(*), sum(amount), max(d), ' +\n-    'max(name) filter (where id = 1000), sum(v) from arr', []);\n-  Check(rows.Step, 'array select');\n-  CheckEqual(rows.ColumnInt(0), COUNT, 'array count');\n-  Check(rows.ColumnCurrency(1) = 501000, 'array sum(decimal)');\n+    'max(name) filter (where id = 1000), sum(v), count(v) from arr', []);\n+  Check(rows.Step, 'batch select');\n+  CheckEqual(rows.ColumnInt(0), COUNT + 100, 'batch count');\n+  Check(rows.ColumnCurrency(1) = 501000, 'batch sum(decimal)');\n   CheckEqual(Da\n... [truncated, 552 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": 678,
+      "is_merge": true
+    },
+    {
+      "sha": "288e3cbfa42a498334e9a7fa28a45dd286665c97",
+      "short_sha": "288e3cbf",
+      "subject": "db: DuckDB uses SplitRight() and a dDuckDB = dPostgreSQL constant",
+      "body": "Following the review: the Appender splits 'schema.table' with the existing\nSplitRight(), and dDuckDB is a constant for the PostgreSQL-like dialect, to\nbe used in the DuckDB code in case a specific dialect is needed one day.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T09:05:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/288e3cbfa42a498334e9a7fa28a45dd286665c97",
+      "parents": [
+        "1d9eae840cd48b36039a33e749cea7aff8ce8212"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -32,6 +32,12 @@ interface\n \n { ************ DuckDB C API Types and Constants }\n \n+const\n+  /// the TSqlDBDefinition used for DuckDB, since its SQL is PostgreSQL-like\n+  // - please use this constant in the DuckDB code instead of dPostgreSQL, in\n+  // case a specific dialect would be needed in the future\n+  dDuckDB = dPostgreSQL;\n+\n type\n   /// exception raised by the DuckDB providers\n   ESqlDBDuckDB = class(ESqlDBException);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 11,
+          "patch": "@@ -14,7 +14,7 @@\n   *****************************************************************************\n \n   Notes:\n-  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+  - DuckDB SQL is very close to PostgreSQL, so dDuckDB = dPostgreSQL is used as\n     TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n   - one database file can only be opened by ONE process in read/write mode:\n     the duckdb_database handle is owned by the connection properties instance,\n@@ -701,7 +701,7 @@ constructor TSqlDBDuckDBConnectionProperties.Create(\n   const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n begin\n   DuckDBLibraryInitialize; // raise ESqlDBDuckDB if no duckdb.dll\n-  fDbms := dPostgreSQL;    // DuckDB SQL dialect is PostgreSQL-like\n+  fDbms := dDuckDB;        // PostgreSQL-like SQL dialect\n   inherited Create(aServerName, aDatabaseName, aUserID, aPassWord);\n   fEngineName := 'DuckDB';\n   ForcedSchemaName := 'main'; // DuckDB default schema, for metadata queries\n@@ -1463,7 +1463,6 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n var\n   schema: PUtf8Char;\n   sch, tbl: RawUtf8;\n-  p: PtrInt;\n begin\n   inherited Create;\n   if not DuckDB.HasAppender then\n@@ -1473,14 +1472,8 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   fTable := aTable;\n   sch := aSchema;\n   tbl := aTable;\n-  p := PosExChar('.', tbl);\n-  if (sch = '') and\n-     (p > 0) then\n-  begin\n-    // 'schema.table' as supplied by the ORM\n-    sch := copy(tbl, 1, p - 1);\n-    tbl := copy(tbl, p + 1, maxInt);\n-  end;\n+  if sch = '' then\n+    tbl := SplitRight(aTable, '.', @sch); // 'schema.table' as set by the ORM\n   schema := nil;\n   if sch <> '' then\n     schema := pointer(sch);",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1d9eae840cd48b36039a33e749cea7aff8ce8212",
+      "short_sha": "1d9eae84",
+      "subject": "db: DuckDB Appender accepts a schema-qualified table name",
+      "body": "The ORM supplies 'main.TableName': the Appender looked for a table named\n'main.TableName' in the default schema, so OnBatchInsert failed for tables\nwhose columns are mapped one to one (found by running the ORM external\ntests over DuckDB).\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T06:50:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1d9eae840cd48b36039a33e749cea7aff8ce8212",
+      "parents": [
+        "78780e65bb47cb94c7faec0515b98b1cc391c8cd"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 3,
+          "patch": "@@ -1462,18 +1462,30 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   const aTable, aSchema: RawUtf8);\n var\n   schema: PUtf8Char;\n+  sch, tbl: RawUtf8;\n+  p: PtrInt;\n begin\n   inherited Create;\n   if not DuckDB.HasAppender then\n     ESqlDBDuckDB.RaiseU('DuckDB library has no appender API');\n   if not aConnection.IsConnected then\n     aConnection.Connect;\n   fTable := aTable;\n+  sch := aSchema;\n+  tbl := aTable;\n+  p := PosExChar('.', tbl);\n+  if (sch = '') and\n+     (p > 0) then\n+  begin\n+    // 'schema.table' as supplied by the ORM\n+    sch := copy(tbl, 1, p - 1);\n+    tbl := copy(tbl, p + 1, maxInt);\n+  end;\n   schema := nil;\n-  if aSchema <> '' then\n-    schema := pointer(aSchema);\n+  if sch <> '' then\n+    schema := pointer(sch);\n   if DuckDB.appender_create(aConnection.fConn,\n-       schema, pointer(aTable), fAppender) <> DuckDBSuccess then\n+       schema, pointer(tbl), fAppender) <> DuckDBSuccess then\n   begin\n     try\n       Check(DuckDBError, 'create');",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -465,7 +465,8 @@ procedure TTestDuckDB.BatchInsert;\n     end;\n     timer.Start;\n     if pass = 0 then\n-      fProps.OnBatchInsert(fProps, 'arr', names, types, COUNT, values, [])\n+      // the ORM supplies schema-qualified table names\n+      fProps.OnBatchInsert(fProps, 'main.arr', names, types, COUNT, values, [])\n     else\n     begin\n       // not all columns: the Appender is not usable -> regular INSERT",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "78780e65bb47cb94c7faec0515b98b1cc391c8cd",
+      "short_sha": "78780e65",
+      "subject": "db: DuckDB integer type list shared by ColumnDouble and ColumnCurrency",
+      "body": "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:57:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/78780e65bb47cb94c7faec0515b98b1cc391c8cd",
+      "parents": [
+        "0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 10,
+          "patch": "@@ -276,6 +276,11 @@ implementation\n     1000000000000, 10000000000000, 100000000000000, 1000000000000000,\n     10000000000000000, 100000000000000000, 1000000000000000000);\n \n+  // integer types which can be read by ReadIntegral() as Int64\n+  DUCKDB_INT_TYPES = [DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT,\n+    DUCKDB_TYPE_SMALLINT, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT,\n+    DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER];\n+\n function IsValid(validity: PDuckI64Array; row: PtrInt): boolean;\n   {$ifdef HASINLINE} inline; {$endif}\n begin\n@@ -1285,12 +1290,11 @@ function TSqlDBDuckDBStatement.ColumnDouble(Col: integer): double;\n         result := GetExtended(pointer(ColumnUtf8(Col)))\n       else\n         result := DecimalMantissa(c, hi) / POW10[c^.Info.Scale];\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER:\n-      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow);\n   else\n-    result := GetExtended(pointer(ColumnUtf8(Col)));\n+    if c^.Info.TypeId in DUCKDB_INT_TYPES then\n+      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow)\n+    else\n+      result := GetExtended(pointer(ColumnUtf8(Col)));\n   end;\n end;\n \n@@ -1315,12 +1319,11 @@ function TSqlDBDuckDBStatement.ColumnCurrency(Col: integer): currency;\n         PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n     DUCKDB_TYPE_FLOAT, DUCKDB_TYPE_DOUBLE:\n       result := ColumnDouble(Col);\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER:\n-      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow);\n   else\n-    PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n+    if c^.Info.TypeId in DUCKDB_INT_TYPES then\n+      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow)\n+    else\n+      PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n   end;\n end;\n ",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3",
+      "short_sha": "0c5d1ac1",
+      "subject": "db: DuckDB logical types are now parsed once into a TDuckDBTypeInfo cache",
+      "body": "TDuckDBLogicalType was queried again for every value (type id, decimal\nscale, enum dictionary, and a create/destroy of the child type of each\nLIST/ARRAY/MAP/STRUCT/UNION row). Parse the column type and its nested\ntypes once, in mormot.db.raw.duckdb (with DuckDBTypeToField and the cached\nENUM dictionary), and use it in the vector to text/JSON conversion.\nNumbers, UUID and MAP keys within nested values no longer use a transient\nRawUtf8.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:55:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3",
+      "parents": [
+        "120ac439cb58ee8943fff85af71f46f655249f92"
+      ],
+      "stats": {
+        "additions": 293,
+        "deletions": 191,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 177,
+          "deletions": 0,
+          "patch": "@@ -390,6 +390,50 @@ procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: integer);\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+type\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n+  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n+\n+  /// a DuckDB logical type, parsed once with all its nested types\n+  // - to avoid calling the DuckDB C API for every row of a result set\n+  // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n+  TDuckDBTypeInfo = record\n+    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n+    TypeId: TDuckDBType;\n+    /// internal storage type of a DECIMAL or an ENUM\n+    Internal: TDuckDBType;\n+    /// number of decimals of a DECIMAL, or fixed size of an ARRAY\n+    Scale: integer;\n+    /// number of nested types in Children[]\n+    ChildCount: integer;\n+    /// the DuckDB logical type handle, owned by this structure\n+    Handle: TDuckDBLogicalType;\n+    /// STRUCT field names, or ENUM values (cached on first use)\n+    Names: TRawUtf8DynArray;\n+    /// nested types of a LIST/ARRAY (item), MAP (key, value),\n+    // STRUCT (fields) or UNION (members)\n+    Children: PDuckDBTypeInfoArray;\n+  end;\n+\n+  /// pointer-based array of TDuckDBTypeInfo nested types\n+  TDuckDBTypeInfoArray = array[0..1023] of TDuckDBTypeInfo;\n+\n+/// parse a DuckDB logical type and all its nested types, once\n+// - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+/// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n+procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n+\n+/// retrieve the text of an ENUM value, caching all the ENUM dictionary\n+function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n+\n+/// convert a DuckDB type into the corresponding mormot.db field type\n+function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n+\n+\n implementation\n \n \n@@ -939,6 +983,139 @@ procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: intege\n end;\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+  procedure InitChildren(n: PtrInt);\n+  begin\n+    Info.ChildCount := n;\n+    if n > 0 then\n+    begin\n+      GetMem(Info.Children, n * SizeOf(TDuckDBTypeInfo));\n+      FillCharFast(Info.Children^, n * SizeOf(TDuckDBTypeInfo), 0);\n+    end;\n+  end;\n+\n+var\n+  i: PtrInt;\n+  p: PUtf8Char;\n+begin\n+  FillCharFast(Info, SizeOf(Info), 0);\n+  Info.Handle := Handle;\n+  Info.TypeId := DuckDB.get_type_id(Handle);\n+  case Info.TypeId of\n+    DUCKDB_TYPE_DECIMAL:\n+      begin\n+        Info.Internal := DuckDB.decimal_internal_type(Handle);\n+        Info.Scale := DuckDB.decimal_scale(Handle);\n+      end;\n+    DUCKDB_TYPE_ENUM:\n+      Info.Internal := DuckDB.enum_internal_type(Handle);\n+    DUCKDB_TYPE_LIST:\n+      begin\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.list_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_ARRAY:\n+      begin\n+        Info.Scale := DuckDB.array_type_array_size(Handle);\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.array_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_MAP:\n+      begin\n+        InitChildren(2);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.map_type_key_type(Handle));\n+        DuckDBTypeInfoInit(Info.Children^[1], DuckDB.map_type_value_type(Handle));\n+      end;\n+    DUCKDB_TYPE_STRUCT:\n+      begin\n+        InitChildren(DuckDB.struct_type_child_count(Handle));\n+        SetLength(Info.Names, Info.ChildCount);\n+        for i := 0 to Info.ChildCount - 1 do\n+        begin\n+          p := DuckDB.struct_type_child_name(Handle, i);\n+          FastSetString(Info.Names[i], p, StrLen(p));\n+          DuckDB.free_(p);\n+     \n... [truncated, 2396 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 116,
+          "deletions": 191,
+          "patch": "@@ -126,16 +126,9 @@   TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n \n   /// cached information about one DuckDB result column\n   TDuckDBColumnInfo = record\n-    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n-    TypeId: TDuckDBType;\n-    /// number precision retrieved for DECIMAL - 0 means integer\n-    Scale: integer;\n-    /// internal nested storage type for DECIMAL and ENUM\n-    Internal: TDuckDBType;\n-    /// DuckDB type info structure\n-    LogicalType: TDuckDBLogicalType;\n-    /// internal cache of ENUM values\n-    EnumValues: TRawUtf8DynArray;\n+    /// the column type, parsed once with its nested types\n+    Info: TDuckDBTypeInfo;\n+\n     /// current chunk content\n     Vector: TDuckDBVector;\n     /// current position in the data buffer\n@@ -257,18 +250,18 @@   TSqlDBDuckDBAppender = class\n \n /// append the value at Row of a DuckDB vector as JSON\n // - handles all scalar types, and nested LIST/ARRAY/STRUCT/MAP/UNION\n-procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; W: TJsonWriter);\n \n \n /// return the value at Row of a DuckDB vector as text\n // - scalar values in DuckDB text format, nested values as JSON\n-procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToText(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var result: RawUtf8);\n \n /// fill the simple value at Row of a DuckDB vector into a text buffer\n // - returns the number of bytes written, or -1 if this type is not supported\n-function DuckDBVectorValueToTextBuf(vec: TDuckDBVector;  lt: TDuckDBLogicalType;\n+function DuckDBVectorValueToTextBuf(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var Buffer: TTemp47): PtrInt;\n \n \n@@ -290,34 +283,6 @@ function IsValid(validity: PDuckI64Array; row: PtrInt): boolean;\n             ((validity^[row shr 6] shr (row and 63)) and 1 <> 0);\n end;\n \n-function DuckDBTypeToField(typeid: TDuckDBType; scale: integer): TSqlDBFieldType;\n-begin\n-  case typeid of\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER, DUCKDB_TYPE_UBIGINT,\n-    DUCKDB_TYPE_HUGEINT, DUCKDB_TYPE_UHUGEINT:\n-      result := ftInt64;\n-    DUCKDB_TYPE_FLOAT, DUCKDB_TYPE_DOUBLE:\n-      result := ftDouble;\n-    DUCKDB_TYPE_DECIMAL:\n-      if scale <= 4 then\n-        result := ftCurrency\n-      else\n-        result := ftDouble;\n-    DUCKDB_TYPE_DATE, DUCKDB_TYPE_TIME, DUCKDB_TYPE_TIME_TZ, DUCKDB_TYPE_TIME_NS,\n-    DUCKDB_TYPE_TIMESTAMP, DUCKDB_TYPE_TIMESTAMP_S, DUCKDB_TYPE_TIMESTAMP_MS,\n-    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ:\n-      result := ftDate;\n-    DUCKDB_TYPE_BLOB:\n-      result := ftBlob;\n-    DUCKDB_TYPE_SQLNULL:\n-      result := ftNull;\n-  else\n-    result := ftUtf8; // VARCHAR, UUID, ENUM, INTERVAL, BIT, nested as JSON\n-  end;\n-end;\n-\n function TimestampMicros(typeid: TDuckDBType; v: Int64): Int64;\n begin\n   case typeid of\n@@ -352,13 +317,13 @@ function ReadIntegral(typeid: TDuckDBType; data: pointer; row: PtrInt): Int64;\n   end;\n end;\n \n-procedure DecimalValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n+procedure DecimalValue(T: PDuckDBTypeInfo; data: pointer; row: PtrInt;\n   var mantissa: TDuckDBHugeInt; var scale: integer);\n var\n   v: Int64;\n begin\n-  scale := DuckDB.decimal_scale(lt);\n-  case DuckDB.decimal_internal_type(lt) of\n+  scale := T^.Scale;\n+  case T^.Internal of\n     DUCKDB_TYPE_HUGEINT:\n       begin\n         mantissa := PDuckDBHugeInt(PAnsiChar(data) + row * SizeOf(TDuckDBHugeInt))^;\n@@ -378,19 +343,7 @@ procedure DecimalValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n     mantissa.Upper := 0;\n end;\n \n-procedure EnumValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n-  var result: RawUtf8);\n-var\n-  idx: Int64;\n-  p: PUtf8Char;\n-begin\n-  idx := ReadIntegr\n... [truncated, 19979 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "120ac439cb58ee8943fff85af71f46f655249f92",
+      "short_sha": "120ac439",
+      "subject": "db: DuckDB BindArray removed, OnBatchInsert now uses the Appender",
+      "body": "BindArray still executed one statement per row, so it was slower than\nplain inserts. TOnBatchInsert is what the ORM uses: implement it with\nTSqlDBDuckDBAppender, falling back to MultipleValuesInsert() when the\nfields are not all the table columns in order, or for insert options.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:46:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/120ac439cb58ee8943fff85af71f46f655249f92",
+      "parents": [
+        "7d6480007c2bb756e51a67342f947ac6c977eeb0"
+      ],
+      "stats": {
+        "additions": 141,
+        "deletions": 136,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 81,
+          "deletions": 97,
+          "patch": "@@ -60,6 +60,13 @@   TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n     fConfig: RawUtf8;\n     fReadOnly: boolean;\n     procedure GetForeignKeys; override;\n+    /// OnBatchInsert implementation using TSqlDBDuckDBAppender\n+    // - fallback to MultipleValuesInsert() if the Appender can't be used\n+    procedure AppendBatchInsert(Props: TSqlDBConnectionProperties;\n+      const TableName: RawUtf8; const FieldNames: TRawUtf8DynArray;\n+      const FieldTypes: TSqlDBFieldTypeArray; RowCount: integer;\n+      const FieldValues: TRawUtf8DynArrayDynArray;\n+      BatchOptions: TRestBatchOptions);\n   public\n     /// initialize the properties - the database is opened on first connection\n     constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n@@ -152,8 +159,6 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n-    procedure BindArrayRow(Row: integer; var Temp: RawUtf8);\n-    procedure ExecuteArray;\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -739,6 +744,78 @@ constructor TSqlDBDuckDBConnectionProperties.Create(\n   inherited Create(aServerName, aDatabaseName, aUserID, aPassWord);\n   fEngineName := 'DuckDB';\n   ForcedSchemaName := 'main'; // DuckDB default schema, for metadata queries\n+  if DuckDB.HasAppender then\n+  begin\n+    // the Appender is much faster than multi-values INSERT statements\n+    fBatchSendingAbilities := [cCreate];\n+    fOnBatchInsert := AppendBatchInsert;\n+    fBatchMaxSentAtOnce := 4096;\n+  end;\n+end;\n+\n+procedure TSqlDBDuckDBConnectionProperties.AppendBatchInsert(\n+  Props: TSqlDBConnectionProperties; const TableName: RawUtf8;\n+  const FieldNames: TRawUtf8DynArray; const FieldTypes: TSqlDBFieldTypeArray;\n+  RowCount: integer; const FieldValues: TRawUtf8DynArrayDynArray;\n+  BatchOptions: TRestBatchOptions);\n+var\n+  cols: TSqlDBColumnDefineDynArray;\n+  app: TSqlDBDuckDBAppender;\n+  f, r: PtrInt;\n+  v: PRawUtf8;\n+  tmp: RawUtf8;\n+begin\n+  // the Appender expects all columns, in the table order, without conflict\n+  // handling: fallback to the regular multi-values INSERT otherwise\n+  GetFields(TableName, cols);\n+  if (BatchOptions * [boInsertOrIgnore, boInsertOrReplace, boUpsert] <> []) or\n+     (length(cols) <> length(FieldNames)) then\n+  begin\n+    MultipleValuesInsert(Props, TableName, FieldNames, FieldTypes, RowCount,\n+      FieldValues, BatchOptions);\n+    exit;\n+  end;\n+  for f := 0 to high(cols) do\n+    if not PropNameEquals(cols[f].ColumnName, FieldNames[f]) then\n+    begin\n+      MultipleValuesInsert(Props, TableName, FieldNames, FieldTypes, RowCount,\n+        FieldValues, BatchOptions);\n+      exit;\n+    end;\n+  app := TSqlDBDuckDBAppender.Create(\n+    Props.ThreadSafeConnection as TSqlDBDuckDBConnection, TableName);\n+  try\n+    for r := 0 to RowCount - 1 do\n+    begin\n+      for f := 0 to high(FieldNames) do\n+      begin\n+        v := @FieldValues[f, r]; // values are SQL literals, BLOB are decoded\n+        if (v^ = 'null') or\n+           (FieldTypes[f] = ftNull) then\n+          app.AddNull\n+        else\n+          case FieldTypes[f] of\n+            ftInt64:\n+              app.Add(GetInt64(pointer(v^)));\n+            ftDouble:\n+              app.AddDouble(GetExtended(pointer(v^)));\n+            ftBlob:\n+              app.AddBlob(v^);\n+            ftCurrency:\n+              app.AddText(v^); // exact text -> DECIMAL cast\n+          else\n+            begin\n+              // ftUtf8, ftDate: unquote and let DuckDB cast to the column type\n+              UnQuoteSqlStringVar(pointer(v^), tmp);\n+              app.AddText(tmp);\n+            end;\n+          end;\n+      end;\n+      app.EndRow;\n+    end;\n+  finally\n+    app.Free; // flush the rows\n+  end;\n end;\n \n destructor TSqlDBDuckDBConnectionProperties.Destroy;\n@@ -1021,92 +1098,6 @@ procedure TSqlDBDuckDBStatement.B\n... [truncated, 3228 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 60,
+          "deletions": 39,
+          "patch": "@@ -45,7 +45,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure Errors;\n     procedure Metadata;\n     procedure Bulk;\n-    procedure BindArrays;\n+    procedure BatchInsert;\n     procedure Appender;\n   end;\n \n@@ -417,58 +417,79 @@ procedure TTestDuckDB.Bulk;\n   NotifyTestSpeed('read all', COUNT, 0, @timer);\n end;\n \n-procedure TTestDuckDB.BindArrays;\n+procedure TTestDuckDB.BatchInsert;\n const\n   COUNT = 1000;\n var\n-  st: ISqlDBStatement;\n-  ids: array of Int64;\n-  names: TRawUtf8DynArray;\n-  amounts: array of currency;\n-  dates: array of TDateTime;\n-  ratios: array of double;\n-  i: integer;\n+  names, names2: TRawUtf8DynArray;\n+  types: TSqlDBFieldTypeArray;\n+  values, values2: TRawUtf8DynArrayDynArray;\n+  i, pass: integer;\n   rows: ISqlDBRows;\n   timer: TPrecisionTimer;\n begin\n   if fProps = nil then\n     exit;\n+  Check(Assigned(fProps.OnBatchInsert), 'OnBatchInsert');\n+  CheckEqual(ord(fProps.BatchSendingAbilities = [cCreate]), 1);\n   fProps.ExecuteNoResult('create or replace table arr (id INTEGER, ' +\n     'name VARCHAR, amount DECIMAL(19,4), d TIMESTAMP, v DOUBLE)', []);\n-  SetLength(ids, COUNT);\n-  SetLength(names, COUNT);\n-  SetLength(amounts, COUNT);\n-  SetLength(dates, COUNT);\n-  SetLength(ratios, COUNT);\n-  for i := 0 to COUNT - 1 do\n+  SetLength(names, 5);\n+  names[0] := 'id';\n+  names[1] := 'name';\n+  names[2] := 'amount';\n+  names[3] := 'd';\n+  names[4] := 'v';\n+  types[0] := ftInt64;\n+  types[1] := ftUtf8;\n+  types[2] := ftCurrency;\n+  types[3] := ftDate;\n+  types[4] := ftDouble;\n+  SetLength(values, 5);\n+  for i := 0 to 4 do\n+    SetLength(values[i], COUNT);\n+  // pass 0 uses the Appender, pass 1 the multi-values INSERT fallback\n+  // (inserting only id and name for 100 more rows)\n+  for pass := 0 to 1 do\n   begin\n-    ids[i] := i + 1;\n-    names[i] := FormatUtf8('it''s #%', [i + 1]);\n-    amounts[i] := (i + 1) + 0.5;\n-    dates[i] := EncodeDate(2025, 1, 1) + i;\n-    ratios[i] := i / 8;\n+    for i := 0 to COUNT - 1 do\n+    begin\n+      values[0, i] := Int32ToUtf8(pass * COUNT + i + 1);\n+      values[1, i] := QuotedStr(FormatUtf8('it''s #%', [i + 1]), '''');\n+      values[2, i] := Int32ToUtf8(i + 1) + '.5';\n+      values[3, i] := QuotedStr(DateToIso8601Text(EncodeDate(2025, 1, 1) + i), '''');\n+      if i = 0 then\n+        values[4, i] := 'null'\n+      else\n+        values[4, i] := DoubleToStr(i / 8);\n+    end;\n+    timer.Start;\n+    if pass = 0 then\n+      fProps.OnBatchInsert(fProps, 'arr', names, types, COUNT, values, [])\n+    else\n+    begin\n+      // not all columns: the Appender is not usable -> regular INSERT\n+      SetLength(names2, 2);\n+      SetLength(values2, 2);\n+      for i := 0 to 1 do\n+      begin\n+        names2[i] := names[i];\n+        values2[i] := values[i];\n+      end;\n+      fProps.OnBatchInsert(fProps, 'arr', names2, types, 100, values2, []);\n+    end;\n+    NotifyTestSpeed('insert', COUNT, 0, @timer);\n   end;\n-  timer.Start;\n-  st := fProps.ThreadSafeConnection.NewStatementPrepared(\n-    'insert into arr values (?,?,?,?,?)', false, true);\n-  st.BindArray(1, ids);\n-  st.BindArray(2, names);\n-  st.BindArrayCurrency(3, amounts);\n-  st.BindArrayDateTime(4, dates);\n-  st.BindArray(5, ratios);\n-  st.ExecutePrepared;\n-  CheckEqual(st.UpdateCount, COUNT, 'array updatecount');\n-  NotifyTestSpeed('insert', COUNT, 0, @timer);\n-  st := nil;\n   rows := fProps.Execute('select count(*), sum(amount), max(d), ' +\n-    'max(name) filter (where id = 1000), sum(v) from arr', []);\n-  Check(rows.Step, 'array select');\n-  CheckEqual(rows.ColumnInt(0), COUNT, 'array count');\n-  Check(rows.ColumnCurrency(1) = 501000, 'array sum(decimal)');\n+    'max(name) filter (where id = 1000), sum(v), count(v) from arr', []);\n+  Check(rows.Step, 'batch select');\n+  CheckEqual(rows.ColumnInt(0), COUNT + 100, 'batch count');\n+  Check(rows.ColumnCurrency(1) = 501000, 'batch sum(decimal)');\n   CheckEqual(DateToIso8601Text(rows.ColumnDateTime(2)),\n-    DateToIso8601Text(EncodeDate(2025, 1, 1) + COUNT - 1), 'array dates');\n-  CheckEqu\n... [truncated, 424 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
