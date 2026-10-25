@@ -1,0 +1,1556 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-24",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-25T03:42:36Z",
+  "range": {
+    "since": "2026-10-23T22:00:00Z",
+    "until": "2026-10-24T22:00:00Z",
+    "base_sha": "b393877f105aefb33880b97c03982de23303893d",
+    "head_sha": "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 29,
+    "additions": 3707,
+    "deletions": 957
+  },
+  "commits": [
+    {
+      "sha": "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0",
+      "short_sha": "7b9353c3",
+      "subject": "Merge pull request #674 from zen010101/fix-async-expect100",
+      "body": "net: fixed THttpAsyncServer \"Expect: 100-continue\" closing the connection",
+      "author": "ab",
+      "date": "2026-10-24T09:28:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0",
+      "parents": [
+        "cee7c851736f2c8f024b641bfe4527f02974ef2b",
+        "3f939de0da46f7a0202eccf12ec371ea76f535d5"
+      ],
+      "stats": {
+        "additions": 171,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 3,
+          "patch": "@@ -5133,6 +5133,15 @@ function THttpAsyncServerConnection.AfterWrite: TPollAsyncSocketOnReadWrite;\n   result := soClose; // on error, shutdown and clear the connection\r\n   if fOwner.fSockets = nil then\r\n     fHttp.State := hrsErrorMisuse;\r\n+  if fHttp.State in [hrsGetBodyChunkedHexFirst .. hrsWaitAsyncProcessing] then\r\n+  begin\r\n+    // the request is still being received or processed, so this write can\r\n+    // only be the end of the \"100 Continue\" interim response, when DoHeaders\r\n+    // could not send it at once: nothing to release yet - the final response\r\n+    // will trigger its own AfterWrite()\r\n+    result := soContinue;\r\n+    exit;\r\n+  end;\r\n   // compute next step\r\n   if fHttp.State = hrsSendBody then\r\n   begin\r\n@@ -5310,9 +5319,14 @@ function THttpAsyncServerConnection.DoBodyDownload: TPollAsyncSocketOnReadWrite;\n   end;\r\n end;\r\n \r\n+const\r\n+  HTTP_CONTINUE_RESPONSE: string[25] = 'HTTP/1.1 100 Continue'#13#10#13#10;\r\n+\r\n function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\r\n var\r\n   status: integer;\r\n+  p: PByte;\r\n+  len: integer; // warning: len should be defined as integer, not PtrInt\r\n begin\r\n   // finalize the headers\r\n   result := soClose;\r\n@@ -5337,10 +5351,27 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n     exit;\r\n   // implement Expect: 100-Continue for a framed request body\r\n   if hfExpect100 in fHttp.HeaderFlags then\r\n+  begin\r\n     // client waits for the server to parse the headers and return 100\r\n-    // before sending the request body\r\n-    fServer.fAsync.fSockets.WriteString(self,\r\n-      'HTTP/1.1 100 Continue'#13#10#13#10);\r\n+    // before sending the request body: send this interim response at once\r\n+    // from this thread, as DoResponse() does for the final response, so that\r\n+    // it is never pending behind the final response (e.g. with acoWritePollOnly\r\n+    // when the client sends the body without waiting), and AfterWrite() is\r\n+    // not called for it\r\n+    p := @HTTP_CONTINUE_RESPONSE[1];\r\n+    len := ord(HTTP_CONTINUE_RESPONSE[0]);\r\n+    if not fServer.fAsync.fSockets.RawWrite(self, p, len) then\r\n+    begin\r\n+      result := soClose; // socket closed or broken\r\n+      exit;\r\n+    end;\r\n+    if (len <> 0) and // OS buffer was full (paranoid): finish in ProcessWrite\r\n+       not fServer.fAsync.fSockets.Write(self, p, len, {timeout=}1000) then\r\n+    begin\r\n+      result := soClose; // the connection was already closed on write error\r\n+      exit;\r\n+    end;\r\n+  end;\r\n   // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n   if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n      Assigned(fServer.fOnBodyDownload) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 137,
+          "deletions": 0,
+          "patch": "@@ -155,6 +155,11 @@   TNetworkProtocols = class(TSynTestCase)\n     {$endif OSPOSIX}\r\n     /// validate THttpServerGeneric.OnBodyDownload streamed body upload\r\n     procedure DoHttpBodyDownload(Sender: TObject);\r\n+    /// validate THttpAsyncServer \"Expect: 100-continue\" interim response\r\n+    procedure DoHttpExpect100(Sender: TObject);\r\n+    function DoExpectRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoExpectDownload(const aUrl, aMethod, aInHeaders, aInContentType,\r\n+      aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n     /// validate 'Range:' file responses, especially against invalid offsets\r\n     procedure DoHttpFileRange(Sender: TObject);\r\n     /// validate THttpServerRequestAbstract.SetOutStream streamed body download\r\n@@ -486,6 +491,7 @@ procedure TNetworkProtocols.SlowTests;\n begin\r\n   // start some slow tests in background if /multithread is enabled\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n+  Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n   Run(DoHttpOutStream, self, 'HttpOutStream', true, false);\r\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n@@ -6833,6 +6839,137 @@ procedure TNetworkProtocols.DoHttpOutStream(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoExpectRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+var\r\n+  data: RawByteString;\r\n+begin\r\n+  // echo the length and hash of the body, received either in memory or\r\n+  // through the stream supplied by DoExpectDownload\r\n+  if Ctxt.InContentStream <> nil then\r\n+  begin\r\n+    SetLength(data, Ctxt.InContentStream.Size);\r\n+    Ctxt.InContentStream.Position := 0;\r\n+    Ctxt.InContentStream.ReadBuffer(pointer(data)^, length(data));\r\n+  end\r\n+  else\r\n+    data := Ctxt.InContent;\r\n+  Ctxt.OutContent := Make(['ok ', length(data), ' ',\r\n+    CardinalToHexShort(crc32cHash(data))]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoExpectDownload(const aUrl, aMethod, aInHeaders,\r\n+  aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n+begin\r\n+  if aUrl = '/stream' then\r\n+    result := TRawByteStringStream.Create // the body is written to this stream\r\n+  else\r\n+    result := nil; // in-memory Content fallback\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpExpect100(Sender: TObject);\r\n+var\r\n+  srv: THttpAsyncServer;\r\n+  raw: TCrtSocket;\r\n+  body: RawByteString;\r\n+  hosthead, ok, cmd: RawUtf8;\r\n+  i, clen: integer;\r\n+\r\n+  procedure Post(const url: RawUtf8; expect, waitfor100: boolean);\r\n+  var\r\n+    received100: boolean;\r\n+  begin\r\n+    // send the headers, optionally wait for the interim response, then send\r\n+    // the body and read the final response - all on the same connection\r\n+    raw.SockSend(['POST ', url, ' HTTP/1.1']);\r\n+    raw.SockSend(hosthead);\r\n+    raw.SockSend(['Content-Length: ', length(body)]);\r\n+    raw.SockSend('Content-Type: application/dummy');\r\n+    if expect then\r\n+      raw.SockSend('Expect: 100-continue');\r\n+    raw.SockSendCRLF; // void line: end of headers\r\n+    raw.SockSendFlush;\r\n+    received100 := false;\r\n+    if expect and waitfor100 then\r\n+    begin\r\n+      // RFC 9110 10.1.1: the 100 interim response lets the client send the body\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd);\r\n+      CheckUtf8(IdemPChar(pointer(cmd), 'HTTP/1.1 100 '),\r\n+        '% 100 %', [url, cmd]);\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd); // void line ending the interim response\r\n+      CheckEqual(cmd, '', '100 void line');\r\n+      received100 := true;\r\n+    end;\r\n+    raw.SockSendFlush(body);\r\n+    cmd := '';\r\n+    raw.SockRecvLn(cmd);\r\n+    if expect and not received100 then\r\n+    begin\r\n+      // the client did not wait: the interim response is still sent first\r\n+      CheckUtf8(IdemPChar(pointer(cmd), 'HTTP/1.1 100 '),\r\n+        '% early 100 %', [url, cmd]);\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd);\r\n\n... [truncated, 2199 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 674,
+      "is_merge": true
+    },
+    {
+      "sha": "cee7c851736f2c8f024b641bfe4527f02974ef2b",
+      "short_sha": "cee7c851",
+      "subject": "Merge pull request #680 from joaopauloschuler/nolte/auth-in-recommended-patterns-1",
+      "body": "recommended-patterns: DTO units no longer use the domain",
+      "author": "ab",
+      "date": "2026-10-24T09:14:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cee7c851736f2c8f024b641bfe4527f02974ef2b",
+      "parents": [
+        "aef2b5e0e9ebe808ef391d477c0389c179bfd0c1",
+        "b393877f105aefb33880b97c03982de23303893d"
+      ],
+      "stats": {
+        "additions": 302,
+        "deletions": 44,
+        "files": 17
+      },
+      "files": [
+        {
+          "path": "docs/mORMot2-SAD-Recommended-Patterns.md",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -556,7 +556,7 @@ tests/\n \n **The `TOrm` lives in `dom/`, on purpose.** Because the `TOrm` doubles as the domain object ([B.3](#b3-two-types-per-entity-not-three)), it belongs with the domain, not with the persistence machinery. The cost is precise and acceptable: `dom/` depends on the ORM **base type** (`mormot.orm.core`) but never on the ORM **runtime** — no `IRestOrm`, no REST server, no SQL. Those stay in `infra/`. This keeps the dependency direction clean: the port interface in `dom/` can name the entity it returns without reaching into `infra/`, and `infra/` depends on `dom/`, never the reverse. (Some older code merges the two into a single `kdom/`-style folder — that is the case this split is meant to avoid.)\n \n-**The CQRS interfaces live in `app/<entity>/interface/`, not in `dom/`.** `I<Entity>Query` / `I<Entity>Command` take and return the DTOs, so declaring them in `dom/` would make the domain depend on the application layer — the inverted direction this layout exists to prevent. They are the application layer's public contract, the use-case boundary clients call (a *driving* port), whereas `I<Entity>Repository` is a port the domain needs (a *driven* port) and stays in `dom/`. Consumer code compiles against `interface/` (plus the `dom/` types the DTOs embed), never against `implementation/`, which is linked only by the server and the [A.6.1](#a61-trusted--local-deployment) in-process stack.\n+**The CQRS interfaces live in `app/<entity>/interface/`, not in `dom/`.** `I<Entity>Query` / `I<Entity>Command` take and return the DTOs, so declaring them in `dom/` would make the domain depend on the application layer — the inverted direction this layout exists to prevent. They are the application layer's public contract, the use-case boundary clients call (a *driving* port), whereas `I<Entity>Repository` is a port the domain needs (a *driven* port) and stays in `dom/`. Consumer code compiles against `interface/`, never against `dom/` or `implementation/`, which are linked only by the server and the [A.6.1](#a61-trusted--local-deployment) in-process stack.\n \n | Pattern | Layer | Role |\n |---|---|---|\n@@ -574,7 +574,9 @@ tests/\n | `App<Name>ClientLocal.pas` / `…Remote.pas` | (root) | topology selection ([A.6](#a6-minimum-recommended-server-configuration)) |\n | `<entity>_tests.pas` | tests | one `TSynTestCase` per entity |\n \n-**The one rule the layout exists to enforce:** `app/<entity>/implementation/*_impl.pas` depends on the `dom/` repository ports and its own `interface/` contract, **never** on `infra/*_repository_orm.pas`. `serv/` is the only place that names the concrete `T<Entity>RepositoryOrm` class — it constructs each repository, registers it for injection, and hands the resolver to the services ([B.5](#b5-soa-composition-root-and-dependency-injection), [B.9](#b9-the-two-server-approach-and-its-ambiguous-orm)). Swapping SQLite for another backend, or a stub for tests, is an `infra/` change that nothing in `app/` or `dom/` sees.\n+**The first rule the layout exists to enforce:** `app/<entity>/implementation/*_impl.pas` depends on the `dom/` repository ports and its own `interface/` contract, **never** on `infra/*_repository_orm.pas`. `serv/` is the only place that names the concrete `T<Entity>RepositoryOrm` class — it constructs each repository, registers it for injection, and hands the resolver to the services ([B.5](#b5-soa-composition-root-and-dependency-injection), [B.9](#b9-the-two-server-approach-and-its-ambiguous-orm)). Swapping SQLite for another backend, or a stub for tests, is an `infra/` change that nothing in `app/` or `dom/` sees.\n+\n+**The second rule:** `app/<entity>/interface/` uses no `dom/` unit. When a DTO needs a type the aggregate also has — a record embedded in the `TOrm`, for instance — the DTO unit declares its own record with the same fields, and `<entity>_mappers.pas` copies between the two with `TRttiMap` ([A.7](#a7-copying-between-objects-records-and-dtos)). The wire contract then does not chan\n... [truncated, 227 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/docs/API.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -393,7 +393,7 @@ Pascal record member is the same name in `PascalCase`.\n | updatedAt | TDateTime | Last update timestamp |\n | commentCount | integer | Number of comments |\n | tagIDs | TIDDynArray | Associated tag IDs |\n-| comments | TTaskCommentDynArray | Embedded comments |\n+| comments | TTaskCommentDTODynArray | Embedded comments |\n \n ### TTaskListItemDTO\n | Field | Type | Description |",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/ARCHITECTURE.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -151,7 +151,7 @@ A **family** of operation-specific `packed record` DTOs per entity — no single\n \n All registered via `Rtti.RegisterFromText(TypeInfo(T), 'field definitions')` in the unit's `initialization` section for JSON serialization on FPC 3.2.2.\n \n-**JSON casing** — each DTO unit normalizes its wire contract to camelCase right after the `RegisterFromText` calls (the FPC ordering required by *Recommended Patterns* [A.7](https://github.com/synopse/mORMot2/blob/master/docs/mORMot2-SAD-Recommended-Patterns.md#a7-copying-between-objects-records-and-dtos), Gotcha 3) with `Rtti[TypeInfo(T)].Props.NameChangeCase(DtoJsonCase)`, where `DtoJsonCase = scLowerCaseFirst` is the single switch in `shared_types.pas`. This is applied to the DTO record types **only — never the `TOrm`** (`NameChangeCase` is a no-op on ORM JSON anyway, since the ORM serializes via its own `TOrmProperties`). `scLowerCaseFirst` lowercases the first character only, so a bare `ID` field goes out as `iD`; see [API.md](API.md) for the exact wire names. The embedded `TTaskComment` record follows the same convention (its call lives in `dom/tasks/task.pas`, alongside its own `RegisterFromText`).\n+**JSON casing** — each DTO unit normalizes its wire contract to camelCase right after the `RegisterFromText` calls (the FPC ordering required by *Recommended Patterns* [A.7](https://github.com/synopse/mORMot2/blob/master/docs/mORMot2-SAD-Recommended-Patterns.md#a7-copying-between-objects-records-and-dtos), Gotcha 3) with `Rtti[TypeInfo(T)].Props.NameChangeCase(DtoJsonCase)`, where `DtoJsonCase = scLowerCaseFirst` is the single switch in `shared_types.pas`. This is applied to the DTO record types **only — never the `TOrm`** (`NameChangeCase` is a no-op on ORM JSON anyway, since the ORM serializes via its own `TOrmProperties`). `scLowerCaseFirst` lowercases the first character only, so a bare `ID` field goes out as `iD`; see [API.md](API.md) for the exact wire names. Comments go out as `TTaskCommentDTO`, declared and normalized in `task_dtos.pas` like the other DTOs, so the wire contract does not depend on the domain unit; `task_mappers` copies them from the aggregate's embedded `TTaskComment`, which keeps its own camelCase registration in `dom/tasks/task.pas` for the JSON column.\n \n `string` is **forbidden** on the wire — `RawUtf8` for text (zero-copy at the HTTP boundary), `RawByteString` / `TSQLRawBlob` for binary.\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/COMMENTS_FEATURE.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -102,7 +102,7 @@ Contains embedded comments:\n TTaskViewDTO = packed record\n   // ... task fields\n   CommentCount: integer;\n-  Comments: TTaskCommentDynArray;  // Full comment data\n+  Comments: TTaskCommentDTODynArray;  // Full comment data, copied from TTaskComment by task_mappers\n end;\n ```\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/DEVELOPMENT.md",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 4,
+          "patch": "@@ -58,7 +58,9 @@ The hard rule: `app/*/implementation/*_impl.pas` depends on `dom/*_repository.pa\n - **Lazarus**: open `prj/lazarus/task_manager.lpi` or `prj/lazarus/cli_client.lpi`.\n   Both require the `mormot2` package (`packages/lazarus/mormot2.lpk` in the\n   enclosing repository). The `cli_client.lpi` \"local\" build mode adds\n-  `-dLOCAL_MODE`. Headless builds work too:\n+  `-dLOCAL_MODE` and the `dom`, `infra` and `app/*/implementation` folders to\n+  the unit search path; the other modes build the remote client from the\n+  `app/*/interface` folders alone. Headless builds work too:\n \n   ```bash\n   lazbuild --add-package-link ../../packages/lazarus/mormot2.lpk   # once\n@@ -363,7 +365,7 @@ No manual cleanup needed: `InjectInstance` ref-counts the repos, and `Dispatcher\n \n ### 11. Update the build files\n \n-**FPC**: add the new folders to `prj/fpc/compile.sh` and `prj/fpc/compile_cli.sh`, and the same paths to their Windows twins `compile.bat` / `compile_cli.bat` (`^` line continuations). `-Futests/myfeature` goes in `compile.*` only — the CLI does not link the tests:\n+**FPC**: add the new folders to `prj/fpc/compile.sh` and `prj/fpc/compile_cli.sh`, and the same paths to their Windows twins `compile.bat` / `compile_cli.bat` (`^` line continuations). `-Futests/myfeature` goes in `compile.*` only — the CLI does not link the tests. In `compile_cli.*` only the `interface` folder is listed unconditionally; the `dom`, `infra` and `implementation` folders go in the `SERVER_PATHS` variable, which is set in local mode only, so the remote client cannot reach into the domain:\n \n ```\n -Fusrc/dom/myfeature \\\n@@ -373,7 +375,7 @@ No manual cleanup needed: `InjectInstance` ref-counts the repos, and `Dispatcher\n -Futests/myfeature \\\n ```\n \n-**Delphi / Lazarus**: the `.lpi` projects use `prj/delphi/*.dpr` as their main source, so both toolchains resolve project units through the `.dpr` `in` clauses — the `.lpi` files need no change. Add each new unit to `prj/delphi/task_manager.dpr`:\n+**Delphi / Lazarus**: the `.lpi` projects use `prj/delphi/*.dpr` as their main source, so both toolchains resolve project units through the `.dpr` `in` clauses. The `.lpi` files additionally list every unit (for the Project Inspector) and the source folders as unit search paths (for code navigation in the editor), so new units and folders go there too. Add each new unit to `prj/delphi/task_manager.dpr`:\n \n ```pascal\n myfeature in '..\\..\\src\\dom\\myfeature\\myfeature.pas',\n@@ -382,7 +384,7 @@ myfeature_query in '..\\..\\src\\app\\myfeature\\interface\\myfeature_query.pas',\n // ... and so on for the infra/, implementation/ and tests/ units\n ```\n \n-In `prj/delphi/cli_client.dpr`, list the `interface/` units (and any `dom/` unit they use) unconditionally, and the remaining units inside the existing `{$ifdef LOCAL_MODE}` block. Then mirror them as `<DCCReference Include=\"…\"/>` items, which msbuild and the Delphi IDE read: every new unit in `task_manager.dproj`, only the unconditional ones in `cli_client.dproj`. The new units also go in the `uses` clause of `AppTaskManagerClientLocal.pas` (step 10).\n+In `prj/delphi/cli_client.dpr`, list the `interface/` units unconditionally, and the remaining units (`dom/` included) inside the existing `{$ifdef LOCAL_MODE}` block. The `*_dtos.pas` units must not use a `dom/` unit (see [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)), so the remote client needs none. Then mirror them as `<DCCReference Include=\"…\"/>` items, which msbuild and the Delphi IDE read: every new unit in `task_manager.dproj`, only the unconditional ones in `cli_client.dproj`. In the `.lpi` files, add every new unit as a project unit (Project Inspector → Add) and the new folders to *Project Options → Paths → Other unit files*: in every build mode of `task_manager.lpi`; in `cli_client.lpi` the `interface/` folder in every build mode, the `dom/`, `infra/` and `implementation/` folders in the \"local\" mode only, so the remote build keeps failing on a stray domain dependency. Th\n... [truncated, 104 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/docs/PROJECT_STRUCTURE.md",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 5,
+          "patch": "@@ -96,7 +96,7 @@ All SQL/FTS5 knowledge lives here. If the application layer ever calls `IRestOrm\n \n ### `app/` — Application (contract, DTOs, mappers, services)\n \n-Each `app/<entity>/` is split in two. **`interface/`** is the public contract shared by the server and its clients — the client-facing units (`AppTaskManagerClient`, `AppTaskManagerClientRemote`, `cli_client_core`) reference this folder (plus the `dom/` types the DTOs embed, and `shared_types`), never `implementation/`. **`implementation/`** holds the server-side services and mappers; clients never reference it. The exceptions run server-side code in-process: the CLI's `LOCAL_MODE` backend (`AppTaskManagerClientLocal`), which hosts the services, and the tests, which exercise the mappers directly.\n+Each `app/<entity>/` is split in two. **`interface/`** is t\n... [truncated, 5185 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/delphi/cli_client.dpr",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 838 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/delphi/cli_client.dproj",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "\n... [truncated, 506 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/fpc/compile_cli.bat",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 6,
+          "patch": "\n... [truncated, 1111 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/fpc/compile_cli.sh",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 6,
+          "patch": "\n... [truncated, 1073 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/lazarus/cli_client.lpi",
+          "status": "modified",
+          "additions": 101,
+          "deletions": 2,
+          "patch": "\n... [truncated, 5185 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/lazarus/task_manager.lpi",
+          "status": "modified",
+          "additions": 97,
+          "deletions": 2,
+          "patch": "\n... [truncated, 5520 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/app/tasks/implementation/task_mappers.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 2,
+          "patch": "\n... [truncated, 1378 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/app/tasks/interface/task_dtos.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 4,
+          "patch": "\n... [truncated, 2396 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/cli_client_core.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "\n... [truncated, 151 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/dom/tasks/task.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "\n... [truncated, 863 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/tests/tasks/task_tests.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 2,
+          "patch": "\n... [truncated, 2777 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Docs",
+        "Samples"
+      ],
+      "units": [],
+      "pr": 680,
+      "is_merge": true
+    },
+    {
+      "sha": "aef2b5e0e9ebe808ef391d477c0389c179bfd0c1",
+      "short_sha": "aef2b5e0",
+      "subject": "Merge pull request #685 from landrix/fix/pdf-review-673",
+      "body": "ui: pdf - follow-ups to #684: the raster font cache and NewDoc",
+      "author": "ab",
+      "date": "2026-10-24T09:10:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aef2b5e0e9ebe808ef391d477c0389c179bfd0c1",
+      "parents": [
+        "71432b88ef941d3d74d86f80bce429163f791846",
+        "bedd42932a4d757b00202b907c7fff689245a694"
+      ],
+      "stats": {
+        "additions": 103,
+        "deletions": 10,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 10,
+          "patch": "@@ -1325,6 +1325,11 @@   TPdfDocument = class\n     fTrueTypeFonts: TRawUtf8DynArray;\r\n     fTrueTypeFontLastName: RawUtf8;\r\n     fTrueTypeFontLastIndex: integer;\r\n+    // the index an unknown (raster) font name was resolved to, shared by the\r\n+    // canvases of the document and of its forms\r\n+    fPreviousRasterFontName: RawUtf8;\r\n+    fPreviousRasterFontIndex: integer;\r\n+    fPreviousRasterFontFixed: boolean;\r\n     fDC: HDC;\r\n     fScreenLogPixels: integer;\r\n     fPrinterPxPerInch: TPoint;\r\n@@ -1834,9 +1839,6 @@   TPdfCanvas = class\n     fUseMetaFileTextClipping: TPdfCanvasRenderMetaFileTextClipping;\r\n     fKerningHScaleBottom: single;\r\n     fKerningHScaleTop: single;\r\n-    // some cache\r\n-    fPreviousRasterFontName: RawUtf8;\r\n-    fPreviousRasterFontIndex: integer;\r\n     // result := fOffsetX + (X * fFactorX);\r\n     function I2X(X: integer): single;\r\n     function S2X(X: single): single;\r\n@@ -7457,8 +7459,7 @@ function TPdfDocument.AddTrueTypeFont(const TtfName: RawUtf8): boolean;\n   fTrueTypeFontLastName := '';\r\n   if fallback <> '' then\r\n     fFontFallBackIndex := GetTrueTypeFontIndex(fallback);\r\n-  if fCanvas <> nil then\r\n-    fCanvas.fPreviousRasterFontName := ''; // its index moved too\r\n+  fPreviousRasterFontName := ''; // its index moved too\r\n   ins := GetTrueTypeFontIndex(TtfName);\r\n   for i := 0 to fFontList.Count - 1 do\r\n   begin\r\n@@ -7472,6 +7473,7 @@ procedure TPdfDocument.FreeDoc;\n var\r\n   i: PtrInt;\r\n begin\r\n+  FreeAndNil(fSaveToStreamWriter); // a SaveToStreamDirectBegin never ended\r\n   if fXObjectList <> nil then\r\n   begin\r\n     FreeAndNil(fXObjectList);\r\n@@ -8208,6 +8210,7 @@ procedure TPdfDocument.SetPdfA(Value: TPdfALevel);\n procedure TPdfDocument.SetFontFallBackName(const Value: string);\r\n begin\r\n   fFontFallBackIndex := GetTrueTypeFontIndex(StringToUtf8(Value));\r\n+  fPreviousRasterFontName := ''; // it may have been resolved to the fallback\r\n end;\r\n \r\n function TPdfDocument.GetFontFallBackName: string;\r\n@@ -8675,9 +8678,10 @@ function TPdfCanvas.SetFont(const AName: RawUtf8; ASize: single;\n             exit; // we got a standard/embedded font\r\n         end;\r\n     end;\r\n-    if (fPreviousRasterFontName <> '') and\r\n-       (fPreviousRasterFontName = AName) then\r\n-      ndx := fPreviousRasterFontIndex\r\n+    if (fDoc.fPreviousRasterFontName <> '') and\r\n+       (fDoc.fPreviousRasterFontName = AName) and\r\n+       (fDoc.fPreviousRasterFontFixed = AIsFixedWidth) then\r\n+      ndx := fDoc.fPreviousRasterFontIndex\r\n     else\r\n     begin\r\n       // search the font in the global system-wide true type fonts list\r\n@@ -8699,8 +8703,9 @@ function TPdfCanvas.SetFont(const AName: RawUtf8; ASize: single;\n           if ndx < 0 then\r\n             exit;\r\n         end;\r\n-        fPreviousRasterFontName := AName;\r\n-        fPreviousRasterFontIndex := ndx;\r\n+        fDoc.fPreviousRasterFontName := AName;\r\n+        fDoc.fPreviousRasterFontIndex := ndx;\r\n+        fDoc.fPreviousRasterFontFixed := AIsFixedWidth;\r\n       end;\r\n     end;\r\n   end;\r\n@@ -10233,6 +10238,7 @@ procedure TPdfEncryptionRC4MD5.AttachDocument(aDoc: TPdfDocument);\n       md5.Full(@dig, SizeOf(dig), dig);\r\n   SetLength(fInternalKey, HASHSIZE[fLevel]);\r\n   MoveFast(dig, fInternalKey[0], HASHSIZE[fLevel]);\r\n+  fLastObjectNumber := -1; // the cached object key is of the previous one\r\n   // calc fUserPass content\r\n   case fLevel of\r\n     elRC4_40:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 87,
+          "deletions": 0,
+          "patch": "@@ -38,6 +38,9 @@   TTestUiPdf = class(TSynTestCase)\n     procedure OutlineBeforePage;\r\n     procedure AddFontKeepsIndexes;\r\n     procedure NewDocDropsPage;\r\n+    procedure RasterFontCache;\r\n+    procedure NewDocRenewsKey;\r\n+    procedure NewDocEndsDirectSave;\r\n     procedure CatalogGetters;\r\n     procedure JpegColorSpace;\r\n     procedure ZeroAdvanceMeasured;\r\n@@ -804,6 +807,90 @@ procedure TTestUiPdf.NewDocDropsPage;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+procedure TTestUiPdf.RasterFontCache;\r\n+const\r\n+  UNKNOWN = 'No Such mORMot Font';\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  form: TPdfFormWithCanvas;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.FontFallBackName := 'Tahoma';\r\n+    form := TPdfFormWithCanvas.Create(pdf, 200, 100);\r\n+    pdf.AddXObject('FormR', form); // owned by the document from here\r\n+    form.Canvas.SetFont(UNKNOWN, 10, []); // resolved and cached\r\n+    // sorts first: every index after it moves\r\n+    Check(pdf.AddTrueTypeFont('AAA mORMot Test Font'));\r\n+    Check(form.Canvas.SetFont(UNKNOWN, 10, [pfsItalic]) =\r\n+          form.Canvas.SetFont('Tahoma', 10, [pfsItalic]), 'form canvas');\r\n+    form.CloseCanvas;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont(UNKNOWN, 10, []); // resolved and cached\r\n+    pdf.FontFallBackName := 'Verdana';\r\n+    Check(pdf.Canvas.SetFont(UNKNOWN, 10, []) =\r\n+          pdf.Canvas.SetFont('Verdana', 10, []), 'new fallback');\r\n+    Check(pdf.Canvas.SetFont(UNKNOWN, 10, [], -1, -1, true) =\r\n+          pdf.Canvas.SetFont('Courier New', 10, []), 'fixed width');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.NewDocRenewsKey;\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  first, second: RawByteString;\r\n+begin\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elRC4_128, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := 'AAAAAAAA';\r\n+    pdf.AddPage;\r\n+    first := PdfStringAfter(SavedPdf(pdf), '/Subject');\r\n+    pdf.NewDoc; // a new file ID, so a new key\r\n+    pdf.Info.Subject := 'AAAAAAAA';\r\n+    pdf.AddPage;\r\n+    second := PdfStringAfter(SavedPdf(pdf), '/Subject');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // with empty pages, the Info dictionary is the last object encrypted by one\r\n+  // save and the first by the next: the RC4 key cached for it was the old one\r\n+  CheckEqual(length(second), 8, 'subject');\r\n+  Check(second <> first, 'encrypted with the key of the new document');\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n+procedure TTestUiPdf.NewDocEndsDirectSave;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  left: TMemoryStream;\r\n+  s: RawByteString;\r\n+begin\r\n+  left := TMemoryStream.Create;\r\n+  try\r\n+    pdf := TPdfDocument.Create;\r\n+    try\r\n+      pdf.AddPage;\r\n+      pdf.SaveToStreamDirectBegin(left); // never ended\r\n+      pdf.NewDoc;\r\n+      pdf.AddPage;\r\n+      s := SavedPdf(pdf); // raised \"SaveToStreamDirectBegin called twice\"\r\n+    finally\r\n+      pdf.Free;\r\n+    end;\r\n+  finally\r\n+    left.Free;\r\n+  end;\r\n+  Check(PosEx('%%EOF', s) > 0, 'saved after NewDoc');\r\n+end;\r\n+\r\n procedure TTestUiPdf.CatalogGetters;\r\n var\r\n   pdf: TPdfDocument;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 685,
+      "is_merge": true
+    },
+    {
+      "sha": "bedd42932a4d757b00202b907c7fff689245a694",
+      "short_sha": "bedd4293",
+      "subject": "ui: pdf - NewDoc renews the RC4 object key and ends a direct save left open",
+      "body": "Follow-up to synopse/mORMot2#673 row 7: RC4 caches the key of the last object it encrypted. When the first object the renewed document encrypts has the number of the last one encrypted before - the Info dictionary of a document whose pages are empty - it was encrypted with the key of the old file ID. The writer of a SaveToStreamDirectBegin never ended stayed, and the next save raised \"called twice\"; FreeDoc frees it, the destructor too.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T08:55:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bedd42932a4d757b00202b907c7fff689245a694",
+      "parents": [
+        "a61d994ba5252155c79846c474117da9e3e2be7d"
+      ],
+      "stats": {
+        "additions": 58,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -7473,6 +7473,7 @@ procedure TPdfDocument.FreeDoc;\n var\r\n   i: PtrInt;\r\n begin\r\n+  FreeAndNil(fSaveToStreamWriter); // a SaveToStreamDirectBegin never ended\r\n   if fXObjectList <> nil then\r\n   begin\r\n     FreeAndNil(fXObjectList);\r\n@@ -10237,6 +10238,7 @@ procedure TPdfEncryptionRC4MD5.AttachDocument(aDoc: TPdfDocument);\n       md5.Full(@dig, SizeOf(dig), dig);\r\n   SetLength(fInternalKey, HASHSIZE[fLevel]);\r\n   MoveFast(dig, fInternalKey[0], HASHSIZE[fLevel]);\r\n+  fLastObjectNumber := -1; // the cached object key is of the previous one\r\n   // calc fUserPass content\r\n   case fLevel of\r\n     elRC4_40:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 0,
+          "patch": "@@ -39,6 +39,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure AddFontKeepsIndexes;\r\n     procedure NewDocDropsPage;\r\n     procedure RasterFontCache;\r\n+    procedure NewDocRenewsKey;\r\n+    procedure NewDocEndsDirectSave;\r\n     procedure CatalogGetters;\r\n     procedure JpegColorSpace;\r\n     procedure ZeroAdvanceMeasured;\r\n@@ -835,6 +837,60 @@ procedure TTestUiPdf.RasterFontCache;\n   end;\r\n end;\r\n \r\n+procedure TTestUiPdf.NewDocRenewsKey;\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  first, second: RawByteString;\r\n+begin\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elRC4_128, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := 'AAAAAAAA';\r\n+    pdf.AddPage;\r\n+    first := PdfStringAfter(SavedPdf(pdf), '/Subject');\r\n+    pdf.NewDoc; // a new file ID, so a new key\r\n+    pdf.Info.Subject := 'AAAAAAAA';\r\n+    pdf.AddPage;\r\n+    second := PdfStringAfter(SavedPdf(pdf), '/Subject');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // with empty pages, the Info dictionary is the last object encrypted by one\r\n+  // save and the first by the next: the RC4 key cached for it was the old one\r\n+  CheckEqual(length(second), 8, 'subject');\r\n+  Check(second <> first, 'encrypted with the key of the new document');\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n+procedure TTestUiPdf.NewDocEndsDirectSave;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  left: TMemoryStream;\r\n+  s: RawByteString;\r\n+begin\r\n+  left := TMemoryStream.Create;\r\n+  try\r\n+    pdf := TPdfDocument.Create;\r\n+    try\r\n+      pdf.AddPage;\r\n+      pdf.SaveToStreamDirectBegin(left); // never ended\r\n+      pdf.NewDoc;\r\n+      pdf.AddPage;\r\n+      s := SavedPdf(pdf); // raised \"SaveToStreamDirectBegin called twice\"\r\n+    finally\r\n+      pdf.Free;\r\n+    end;\r\n+  finally\r\n+    left.Free;\r\n+  end;\r\n+  Check(PosEx('%%EOF', s) > 0, 'saved after NewDoc');\r\n+end;\r\n+\r\n procedure TTestUiPdf.CatalogGetters;\r\n var\r\n   pdf: TPdfDocument;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a61d994ba5252155c79846c474117da9e3e2be7d",
+      "short_sha": "a61d994b",
+      "subject": "ui: pdf - the raster font cache is shared by the canvases of a document, and follows its keys",
+      "body": "Follow-up to synopse/mORMot2#673 row 5: the index an unknown font name was resolved to was cached per canvas, and AddTrueTypeFont cleared only the page canvas, so a form canvas kept the moved index. The cache now lives in TPdfDocument. It also ignored a change of FontFallBackName, and AIsFixedWidth (fixed width takes Courier New), on a single canvas too.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T08:55:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a61d994ba5252155c79846c474117da9e3e2be7d",
+      "parents": [
+        "cfc2797ff3fc3c667d148179916b70509b14678f"
+      ],
+      "stats": {
+        "additions": 45,
+        "deletions": 10,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 10,
+          "patch": "@@ -1325,6 +1325,11 @@   TPdfDocument = class\n     fTrueTypeFonts: TRawUtf8DynArray;\r\n     fTrueTypeFontLastName: RawUtf8;\r\n     fTrueTypeFontLastIndex: integer;\r\n+    // the index an unknown (raster) font name was resolved to, shared by the\r\n+    // canvases of the document and of its forms\r\n+    fPreviousRasterFontName: RawUtf8;\r\n+    fPreviousRasterFontIndex: integer;\r\n+    fPreviousRasterFontFixed: boolean;\r\n     fDC: HDC;\r\n     fScreenLogPixels: integer;\r\n     fPrinterPxPerInch: TPoint;\r\n@@ -1834,9 +1839,6 @@   TPdfCanvas = class\n     fUseMetaFileTextClipping: TPdfCanvasRenderMetaFileTextClipping;\r\n     fKerningHScaleBottom: single;\r\n     fKerningHScaleTop: single;\r\n-    // some cache\r\n-    fPreviousRasterFontName: RawUtf8;\r\n-    fPreviousRasterFontIndex: integer;\r\n     // result := fOffsetX + (X * fFactorX);\r\n     function I2X(X: integer): single;\r\n     function S2X(X: single): single;\r\n@@ -7457,8 +7459,7 @@ function TPdfDocument.AddTrueTypeFont(const TtfName: RawUtf8): boolean;\n   fTrueTypeFontLastName := '';\r\n   if fallback <> '' then\r\n     fFontFallBackIndex := GetTrueTypeFontIndex(fallback);\r\n-  if fCanvas <> nil then\r\n-    fCanvas.fPreviousRasterFontName := ''; // its index moved too\r\n+  fPreviousRasterFontName := ''; // its index moved too\r\n   ins := GetTrueTypeFontIndex(TtfName);\r\n   for i := 0 to fFontList.Count - 1 do\r\n   begin\r\n@@ -8208,6 +8209,7 @@ procedure TPdfDocument.SetPdfA(Value: TPdfALevel);\n procedure TPdfDocument.SetFontFallBackName(const Value: string);\r\n begin\r\n   fFontFallBackIndex := GetTrueTypeFontIndex(StringToUtf8(Value));\r\n+  fPreviousRasterFontName := ''; // it may have been resolved to the fallback\r\n end;\r\n \r\n function TPdfDocument.GetFontFallBackName: string;\r\n@@ -8675,9 +8677,10 @@ function TPdfCanvas.SetFont(const AName: RawUtf8; ASize: single;\n             exit; // we got a standard/embedded font\r\n         end;\r\n     end;\r\n-    if (fPreviousRasterFontName <> '') and\r\n-       (fPreviousRasterFontName = AName) then\r\n-      ndx := fPreviousRasterFontIndex\r\n+    if (fDoc.fPreviousRasterFontName <> '') and\r\n+       (fDoc.fPreviousRasterFontName = AName) and\r\n+       (fDoc.fPreviousRasterFontFixed = AIsFixedWidth) then\r\n+      ndx := fDoc.fPreviousRasterFontIndex\r\n     else\r\n     begin\r\n       // search the font in the global system-wide true type fonts list\r\n@@ -8699,8 +8702,9 @@ function TPdfCanvas.SetFont(const AName: RawUtf8; ASize: single;\n           if ndx < 0 then\r\n             exit;\r\n         end;\r\n-        fPreviousRasterFontName := AName;\r\n-        fPreviousRasterFontIndex := ndx;\r\n+        fDoc.fPreviousRasterFontName := AName;\r\n+        fDoc.fPreviousRasterFontIndex := ndx;\r\n+        fDoc.fPreviousRasterFontFixed := AIsFixedWidth;\r\n       end;\r\n     end;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 0,
+          "patch": "@@ -38,6 +38,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure OutlineBeforePage;\r\n     procedure AddFontKeepsIndexes;\r\n     procedure NewDocDropsPage;\r\n+    procedure RasterFontCache;\r\n     procedure CatalogGetters;\r\n     procedure JpegColorSpace;\r\n     procedure ZeroAdvanceMeasured;\r\n@@ -804,6 +805,36 @@ procedure TTestUiPdf.NewDocDropsPage;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+procedure TTestUiPdf.RasterFontCache;\r\n+const\r\n+  UNKNOWN = 'No Such mORMot Font';\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  form: TPdfFormWithCanvas;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.FontFallBackName := 'Tahoma';\r\n+    form := TPdfFormWithCanvas.Create(pdf, 200, 100);\r\n+    pdf.AddXObject('FormR', form); // owned by the document from here\r\n+    form.Canvas.SetFont(UNKNOWN, 10, []); // resolved and cached\r\n+    // sorts first: every index after it moves\r\n+    Check(pdf.AddTrueTypeFont('AAA mORMot Test Font'));\r\n+    Check(form.Canvas.SetFont(UNKNOWN, 10, [pfsItalic]) =\r\n+          form.Canvas.SetFont('Tahoma', 10, [pfsItalic]), 'form canvas');\r\n+    form.CloseCanvas;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont(UNKNOWN, 10, []); // resolved and cached\r\n+    pdf.FontFallBackName := 'Verdana';\r\n+    Check(pdf.Canvas.SetFont(UNKNOWN, 10, []) =\r\n+          pdf.Canvas.SetFont('Verdana', 10, []), 'new fallback');\r\n+    Check(pdf.Canvas.SetFont(UNKNOWN, 10, [], -1, -1, true) =\r\n+          pdf.Canvas.SetFont('Courier New', 10, []), 'fixed width');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n procedure TTestUiPdf.CatalogGetters;\r\n var\r\n   pdf: TPdfDocument;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "71432b88ef941d3d74d86f80bce429163f791846",
+      "short_sha": "71432b88",
+      "subject": "Merge pull request #684 from landrix/fix/pdf-review-673",
+      "body": "ui: pdf - fixes for rows 1-13 of #673, with their tests",
+      "author": "ab",
+      "date": "2026-10-24T08:27:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/71432b88ef941d3d74d86f80bce429163f791846",
+      "parents": [
+        "723a3172734c6c8546fb7f4757383d868b06e019",
+        "cfc2797ff3fc3c667d148179916b70509b14678f"
+      ],
+      "stats": {
+        "additions": 823,
+        "deletions": 74,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 227,
+          "deletions": 71,
+          "patch": "@@ -719,7 +719,11 @@   TPdfWrite = class\n     // - Ansi to Unicode conversion uses the CodePage set by Create() constructor\r\n     function AddToUnicodeHex(const Text: PdfString): TPdfWrite;\r\n     /// write some unicode text as as Big-Endian 4 hexadecimal characters\r\n+    // - never encrypted: AddUnicodeHexString writes the text string of an object\r\n     function AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWrite;\r\n+    /// write a text string of an object as <FEFF...>: the BOM and the\r\n+    // UTF-16BE characters, encrypted together when the document is\r\n+    function AddUnicodeHexString(PW: PWideChar; WideCharCount: integer): TPdfWrite;\r\n     /// convert some text into unicode characters, then write it as PDF Text\r\n     // - Ansi to Unicode conversion uses the CodePage set by Create() constructor\r\n     // - use (...) for all WinAnsi characters, or <..hexa..> for Unicode characters\r\n@@ -2590,6 +2594,9 @@   TPdfFontTrueType = class(TPdfFontWinAnsi)\n     // - WinAnsi characters are taken from fWinAnsiWidth[], unicode chars from\r\n     // fUsedWide[].Width\r\n     function GetWideCharWidth(aWideChar: WideChar): integer;\r\n+    /// true when GetWideCharWidth returns 0 for a character the face lacks,\r\n+    // not for a glyph whose advance is 0 (a combining mark)\r\n+    function WideCharMissing(aWideChar: WideChar): boolean;\r\n     /// is set to true if the PDF used any true type encoding\r\n     property WideCharUsed: boolean\r\n       read GetWideCharUsed;\r\n@@ -4031,12 +4038,18 @@ constructor TPdfReal.Create(AValue: double);\n { TPdfText }\r\n \r\n procedure TPdfText.InternalWriteTo(W: TPdfWrite);\r\n+var\r\n+  tmp: TSynTempBuffer;\r\n begin\r\n   // if the value has multibyte character, convert the value to hex unicode.\r\n   // otherwise, escape characters.\r\n   if SysLocale.FarEast and\r\n     HasMultiByteString(pointer(fValue)) then\r\n-    W.Add('<FEFF').AddToUnicodeHex(fValue).Add('>')\r\n+  begin\r\n+    W.ToWideChar(fValue, tmp);\r\n+    W.AddUnicodeHexString(tmp.buf, tmp.len);\r\n+    tmp.Done;\r\n+  end\r\n   else\r\n     W.Add('(').AddEscapeContent(fValue).Add(')');\r\n end;\r\n@@ -4072,7 +4085,7 @@ procedure TPdfTextUtf8.InternalWriteTo(W: TPdfWrite);\n   else\r\n   begin\r\n     utf16 := Utf8DecodeToUnicodeRawByteString(fValue);\r\n-    W.Add('<FEFF').AddUnicodeHex(pointer(utf16), Length(utf16) shr 1).Add('>');\r\n+    W.AddUnicodeHexString(pointer(utf16), Length(utf16) shr 1);\r\n   end;\r\n end;\r\n \r\n@@ -4629,7 +4642,9 @@ constructor TPdfStream.Create(ADoc: TPdfDocument; DontAddToFXref: boolean);\n \r\n destructor TPdfStream.Destroy;\r\n begin\r\n-  fWriter.fDestStream.Free;\r\n+  // nil when a constructor of TPdfImage raised before inherited Create\r\n+  if fWriter <> nil then\r\n+    fWriter.fDestStream.Free;\r\n   fWriter.Free;\r\n   fAttributes.Free;\r\n   inherited;\r\n@@ -4858,7 +4873,7 @@ function TPdfWrite.AddEscape(Text: PAnsiChar; TextLen: integer): TPdfWrite;\n           inc(B, 2);\r\n         end;\r\n       #8:\r\n-        PWord(B)^ := ord('\\') + ord('B') shl 8;\r\n+        PWord(B)^ := ord('\\') + ord('b') shl 8;\r\n       #9:\r\n         PWord(B)^ := ord('\\') + ord('t') shl 8;\r\n       #10:\r\n@@ -5141,20 +5156,9 @@ function TPdfWrite.AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWri\n \r\n var\r\n   L: PtrInt;\r\n-  {$ifdef USE_PDFSECURITY}\r\n-  sectmp: TSynTempBuffer;\r\n-  {$endif USE_PDFSECURITY}\r\n begin\r\n   if WideCharCount > 0 then\r\n   begin\r\n-    {$ifdef USE_PDFSECURITY}\r\n-    if fDoc.fEncryption <> nil then\r\n-    begin\r\n-      sectmp.Init(WideCharCount * 2);\r\n-      fDoc.fEncryption.EncodeBuffer(PW^, sectmp.buf^, WideCharCount * 2);\r\n-      PW := sectmp.buf;\r\n-    end;\r\n-    {$endif USE_PDFSECURITY}\r\n     repeat\r\n       L := WideCharCount;\r\n       if BEnd - B <= L * 4 then\r\n@@ -5168,14 +5172,40 @@ function TPdfWrite.AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWri\n       inc(B, L * 4);\r\n       dec(WideCharCount, L);\r\n     until WideCharCount = 0;\r\n-    {$ifdef USE_PDFSECURITY}\r\n-    if fDoc.fEncryption <> nil then\r\n-      sectmp.Done;\r\n-    {$endif USE_PDFSECURITY}\n... [truncated, 17369 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 596,
+          "deletions": 3,
+          "patch": "@@ -31,6 +31,18 @@   TTestUiPdf = class(TSynTestCase)\n     procedure TextInsertion;\r\n     procedure MultiplePages;\r\n     procedure PDFMetadata;\r\n+    procedure UnicodeWidth;\r\n+    procedure EscapeBackspace;\r\n+    procedure EncryptedUnicodeString;\r\n+    procedure WinAnsiToUnicodeBlocks;\r\n+    procedure OutlineBeforePage;\r\n+    procedure AddFontKeepsIndexes;\r\n+    procedure NewDocDropsPage;\r\n+    procedure CatalogGetters;\r\n+    procedure JpegColorSpace;\r\n+    procedure ZeroAdvanceMeasured;\r\n+    procedure ReducedFontChecksum;\r\n+    procedure BidiEmbeddingOrder;\r\n   end;\r\n \r\n implementation\r\n@@ -39,14 +51,17 @@ implementation\n {$ifdef FPC}\r\n   Windows,\r\n   Graphics,\r\n-  mormot.ui.core\r\n+  mormot.ui.core,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n {$else}\r\n   {$ifdef NEEDVCLPREFIX}\r\n   WinApi.Windows,\r\n-  VCL.Graphics\r\n+  VCL.Graphics,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n   {$else}\r\n   Windows,\r\n-  Graphics\r\n+  Graphics,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n   {$endif NEEDVCLPREFIX}\r\n {$endif FPC}\r\n   ;\r\n@@ -465,6 +480,584 @@ procedure TTestUiPdf.PDFMetadata;\n   end;\r\n end;\r\n \r\n+function SavedPdf(Doc: TPdfDocument): RawByteString;\r\n+var\r\n+  ms: TMemoryStream;\r\n+begin\r\n+  ms := TMemoryStream.Create;\r\n+  try\r\n+    Doc.SaveToStream(ms, FIXED_DATE);\r\n+    SetString(result, PAnsiChar(ms.Memory), ms.Size);\r\n+  finally\r\n+    ms.Free;\r\n+  end;\r\n+end;\r\n+\r\n+function Nibble(c: AnsiChar): integer;\r\n+begin\r\n+  case c of\r\n+    '0'..'9':\r\n+      result := ord(c) - ord('0');\r\n+    'A'..'F':\r\n+      result := ord(c) - (ord('A') - 10);\r\n+    'a'..'f':\r\n+      result := ord(c) - (ord('a') - 10);\r\n+  else\r\n+    result := 0;\r\n+  end;\r\n+end;\r\n+\r\n+// the bytes of the (literal) or <hex> string written after Key\r\n+function PdfStringAfter(const s, Key: RawByteString): RawByteString;\r\n+var\r\n+  p: integer;\r\n+begin\r\n+  result := '';\r\n+  p := PosEx(Key, s);\r\n+  if p = 0 then\r\n+    exit;\r\n+  inc(p, length(Key));\r\n+  while (p <= length(s)) and\r\n+        (s[p] = ' ') do\r\n+    inc(p);\r\n+  if p > length(s) then\r\n+    exit;\r\n+  if s[p] = '<' then\r\n+  begin\r\n+    inc(p);\r\n+    while (p < length(s)) and\r\n+          (s[p] <> '>') do\r\n+    begin\r\n+      result := result + AnsiChar(Nibble(s[p]) shl 4 + Nibble(s[p + 1]));\r\n+      inc(p, 2);\r\n+    end;\r\n+  end\r\n+  else if s[p] = '(' then\r\n+  begin\r\n+    inc(p);\r\n+    while (p <= length(s)) and\r\n+          (s[p] <> ')') do\r\n+    begin\r\n+      if s[p] = '\\' then\r\n+      begin\r\n+        inc(p);\r\n+        case s[p] of\r\n+          'n':\r\n+            result := result + #10;\r\n+          'r':\r\n+            result := result + #13;\r\n+          't':\r\n+            result := result + #9;\r\n+          'b':\r\n+            result := result + #8;\r\n+          'f':\r\n+            result := result + #12;\r\n+          '0'..'7':\r\n+            begin\r\n+              result := result + AnsiChar((ord(s[p]) - 48) * 64 +\r\n+                (ord(s[p + 1]) - 48) * 8 + (ord(s[p + 2]) - 48));\r\n+              inc(p, 2);\r\n+            end;\r\n+        else\r\n+          result := result + s[p];\r\n+        end;\r\n+      end\r\n+      else\r\n+        result := result + s[p];\r\n+      inc(p);\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.UnicodeWidth;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  w: array[0..1] of WideChar;\r\n+begin\r\n+  // FPC read fUsedWide[] before FindOrAddUsedWideChar reallocated it\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    w[1] := #0;\r\n+    w[0] := WideChar($0418); // not WinAnsi: drawn before it was ever measured\r\n+    pdf.Canvas.TextOutW(20, 700, @w);\r\n+    w[0] := WideChar($0416);\r\n+    Check(pdf.Canvas.UnicodeTextWidth(@w) > 0, 'measured');\r\n+    Check(SavedPdf(pdf) <> '', 'saved');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EscapeBackspace;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.GeneratePDF15Fil\n... [truncated, 13563 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 684,
+      "is_merge": true
+    },
+    {
+      "sha": "cfc2797ff3fc3c667d148179916b70509b14678f",
+      "short_sha": "cfc2797f",
+      "subject": "ui: pdf - Uniscribe gets the bidi level without the state bits above it",
+      "body": "synopse/mORMot2#673 row 13.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cfc2797ff3fc3c667d148179916b70509b14678f",
+      "parents": [
+        "5368dcc8f5ca26c4be885487d99f10dea3badda3"
+      ],
+      "stats": {
+        "additions": 73,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -5314,7 +5314,8 @@ function TPdfWrite.AddUnicodeHexTextUniScribe(PW: PWideChar; PWLen: integer;\n   // 3. get Visual Order, i.e. how to render the content from left to right\r\n   SetLength(level, count);\r\n   for i := 0 to count - 1 do\r\n-    level[i] := items[i].a.s.uBidiLevel;\r\n+    // without the state bits above the five level bits\r\n+    level[i] := items[i].a.s.uBidiLevel and $1f;\r\n   SetLength(VisualToLogical, count);\r\n   if ScriptLayout(count, pointer(level), pointer(VisualToLogical), nil) <> 0 then\r\n     exit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 71,
+          "deletions": 0,
+          "patch": "@@ -42,6 +42,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure JpegColorSpace;\r\n     procedure ZeroAdvanceMeasured;\r\n     procedure ReducedFontChecksum;\r\n+    procedure BidiEmbeddingOrder;\r\n   end;\r\n \r\n implementation\r\n@@ -987,6 +988,76 @@ procedure TTestUiPdf.ReducedFontChecksum;\n end;\r\n {$endif NO_USE_UNISCRIBE}\r\n \r\n+function Hex4(v: word): RawUtf8;\r\n+const\r\n+  HEX: array[0..15] of AnsiChar = '0123456789ABCDEF';\r\n+begin\r\n+  SetLength(result, 4);\r\n+  result[1] := HEX[v shr 12];\r\n+  result[2] := HEX[(v shr 8) and 15];\r\n+  result[3] := HEX[(v shr 4) and 15];\r\n+  result[4] := HEX[v and 15];\r\n+end;\r\n+\r\n+{$ifdef FPC} // not in the Windows unit of FPC\r\n+function GetGlyphIndicesW(DC: HDC; Text: PWideChar; Count: integer;\r\n+  Glyphs: PWord; Flags: cardinal): cardinal; stdcall; external 'gdi32.dll';\r\n+{$endif FPC}\r\n+\r\n+procedure TTestUiPdf.BidiEmbeddingOrder;\r\n+{$ifndef NO_USE_UNISCRIBE}\r\n+const\r\n+  // x RLO ab LRE cd PDF ef PDF z: the embedding levels 0 1 2 1 0, where\r\n+  // Uniscribe also sets the override bit of the state above the level bits\r\n+  TXT: array[0..14] of WideChar = ('x', ' ', WideChar($202E), 'a', 'b',\r\n+    WideChar($202A), 'c', 'd', WideChar($202C), 'e', 'f', WideChar($202C),\r\n+    ' ', 'z', #0);\r\n+  ECA: array[0..2] of WideChar = ('e', 'c', 'a');\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+  dc: HDC;\r\n+  font, old: HFONT;\r\n+  g: array[0..2] of word;\r\n+  p, pe, pc, pa: integer;\r\n+begin\r\n+  dc := CreateCompatibleDC(0);\r\n+  font := CreateFont(-100, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET,\r\n+    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, 0, 'Arial');\r\n+  old := SelectObject(dc, font);\r\n+  GetGlyphIndicesW(dc, @ECA, 3, @g, 0);\r\n+  SelectObject(dc, old);\r\n+  DeleteObject(font);\r\n+  DeleteDC(dc);\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.UseUniscribe := true;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    pdf.Canvas.TextOutW(20, 700, @TXT);\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // visual order: x, then the runs ef, cd, ab - in the text object only\r\n+  p := PosEx('BT'#10, s);\r\n+  if not Check(p > 0, 'text object') then\r\n+    exit;\r\n+  s := copy(s, p, PosEx('ET'#10, s, p) - p);\r\n+  pe := PosEx(Hex4(g[0]), s);\r\n+  pc := PosEx(Hex4(g[1]), s);\r\n+  pa := PosEx(Hex4(g[2]), s);\r\n+  CheckUtf8((pe > 0) and\r\n+            (pe < pc) and\r\n+            (pc < pa), 'visual order ef, cd, ab: % % %', [pe, pc, pa]);\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_UNISCRIBE}\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5368dcc8f5ca26c4be885487d99f10dea3badda3",
+      "short_sha": "5368dcc8",
+      "subject": "ui: pdf - the reduced TrueType subset sums its table directory as big-endian words",
+      "body": "synopse/mORMot2#673 row 12.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5368dcc8f5ca26c4be885487d99f10dea3badda3",
+      "parents": [
+        "2868a44f991bbea3e61f48b38004a4dfb48f940f"
+      ],
+      "stats": {
+        "additions": 57,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -6421,7 +6421,7 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n   end;\r\n   // finalize the generated content\r\n   for i := 0 to ((SizeOf(dir^) + (n * SizeOf(e^))) shr 2) - 1 do\r\n-    inc(checksum, PCardinalArray(ttf)[i]);\r\n+    inc(checksum, bswap32(PCardinalArray(ttf)[i])); // big-endian words\r\n   if head <> nil then\r\n     head^.checkSumAdjustment := bswap32($B1B0AFBA - checksum);\r\n   {%H-}PStrLen(PtrUInt(ttf) - _STRLEN)^ := PtrUInt(d) - PtrUInt(ttf); // resize\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 0,
+          "patch": "@@ -41,6 +41,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure CatalogGetters;\r\n     procedure JpegColorSpace;\r\n     procedure ZeroAdvanceMeasured;\r\n+    procedure ReducedFontChecksum;\r\n   end;\r\n \r\n implementation\r\n@@ -931,6 +932,61 @@ procedure TTestUiPdf.ZeroAdvanceMeasured;\n   end;\r\n end;\r\n \r\n+procedure TTestUiPdf.ReducedFontChecksum;\r\n+{$ifndef NO_USE_UNISCRIBE}\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+  p, len, i: integer;\r\n+  sum: cardinal;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.EmbeddedTtf := true;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    pdf.Canvas.TextOut(20, 700, 'Hello');\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // the subset of a hinted face keeps 10 tables, so ReduceTTF rebuilds it\r\n+  p := PosEx('/Length1 ', s);\r\n+  if not Check(p > 0, 'FontFile2') then\r\n+    exit;\r\n+  len := GetInteger(@s[p + 9]);\r\n+  p := PosEx('stream', s, p);\r\n+  if not Check(p > 0, 'stream') then\r\n+    exit;\r\n+  inc(p, 6);\r\n+  if s[p] = #13 then\r\n+    inc(p);\r\n+  inc(p); // #10\r\n+  if not Check(p + len - 1 <= length(s), 'font data') then\r\n+    exit;\r\n+  // the whole font sums to $B1B0AFBA, its tables read as big-endian words\r\n+  sum := 0;\r\n+  i := 0;\r\n+  while i < len do\r\n+  begin\r\n+    sum := sum + cardinal(ord(s[p + i])) shl 24;\r\n+    if i + 1 < len then\r\n+      sum := sum + cardinal(ord(s[p + i + 1])) shl 16;\r\n+    if i + 2 < len then\r\n+      sum := sum + cardinal(ord(s[p + i + 2])) shl 8;\r\n+    if i + 3 < len then\r\n+      sum := sum + cardinal(ord(s[p + i + 3]));\r\n+    inc(i, 4);\r\n+  end;\r\n+  CheckEqual(sum, $B1B0AFBA, 'head.checkSumAdjustment');\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_UNISCRIBE}\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2868a44f991bbea3e61f48b38004a4dfb48f940f",
+      "short_sha": "2868a44f",
+      "subject": "ui: pdf - a glyph whose advance is 0 (a combining mark) is measured as 0, not as a missing one",
+      "body": "synopse/mORMot2#673 row 11.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2868a44f991bbea3e61f48b38004a4dfb48f940f",
+      "parents": [
+        "2b37d1539154bac3011cd3171d10257c11e44b33"
+      ],
+      "stats": {
+        "additions": 57,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 6,
+          "patch": "@@ -2594,6 +2594,9 @@   TPdfFontTrueType = class(TPdfFontWinAnsi)\n     // - WinAnsi characters are taken from fWinAnsiWidth[], unicode chars from\r\n     // fUsedWide[].Width\r\n     function GetWideCharWidth(aWideChar: WideChar): integer;\r\n+    /// true when GetWideCharWidth returns 0 for a character the face lacks,\r\n+    // not for a glyph whose advance is 0 (a combining mark)\r\n+    function WideCharMissing(aWideChar: WideChar): boolean;\r\n     /// is set to true if the PDF used any true type encoding\r\n     property WideCharUsed: boolean\r\n       read GetWideCharUsed;\r\n@@ -6314,6 +6317,21 @@ function TPdfFontTrueType.GetWideCharWidth(aWideChar: WideChar): integer;\n   end;\r\n end;\r\n \r\n+function TPdfFontTrueType.WideCharMissing(aWideChar: WideChar): boolean;\r\n+var\r\n+  i: integer;\r\n+begin\r\n+  if fUnicode then\r\n+    result := WinAnsiFont.WideCharMissing(aWideChar)\r\n+  else if WideCharToWinAnsi(ord(aWideChar)) >= 0 then\r\n+    result := true // a WinAnsi character measured 0, as before\r\n+  else\r\n+  begin\r\n+    i := FindOrAddUsedWideChar(aWideChar); // may reallocate fUsedWide[]\r\n+    result := fUsedWide[i].Glyph = 0;\r\n+  end;\r\n+end;\r\n+\r\n type\r\n   TTtfTableDirectory = packed record\r\n     sfntVersion: cardinal; // 0x00010000 for version 1.0\r\n@@ -9276,6 +9294,7 @@ function TPdfCanvas.UnicodeTextWidth(PW: PWideChar): single;\n var\r\n   s: PdfString;\r\n   i, w, w2: integer;\r\n+  fallback: TPdfFontTrueType;\r\n begin\r\n   w := 0;\r\n   if PW <> nil then\r\n@@ -9297,13 +9316,22 @@ function TPdfCanvas.UnicodeTextWidth(PW: PWideChar): single;\n         while PW^ <> #0 do\r\n         begin\r\n           w2 := GetWideCharWidth(PW^);\r\n+          // 0 is also the advance of a combining mark: only a glyph the font\r\n+          // lacks is measured in the fallback font, or as DEFAULT_PDF_WIDTH\r\n           if (w2 = 0) and\r\n-             (fDoc.fUseFontFallBack) and\r\n-             (fDoc.fFontFallBackIndex >= 0) then\r\n-            w2 := (SetFont('', fPage.FontSize, fStyle, -1,\r\n-              fDoc.fFontFallBackIndex) as TPdfFontTrueType).GetWideCharWidth(PW^);\r\n-          if w2 = 0 then\r\n-            w2 := DEFAULT_PDF_WIDTH;\r\n+             WideCharMissing(PW^) then\r\n+            if (fDoc.fUseFontFallBack) and\r\n+               (fDoc.fFontFallBackIndex >= 0) then\r\n+            begin\r\n+              fallback := SetFont('', fPage.FontSize, fStyle, -1,\r\n+                fDoc.fFontFallBackIndex) as TPdfFontTrueType;\r\n+              w2 := fallback.GetWideCharWidth(PW^);\r\n+              if (w2 = 0) and\r\n+                 fallback.WideCharMissing(PW^) then\r\n+                w2 := DEFAULT_PDF_WIDTH;\r\n+            end\r\n+            else\r\n+              w2 := DEFAULT_PDF_WIDTH;\r\n           inc(w, w2);\r\n           inc(PW);\r\n         end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 0,
+          "patch": "@@ -40,6 +40,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure NewDocDropsPage;\r\n     procedure CatalogGetters;\r\n     procedure JpegColorSpace;\r\n+    procedure ZeroAdvanceMeasured;\r\n   end;\r\n \r\n implementation\r\n@@ -908,6 +909,28 @@ procedure TTestUiPdf.JpegColorSpace;\n   end;\r\n end;\r\n \r\n+procedure TTestUiPdf.ZeroAdvanceMeasured;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  w: array[0..2] of WideChar;\r\n+  w1, w2: single;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    w[0] := 'a';\r\n+    w[1] := #0;\r\n+    w1 := pdf.Canvas.UnicodeTextWidth(@w);\r\n+    w[1] := WideChar($0301); // combining acute accent: advances by 0\r\n+    w[2] := #0;\r\n+    w2 := pdf.Canvas.UnicodeTextWidth(@w);\r\n+    CheckSame(w1, w2, 1E-6, 'a combining mark adds no width');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2b37d1539154bac3011cd3171d10257c11e44b33",
+      "short_sha": "2b37d153",
+      "subject": "ui: pdf - a JPEG gets the colour space of its data; CMYK and non-JPEG data raise",
+      "body": "TPdfImage.Create(TJpegImage) wrote DeviceRGB for every JPEG: it now writes\r\nDeviceGray for a grayscale one, and raises EPdfInvalidValue for a CMYK one.\r\nCreateJpegDirect raises for data that is no JPEG, or of 4 components, instead\r\nof returning an incomplete image object; both raise before inherited Create,\r\nso TPdfStream.Destroy accepts a nil fWriter.\r\n\r\nsynopse/mORMot2#673 row 10.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2b37d1539154bac3011cd3171d10257c11e44b33",
+      "parents": [
+        "823a8296f1ddf94ef0358e71fd8968217377a22f"
+      ],
+      "stats": {
+        "additions": 168,
+        "deletions": 32,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 69,
+          "deletions": 29,
+          "patch": "@@ -4639,7 +4639,9 @@ constructor TPdfStream.Create(ADoc: TPdfDocument; DontAddToFXref: boolean);\n \r\n destructor TPdfStream.Destroy;\r\n begin\r\n-  fWriter.fDestStream.Free;\r\n+  // nil when a constructor of TPdfImage raised before inherited Create\r\n+  if fWriter <> nil then\r\n+    fWriter.fDestStream.Free;\r\n   fWriter.Free;\r\n   fAttributes.Free;\r\n   inherited;\r\n@@ -9848,6 +9850,34 @@ constructor TPdfImage.Create(aDoc: TPdfDocument; aImage: TGraphic;\n   entry: array of TPaletteEntry;\r\n   ca: TPdfArray;\r\n   transcolor: TPdfColorRGB;\r\n+  jpeg: TMemoryStream;\r\n+  jw, jh, jbits: integer;\r\n+\r\n+  function SavedJpeg: TMemoryStream;\r\n+  begin\r\n+    result := TMemoryStream.Create;\r\n+    try\r\n+      with TJpegImage(aImage) do\r\n+      begin\r\n+        if aDoc.ForceJPEGCompression <> 0 then\r\n+          CompressionQuality := aDoc.ForceJPEGCompression;\r\n+        {$ifdef USE_SYNGDIPLUS}\r\n+        if aDoc.ForceJPEGCompression = 0 then // recompression only if necessary\r\n+          SaveInternalToStream(result)\r\n+        else\r\n+        {$endif USE_SYNGDIPLUS}\r\n+          SaveToStream(result); // with CompressionQuality recompress\r\n+      end;\r\n+      // the colour space of the components the data says, RGB if unrecognized\r\n+      if not GetJpegSize(result.Memory, result.Size, jw, jh, jbits) then\r\n+        jbits := 24;\r\n+      if jbits = 32 then\r\n+        EPdfInvalidValue.RaiseUtf8('TPdfImage.Create: CMYK JPEG not supported', []);\r\n+    except\r\n+      result.Free;\r\n+      raise;\r\n+    end;\r\n+  end;\r\n \r\n   procedure NeedBitmap(PF: TPixelFormat);\r\n   begin\r\n@@ -9881,28 +9911,32 @@ constructor TPdfImage.Create(aDoc: TPdfDocument; aImage: TGraphic;\n   end;\r\n \r\n begin\r\n-  inherited Create(aDoc, DontAddToFXref);\r\n-  fPixelWidth := aImage.Width;\r\n-  fPixelHeight := aImage.Height;\r\n-  fAttributes.AddItem('Type', 'XObject');\r\n-  fAttributes.AddItem('Subtype', 'Image');\r\n+  jbits := 24;\r\n+  jpeg := nil;\r\n   if aImage.InheritsFrom(TJpegImage) then\r\n-  begin\r\n-    fAttributes.AddItem('ColorSpace', 'DeviceRGB');\r\n+    jpeg := SavedJpeg; // before inherited Create: a raise leaves no xref entry\r\n+  try\r\n+    inherited Create(aDoc, DontAddToFXref);\r\n+    fPixelWidth := aImage.Width;\r\n+    fPixelHeight := aImage.Height;\r\n+    fAttributes.AddItem('Type', 'XObject');\r\n+    fAttributes.AddItem('Subtype', 'Image');\r\n+  except\r\n+    jpeg.Free;\r\n+    raise;\r\n+  end;\r\n+  if jpeg <> nil then\r\n+  try\r\n+    if jbits = 8 then\r\n+      fAttributes.AddItem('ColorSpace', 'DeviceGray')\r\n+    else\r\n+      fAttributes.AddItem('ColorSpace', 'DeviceRGB');\r\n     fFilter := 'DCTDecode';\r\n     fWriter.Save; // flush to allow direct access to fDestStream\r\n-    with TJpegImage(aImage) do\r\n-    begin\r\n-      if aDoc.ForceJPEGCompression <> 0 then\r\n-        CompressionQuality := aDoc.ForceJPEGCompression;\r\n-      {$ifdef USE_SYNGDIPLUS}\r\n-      if aDoc.ForceJPEGCompression = 0 then // recompression only if necessary\r\n-        SaveInternalToStream(fWriter.fDestStream)\r\n-      else\r\n-      {$endif USE_SYNGDIPLUS}\r\n-        SaveToStream(fWriter.fDestStream); // with CompressionQuality recompress\r\n-    end;\r\n+    fWriter.fDestStream.WriteBuffer(jpeg.Memory^, jpeg.Size);\r\n     fWriter.fDestStreamPosition := fWriter.fDestStream.Position;\r\n+  finally\r\n+    jpeg.Free;\r\n   end\r\n   else\r\n   begin\r\n@@ -9982,12 +10016,20 @@ constructor TPdfImage.CreateJpegDirect(aDoc: TPdfDocument;\n constructor TPdfImage.CreateJpegDirect(aDoc: TPdfDocument;\r\n   aJpegFile: TMemoryStream; DontAddToFXref: boolean);\r\n var\r\n-  len, bits: integer;\r\n+  len, w, h, bits: integer;\r\n begin\r\n-  inherited Create(aDoc, DontAddToFXref);\r\n+  // before inherited Create: a raise there leaves nothing in the xref\r\n   len := aJpegFile.Size;\r\n-  if not GetJpegSize(aJpegFile.Memory, len, fPixelWidth, fPixelHeight, bits) then\r\n-    exit; // JPEG format expected\r\n+  if not GetJpegSize(aJpegFile.Memory, len, w, h, bits) then\r\n+    EPdfInvalidValue.RaiseUtf8('TPdfImage.CreateJpegDirect: no JPEG (% bytes)',\r\n+      [len]);\r\n+  if (bits <> 8) and\r\n+  \n... [truncated, 941 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 99,
+          "deletions": 3,
+          "patch": "@@ -39,6 +39,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure AddFontKeepsIndexes;\r\n     procedure NewDocDropsPage;\r\n     procedure CatalogGetters;\r\n+    procedure JpegColorSpace;\r\n   end;\r\n \r\n implementation\r\n@@ -47,14 +48,17 @@ implementation\n {$ifdef FPC}\r\n   Windows,\r\n   Graphics,\r\n-  mormot.ui.core\r\n+  mormot.ui.core,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n {$else}\r\n   {$ifdef NEEDVCLPREFIX}\r\n   WinApi.Windows,\r\n-  VCL.Graphics\r\n+  VCL.Graphics,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n   {$else}\r\n   Windows,\r\n-  Graphics\r\n+  Graphics,\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n   {$endif NEEDVCLPREFIX}\r\n {$endif FPC}\r\n   ;\r\n@@ -812,6 +816,98 @@ procedure TTestUiPdf.CatalogGetters;\n   end;\r\n end;\r\n \r\n+const\r\n+  // 8 x 8 pixels, one component (grayscale) and four (CMYK)\r\n+  JPEG_GRAY = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEj' +\r\n+    'JR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/wAALCAAIAAgBAREA' +\r\n+    '/8QAFAABAAAAAAAAAAAAAAAAAAAAAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8A' +\r\n+    'P//Z';\r\n+  JPEG_CMYK = '/9j/7gAOQWRvYmUAZAAAAAAA/9sAQwAQCwwODAoQDg0OEhEQExgoGhgWFhgxIyUd' +\r\n+    'KDozPTw5Mzg3QEhcTkBEV0U3OFBtUVdfYmdoZz5NcXlwZHhcZWdj/8AAFAgACAAIBEMRAE0R' +\r\n+    'AFkRAEsRAP/EABUAAQEAAAAAAAAAAAAAAAAAAAcB/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/a' +\r\n+    'AA4EQwBNAFkASwAAPwBAQfkB/9k=';\r\n+\r\n+procedure TTestUiPdf.JpegColorSpace;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  jpg: TJpegImage;\r\n+  ms: TMemoryStream;\r\n+  img: TPdfImage;\r\n+  raised: boolean;\r\n+  nojpeg: RawByteString;\r\n+\r\n+  procedure Load(const b64: RawUtf8);\r\n+  var\r\n+    bin: RawByteString;\r\n+  begin\r\n+    bin := Base64ToBin(b64);\r\n+    ms.Clear;\r\n+    ms.WriteBuffer(pointer(bin)^, length(bin));\r\n+    ms.Position := 0;\r\n+  end;\r\n+\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  ms := TMemoryStream.Create;\r\n+  try\r\n+    pdf.AddPage;\r\n+    // a grayscale TJpegImage is not RGB\r\n+    Load(JPEG_GRAY);\r\n+    jpg := TJpegImage.Create;\r\n+    try\r\n+      jpg.LoadFromStream(ms);\r\n+      img := TPdfImage.Create(pdf, jpg, true);\r\n+      try\r\n+        CheckEqual(img.Attributes.PdfNameByName('ColorSpace').Value,\r\n+          'DeviceGray', 'TJpegImage');\r\n+      finally\r\n+        img.Free;\r\n+      end;\r\n+    finally\r\n+      jpg.Free;\r\n+    end;\r\n+    // what cannot be written raises, nothing incomplete is left\r\n+    Load(JPEG_CMYK);\r\n+    jpg := TJpegImage.Create;\r\n+    try\r\n+      jpg.LoadFromStream(ms);\r\n+      raised := false;\r\n+      try\r\n+        TPdfImage.Create(pdf, jpg, true).Free;\r\n+      except\r\n+        on EPdfInvalidValue do\r\n+          raised := true;\r\n+      end;\r\n+      Check(raised, 'CMYK TJpegImage');\r\n+    finally\r\n+      jpg.Free;\r\n+    end;\r\n+    Load(JPEG_CMYK);\r\n+    raised := false;\r\n+    try\r\n+      TPdfImage.CreateJpegDirect(pdf, ms, true).Free;\r\n+    except\r\n+      on EPdfInvalidValue do\r\n+        raised := true;\r\n+    end;\r\n+    Check(raised, 'CMYK JPEG');\r\n+    nojpeg := 'some text, not a JPEG';\r\n+    ms.Clear;\r\n+    ms.WriteBuffer(pointer(nojpeg)^, length(nojpeg));\r\n+    raised := false;\r\n+    try\r\n+      TPdfImage.CreateJpegDirect(pdf, ms, true).Free;\r\n+    except\r\n+      on EPdfInvalidValue do\r\n+        raised := true;\r\n+    end;\r\n+    Check(raised, 'not a JPEG');\r\n+  finally\r\n+    ms.Free;\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "823a8296f1ddf94ef0358e71fd8968217377a22f",
+      "short_sha": "823a8296",
+      "subject": "ui: pdf - TPdfDictionaryWrapper.HasData and TPdfCatalog.NonFullScreenPageMode read what is written",
+      "body": "synopse/mORMot2#673 row 8.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/823a8296f1ddf94ef0358e71fd8968217377a22f",
+      "parents": [
+        "f1d7a62d359b9ae05745672b3b4cf90054e5961b"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -9569,7 +9569,7 @@ procedure TPdfDictionaryWrapper.SetData(AData: TPdfDictionary);\n \r\n function TPdfDictionaryWrapper.GetHasData: boolean;\r\n begin\r\n-  result := (fData = nil);\r\n+  result := fData <> nil;\r\n end;\r\n \r\n \r\n@@ -9702,7 +9702,7 @@ function TPdfCatalog.GetNonFullScreenPageMode: TPdfPageMode;\n   s: PdfString;\r\n begin\r\n   result := pmUseNone;\r\n-  d := fData.PdfDictionaryByName('NonFullScreenPageMode');\r\n+  d := fData.PdfDictionaryByName('ViewerPreferences'); // where the setter writes\r\n   if d = nil then\r\n     exit;\r\n   m := d.PdfNameByName('NonFullScreenPageMode');\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 0,
+          "patch": "@@ -38,6 +38,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure OutlineBeforePage;\r\n     procedure AddFontKeepsIndexes;\r\n     procedure NewDocDropsPage;\r\n+    procedure CatalogGetters;\r\n   end;\r\n \r\n implementation\r\n@@ -796,6 +797,21 @@ procedure TTestUiPdf.NewDocDropsPage;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+procedure TTestUiPdf.CatalogGetters;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    Check(pdf.Info.HasData, 'HasData');\r\n+    pdf.Root.NonFullScreenPageMode := pmUseOutlines;\r\n+    Check(pdf.Root.NonFullScreenPageMode = pmUseOutlines,\r\n+      'NonFullScreenPageMode reads ViewerPreferences');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f1d7a62d359b9ae05745672b3b4cf90054e5961b",
+      "short_sha": "f1d7a62d",
+      "subject": "ui: pdf - NewDoc drops its references to the freed page, metadata, outlines and /Encrypt",
+      "body": "synopse/mORMot2#673 row 7.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:18Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f1d7a62d359b9ae05745672b3b4cf90054e5961b",
+      "parents": [
+        "75a2eed7097073a0f811a26eb94b3cd16eccfb18"
+      ],
+      "stats": {
+        "additions": 59,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -7260,6 +7260,19 @@ procedure TPdfDocument.NewDoc;\n   fBookMarks.Clear;\r\n   fMissingBookmarks.Clear;\r\n   FreeDoc;\r\n+  // freed with the objects above: a later test of them must see nil\r\n+  fMetaData := nil;\r\n+  fOutputIntents := nil;\r\n+  fOutlineRoot := nil;\r\n+  {$ifdef USE_PDFSECURITY}\r\n+  fEncryptionObject := nil; // was the /Encrypt value of the freed trailer\r\n+  {$endif USE_PDFSECURITY}\r\n+  if fCanvas <> nil then\r\n+  begin\r\n+    fCanvas.fPage := nil;\r\n+    fCanvas.fContents := nil;\r\n+    fCanvas.fPageFontList := nil;\r\n+  end;\r\n   fXRef := TPdfXref.Create;\r\n   fTrailer := TPdfTrailer.Create(fXRef);\r\n   fFontList := TSynList.Create;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -37,6 +37,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure WinAnsiToUnicodeBlocks;\r\n     procedure OutlineBeforePage;\r\n     procedure AddFontKeepsIndexes;\r\n+    procedure NewDocDropsPage;\r\n   end;\r\n \r\n implementation\r\n@@ -750,6 +751,51 @@ procedure TTestUiPdf.AddFontKeepsIndexes;\n   end;\r\n end;\r\n \r\n+procedure TTestUiPdf.NewDocDropsPage;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  page: TPdfPage;\r\n+  raised: boolean;\r\n+  s: RawByteString;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.AddPage;\r\n+    Check(pdf.Canvas.Page <> nil);\r\n+    pdf.NewDoc; // frees the page and its content stream\r\n+    raised := false;\r\n+    try\r\n+      page := pdf.Canvas.Page; // raises without a page\r\n+      Check(page = nil);\r\n+    except\r\n+      on EPdfInvalidOperation do\r\n+        raised := true;\r\n+    end;\r\n+    Check(raised, 'no reference to the freed page');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  {$ifndef NO_USE_PDFSECURITY}\r\n+  // the /Encrypt dictionary was freed with the trailer of the first document\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elRC4_40, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.AddPage;\r\n+    pdf.NewDoc;\r\n+    pdf.AddPage;\r\n+    raised := false;\r\n+    try\r\n+      s := SavedPdf(pdf);\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+    Check(not raised and (PosEx('/Encrypt', s) > 0), 'encrypted after NewDoc');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  {$endif NO_USE_PDFSECURITY}\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "75a2eed7097073a0f811a26eb94b3cd16eccfb18",
+      "short_sha": "75a2eed7",
+      "subject": "ui: pdf - the PostScript name of a face without an English one is the family name",
+      "body": "synopse/mORMot2#673 row 6.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/75a2eed7097073a0f811a26eb94b3cd16eccfb18",
+      "parents": [
+        "e4caf68f477b5bb6ab411a6a9130dcf3f8ce1a74"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 3,
+          "patch": "@@ -7815,12 +7815,11 @@ function TPdfDocument.TtfFontPostcriptName(aFontIndex: integer;\n   PW: pointer;\r\n begin\r\n   aFontName := fTrueTypeFonts[aFontIndex];\r\n+  // also when the face has no English (3,1) PostScript name\r\n+  result := TrueTypeFontName(aFontName, AStyle);\r\n   if IsAnsiCompatible(aFontName) or\r\n      (AFont = nil) then\r\n-  begin\r\n-    result := TrueTypeFontName(aFontName, AStyle);\r\n     exit; // no need to search for the PostScript name field in Ttf content\r\n-  end;\r\n   name := GetTtfData(GetDCWithFont(AFont), 'name', fName);\r\n   if (name = nil) or\r\n      (name^.format <> 0) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e4caf68f477b5bb6ab411a6a9130dcf3f8ce1a74",
+      "short_sha": "e4caf68f",
+      "subject": "ui: pdf - AddTrueTypeFont keeps the name cache, the fallback index and the created fonts' indexes",
+      "body": "The canvas cache of a raster font is reset too: its index moved as well.\r\n\r\nsynopse/mORMot2#673 row 5.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e4caf68f477b5bb6ab411a6a9130dcf3f8ce1a74",
+      "parents": [
+        "9248feee08fe8de42a9323c175a8b449bc835ff5"
+      ],
+      "stats": {
+        "additions": 52,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 0,
+          "patch": "@@ -7406,12 +7406,32 @@ function TPdfDocument.AddPage: TPdfPage;\n end;\r\n \r\n function TPdfDocument.AddTrueTypeFont(const TtfName: RawUtf8): boolean;\r\n+var\r\n+  fallback: RawUtf8;\r\n+  i, ins: PtrInt;\r\n+  f: TPdfFont;\r\n begin\r\n   result := GetTrueTypeFontIndex(TtfName) < 0;\r\n   if not result then\r\n     exit;\r\n+  if fFontFallBackIndex >= 0 then\r\n+    fallback := fTrueTypeFonts[fFontFallBackIndex];\r\n   AddRawUtf8(fTrueTypeFonts, TtfName);\r\n   QuickSortRawUtf8(fTrueTypeFonts, length(fTrueTypeFonts), nil, @StrIComp);\r\n+  // the sort moves the indexes: the cached one, the fallback's, and those\r\n+  // of the fonts already created (1-based, 0 for no TrueType font)\r\n+  fTrueTypeFontLastName := '';\r\n+  if fallback <> '' then\r\n+    fFontFallBackIndex := GetTrueTypeFontIndex(fallback);\r\n+  if fCanvas <> nil then\r\n+    fCanvas.fPreviousRasterFontName := ''; // its index moved too\r\n+  ins := GetTrueTypeFontIndex(TtfName);\r\n+  for i := 0 to fFontList.Count - 1 do\r\n+  begin\r\n+    f := fFontList.List[i];\r\n+    if f.fTrueTypeFontsIndex > ins then\r\n+      inc(f.fTrueTypeFontsIndex);\r\n+  end;\r\n end;\r\n \r\n procedure TPdfDocument.FreeDoc;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 0,
+          "patch": "@@ -36,6 +36,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EncryptedUnicodeString;\r\n     procedure WinAnsiToUnicodeBlocks;\r\n     procedure OutlineBeforePage;\r\n+    procedure AddFontKeepsIndexes;\r\n   end;\r\n \r\n implementation\r\n@@ -718,6 +719,37 @@ procedure TTestUiPdf.OutlineBeforePage;\n   end;\r\n end;\r\n \r\n+type\r\n+  TPdfDocumentAccess = class(TPdfDocument); // GetTrueTypeFontIndex\r\n+\r\n+procedure TTestUiPdf.AddFontKeepsIndexes;\r\n+var\r\n+  pdf: TPdfDocumentAccess;\r\n+  verdana: TPdfFont;\r\n+  i: integer;\r\n+begin\r\n+  pdf := TPdfDocumentAccess.Create;\r\n+  try\r\n+    pdf.FontFallBackName := 'Tahoma';\r\n+    i := pdf.GetTrueTypeFontIndex('Verdana');\r\n+    if not Check(i >= 0, 'Verdana installed') then\r\n+      exit;\r\n+    pdf.AddPage;\r\n+    verdana := pdf.Canvas.SetFont('Verdana', 10, []); // created before the insert\r\n+    pdf.Canvas.SetFont('No Such mORMot Font', 10, []); // resolved and cached\r\n+    // sorts first: every index after it moves\r\n+    Check(pdf.AddTrueTypeFont('AAA mORMot Test Font'));\r\n+    CheckEqual(pdf.FontFallBackName, 'Tahoma', 'fallback kept');\r\n+    CheckEqual(pdf.GetTrueTypeFontIndex('Verdana'), i + 1, 'name cache');\r\n+    Check(pdf.Canvas.SetFont('Verdana', 10, []) = verdana, 'created font reused');\r\n+    // a style not created yet: made from the cached index of the raster font\r\n+    Check(pdf.Canvas.SetFont('No Such mORMot Font', 10, [pfsBold]) =\r\n+          pdf.Canvas.SetFont('Tahoma', 10, [pfsBold]), 'raster font');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9248feee08fe8de42a9323c175a8b449bc835ff5",
+      "short_sha": "9248feee",
+      "subject": "ui: pdf - an outline entry with a position before the first page is no longer freed twice",
+      "body": "synopse/mORMot2#673 row 4.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9248feee08fe8de42a9323c175a8b449bc835ff5",
+      "parents": [
+        "595dbca17e8a47e72334ed33d9939ea7748a8654"
+      ],
+      "stats": {
+        "additions": 47,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 3,
+          "patch": "@@ -6804,13 +6804,16 @@ constructor TPdfOutlineEntry.Create(AParent: TPdfOutlineEntry; TopPosition: inte\n     raise EPdfInvalidValue.Create('CreateEntry');\r\n   fParent := AParent;\r\n   fDoc := AParent.Doc;\r\n+  // before registering: a failed constructor frees itself, and an entry in\r\n+  // fObjectList would be freed a second time by the document\r\n+  if (TopPosition >= 0) and\r\n+     (fDoc.Canvas.fPage = nil) then\r\n+    fDoc.RaiseInvalidOperation;\r\n   Data := TPdfDictionary.Create(fDoc.fXRef);\r\n   fDoc.fXRef.AddObject(Data);\r\n   fDoc.fObjectList.Add(Self);\r\n   if TopPosition >= 0 then\r\n   begin\r\n-    if fDoc.Canvas.fPage = nil then\r\n-      fDoc.RaiseInvalidOperation;\r\n     fDest := fDoc.CreateDestination;\r\n     fDest.DestinationType := dtXYZ;\r\n     fDest.Zoom := 0; // will leave Zoom factor unchanged\r\n@@ -6830,6 +6833,7 @@ function TPdfOutlineEntry.AddChild(TopPosition: integer): TPdfOutlineEntry;\n var\r\n   TmpEntry: TPdfOutlineEntry;\r\n begin\r\n+  result := TPdfOutlineEntry.Create(Self, TopPosition); // may raise\r\n   // increment total Count variable\r\n   inc(fCount);\r\n   TmpEntry := Parent;\r\n@@ -6838,7 +6842,6 @@ function TPdfOutlineEntry.AddChild(TopPosition: integer): TPdfOutlineEntry;\n     TmpEntry.fCount := TmpEntry.fCount + 1;\r\n     TmpEntry := TmpEntry.Parent;\r\n   end;\r\n-  result := TPdfOutlineEntry.Create(Self, TopPosition);\r\n   if fFirst = nil then\r\n     fFirst := result;\r\n   if fLast <> nil then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 0,
+          "patch": "@@ -35,6 +35,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EscapeBackspace;\r\n     procedure EncryptedUnicodeString;\r\n     procedure WinAnsiToUnicodeBlocks;\r\n+    procedure OutlineBeforePage;\r\n   end;\r\n \r\n implementation\r\n@@ -677,6 +678,46 @@ procedure TTestUiPdf.WinAnsiToUnicodeBlocks;\n   Check(blocks > 1, 'the WinAnsi /ToUnicode needs several blocks');\r\n end;\r\n \r\n+procedure TTestUiPdf.OutlineBeforePage;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+  p, q: integer;\r\n+  raised: boolean;\r\n+begin\r\n+  pdf := TPdfDocument.Create(true);\r\n+  try\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    raised := false;\r\n+    try\r\n+      pdf.CreateOutline('no page yet', 0, 100);\r\n+    except\r\n+      on EPdfInvalidOperation do\r\n+        raised := true;\r\n+    end;\r\n+    Check(raised, 'an outline with a position needs a page');\r\n+    Check(pdf.OutlineRoot.First = nil, 'no entry left');\r\n+    pdf.AddPage;\r\n+    pdf.CreateOutline('on a page', 0, 100);\r\n+    Check(pdf.OutlineRoot.First <> nil);\r\n+    s := SavedPdf(pdf);\r\n+    // the root counts the one entry, not the failed one too\r\n+    p := PosEx('/Type/Outlines', s);\r\n+    q := PosEx('>>', s, p);\r\n+    if Check((p > 0) and (q > p), 'Outlines dictionary') then\r\n+      Check(PosEx('/Count 1', copy(s, p, q - p)) > 0, 'one entry counted');\r\n+  finally\r\n+    raised := false;\r\n+    try\r\n+      pdf.Free; // the failed entry must not be freed a second time\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+    Check(not raised, 'document freed');\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "595dbca17e8a47e72334ed33d9939ea7748a8654",
+      "short_sha": "595dbca1",
+      "subject": "ui: pdf - the WinAnsi /ToUnicode CMap of PDF/A writes at most 99 entries per bfchar block",
+      "body": "synopse/mORMot2#673 row 3.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/595dbca17e8a47e72334ed33d9939ea7748a8654",
+      "parents": [
+        "4170c8b3742a1d35756829b970d2d5e1b7dda4b6"
+      ],
+      "stats": {
+        "additions": 59,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 3,
+          "patch": "@@ -6410,7 +6410,7 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n procedure TPdfFontTrueType.PrepareForSaving;\r\n var\r\n   c: AnsiChar;\r\n-  i, n, L, ndx, count: integer;\r\n+  i, n, L, ndx, count, done: integer;\r\n   fonts: TPdfArray;\r\n   font, info: TPdfDictionary;\r\n   tounicode: TPdfStream;\r\n@@ -6628,13 +6628,29 @@ procedure TPdfFontTrueType.PrepareForSaving;\n         for c := AnsiChar(fFirstChar) to AnsiChar(fLastChar) do\r\n           if c in fWinAnsiUsed then\r\n             inc(count);\r\n-        tounicode.Writer.Add(count).Add(' beginbfchar'#10);\r\n+        // at most 100 entries per block (Adobe CMap specification 5014, 7.4)\r\n+        done := 0;\r\n         for c := AnsiChar(fFirstChar) to AnsiChar(fLastChar) do\r\n           if c in fWinAnsiUsed then\r\n+          begin\r\n+            if done mod 99 = 0 then\r\n+            begin\r\n+              if done > 0 then\r\n+                tounicode.Writer.Add('endbfchar'#10);\r\n+              if count - done > 99 then\r\n+                tounicode.Writer.Add(99)\r\n+              else\r\n+                tounicode.Writer.Add(count - done);\r\n+              tounicode.Writer.Add(' beginbfchar'#10);\r\n+            end;\r\n             tounicode.Writer.Add('<').Add(HexChars[ord(c) shr 4]).\r\n               Add(HexChars[ord(c) and $F]).Add('> <').\r\n               AddHex4(WinAnsiConvert.AnsiToWide[ord(c)]).Add('>'#10);\r\n-        tounicode.Writer.Add('endbfchar'#10'endcmap'#10 +\r\n+            inc(done);\r\n+          end;\r\n+        if done > 0 then\r\n+          tounicode.Writer.Add('endbfchar'#10);\r\n+        tounicode.Writer.Add('endcmap'#10 +\r\n           'CMapName currentdict /CMap defineresource pop'#10'end'#10'end');\r\n         Data.AddItem('ToUnicode', tounicode);\r\n       end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 0,
+          "patch": "@@ -34,6 +34,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure UnicodeWidth;\r\n     procedure EscapeBackspace;\r\n     procedure EncryptedUnicodeString;\r\n+    procedure WinAnsiToUnicodeBlocks;\r\n   end;\r\n \r\n implementation\r\n@@ -637,6 +638,45 @@ procedure TTestUiPdf.EncryptedUnicodeString;\n end;\r\n {$endif NO_USE_PDFSECURITY}\r\n \r\n+procedure TTestUiPdf.WinAnsiToUnicodeBlocks;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  txt: PdfString;\r\n+  s: RawByteString;\r\n+  c, p, q, n, blocks: integer;\r\n+begin\r\n+  txt := '';\r\n+  for c := 33 to 255 do\r\n+    if (c < 127) or\r\n+       (c > 160) then\r\n+      txt := txt + AnsiChar(c);\r\n+  pdf := TPdfDocument.Create(false, 0, pdfa1B);\r\n+  try\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    pdf.Canvas.TextOut(20, 700, txt);\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // at most 100 entries per bfchar block (Adobe CMap specification, 7.4)\r\n+  blocks := 0;\r\n+  p := PosEx(' beginbfchar', s);\r\n+  while p > 0 do\r\n+  begin\r\n+    q := p;\r\n+    while (q > 1) and\r\n+          (s[q - 1] in ['0'..'9']) do\r\n+      dec(q);\r\n+    n := GetInteger(@s[q]);\r\n+    CheckUtf8(n <= 100, 'beginbfchar %', [n]);\r\n+    inc(blocks);\r\n+    p := PosEx(' beginbfchar', s, p + 1);\r\n+  end;\r\n+  Check(blocks > 1, 'the WinAnsi /ToUnicode needs several blocks');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4170c8b3742a1d35756829b970d2d5e1b7dda4b6",
+      "short_sha": "4170c8b3",
+      "subject": "ui: pdf - an encrypted Unicode text string has its BOM and UTF-16BE encrypted together",
+      "body": "synopse/mORMot2#673 row 2.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4170c8b3742a1d35756829b970d2d5e1b7dda4b6",
+      "parents": [
+        "77537f0a5a4175fc9a92271cd861ecc779bd76f0"
+      ],
+      "stats": {
+        "additions": 83,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 17,
+          "patch": "@@ -719,7 +719,11 @@   TPdfWrite = class\n     // - Ansi to Unicode conversion uses the CodePage set by Create() constructor\r\n     function AddToUnicodeHex(const Text: PdfString): TPdfWrite;\r\n     /// write some unicode text as as Big-Endian 4 hexadecimal characters\r\n+    // - never encrypted: AddUnicodeHexString writes the text string of an object\r\n     function AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWrite;\r\n+    /// write a text string of an object as <FEFF...>: the BOM and the\r\n+    // UTF-16BE characters, encrypted together when the document is\r\n+    function AddUnicodeHexString(PW: PWideChar; WideCharCount: integer): TPdfWrite;\r\n     /// convert some text into unicode characters, then write it as PDF Text\r\n     // - Ansi to Unicode conversion uses the CodePage set by Create() constructor\r\n     // - use (...) for all WinAnsi characters, or <..hexa..> for Unicode characters\r\n@@ -4031,12 +4035,18 @@ constructor TPdfReal.Create(AValue: double);\n { TPdfText }\r\n \r\n procedure TPdfText.InternalWriteTo(W: TPdfWrite);\r\n+var\r\n+  tmp: TSynTempBuffer;\r\n begin\r\n   // if the value has multibyte character, convert the value to hex unicode.\r\n   // otherwise, escape characters.\r\n   if SysLocale.FarEast and\r\n     HasMultiByteString(pointer(fValue)) then\r\n-    W.Add('<FEFF').AddToUnicodeHex(fValue).Add('>')\r\n+  begin\r\n+    W.ToWideChar(fValue, tmp);\r\n+    W.AddUnicodeHexString(tmp.buf, tmp.len);\r\n+    tmp.Done;\r\n+  end\r\n   else\r\n     W.Add('(').AddEscapeContent(fValue).Add(')');\r\n end;\r\n@@ -4072,7 +4082,7 @@ procedure TPdfTextUtf8.InternalWriteTo(W: TPdfWrite);\n   else\r\n   begin\r\n     utf16 := Utf8DecodeToUnicodeRawByteString(fValue);\r\n-    W.Add('<FEFF').AddUnicodeHex(pointer(utf16), Length(utf16) shr 1).Add('>');\r\n+    W.AddUnicodeHexString(pointer(utf16), Length(utf16) shr 1);\r\n   end;\r\n end;\r\n \r\n@@ -5141,20 +5151,9 @@ function TPdfWrite.AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWri\n \r\n var\r\n   L: PtrInt;\r\n-  {$ifdef USE_PDFSECURITY}\r\n-  sectmp: TSynTempBuffer;\r\n-  {$endif USE_PDFSECURITY}\r\n begin\r\n   if WideCharCount > 0 then\r\n   begin\r\n-    {$ifdef USE_PDFSECURITY}\r\n-    if fDoc.fEncryption <> nil then\r\n-    begin\r\n-      sectmp.Init(WideCharCount * 2);\r\n-      fDoc.fEncryption.EncodeBuffer(PW^, sectmp.buf^, WideCharCount * 2);\r\n-      PW := sectmp.buf;\r\n-    end;\r\n-    {$endif USE_PDFSECURITY}\r\n     repeat\r\n       L := WideCharCount;\r\n       if BEnd - B <= L * 4 then\r\n@@ -5168,14 +5167,40 @@ function TPdfWrite.AddUnicodeHex(PW: PWideChar; WideCharCount: integer): TPdfWri\n       inc(B, L * 4);\r\n       dec(WideCharCount, L);\r\n     until WideCharCount = 0;\r\n-    {$ifdef USE_PDFSECURITY}\r\n-    if fDoc.fEncryption <> nil then\r\n-      sectmp.Done;\r\n-    {$endif USE_PDFSECURITY}\r\n   end;\r\n   result := self;\r\n end;\r\n \r\n+function TPdfWrite.AddUnicodeHexString(PW: PWideChar;\r\n+  WideCharCount: integer): TPdfWrite;\r\n+{$ifdef USE_PDFSECURITY}\r\n+var\r\n+  be: RawByteString;\r\n+  p: PByteArray;\r\n+  i: PtrInt;\r\n+{$endif USE_PDFSECURITY}\r\n+begin\r\n+  {$ifdef USE_PDFSECURITY}\r\n+  if fDoc.fEncryption <> nil then\r\n+  begin\r\n+    // ISO 32000-1 7.6.2: the whole string is encrypted, its BOM included\r\n+    SetLength(be, WideCharCount * 2 + 2);\r\n+    p := pointer(be);\r\n+    p[0] := $fe;\r\n+    p[1] := $ff;\r\n+    for i := 0 to WideCharCount - 1 do\r\n+    begin\r\n+      p[i * 2 + 2] := PWordArray(PW)[i] shr 8;\r\n+      p[i * 2 + 3] := PWordArray(PW)[i] and $ff;\r\n+    end;\r\n+    fDoc.fEncryption.EncodeBuffer(p^, p^, length(be)); // RC4 works in place\r\n+    result := Add('<').AddHex(be).Add('>');\r\n+    exit;\r\n+  end;\r\n+  {$endif USE_PDFSECURITY}\r\n+  result := Add('<FEFF').AddUnicodeHex(PW, WideCharCount).Add('>');\r\n+end;\r\n+\r\n const\r\n   SHOWTEXTCMD: array[boolean] of PdfString = (' Tj'#10, ' '''#10);\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 41,
+          "deletions": 0,
+          "patch": "@@ -33,6 +33,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure PDFMetadata;\r\n     procedure UnicodeWidth;\r\n     procedure EscapeBackspace;\r\n+    procedure EncryptedUnicodeString;\r\n   end;\r\n \r\n implementation\r\n@@ -596,6 +597,46 @@ procedure TTestUiPdf.EscapeBackspace;\n   Check(PosEx('/Subject(a\\bb)', s) > 0, 'backspace escaped as \\b');\r\n end;\r\n \r\n+procedure TTestUiPdf.EncryptedUnicodeString;\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+const\r\n+  KNOWN = 'ABCDEFGHIJKLMNOPQRSTUVWX';\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  w: array[0..1] of WideChar;\r\n+  s, sub, tit: RawByteString;\r\n+  i: integer;\r\n+begin\r\n+  w[0] := WideChar($0416); // two Cyrillic letters: a <FEFF..> text string\r\n+  w[1] := WideChar($0417);\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elRC4_40, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := KNOWN;\r\n+    pdf.Info.Data.AddItem('Title', TPdfTextUtf8.Create(RawUnicodeToUtf8(@w, 2)));\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // RC4 restarts for each string of an object: the known Subject gives the\r\n+  // key stream, which decrypts the Title of the same Info dictionary\r\n+  sub := PdfStringAfter(s, '/Subject');\r\n+  tit := PdfStringAfter(s, '/Title');\r\n+  if not CheckEqual(length(sub), length(KNOWN), 'subject') or\r\n+     not CheckEqual(length(tit), 6, 'title: BOM and two characters') then\r\n+    exit;\r\n+  for i := 1 to length(tit) do\r\n+    tit[i] := AnsiChar(ord(tit[i]) xor ord(sub[i]) xor ord(KNOWN[i]));\r\n+  Check(tit = #$fe#$ff#$04#$16#$04#$17, 'BOM and UTF-16BE encrypted together');\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "77537f0a5a4175fc9a92271cd861ecc779bd76f0",
+      "short_sha": "77537f0a",
+      "subject": "ui: pdf - a backspace in a string is written \\b, not \\B",
+      "body": "synopse/mORMot2#673 row 1.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/77537f0a5a4175fc9a92271cd861ecc779bd76f0",
+      "parents": [
+        "52934bbd506d000d37d4e4c0fb3d1486f3f49a11"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4858,7 +4858,7 @@ function TPdfWrite.AddEscape(Text: PAnsiChar; TextLen: integer): TPdfWrite;\n           inc(B, 2);\r\n         end;\r\n       #8:\r\n-        PWord(B)^ := ord('\\') + ord('B') shl 8;\r\n+        PWord(B)^ := ord('\\') + ord('b') shl 8;\r\n       #9:\r\n         PWord(B)^ := ord('\\') + ord('t') shl 8;\r\n       #10:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 0,
+          "patch": "@@ -32,6 +32,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure MultiplePages;\r\n     procedure PDFMetadata;\r\n     procedure UnicodeWidth;\r\n+    procedure EscapeBackspace;\r\n   end;\r\n \r\n implementation\r\n@@ -576,6 +577,25 @@ procedure TTestUiPdf.UnicodeWidth;\n   end;\r\n end;\r\n \r\n+procedure TTestUiPdf.EscapeBackspace;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+begin\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := 'a'#8'b';\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // ISO 32000-1 7.3.4.2 defines \\b - a reader takes \\B as a plain B\r\n+  Check(PosEx('/Subject(a\\bb)', s) > 0, 'backspace escaped as \\b');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "52934bbd506d000d37d4e4c0fb3d1486f3f49a11",
+      "short_sha": "52934bbd",
+      "subject": "ui: pdf - fUsedWide[] is indexed once FindOrAddUsedWideChar has grown it (an access violation on FPC)",
+      "body": "Found while testing the fixes of synopse/mORMot2#673 with FPC, which reads\r\nthe address of fUsedWide[] before the call that may reallocate it: measuring\r\nor drawing the first character beyond WinAnsi raised an access violation.",
+      "author": "Sven Harazim",
+      "date": "2026-10-24T07:59:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/52934bbd506d000d37d4e4c0fb3d1486f3f49a11",
+      "parents": [
+        "723a3172734c6c8546fb7f4757383d868b06e019"
+      ],
+      "stats": {
+        "additions": 127,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 5,
+          "patch": "@@ -5311,10 +5311,12 @@ procedure TPdfWrite.AddGlyphFromChar(Char: WideChar; Canvas: TPdfCanvas;\n   changed: boolean;\r\n   fnt: TPdfFontTrueType;\r\n   Glyph: word;\r\n+  ndx: integer;\r\n begin\r\n   assert((Ttf <> nil) and not Ttf.Unicode);\r\n   changed := fAddGlyphFont = fNone;\r\n-  Glyph := Ttf.fUsedWide[Ttf.FindOrAddUsedWideChar(Char)].Glyph;\r\n+  ndx := Ttf.FindOrAddUsedWideChar(Char); // may reallocate fUsedWide[]\r\n+  Glyph := Ttf.fUsedWide[ndx].Glyph;\r\n   with Canvas.fDoc do\r\n     if (fPdfA <> pdfaNone) and\r\n        (Glyph = 0) and\r\n@@ -5331,7 +5333,8 @@ procedure TPdfWrite.AddGlyphFromChar(Char: WideChar; Canvas: TPdfCanvas;\n       fnt := Canvas.SetFont('', Canvas.fPage.FontSize, Ttf.fStyle, -1,\r\n         fFontFallBackIndex) as TPdfFontTrueType;\r\n       assert(not fnt.Unicode);\r\n-      Glyph := fnt.fUsedWide[fnt.FindOrAddUsedWideChar(Char)].Glyph;\r\n+      ndx := fnt.FindOrAddUsedWideChar(Char);\r\n+      Glyph := fnt.fUsedWide[ndx].Glyph;\r\n     end\r\n     else\r\n     begin\r\n@@ -6119,6 +6122,7 @@ function TPdfFontTrueType.FindOrAddUsedWideChar(aWideChar: WideChar): integer;\n function TPdfFontTrueType.GetAndMarkGlyphAsUsed(aGlyph: word): word;\r\n var\r\n   i: PtrInt;\r\n+  ndx: integer;\r\n begin\r\n   result := aGlyph; // fallback to raw glyph index if nothing explicit\r\n   // 1. check if not already registered as used\r\n@@ -6131,8 +6135,10 @@ function TPdfFontTrueType.GetAndMarkGlyphAsUsed(aGlyph: word): word;\n     for i := 0 to fUsedWideChar.Count - 1 do\r\n       if fUsedWide[i].Glyph = aGlyph then\r\n       begin\r\n-        result := WinAnsiFont.fUsedWide[FindOrAddUsedWideChar(\r\n-          WideChar(fUsedWideChar.Values[i]))].Glyph;\r\n+        // FindOrAddUsedWideChar may reallocate fUsedWide[]: call it before\r\n+        // indexing, or FPC reads the array address first and it gets stale\r\n+        ndx := FindOrAddUsedWideChar(WideChar(fUsedWideChar.Values[i]));\r\n+        result := WinAnsiFont.fUsedWide[ndx].Glyph;\r\n         exit; // result may be 0 if this glyph doesn't exist in the CMAP content\r\n       end;\r\n end;\r\n@@ -6259,6 +6265,8 @@ function TPdfFontTrueType.GetWideCharUsed: boolean;\n end;\r\n \r\n function TPdfFontTrueType.GetWideCharWidth(aWideChar: WideChar): integer;\r\n+var\r\n+  i: integer;\r\n begin\r\n   if fUnicode then\r\n   begin // we need fUsedWide[] to be the used glyphs\r\n@@ -6273,7 +6281,10 @@ function TPdfFontTrueType.GetWideCharWidth(aWideChar: WideChar): integer;\n     else\r\n       result := fDefaultWidth\r\n   else\r\n-    result := fUsedWide[FindOrAddUsedWideChar(aWideChar)].Width;\r\n+  begin\r\n+    i := FindOrAddUsedWideChar(aWideChar); // may reallocate fUsedWide[]\r\n+    result := fUsedWide[i].Width;\r\n+  end;\r\n end;\r\n \r\n type\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 111,
+          "deletions": 0,
+          "patch": "@@ -31,6 +31,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure TextInsertion;\r\n     procedure MultiplePages;\r\n     procedure PDFMetadata;\r\n+    procedure UnicodeWidth;\r\n   end;\r\n \r\n implementation\r\n@@ -465,6 +466,116 @@ procedure TTestUiPdf.PDFMetadata;\n   end;\r\n end;\r\n \r\n+function SavedPdf(Doc: TPdfDocument): RawByteString;\r\n+var\r\n+  ms: TMemoryStream;\r\n+begin\r\n+  ms := TMemoryStream.Create;\r\n+  try\r\n+    Doc.SaveToStream(ms, FIXED_DATE);\r\n+    SetString(result, PAnsiChar(ms.Memory), ms.Size);\r\n+  finally\r\n+    ms.Free;\r\n+  end;\r\n+end;\r\n+\r\n+function Nibble(c: AnsiChar): integer;\r\n+begin\r\n+  case c of\r\n+    '0'..'9':\r\n+      result := ord(c) - ord('0');\r\n+    'A'..'F':\r\n+      result := ord(c) - (ord('A') - 10);\r\n+    'a'..'f':\r\n+      result := ord(c) - (ord('a') - 10);\r\n+  else\r\n+    result := 0;\r\n+  end;\r\n+end;\r\n+\r\n+// the bytes of the (literal) or <hex> string written after Key\r\n+function PdfStringAfter(const s, Key: RawByteString): RawByteString;\r\n+var\r\n+  p: integer;\r\n+begin\r\n+  result := '';\r\n+  p := PosEx(Key, s);\r\n+  if p = 0 then\r\n+    exit;\r\n+  inc(p, length(Key));\r\n+  while (p <= length(s)) and\r\n+        (s[p] = ' ') do\r\n+    inc(p);\r\n+  if p > length(s) then\r\n+    exit;\r\n+  if s[p] = '<' then\r\n+  begin\r\n+    inc(p);\r\n+    while (p < length(s)) and\r\n+          (s[p] <> '>') do\r\n+    begin\r\n+      result := result + AnsiChar(Nibble(s[p]) shl 4 + Nibble(s[p + 1]));\r\n+      inc(p, 2);\r\n+    end;\r\n+  end\r\n+  else if s[p] = '(' then\r\n+  begin\r\n+    inc(p);\r\n+    while (p <= length(s)) and\r\n+          (s[p] <> ')') do\r\n+    begin\r\n+      if s[p] = '\\' then\r\n+      begin\r\n+        inc(p);\r\n+        case s[p] of\r\n+          'n':\r\n+            result := result + #10;\r\n+          'r':\r\n+            result := result + #13;\r\n+          't':\r\n+            result := result + #9;\r\n+          'b':\r\n+            result := result + #8;\r\n+          'f':\r\n+            result := result + #12;\r\n+          '0'..'7':\r\n+            begin\r\n+              result := result + AnsiChar((ord(s[p]) - 48) * 64 +\r\n+                (ord(s[p + 1]) - 48) * 8 + (ord(s[p + 2]) - 48));\r\n+              inc(p, 2);\r\n+            end;\r\n+        else\r\n+          result := result + s[p];\r\n+        end;\r\n+      end\r\n+      else\r\n+        result := result + s[p];\r\n+      inc(p);\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.UnicodeWidth;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  w: array[0..1] of WideChar;\r\n+begin\r\n+  // FPC read fUsedWide[] before FindOrAddUsedWideChar reallocated it\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Arial', 10, []);\r\n+    w[1] := #0;\r\n+    w[0] := WideChar($0418); // not WinAnsi: drawn before it was ever measured\r\n+    pdf.Canvas.TextOutW(20, 700, @w);\r\n+    w[0] := WideChar($0416);\r\n+    Check(pdf.Canvas.UnicodeTextWidth(@w) > 0, 'measured');\r\n+    Check(SavedPdf(pdf) <> '', 'saved');\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "723a3172734c6c8546fb7f4757383d868b06e019",
+      "short_sha": "723a3172",
+      "subject": "Merge pull request #678 from tobfel/cleanup-duckdb",
+      "body": "db: DuckDB cleanup - no BindArray, Appender OnBatchInsert, cached logical types",
+      "author": "ab",
+      "date": "2026-10-23T15:05:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/723a3172734c6c8546fb7f4757383d868b06e019",
+      "parents": [
+        "7d6480007c2bb756e51a67342f947ac6c977eeb0",
+        "288e3cbfa42a498334e9a7fa28a45dd286665c97"
+      ],
+      "stats": {
+        "additions": 462,
+        "deletions": 340,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 183,
+          "deletions": 0,
+          "patch": "@@ -32,6 +32,12 @@ interface\n \n { ************ DuckDB C API Types and Constants }\n \n+const\n+  /// the TSqlDBDefinition used for DuckDB, since its SQL is PostgreSQL-like\n+  // - please use this constant in the DuckDB code instead of dPostgreSQL, in\n+  // case a specific dialect would be needed in the future\n+  dDuckDB = dPostgreSQL;\n+\n type\n   /// exception raised by the DuckDB providers\n   ESqlDBDuckDB = class(ESqlDBException);\n@@ -390,6 +396,50 @@ procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: integer);\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+type\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n+  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n+\n+  /// a DuckDB logical type, parsed once with all its nested types\n+  // - to avoid calling the DuckDB C API for every row of a result set\n+  // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n+  TDuckDBTypeInfo = record\n+    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n+    TypeId: TDuckDBType;\n+    /// internal storage type of a DECIMAL or an ENUM\n+    Internal: TDuckDBType;\n+    /// number of decimals of a DECIMAL, or fixed size of an ARRAY\n+    Scale: integer;\n+    /// number of nested types in Children[]\n+    ChildCount: integer;\n+    /// the DuckDB logical type handle, owned by this structure\n+    Handle: TDuckDBLogicalType;\n+    /// STRUCT field names, or ENUM values (cached on first use)\n+    Names: TRawUtf8DynArray;\n+    /// nested types of a LIST/ARRAY (item), MAP (key, value),\n+    // STRUCT (fields) or UNION (members)\n+    Children: PDuckDBTypeInfoArray;\n+  end;\n+\n+  /// pointer-based array of TDuckDBTypeInfo nested types\n+  TDuckDBTypeInfoArray = array[0..1023] of TDuckDBTypeInfo;\n+\n+/// parse a DuckDB logical type and all its nested types, once\n+// - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+/// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n+procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n+\n+/// retrieve the text of an ENUM value, caching all the ENUM dictionary\n+function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n+\n+/// convert a DuckDB type into the corresponding mormot.db field type\n+function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n+\n+\n implementation\n \n \n@@ -939,6 +989,139 @@ procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: intege\n end;\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+  procedure InitChildren(n: PtrInt);\n+  begin\n+    Info.ChildCount := n;\n+    if n > 0 then\n+    begin\n+      GetMem(Info.Children, n * SizeOf(TDuckDBTypeInfo));\n+      FillCharFast(Info.Children^, n * SizeOf(TDuckDBTypeInfo), 0);\n+    end;\n+  end;\n+\n+var\n+  i: PtrInt;\n+  p: PUtf8Char;\n+begin\n+  FillCharFast(Info, SizeOf(Info), 0);\n+  Info.Handle := Handle;\n+  Info.TypeId := DuckDB.get_type_id(Handle);\n+  case Info.TypeId of\n+    DUCKDB_TYPE_DECIMAL:\n+      begin\n+        Info.Internal := DuckDB.decimal_internal_type(Handle);\n+        Info.Scale := DuckDB.decimal_scale(Handle);\n+      end;\n+    DUCKDB_TYPE_ENUM:\n+      Info.Internal := DuckDB.enum_internal_type(Handle);\n+    DUCKDB_TYPE_LIST:\n+      begin\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.list_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_ARRAY:\n+      begin\n+        Info.Scale := DuckDB.array_type_array_size(Handle);\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.array_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_MAP:\n+      begin\n+        InitChildren(2);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.map_type_key_type(Handle));\n+        DuckDBTypeInf\n... [truncated, 2828 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 218,
+          "deletions": 301,
+          "patch": "@@ -14,7 +14,7 @@\n   *****************************************************************************\n \n   Notes:\n-  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+  - DuckDB SQL is very close to PostgreSQL, so dDuckDB = dPostgreSQL is used as\n     TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n   - one database file can only be opened by ONE process in read/write mode:\n     the duckdb_database handle is owned by the connection properties instance,\n@@ -60,6 +60,13 @@   TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n     fConfig: RawUtf8;\n     fReadOnly: boolean;\n     procedure GetForeignKeys; override;\n+    /// OnBatchInsert implementation using TSqlDBDuckDBAppender\n+    // - fallback to MultipleValuesInsert() if the Appender can't be used\n+    procedure AppendBatchInsert(Props: TSqlDBConnectionProperties;\n+      const TableName: RawUtf8; const FieldNames: TRawUtf8DynArray;\n+      const FieldTypes: TSqlDBFieldTypeArray; RowCount: integer;\n+      const FieldValues: TRawUtf8DynArrayDynArray;\n+      BatchOptions: TRestBatchOptions);\n   public\n     /// initialize the properties - the database is opened on first connection\n     constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n@@ -119,16 +126,9 @@   TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n \n   /// cached information about one DuckDB result column\n   TDuckDBColumnInfo = record\n-    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n-    TypeId: TDuckDBType;\n-    /// number precision retrieved for DECIMAL - 0 means integer\n-    Scale: integer;\n-    /// internal nested storage type for DECIMAL and ENUM\n-    Internal: TDuckDBType;\n-    /// DuckDB type info structure\n-    LogicalType: TDuckDBLogicalType;\n-    /// internal cache of ENUM values\n-    EnumValues: TRawUtf8DynArray;\n+    /// the column type, parsed once with its nested types\n+    Info: TDuckDBTypeInfo;\n+\n     /// current chunk content\n     Vector: TDuckDBVector;\n     /// current position in the data buffer\n@@ -152,8 +152,6 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n-    procedure BindArrayRow(Row: integer; var Temp: RawUtf8);\n-    procedure ExecuteArray;\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -252,18 +250,18 @@   TSqlDBDuckDBAppender = class\n \n /// append the value at Row of a DuckDB vector as JSON\n // - handles all scalar types, and nested LIST/ARRAY/STRUCT/MAP/UNION\n-procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; W: TJsonWriter);\n \n \n /// return the value at Row of a DuckDB vector as text\n // - scalar values in DuckDB text format, nested values as JSON\n-procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToText(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var result: RawUtf8);\n \n /// fill the simple value at Row of a DuckDB vector into a text buffer\n // - returns the number of bytes written, or -1 if this type is not supported\n-function DuckDBVectorValueToTextBuf(vec: TDuckDBVector;  lt: TDuckDBLogicalType;\n+function DuckDBVectorValueToTextBuf(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var Buffer: TTemp47): PtrInt;\n \n \n@@ -278,41 +276,18 @@ implementation\n     1000000000000, 10000000000000, 100000000000000, 1000000000000000,\n     10000000000000000, 100000000000000000, 1000000000000000000);\n \n+  // integer types which can be read by ReadIntegral() as Int64\n+  DUCKDB_INT_TYPES = [DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT,\n+    DUCKDB_TYPE_SMALLINT, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT,\n+    DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER];\n+\n function IsValid(valid\n... [truncated, 29681 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 39,
+          "patch": "@@ -45,7 +45,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure Errors;\n     procedure Metadata;\n     procedure Bulk;\n-    procedure BindArrays;\n+    procedure BatchInsert;\n     procedure Appender;\n   end;\n \n@@ -417,58 +417,80 @@ procedure TTestDuckDB.Bulk;\n   NotifyTestSpeed('read all', COUNT, 0, @timer);\n end;\n \n-procedure TTestDuckDB.BindArrays;\n+procedure TTestDuckDB.BatchInsert;\n const\n   COUNT = 1000;\n var\n-  st: ISqlDBStatement;\n-  ids: array of Int64;\n-  names: TRawUtf8DynArray;\n-  amounts: array of currency;\n-  dates: array of TDateTime;\n-  ratios: array of double;\n-  i: integer;\n+  names, names2: TRawUtf8DynArray;\n+  types: TSqlDBFieldTypeArray;\n+  values, values2: TRawUtf8DynArrayDynArray;\n+  i, pass: integer;\n   rows: ISqlDBRows;\n   timer: TPrecisionTimer;\n begin\n   if fProps = nil then\n     exit;\n+  Check(Assigned(fProps.OnBatchInsert), 'OnBatchInsert');\n+  CheckEqual(ord(fProps.BatchSendingAbilities = [cCreate]), 1);\n   fProps.ExecuteNoResult('create or replace table arr (id INTEGER, ' +\n     'name VARCHAR, amount DECIMAL(19,4), d TIMESTAMP, v DOUBLE)', []);\n-  SetLength(ids, COUNT);\n-  SetLength(names, COUNT);\n-  SetLength(amounts, COUNT);\n-  SetLength(dates, COUNT);\n-  SetLength(ratios, COUNT);\n-  for i := 0 to COUNT - 1 do\n+  SetLength(names, 5);\n+  names[0] := 'id';\n+  names[1] := 'name';\n+  names[2] := 'amount';\n+  names[3] := 'd';\n+  names[4] := 'v';\n+  types[0] := ftInt64;\n+  types[1] := ftUtf8;\n+  types[2] := ftCurrency;\n+  types[3] := ftDate;\n+  types[4] := ftDouble;\n+  SetLength(values, 5);\n+  for i := 0 to 4 do\n+    SetLength(values[i], COUNT);\n+  // pass 0 uses the Appender, pass 1 the multi-values INSERT fallback\n+  // (inserting only id and name for 100 more rows)\n+  for pass := 0 to 1 do\n   begin\n-    ids[i] := i + 1;\n-    names[i] := FormatUtf8('it''s #%', [i + 1]);\n-    amounts[i] := (i + 1) + 0.5;\n-    dates[i] := EncodeDate(2025, 1, 1) + i;\n-    ratios[i] := i / 8;\n+    for i := 0 to COUNT - 1 do\n+    begin\n+      values[0, i] := Int32ToUtf8(pass * COUNT + i + 1);\n+      values[1, i] := QuotedStr(FormatUtf8('it''s #%', [i + 1]), '''');\n+      values[2, i] := Int32ToUtf8(i + 1) + '.5';\n+      values[3, i] := QuotedStr(DateToIso8601Text(EncodeDate(2025, 1, 1) + i), '''');\n+      if i = 0 then\n+        values[4, i] := 'null'\n+      else\n+        values[4, i] := DoubleToStr(i / 8);\n+    end;\n+    timer.Start;\n+    if pass = 0 then\n+      // the ORM supplies schema-qualified table names\n+      fProps.OnBatchInsert(fProps, 'main.arr', names, types, COUNT, values, [])\n+    else\n+    begin\n+      // not all columns: the Appender is not usable -> regular INSERT\n+      SetLength(names2, 2);\n+      SetLength(values2, 2);\n+      for i := 0 to 1 do\n+      begin\n+        names2[i] := names[i];\n+        values2[i] := values[i];\n+      end;\n+      fProps.OnBatchInsert(fProps, 'arr', names2, types, 100, values2, []);\n+    end;\n+    NotifyTestSpeed('insert', COUNT, 0, @timer);\n   end;\n-  timer.Start;\n-  st := fProps.ThreadSafeConnection.NewStatementPrepared(\n-    'insert into arr values (?,?,?,?,?)', false, true);\n-  st.BindArray(1, ids);\n-  st.BindArray(2, names);\n-  st.BindArrayCurrency(3, amounts);\n-  st.BindArrayDateTime(4, dates);\n-  st.BindArray(5, ratios);\n-  st.ExecutePrepared;\n-  CheckEqual(st.UpdateCount, COUNT, 'array updatecount');\n-  NotifyTestSpeed('insert', COUNT, 0, @timer);\n-  st := nil;\n   rows := fProps.Execute('select count(*), sum(amount), max(d), ' +\n-    'max(name) filter (where id = 1000), sum(v) from arr', []);\n-  Check(rows.Step, 'array select');\n-  CheckEqual(rows.ColumnInt(0), COUNT, 'array count');\n-  Check(rows.ColumnCurrency(1) = 501000, 'array sum(decimal)');\n+    'max(name) filter (where id = 1000), sum(v), count(v) from arr', []);\n+  Check(rows.Step, 'batch select');\n+  CheckEqual(rows.ColumnInt(0), COUNT + 100, 'batch count');\n+  Check(rows.ColumnCurrency(1) = 501000, 'batch sum(decimal)');\n   CheckEqual(Da\n... [truncated, 552 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": 678,
+      "is_merge": true
+    },
+    {
+      "sha": "288e3cbfa42a498334e9a7fa28a45dd286665c97",
+      "short_sha": "288e3cbf",
+      "subject": "db: DuckDB uses SplitRight() and a dDuckDB = dPostgreSQL constant",
+      "body": "Following the review: the Appender splits 'schema.table' with the existing\nSplitRight(), and dDuckDB is a constant for the PostgreSQL-like dialect, to\nbe used in the DuckDB code in case a specific dialect is needed one day.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T09:05:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/288e3cbfa42a498334e9a7fa28a45dd286665c97",
+      "parents": [
+        "1d9eae840cd48b36039a33e749cea7aff8ce8212"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -32,6 +32,12 @@ interface\n \n { ************ DuckDB C API Types and Constants }\n \n+const\n+  /// the TSqlDBDefinition used for DuckDB, since its SQL is PostgreSQL-like\n+  // - please use this constant in the DuckDB code instead of dPostgreSQL, in\n+  // case a specific dialect would be needed in the future\n+  dDuckDB = dPostgreSQL;\n+\n type\n   /// exception raised by the DuckDB providers\n   ESqlDBDuckDB = class(ESqlDBException);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 11,
+          "patch": "@@ -14,7 +14,7 @@\n   *****************************************************************************\n \n   Notes:\n-  - DuckDB SQL is very close to PostgreSQL, so dPostgreSQL is used as\n+  - DuckDB SQL is very close to PostgreSQL, so dDuckDB = dPostgreSQL is used as\n     TSqlDBDefinition (LIMIT syntax, DDL types, information_schema metadata)\n   - one database file can only be opened by ONE process in read/write mode:\n     the duckdb_database handle is owned by the connection properties instance,\n@@ -701,7 +701,7 @@ constructor TSqlDBDuckDBConnectionProperties.Create(\n   const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n begin\n   DuckDBLibraryInitialize; // raise ESqlDBDuckDB if no duckdb.dll\n-  fDbms := dPostgreSQL;    // DuckDB SQL dialect is PostgreSQL-like\n+  fDbms := dDuckDB;        // PostgreSQL-like SQL dialect\n   inherited Create(aServerName, aDatabaseName, aUserID, aPassWord);\n   fEngineName := 'DuckDB';\n   ForcedSchemaName := 'main'; // DuckDB default schema, for metadata queries\n@@ -1463,7 +1463,6 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n var\n   schema: PUtf8Char;\n   sch, tbl: RawUtf8;\n-  p: PtrInt;\n begin\n   inherited Create;\n   if not DuckDB.HasAppender then\n@@ -1473,14 +1472,8 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   fTable := aTable;\n   sch := aSchema;\n   tbl := aTable;\n-  p := PosExChar('.', tbl);\n-  if (sch = '') and\n-     (p > 0) then\n-  begin\n-    // 'schema.table' as supplied by the ORM\n-    sch := copy(tbl, 1, p - 1);\n-    tbl := copy(tbl, p + 1, maxInt);\n-  end;\n+  if sch = '' then\n+    tbl := SplitRight(aTable, '.', @sch); // 'schema.table' as set by the ORM\n   schema := nil;\n   if sch <> '' then\n     schema := pointer(sch);",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1d9eae840cd48b36039a33e749cea7aff8ce8212",
+      "short_sha": "1d9eae84",
+      "subject": "db: DuckDB Appender accepts a schema-qualified table name",
+      "body": "The ORM supplies 'main.TableName': the Appender looked for a table named\n'main.TableName' in the default schema, so OnBatchInsert failed for tables\nwhose columns are mapped one to one (found by running the ORM external\ntests over DuckDB).\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T06:50:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1d9eae840cd48b36039a33e749cea7aff8ce8212",
+      "parents": [
+        "78780e65bb47cb94c7faec0515b98b1cc391c8cd"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 3,
+          "patch": "@@ -1462,18 +1462,30 @@ constructor TSqlDBDuckDBAppender.Create(aConnection: TSqlDBDuckDBConnection;\n   const aTable, aSchema: RawUtf8);\n var\n   schema: PUtf8Char;\n+  sch, tbl: RawUtf8;\n+  p: PtrInt;\n begin\n   inherited Create;\n   if not DuckDB.HasAppender then\n     ESqlDBDuckDB.RaiseU('DuckDB library has no appender API');\n   if not aConnection.IsConnected then\n     aConnection.Connect;\n   fTable := aTable;\n+  sch := aSchema;\n+  tbl := aTable;\n+  p := PosExChar('.', tbl);\n+  if (sch = '') and\n+     (p > 0) then\n+  begin\n+    // 'schema.table' as supplied by the ORM\n+    sch := copy(tbl, 1, p - 1);\n+    tbl := copy(tbl, p + 1, maxInt);\n+  end;\n   schema := nil;\n-  if aSchema <> '' then\n-    schema := pointer(aSchema);\n+  if sch <> '' then\n+    schema := pointer(sch);\n   if DuckDB.appender_create(aConnection.fConn,\n-       schema, pointer(aTable), fAppender) <> DuckDBSuccess then\n+       schema, pointer(tbl), fAppender) <> DuckDBSuccess then\n   begin\n     try\n       Check(DuckDBError, 'create');",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -465,7 +465,8 @@ procedure TTestDuckDB.BatchInsert;\n     end;\n     timer.Start;\n     if pass = 0 then\n-      fProps.OnBatchInsert(fProps, 'arr', names, types, COUNT, values, [])\n+      // the ORM supplies schema-qualified table names\n+      fProps.OnBatchInsert(fProps, 'main.arr', names, types, COUNT, values, [])\n     else\n     begin\n       // not all columns: the Appender is not usable -> regular INSERT",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "78780e65bb47cb94c7faec0515b98b1cc391c8cd",
+      "short_sha": "78780e65",
+      "subject": "db: DuckDB integer type list shared by ColumnDouble and ColumnCurrency",
+      "body": "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:57:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/78780e65bb47cb94c7faec0515b98b1cc391c8cd",
+      "parents": [
+        "0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 10,
+          "patch": "@@ -276,6 +276,11 @@ implementation\n     1000000000000, 10000000000000, 100000000000000, 1000000000000000,\n     10000000000000000, 100000000000000000, 1000000000000000000);\n \n+  // integer types which can be read by ReadIntegral() as Int64\n+  DUCKDB_INT_TYPES = [DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT,\n+    DUCKDB_TYPE_SMALLINT, DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT,\n+    DUCKDB_TYPE_UTINYINT, DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER];\n+\n function IsValid(validity: PDuckI64Array; row: PtrInt): boolean;\n   {$ifdef HASINLINE} inline; {$endif}\n begin\n@@ -1285,12 +1290,11 @@ function TSqlDBDuckDBStatement.ColumnDouble(Col: integer): double;\n         result := GetExtended(pointer(ColumnUtf8(Col)))\n       else\n         result := DecimalMantissa(c, hi) / POW10[c^.Info.Scale];\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER:\n-      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow);\n   else\n-    result := GetExtended(pointer(ColumnUtf8(Col)));\n+    if c^.Info.TypeId in DUCKDB_INT_TYPES then\n+      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow)\n+    else\n+      result := GetExtended(pointer(ColumnUtf8(Col)));\n   end;\n end;\n \n@@ -1315,12 +1319,11 @@ function TSqlDBDuckDBStatement.ColumnCurrency(Col: integer): currency;\n         PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n     DUCKDB_TYPE_FLOAT, DUCKDB_TYPE_DOUBLE:\n       result := ColumnDouble(Col);\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER:\n-      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow);\n   else\n-    PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n+    if c^.Info.TypeId in DUCKDB_INT_TYPES then\n+      result := ReadIntegral(c^.Info.TypeId, c^.Data, fChunkRow)\n+    else\n+      PInt64(@result)^ := StrToCurr64(pointer(ColumnUtf8(Col)));\n   end;\n end;\n ",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3",
+      "short_sha": "0c5d1ac1",
+      "subject": "db: DuckDB logical types are now parsed once into a TDuckDBTypeInfo cache",
+      "body": "TDuckDBLogicalType was queried again for every value (type id, decimal\nscale, enum dictionary, and a create/destroy of the child type of each\nLIST/ARRAY/MAP/STRUCT/UNION row). Parse the column type and its nested\ntypes once, in mormot.db.raw.duckdb (with DuckDBTypeToField and the cached\nENUM dictionary), and use it in the vector to text/JSON conversion.\nNumbers, UUID and MAP keys within nested values no longer use a transient\nRawUtf8.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:55:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0c5d1ac1c05a8fc3640deb1d7f0464c899fb7ab3",
+      "parents": [
+        "120ac439cb58ee8943fff85af71f46f655249f92"
+      ],
+      "stats": {
+        "additions": 293,
+        "deletions": 191,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 177,
+          "deletions": 0,
+          "patch": "@@ -390,6 +390,50 @@ procedure DuckBitToText(P: PDuckU8Array; Len: integer; var result: RawUtf8);\n procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: integer);\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+type\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n+  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n+\n+  /// a DuckDB logical type, parsed once with all its nested types\n+  // - to avoid calling the DuckDB C API for every row of a result set\n+  // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n+  TDuckDBTypeInfo = record\n+    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n+    TypeId: TDuckDBType;\n+    /// internal storage type of a DECIMAL or an ENUM\n+    Internal: TDuckDBType;\n+    /// number of decimals of a DECIMAL, or fixed size of an ARRAY\n+    Scale: integer;\n+    /// number of nested types in Children[]\n+    ChildCount: integer;\n+    /// the DuckDB logical type handle, owned by this structure\n+    Handle: TDuckDBLogicalType;\n+    /// STRUCT field names, or ENUM values (cached on first use)\n+    Names: TRawUtf8DynArray;\n+    /// nested types of a LIST/ARRAY (item), MAP (key, value),\n+    // STRUCT (fields) or UNION (members)\n+    Children: PDuckDBTypeInfoArray;\n+  end;\n+\n+  /// pointer-based array of TDuckDBTypeInfo nested types\n+  TDuckDBTypeInfoArray = array[0..1023] of TDuckDBTypeInfo;\n+\n+/// parse a DuckDB logical type and all its nested types, once\n+// - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+/// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n+procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n+\n+/// retrieve the text of an ENUM value, caching all the ENUM dictionary\n+function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n+\n+/// convert a DuckDB type into the corresponding mormot.db field type\n+function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n+\n+\n implementation\n \n \n@@ -939,6 +983,139 @@ procedure DuckTimeTzDecode(Bits: Int64; out Micros: Int64; out OffsetSec: intege\n end;\n \n \n+{ ************ DuckDB Logical Type Cache }\n+\n+procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+\n+  procedure InitChildren(n: PtrInt);\n+  begin\n+    Info.ChildCount := n;\n+    if n > 0 then\n+    begin\n+      GetMem(Info.Children, n * SizeOf(TDuckDBTypeInfo));\n+      FillCharFast(Info.Children^, n * SizeOf(TDuckDBTypeInfo), 0);\n+    end;\n+  end;\n+\n+var\n+  i: PtrInt;\n+  p: PUtf8Char;\n+begin\n+  FillCharFast(Info, SizeOf(Info), 0);\n+  Info.Handle := Handle;\n+  Info.TypeId := DuckDB.get_type_id(Handle);\n+  case Info.TypeId of\n+    DUCKDB_TYPE_DECIMAL:\n+      begin\n+        Info.Internal := DuckDB.decimal_internal_type(Handle);\n+        Info.Scale := DuckDB.decimal_scale(Handle);\n+      end;\n+    DUCKDB_TYPE_ENUM:\n+      Info.Internal := DuckDB.enum_internal_type(Handle);\n+    DUCKDB_TYPE_LIST:\n+      begin\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.list_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_ARRAY:\n+      begin\n+        Info.Scale := DuckDB.array_type_array_size(Handle);\n+        InitChildren(1);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.array_type_child_type(Handle));\n+      end;\n+    DUCKDB_TYPE_MAP:\n+      begin\n+        InitChildren(2);\n+        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.map_type_key_type(Handle));\n+        DuckDBTypeInfoInit(Info.Children^[1], DuckDB.map_type_value_type(Handle));\n+      end;\n+    DUCKDB_TYPE_STRUCT:\n+      begin\n+        InitChildren(DuckDB.struct_type_child_count(Handle));\n+        SetLength(Info.Names, Info.ChildCount);\n+        for i := 0 to Info.ChildCount - 1 do\n+        begin\n+          p := DuckDB.struct_type_child_name(Handle, i);\n+          FastSetString(Info.Names[i], p, StrLen(p));\n+          DuckDB.free_(p);\n+     \n... [truncated, 2396 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 116,
+          "deletions": 191,
+          "patch": "@@ -126,16 +126,9 @@   TSqlDBDuckDBConnection = class(TSqlDBConnectionThreadSafe)\n \n   /// cached information about one DuckDB result column\n   TDuckDBColumnInfo = record\n-    /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n-    TypeId: TDuckDBType;\n-    /// number precision retrieved for DECIMAL - 0 means integer\n-    Scale: integer;\n-    /// internal nested storage type for DECIMAL and ENUM\n-    Internal: TDuckDBType;\n-    /// DuckDB type info structure\n-    LogicalType: TDuckDBLogicalType;\n-    /// internal cache of ENUM values\n-    EnumValues: TRawUtf8DynArray;\n+    /// the column type, parsed once with its nested types\n+    Info: TDuckDBTypeInfo;\n+\n     /// current chunk content\n     Vector: TDuckDBVector;\n     /// current position in the data buffer\n@@ -257,18 +250,18 @@   TSqlDBDuckDBAppender = class\n \n /// append the value at Row of a DuckDB vector as JSON\n // - handles all scalar types, and nested LIST/ARRAY/STRUCT/MAP/UNION\n-procedure DuckDBVectorValueToJson(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; W: TJsonWriter);\n \n \n /// return the value at Row of a DuckDB vector as text\n // - scalar values in DuckDB text format, nested values as JSON\n-procedure DuckDBVectorValueToText(vec: TDuckDBVector; lt: TDuckDBLogicalType;\n+procedure DuckDBVectorValueToText(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var result: RawUtf8);\n \n /// fill the simple value at Row of a DuckDB vector into a text buffer\n // - returns the number of bytes written, or -1 if this type is not supported\n-function DuckDBVectorValueToTextBuf(vec: TDuckDBVector;  lt: TDuckDBLogicalType;\n+function DuckDBVectorValueToTextBuf(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n   row: PtrInt; var Buffer: TTemp47): PtrInt;\n \n \n@@ -290,34 +283,6 @@ function IsValid(validity: PDuckI64Array; row: PtrInt): boolean;\n             ((validity^[row shr 6] shr (row and 63)) and 1 <> 0);\n end;\n \n-function DuckDBTypeToField(typeid: TDuckDBType; scale: integer): TSqlDBFieldType;\n-begin\n-  case typeid of\n-    DUCKDB_TYPE_BOOLEAN, DUCKDB_TYPE_TINYINT, DUCKDB_TYPE_SMALLINT,\n-    DUCKDB_TYPE_INTEGER, DUCKDB_TYPE_BIGINT, DUCKDB_TYPE_UTINYINT,\n-    DUCKDB_TYPE_USMALLINT, DUCKDB_TYPE_UINTEGER, DUCKDB_TYPE_UBIGINT,\n-    DUCKDB_TYPE_HUGEINT, DUCKDB_TYPE_UHUGEINT:\n-      result := ftInt64;\n-    DUCKDB_TYPE_FLOAT, DUCKDB_TYPE_DOUBLE:\n-      result := ftDouble;\n-    DUCKDB_TYPE_DECIMAL:\n-      if scale <= 4 then\n-        result := ftCurrency\n-      else\n-        result := ftDouble;\n-    DUCKDB_TYPE_DATE, DUCKDB_TYPE_TIME, DUCKDB_TYPE_TIME_TZ, DUCKDB_TYPE_TIME_NS,\n-    DUCKDB_TYPE_TIMESTAMP, DUCKDB_TYPE_TIMESTAMP_S, DUCKDB_TYPE_TIMESTAMP_MS,\n-    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ:\n-      result := ftDate;\n-    DUCKDB_TYPE_BLOB:\n-      result := ftBlob;\n-    DUCKDB_TYPE_SQLNULL:\n-      result := ftNull;\n-  else\n-    result := ftUtf8; // VARCHAR, UUID, ENUM, INTERVAL, BIT, nested as JSON\n-  end;\n-end;\n-\n function TimestampMicros(typeid: TDuckDBType; v: Int64): Int64;\n begin\n   case typeid of\n@@ -352,13 +317,13 @@ function ReadIntegral(typeid: TDuckDBType; data: pointer; row: PtrInt): Int64;\n   end;\n end;\n \n-procedure DecimalValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n+procedure DecimalValue(T: PDuckDBTypeInfo; data: pointer; row: PtrInt;\n   var mantissa: TDuckDBHugeInt; var scale: integer);\n var\n   v: Int64;\n begin\n-  scale := DuckDB.decimal_scale(lt);\n-  case DuckDB.decimal_internal_type(lt) of\n+  scale := T^.Scale;\n+  case T^.Internal of\n     DUCKDB_TYPE_HUGEINT:\n       begin\n         mantissa := PDuckDBHugeInt(PAnsiChar(data) + row * SizeOf(TDuckDBHugeInt))^;\n@@ -378,19 +343,7 @@ procedure DecimalValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n     mantissa.Upper := 0;\n end;\n \n-procedure EnumValue(lt: TDuckDBLogicalType; data: pointer; row: PtrInt;\n-  var result: RawUtf8);\n-var\n-  idx: Int64;\n-  p: PUtf8Char;\n-begin\n-  idx := ReadIntegr\n... [truncated, 19979 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "120ac439cb58ee8943fff85af71f46f655249f92",
+      "short_sha": "120ac439",
+      "subject": "db: DuckDB BindArray removed, OnBatchInsert now uses the Appender",
+      "body": "BindArray still executed one statement per row, so it was slower than\nplain inserts. TOnBatchInsert is what the ORM uses: implement it with\nTSqlDBDuckDBAppender, falling back to MultipleValuesInsert() when the\nfields are not all the table columns in order, or for insert options.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-23T05:46:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/120ac439cb58ee8943fff85af71f46f655249f92",
+      "parents": [
+        "7d6480007c2bb756e51a67342f947ac6c977eeb0"
+      ],
+      "stats": {
+        "additions": 141,
+        "deletions": 136,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 81,
+          "deletions": 97,
+          "patch": "@@ -60,6 +60,13 @@   TSqlDBDuckDBConnectionProperties = class(TSqlDBConnectionPropertiesThreadSafe)\n     fConfig: RawUtf8;\n     fReadOnly: boolean;\n     procedure GetForeignKeys; override;\n+    /// OnBatchInsert implementation using TSqlDBDuckDBAppender\n+    // - fallback to MultipleValuesInsert() if the Appender can't be used\n+    procedure AppendBatchInsert(Props: TSqlDBConnectionProperties;\n+      const TableName: RawUtf8; const FieldNames: TRawUtf8DynArray;\n+      const FieldTypes: TSqlDBFieldTypeArray; RowCount: integer;\n+      const FieldValues: TRawUtf8DynArrayDynArray;\n+      BatchOptions: TRestBatchOptions);\n   public\n     /// initialize the properties - the database is opened on first connection\n     constructor Create(const aServerName, aDatabaseName, aUserID, aPassWord: RawUtf8);\n@@ -152,8 +159,6 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n-    procedure BindArrayRow(Row: integer; var Temp: RawUtf8);\n-    procedure ExecuteArray;\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -739,6 +744,78 @@ constructor TSqlDBDuckDBConnectionProperties.Create(\n   inherited Create(aServerName, aDatabaseName, aUserID, aPassWord);\n   fEngineName := 'DuckDB';\n   ForcedSchemaName := 'main'; // DuckDB default schema, for metadata queries\n+  if DuckDB.HasAppender then\n+  begin\n+    // the Appender is much faster than multi-values INSERT statements\n+    fBatchSendingAbilities := [cCreate];\n+    fOnBatchInsert := AppendBatchInsert;\n+    fBatchMaxSentAtOnce := 4096;\n+  end;\n+end;\n+\n+procedure TSqlDBDuckDBConnectionProperties.AppendBatchInsert(\n+  Props: TSqlDBConnectionProperties; const TableName: RawUtf8;\n+  const FieldNames: TRawUtf8DynArray; const FieldTypes: TSqlDBFieldTypeArray;\n+  RowCount: integer; const FieldValues: TRawUtf8DynArrayDynArray;\n+  BatchOptions: TRestBatchOptions);\n+var\n+  cols: TSqlDBColumnDefineDynArray;\n+  app: TSqlDBDuckDBAppender;\n+  f, r: PtrInt;\n+  v: PRawUtf8;\n+  tmp: RawUtf8;\n+begin\n+  // the Appender expects all columns, in the table order, without conflict\n+  // handling: fallback to the regular multi-values INSERT otherwise\n+  GetFields(TableName, cols);\n+  if (BatchOptions * [boInsertOrIgnore, boInsertOrReplace, boUpsert] <> []) or\n+     (length(cols) <> length(FieldNames)) then\n+  begin\n+    MultipleValuesInsert(Props, TableName, FieldNames, FieldTypes, RowCount,\n+      FieldValues, BatchOptions);\n+    exit;\n+  end;\n+  for f := 0 to high(cols) do\n+    if not PropNameEquals(cols[f].ColumnName, FieldNames[f]) then\n+    begin\n+      MultipleValuesInsert(Props, TableName, FieldNames, FieldTypes, RowCount,\n+        FieldValues, BatchOptions);\n+      exit;\n+    end;\n+  app := TSqlDBDuckDBAppender.Create(\n+    Props.ThreadSafeConnection as TSqlDBDuckDBConnection, TableName);\n+  try\n+    for r := 0 to RowCount - 1 do\n+    begin\n+      for f := 0 to high(FieldNames) do\n+      begin\n+        v := @FieldValues[f, r]; // values are SQL literals, BLOB are decoded\n+        if (v^ = 'null') or\n+           (FieldTypes[f] = ftNull) then\n+          app.AddNull\n+        else\n+          case FieldTypes[f] of\n+            ftInt64:\n+              app.Add(GetInt64(pointer(v^)));\n+            ftDouble:\n+              app.AddDouble(GetExtended(pointer(v^)));\n+            ftBlob:\n+              app.AddBlob(v^);\n+            ftCurrency:\n+              app.AddText(v^); // exact text -> DECIMAL cast\n+          else\n+            begin\n+              // ftUtf8, ftDate: unquote and let DuckDB cast to the column type\n+              UnQuoteSqlStringVar(pointer(v^), tmp);\n+              app.AddText(tmp);\n+            end;\n+          end;\n+      end;\n+      app.EndRow;\n+    end;\n+  finally\n+    app.Free; // flush the rows\n+  end;\n end;\n \n destructor TSqlDBDuckDBConnectionProperties.Destroy;\n@@ -1021,92 +1098,6 @@ procedure TSqlDBDuckDBStatement.B\n... [truncated, 3228 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 60,
+          "deletions": 39,
+          "patch": "@@ -45,7 +45,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure Errors;\n     procedure Metadata;\n     procedure Bulk;\n-    procedure BindArrays;\n+    procedure BatchInsert;\n     procedure Appender;\n   end;\n \n@@ -417,58 +417,79 @@ procedure TTestDuckDB.Bulk;\n   NotifyTestSpeed('read all', COUNT, 0, @timer);\n end;\n \n-procedure TTestDuckDB.BindArrays;\n+procedure TTestDuckDB.BatchInsert;\n const\n   COUNT = 1000;\n var\n-  st: ISqlDBStatement;\n-  ids: array of Int64;\n-  names: TRawUtf8DynArray;\n-  amounts: array of currency;\n-  dates: array of TDateTime;\n-  ratios: array of double;\n-  i: integer;\n+  names, names2: TRawUtf8DynArray;\n+  types: TSqlDBFieldTypeArray;\n+  values, values2: TRawUtf8DynArrayDynArray;\n+  i, pass: integer;\n   rows: ISqlDBRows;\n   timer: TPrecisionTimer;\n begin\n   if fProps = nil then\n     exit;\n+  Check(Assigned(fProps.OnBatchInsert), 'OnBatchInsert');\n+  CheckEqual(ord(fProps.BatchSendingAbilities = [cCreate]), 1);\n   fProps.ExecuteNoResult('create or replace table arr (id INTEGER, ' +\n     'name VARCHAR, amount DECIMAL(19,4), d TIMESTAMP, v DOUBLE)', []);\n-  SetLength(ids, COUNT);\n-  SetLength(names, COUNT);\n-  SetLength(amounts, COUNT);\n-  SetLength(dates, COUNT);\n-  SetLength(ratios, COUNT);\n-  for i := 0 to COUNT - 1 do\n+  SetLength(names, 5);\n+  names[0] := 'id';\n+  names[1] := 'name';\n+  names[2] := 'amount';\n+  names[3] := 'd';\n+  names[4] := 'v';\n+  types[0] := ftInt64;\n+  types[1] := ftUtf8;\n+  types[2] := ftCurrency;\n+  types[3] := ftDate;\n+  types[4] := ftDouble;\n+  SetLength(values, 5);\n+  for i := 0 to 4 do\n+    SetLength(values[i], COUNT);\n+  // pass 0 uses the Appender, pass 1 the multi-values INSERT fallback\n+  // (inserting only id and name for 100 more rows)\n+  for pass := 0 to 1 do\n   begin\n-    ids[i] := i + 1;\n-    names[i] := FormatUtf8('it''s #%', [i + 1]);\n-    amounts[i] := (i + 1) + 0.5;\n-    dates[i] := EncodeDate(2025, 1, 1) + i;\n-    ratios[i] := i / 8;\n+    for i := 0 to COUNT - 1 do\n+    begin\n+      values[0, i] := Int32ToUtf8(pass * COUNT + i + 1);\n+      values[1, i] := QuotedStr(FormatUtf8('it''s #%', [i + 1]), '''');\n+      values[2, i] := Int32ToUtf8(i + 1) + '.5';\n+      values[3, i] := QuotedStr(DateToIso8601Text(EncodeDate(2025, 1, 1) + i), '''');\n+      if i = 0 then\n+        values[4, i] := 'null'\n+      else\n+        values[4, i] := DoubleToStr(i / 8);\n+    end;\n+    timer.Start;\n+    if pass = 0 then\n+      fProps.OnBatchInsert(fProps, 'arr', names, types, COUNT, values, [])\n+    else\n+    begin\n+      // not all columns: the Appender is not usable -> regular INSERT\n+      SetLength(names2, 2);\n+      SetLength(values2, 2);\n+      for i := 0 to 1 do\n+      begin\n+        names2[i] := names[i];\n+        values2[i] := values[i];\n+      end;\n+      fProps.OnBatchInsert(fProps, 'arr', names2, types, 100, values2, []);\n+    end;\n+    NotifyTestSpeed('insert', COUNT, 0, @timer);\n   end;\n-  timer.Start;\n-  st := fProps.ThreadSafeConnection.NewStatementPrepared(\n-    'insert into arr values (?,?,?,?,?)', false, true);\n-  st.BindArray(1, ids);\n-  st.BindArray(2, names);\n-  st.BindArrayCurrency(3, amounts);\n-  st.BindArrayDateTime(4, dates);\n-  st.BindArray(5, ratios);\n-  st.ExecutePrepared;\n-  CheckEqual(st.UpdateCount, COUNT, 'array updatecount');\n-  NotifyTestSpeed('insert', COUNT, 0, @timer);\n-  st := nil;\n   rows := fProps.Execute('select count(*), sum(amount), max(d), ' +\n-    'max(name) filter (where id = 1000), sum(v) from arr', []);\n-  Check(rows.Step, 'array select');\n-  CheckEqual(rows.ColumnInt(0), COUNT, 'array count');\n-  Check(rows.ColumnCurrency(1) = 501000, 'array sum(decimal)');\n+    'max(name) filter (where id = 1000), sum(v), count(v) from arr', []);\n+  Check(rows.Step, 'batch select');\n+  CheckEqual(rows.ColumnInt(0), COUNT + 100, 'batch count');\n+  Check(rows.ColumnCurrency(1) = 501000, 'batch sum(decimal)');\n   CheckEqual(DateToIso8601Text(rows.ColumnDateTime(2)),\n-    DateToIso8601Text(EncodeDate(2025, 1, 1) + COUNT - 1), 'array dates');\n-  CheckEqu\n... [truncated, 424 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7d6480007c2bb756e51a67342f947ac6c977eeb0",
+      "short_sha": "7d648000",
+      "subject": "Merge pull request #676 from dkounal/sharedtx-commitfail",
+      "body": "db: release the connection transaction when SharedTransaction() Commit fails",
+      "author": "ab",
+      "date": "2026-10-22T18:06:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7d6480007c2bb756e51a67342f947ac6c977eeb0",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b",
+        "1b585fcd7b28f348966b553153b50a75d89c8b11"
+      ],
+      "stats": {
+        "additions": 123,
+        "deletions": 9,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -1322,6 +1322,8 @@   TSqlDBConnectionProperties = class\n     fOnTableAddColumn: TOnTableAddColumn;\r\n     fOnTableCreateMultiIndex: TOnTableCreateMultiIndex;\r\n     procedure UnRegisterSharedTransaction(SessionID: cardinal);\r\n+    /// SharedTransaction() helper after a failed Commit of aConnection\r\n+    procedure ReleaseFailedCommit(aConnection: TSqlDBConnection);\r\n     procedure SetFlag(const flag: TSqlDBConnectionPropertiesFlag; const value: boolean);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetFlag(const flag: TSqlDBConnectionPropertiesFlag): boolean;\r\n@@ -3757,10 +3759,13 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n   i, n: PtrInt;\r\n   found, added: boolean;\r\n   t: ^TSqlDBConnectionTransaction;\r\n+  conn: TSqlDBConnection;\r\n begin\r\n   added := false;\r\n+  conn := nil;\r\n   try\r\n     result := ThreadSafeConnection;\r\n+    conn := result;\r\n     // thread-safe found transactions support\r\n     fSharedTransactionsSafe.Lock;\r\n     try\r\n@@ -3847,13 +3852,37 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n         // the \"found\" branch and just inc(RefCount), letting the caller write\r\n         // OUTSIDE any transaction, silently\r\n         UnRegisterSharedTransaction(SessionID);\r\n+      if (action in [transCommitWithException, transCommitWithoutException]) and\r\n+         (conn <> nil) then\r\n+        // the entry was unregistered above, BEFORE the actual Commit: if it\r\n+        // failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\r\n+        // the Zeos and SQLite3 drivers restore their TransactionCount, and the\r\n+        // database transaction may still be open - nobody would ever close it,\r\n+        // and later statements of this connection would run within it\r\n+        ReleaseFailedCommit(conn);\r\n       result := nil; // result.StartTransaction/Commit/Rollback failed\r\n       if action = transCommitWithException then\r\n         raise;\r\n     end;\r\n   end;\r\n end;\r\n \r\n+procedure TSqlDBConnectionProperties.ReleaseFailedCommit(\r\n+  aConnection: TSqlDBConnection);\r\n+begin\r\n+  if aConnection.fTransactionCount > 1 then\r\n+    // another (nested) transaction is counted on this connection: only release\r\n+    // our own level, and leave the database transaction to its owner\r\n+    dec(aConnection.fTransactionCount)\r\n+  else if aConnection.fTransactionCount = 1 then\r\n+    // only our transaction: roll it back in the database\r\n+    try\r\n+      aConnection.Rollback;\r\n+    except\r\n+      aConnection.fTransactionCount := 0; // flush anyway\r\n+    end;\r\n+end;\r\n+\r\n procedure TSqlDBConnectionProperties.UnRegisterSharedTransaction(\r\n   SessionID: cardinal);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.sqlite3.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -461,11 +461,16 @@ procedure TSqlDBSQLite3Connection.SetSynchronous(Value: TSqlSynchronousMode);\n procedure TSqlDBSQLite3Connection.StartTransaction;\r\n begin\r\n   inherited;\r\n-  fDB.Lock;\r\n   try\r\n-    fDB.TransactionBegin;\r\n-  finally\r\n-    fDB.UnLock;\r\n+    fDB.Lock;\r\n+    try\r\n+      fDB.TransactionBegin;\r\n+    finally\r\n+      fDB.UnLock;\r\n+    end;\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -918,11 +918,16 @@ procedure TSqlDBZeosConnection.StartTransaction;\n begin\r\n   SynDBLog.EnterLocal(log, self, 'StartTransaction');\r\n   inherited StartTransaction;\r\n-  {$ifdef ZEOS73UP}\r\n-  fDatabase.StartTransaction; //returns the txn level\r\n-  {$else}\r\n-  fDatabase.SetAutoCommit(false);\r\n-  {$endif ZEOS73UP}\r\n+  try\r\n+    {$ifdef ZEOS73UP}\r\n+    fDatabase.StartTransaction; //returns the txn level\r\n+    {$else}\r\n+    fDatabase.SetAutoCommit(false);\r\n+    {$endif ZEOS73UP}\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n+  end;\r\n end;\r\n \r\n procedure TSqlDBZeosConnection.Commit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 75,
+          "deletions": 0,
+          "patch": "@@ -78,6 +78,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// SharedTransaction() when the actual Commit fails\r\n+    procedure SharedTransactionCommitFailure;\r\n     /// initialize needed RESTful client (and server) instances\r\n     // - i.e. a RESTful direct access to an external DB\r\n     procedure ExternalRecords;\r\n@@ -1151,6 +1153,79 @@ procedure TTestExternalDatabase.NewStatementFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.SharedTransactionCommitFailure;\r\n+var\r\n+  props: TSqlDBSQLite3ConnectionProperties;\r\n+  conn: TSqlDBConnection;\r\n+  raised: boolean;\r\n+\r\n+  function Count(const table: RawUtf8): integer;\r\n+  begin\r\n+    with props.Execute(FormatUtf8('select count(*) from %', [table]), []) do\r\n+    begin\r\n+      Check(Step, table);\r\n+      result := ColumnInt(0);\r\n+    end;\r\n+  end;\r\n+\r\n+begin\r\n+  // a failed COMMIT (here a SQLite3 deferred foreign key) left the connection\r\n+  // with TransactionCount=1 and the database transaction open, whereas the\r\n+  // shared transaction entry was already removed: nobody would ever close it\r\n+  DeleteFile('sharedtx.db3');\r\n+  props := TSqlDBSQLite3ConnectionProperties.Create('sharedtx.db3', '', '', '');\r\n+  try\r\n+    props.ExecuteNoResult('PRAGMA foreign_keys=ON', []);\r\n+    props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n+    props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n+      'DEFERRABLE INITIALLY DEFERRED)', []);\r\n+    // the COMMIT failures below are expected: no exception logging\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n+    try\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin');\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+      CheckEqual(Count('c'), 0, 'row rolled back');\r\n+      // another transaction counted on the same connection is kept as such\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin 2');\r\n+      conn.StartTransaction;\r\n+      props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+      CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+      Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+      conn.Rollback;\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+      CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+      // with exception: same cleaning, and the error is propagated\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      raised := false;\r\n+      try\r\n+        props.SharedTransaction(1, transCommitWithException);\r\n+      except\r\n+        raised := true;\r\n+      end;\r\n+      Check(raised, 'commit 3 should raise');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    finally\r\n+      TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n+    end;\r\n+    // and a new shared transaction works as usual\r\n+    Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n+    Check(props.SharedTransaction(1, transRollback) <> nil, 'rollback');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 4');\r\n+  finally\r\n+    props.Free;\r\n+    DeleteFile('sharedtx.db3');\r\n+  end;\r\n+end;\r\n+\r\n procedure TTestExternalDatabase.NextIDSelectMaxFailure;\r\n var\r\n   model: TOrmModel;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.sqlite3",
+        "mormot.db.sql.zeos"
+      ],
+      "pr": 676,
+      "is_merge": true
+    },
+    {
+      "sha": "1b585fcd7b28f348966b553153b50a75d89c8b11",
+      "short_sha": "1b585fcd",
+      "subject": "test: no exception logging for the expected COMMIT failures",
+      "body": "as requested in the review of the SharedTransactionCommitFailure test\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-22T17:28:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1b585fcd7b28f348966b553153b50a75d89c8b11",
+      "parents": [
+        "ff3b607304163168890369dc5e08cd815fecf9a7"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 29,
+          "patch": "@@ -1179,37 +1179,43 @@ procedure TTestExternalDatabase.SharedTransactionCommitFailure;\n     props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n     props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n       'DEFERRABLE INITIALLY DEFERRED)', []);\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    Check(conn <> nil, 'begin');\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter');\r\n-    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n-    CheckEqual(Count('c'), 0, 'row rolled back');\r\n-    // another transaction counted on the same connection is kept as such\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    Check(conn <> nil, 'begin 2');\r\n-    conn.StartTransaction;\r\n-    props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n-    CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n-    Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n-    conn.Rollback;\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n-    CheckEqual(Count('p'), 0, 'owner rolled back');\r\n-    // with exception: same cleaning, and the error is propagated\r\n-    conn := props.SharedTransaction(1, transBegin);\r\n-    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n-    raised := false;\r\n+    // the COMMIT failures below are expected: no exception logging\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n     try\r\n-      props.SharedTransaction(1, transCommitWithException);\r\n-    except\r\n-      raised := true;\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin');\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+      CheckEqual(Count('c'), 0, 'row rolled back');\r\n+      // another transaction counted on the same connection is kept as such\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      Check(conn <> nil, 'begin 2');\r\n+      conn.StartTransaction;\r\n+      props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+      CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+      Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+      conn.Rollback;\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+      CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+      // with exception: same cleaning, and the error is propagated\r\n+      conn := props.SharedTransaction(1, transBegin);\r\n+      props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+      raised := false;\r\n+      try\r\n+        props.SharedTransaction(1, transCommitWithException);\r\n+      except\r\n+        raised := true;\r\n+      end;\r\n+      Check(raised, 'commit 3 should raise');\r\n+      CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+      Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    finally\r\n+      TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n     end;\r\n-    Check(raised, 'commit 3 should raise');\r\n-    CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n-    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n     // and a new shared transaction works as usual\r\n     Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n     Check(props\n... [truncated, 58 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff3b607304163168890369dc5e08cd815fecf9a7",
+      "short_sha": "ff3b6073",
+      "subject": "db: release the connection transaction when SharedTransaction() Commit fails",
+      "body": "- SharedTransaction() unregisters its entry BEFORE the actual Commit: if the\n  Commit failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\n  the Zeos and SQLite3 drivers restored their TransactionCount (\"still\n  active\"), and the database transaction could stay open - nobody would ever\n  close it, later statements of this connection would run within it, and the\n  final Disconnect raised e.g. \"You cannot use ROLLBACK in AUTOCOMMIT mode\"\n- now ReleaseFailedCommit() rolls back our transaction, or only releases our\n  level when another transaction is still counted on the same connection\n- Zeos and SQLite3 StartTransaction no longer leave TransactionCount\n  incremented when the actual database call fails\n- new TTestExternalDatabase.SharedTransactionCommitFailure test (fails 8/19\n  without the fix)\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-22T10:06:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff3b607304163168890369dc5e08cd815fecf9a7",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b"
+      ],
+      "stats": {
+        "additions": 117,
+        "deletions": 9,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -1322,6 +1322,8 @@   TSqlDBConnectionProperties = class\n     fOnTableAddColumn: TOnTableAddColumn;\r\n     fOnTableCreateMultiIndex: TOnTableCreateMultiIndex;\r\n     procedure UnRegisterSharedTransaction(SessionID: cardinal);\r\n+    /// SharedTransaction() helper after a failed Commit of aConnection\r\n+    procedure ReleaseFailedCommit(aConnection: TSqlDBConnection);\r\n     procedure SetFlag(const flag: TSqlDBConnectionPropertiesFlag; const value: boolean);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetFlag(const flag: TSqlDBConnectionPropertiesFlag): boolean;\r\n@@ -3757,10 +3759,13 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n   i, n: PtrInt;\r\n   found, added: boolean;\r\n   t: ^TSqlDBConnectionTransaction;\r\n+  conn: TSqlDBConnection;\r\n begin\r\n   added := false;\r\n+  conn := nil;\r\n   try\r\n     result := ThreadSafeConnection;\r\n+    conn := result;\r\n     // thread-safe found transactions support\r\n     fSharedTransactionsSafe.Lock;\r\n     try\r\n@@ -3847,13 +3852,37 @@ function TSqlDBConnectionProperties.SharedTransaction(SessionID: cardinal;\n         // the \"found\" branch and just inc(RefCount), letting the caller write\r\n         // OUTSIDE any transaction, silently\r\n         UnRegisterSharedTransaction(SessionID);\r\n+      if (action in [transCommitWithException, transCommitWithoutException]) and\r\n+         (conn <> nil) then\r\n+        // the entry was unregistered above, BEFORE the actual Commit: if it\r\n+        // failed (e.g. a SQLite3 deferred foreign key, or a lost connection),\r\n+        // the Zeos and SQLite3 drivers restore their TransactionCount, and the\r\n+        // database transaction may still be open - nobody would ever close it,\r\n+        // and later statements of this connection would run within it\r\n+        ReleaseFailedCommit(conn);\r\n       result := nil; // result.StartTransaction/Commit/Rollback failed\r\n       if action = transCommitWithException then\r\n         raise;\r\n     end;\r\n   end;\r\n end;\r\n \r\n+procedure TSqlDBConnectionProperties.ReleaseFailedCommit(\r\n+  aConnection: TSqlDBConnection);\r\n+begin\r\n+  if aConnection.fTransactionCount > 1 then\r\n+    // another (nested) transaction is counted on this connection: only release\r\n+    // our own level, and leave the database transaction to its owner\r\n+    dec(aConnection.fTransactionCount)\r\n+  else if aConnection.fTransactionCount = 1 then\r\n+    // only our transaction: roll it back in the database\r\n+    try\r\n+      aConnection.Rollback;\r\n+    except\r\n+      aConnection.fTransactionCount := 0; // flush anyway\r\n+    end;\r\n+end;\r\n+\r\n procedure TSqlDBConnectionProperties.UnRegisterSharedTransaction(\r\n   SessionID: cardinal);\r\n var\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.sqlite3.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "@@ -461,11 +461,16 @@ procedure TSqlDBSQLite3Connection.SetSynchronous(Value: TSqlSynchronousMode);\n procedure TSqlDBSQLite3Connection.StartTransaction;\r\n begin\r\n   inherited;\r\n-  fDB.Lock;\r\n   try\r\n-    fDB.TransactionBegin;\r\n-  finally\r\n-    fDB.UnLock;\r\n+    fDB.Lock;\r\n+    try\r\n+      fDB.TransactionBegin;\r\n+    finally\r\n+      fDB.UnLock;\r\n+    end;\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -918,11 +918,16 @@ procedure TSqlDBZeosConnection.StartTransaction;\n begin\r\n   SynDBLog.EnterLocal(log, self, 'StartTransaction');\r\n   inherited StartTransaction;\r\n-  {$ifdef ZEOS73UP}\r\n-  fDatabase.StartTransaction; //returns the txn level\r\n-  {$else}\r\n-  fDatabase.SetAutoCommit(false);\r\n-  {$endif ZEOS73UP}\r\n+  try\r\n+    {$ifdef ZEOS73UP}\r\n+    fDatabase.StartTransaction; //returns the txn level\r\n+    {$else}\r\n+    fDatabase.SetAutoCommit(false);\r\n+    {$endif ZEOS73UP}\r\n+  except\r\n+    dec(fTransactionCount); // no transaction was actually started\r\n+    raise;\r\n+  end;\r\n end;\r\n \r\n procedure TSqlDBZeosConnection.Commit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 69,
+          "deletions": 0,
+          "patch": "@@ -78,6 +78,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// SharedTransaction() when the actual Commit fails\r\n+    procedure SharedTransactionCommitFailure;\r\n     /// initialize needed RESTful client (and server) instances\r\n     // - i.e. a RESTful direct access to an external DB\r\n     procedure ExternalRecords;\r\n@@ -1151,6 +1153,73 @@ procedure TTestExternalDatabase.NewStatementFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.SharedTransactionCommitFailure;\r\n+var\r\n+  props: TSqlDBSQLite3ConnectionProperties;\r\n+  conn: TSqlDBConnection;\r\n+  raised: boolean;\r\n+\r\n+  function Count(const table: RawUtf8): integer;\r\n+  begin\r\n+    with props.Execute(FormatUtf8('select count(*) from %', [table]), []) do\r\n+    begin\r\n+      Check(Step, table);\r\n+      result := ColumnInt(0);\r\n+    end;\r\n+  end;\r\n+\r\n+begin\r\n+  // a failed COMMIT (here a SQLite3 deferred foreign key) left the connection\r\n+  // with TransactionCount=1 and the database transaction open, whereas the\r\n+  // shared transaction entry was already removed: nobody would ever close it\r\n+  DeleteFile('sharedtx.db3');\r\n+  props := TSqlDBSQLite3ConnectionProperties.Create('sharedtx.db3', '', '', '');\r\n+  try\r\n+    props.ExecuteNoResult('PRAGMA foreign_keys=ON', []);\r\n+    props.ExecuteNoResult('CREATE TABLE p(id INTEGER PRIMARY KEY)', []);\r\n+    props.ExecuteNoResult('CREATE TABLE c(pid INTEGER REFERENCES p(id) ' +\r\n+      'DEFERRABLE INITIALLY DEFERRED)', []);\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    Check(conn <> nil, 'begin');\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter');\r\n+    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back');\r\n+    CheckEqual(Count('c'), 0, 'row rolled back');\r\n+    // another transaction counted on the same connection is kept as such\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    Check(conn <> nil, 'begin 2');\r\n+    conn.StartTransaction;\r\n+    props.ExecuteNoResult('INSERT INTO p VALUES (1)', []);\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    Check(props.SharedTransaction(1, transCommitWithoutException) = nil, 'commit 2');\r\n+    CheckEqual(conn.TransactionCount, 1, 'other transaction still counted');\r\n+    Check(TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'left to its owner');\r\n+    conn.Rollback;\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 2');\r\n+    CheckEqual(Count('p'), 0, 'owner rolled back');\r\n+    // with exception: same cleaning, and the error is propagated\r\n+    conn := props.SharedTransaction(1, transBegin);\r\n+    props.ExecuteNoResult('INSERT INTO c VALUES (999)', []);\r\n+    raised := false;\r\n+    try\r\n+      props.SharedTransaction(1, transCommitWithException);\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+    Check(raised, 'commit 3 should raise');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 3');\r\n+    Check(not TSqlDBSQLite3Connection(conn).DB.TransactionActive, 'rolled back 3');\r\n+    // and a new shared transaction works as usual\r\n+    Check(props.SharedTransaction(1, transBegin) <> nil, 'begin again');\r\n+    Check(props.SharedTransaction(1, transRollback) <> nil, 'rollback');\r\n+    CheckEqual(conn.TransactionCount, 0, 'counter 4');\r\n+  finally\r\n+    props.Free;\r\n+    DeleteFile('sharedtx.db3');\r\n+  end;\r\n+end;\r\n+\r\n procedure TTestExternalDatabase.NextIDSelectMaxFailure;\r\n var\r\n   model: TOrmModel;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql",
+        "mormot.db.sql.sqlite3",
+        "mormot.db.sql.zeos"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3f939de0da46f7a0202eccf12ec371ea76f535d5",
+      "short_sha": "3f939de0",
+      "subject": "net: fixed THttpAsyncServer \"Expect: 100-continue\" closing the connection",
+      "body": "When a request carries \"Expect: 100-continue\" with a body, DoHeaders()\nwrites the \"HTTP/1.1 100 Continue\" interim response before the body is\nreceived. Once this line is written, AfterWrite() is called and took it for\nthe final response: it released the request body stream, found the state\nwas not hrsResponseDone, logged \"AfterWrite: unexpected\" and returned\nsoClose - so the connection was closed while the client was sending the body.\nAny such upload failed, in memory or through OnBodyDownload; curl adds this\nheader by default for bodies above 1MB.\n\nDoHeaders() now sends the interim response at once from the receiving\nthread, with RawWrite() as DoResponse() does for the final response, so it\nis never left pending behind the final response (with acoWritePollOnly, a\nclient sending its body without waiting for the interim response would\notherwise get the final response first, and the connection was closed when\nthe interim line was eventually flushed), and AfterWrite() is not called\nfor it. If the OS buffer was full, the remaining bytes go through Write()\nand ProcessWrite(): AfterWrite() then recognizes them from the connection\nstate, since while the request is still being received or processed\n(hrsGetBody* up to hrsWaitAsyncProcessing) the final response has not been\nset up yet, and it returns soContinue without releasing anything.\n\nRegression test in TNetworkProtocols: uploads with \"Expect: 100-continue\",\nreceived in memory and through an OnBodyDownload stream, on a default server\nand on a server with paoWritePollOnly, several times on the same kept-alive\nconnection, with and without waiting for the interim response, and a request\nwithout this header.",
+      "author": "zen010101",
+      "date": "2026-10-21T11:22:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3f939de0da46f7a0202eccf12ec371ea76f535d5",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b"
+      ],
+      "stats": {
+        "additions": 171,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 3,
+          "patch": "@@ -5133,6 +5133,15 @@ function THttpAsyncServerConnection.AfterWrite: TPollAsyncSocketOnReadWrite;\n   result := soClose; // on error, shutdown and clear the connection\r\n   if fOwner.fSockets = nil then\r\n     fHttp.State := hrsErrorMisuse;\r\n+  if fHttp.State in [hrsGetBodyChunkedHexFirst .. hrsWaitAsyncProcessing] then\r\n+  begin\r\n+    // the request is still being received or processed, so this write can\r\n+    // only be the end of the \"100 Continue\" interim response, when DoHeaders\r\n+    // could not send it at once: nothing to release yet - the final response\r\n+    // will trigger its own AfterWrite()\r\n+    result := soContinue;\r\n+    exit;\r\n+  end;\r\n   // compute next step\r\n   if fHttp.State = hrsSendBody then\r\n   begin\r\n@@ -5310,9 +5319,14 @@ function THttpAsyncServerConnection.DoBodyDownload: TPollAsyncSocketOnReadWrite;\n   end;\r\n end;\r\n \r\n+const\r\n+  HTTP_CONTINUE_RESPONSE: string[25] = 'HTTP/1.1 100 Continue'#13#10#13#10;\r\n+\r\n function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\r\n var\r\n   status: integer;\r\n+  p: PByte;\r\n+  len: integer; // warning: len should be defined as integer, not PtrInt\r\n begin\r\n   // finalize the headers\r\n   result := soClose;\r\n@@ -5337,10 +5351,27 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n     exit;\r\n   // implement Expect: 100-Continue for a framed request body\r\n   if hfExpect100 in fHttp.HeaderFlags then\r\n+  begin\r\n     // client waits for the server to parse the headers and return 100\r\n-    // before sending the request body\r\n-    fServer.fAsync.fSockets.WriteString(self,\r\n-      'HTTP/1.1 100 Continue'#13#10#13#10);\r\n+    // before sending the request body: send this interim response at once\r\n+    // from this thread, as DoResponse() does for the final response, so that\r\n+    // it is never pending behind the final response (e.g. with acoWritePollOnly\r\n+    // when the client sends the body without waiting), and AfterWrite() is\r\n+    // not called for it\r\n+    p := @HTTP_CONTINUE_RESPONSE[1];\r\n+    len := ord(HTTP_CONTINUE_RESPONSE[0]);\r\n+    if not fServer.fAsync.fSockets.RawWrite(self, p, len) then\r\n+    begin\r\n+      result := soClose; // socket closed or broken\r\n+      exit;\r\n+    end;\r\n+    if (len <> 0) and // OS buffer was full (paranoid): finish in ProcessWrite\r\n+       not fServer.fAsync.fSockets.Write(self, p, len, {timeout=}1000) then\r\n+    begin\r\n+      result := soClose; // the connection was already closed on write error\r\n+      exit;\r\n+    end;\r\n+  end;\r\n   // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n   if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n      Assigned(fServer.fOnBodyDownload) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 137,
+          "deletions": 0,
+          "patch": "@@ -155,6 +155,11 @@   TNetworkProtocols = class(TSynTestCase)\n     {$endif OSPOSIX}\r\n     /// validate THttpServerGeneric.OnBodyDownload streamed body upload\r\n     procedure DoHttpBodyDownload(Sender: TObject);\r\n+    /// validate THttpAsyncServer \"Expect: 100-continue\" interim response\r\n+    procedure DoHttpExpect100(Sender: TObject);\r\n+    function DoExpectRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoExpectDownload(const aUrl, aMethod, aInHeaders, aInContentType,\r\n+      aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n     /// validate 'Range:' file responses, especially against invalid offsets\r\n     procedure DoHttpFileRange(Sender: TObject);\r\n     /// validate THttpServerRequestAbstract.SetOutStream streamed body download\r\n@@ -486,6 +491,7 @@ procedure TNetworkProtocols.SlowTests;\n begin\r\n   // start some slow tests in background if /multithread is enabled\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n+  Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n   Run(DoHttpOutStream, self, 'HttpOutStream', true, false);\r\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n@@ -6833,6 +6839,137 @@ procedure TNetworkProtocols.DoHttpOutStream(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoExpectRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+var\r\n+  data: RawByteString;\r\n+begin\r\n+  // echo the length and hash of the body, received either in memory or\r\n+  // through the stream supplied by DoExpectDownload\r\n+  if Ctxt.InContentStream <> nil then\r\n+  begin\r\n+    SetLength(data, Ctxt.InContentStream.Size);\r\n+    Ctxt.InContentStream.Position := 0;\r\n+    Ctxt.InContentStream.ReadBuffer(pointer(data)^, length(data));\r\n+  end\r\n+  else\r\n+    data := Ctxt.InContent;\r\n+  Ctxt.OutContent := Make(['ok ', length(data), ' ',\r\n+    CardinalToHexShort(crc32cHash(data))]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoExpectDownload(const aUrl, aMethod, aInHeaders,\r\n+  aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n+begin\r\n+  if aUrl = '/stream' then\r\n+    result := TRawByteStringStream.Create // the body is written to this stream\r\n+  else\r\n+    result := nil; // in-memory Content fallback\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpExpect100(Sender: TObject);\r\n+var\r\n+  srv: THttpAsyncServer;\r\n+  raw: TCrtSocket;\r\n+  body: RawByteString;\r\n+  hosthead, ok, cmd: RawUtf8;\r\n+  i, clen: integer;\r\n+\r\n+  procedure Post(const url: RawUtf8; expect, waitfor100: boolean);\r\n+  var\r\n+    received100: boolean;\r\n+  begin\r\n+    // send the headers, optionally wait for the interim response, then send\r\n+    // the body and read the final response - all on the same connection\r\n+    raw.SockSend(['POST ', url, ' HTTP/1.1']);\r\n+    raw.SockSend(hosthead);\r\n+    raw.SockSend(['Content-Length: ', length(body)]);\r\n+    raw.SockSend('Content-Type: application/dummy');\r\n+    if expect then\r\n+      raw.SockSend('Expect: 100-continue');\r\n+    raw.SockSendCRLF; // void line: end of headers\r\n+    raw.SockSendFlush;\r\n+    received100 := false;\r\n+    if expect and waitfor100 then\r\n+    begin\r\n+      // RFC 9110 10.1.1: the 100 interim response lets the client send the body\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd);\r\n+      CheckUtf8(IdemPChar(pointer(cmd), 'HTTP/1.1 100 '),\r\n+        '% 100 %', [url, cmd]);\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd); // void line ending the interim response\r\n+      CheckEqual(cmd, '', '100 void line');\r\n+      received100 := true;\r\n+    end;\r\n+    raw.SockSendFlush(body);\r\n+    cmd := '';\r\n+    raw.SockRecvLn(cmd);\r\n+    if expect and not received100 then\r\n+    begin\r\n+      // the client did not wait: the interim response is still sent first\r\n+      CheckUtf8(IdemPChar(pointer(cmd), 'HTTP/1.1 100 '),\r\n+        '% early 100 %', [url, cmd]);\r\n+      cmd := '';\r\n+      raw.SockRecvLn(cmd);\r\n\n... [truncated, 2199 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
