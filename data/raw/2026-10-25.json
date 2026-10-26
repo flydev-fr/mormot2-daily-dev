@@ -1,0 +1,299 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-25",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-26T03:46:00Z",
+  "range": {
+    "since": "2026-10-24T22:00:00Z",
+    "until": "2026-10-25T23:00:00Z",
+    "base_sha": "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0",
+    "head_sha": "180e390d5aeb0e1d072e1300645fd0df42ade226"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 7,
+    "additions": 266,
+    "deletions": 38
+  },
+  "commits": [
+    {
+      "sha": "180e390d5aeb0e1d072e1300645fd0df42ade226",
+      "short_sha": "180e390d",
+      "subject": "Merge pull request #686 from koxo/master",
+      "body": "pdf: fix TMetaFile rendering (colour key, rounded corners, GDI boxes)",
+      "author": "ab",
+      "date": "2026-10-25T20:06:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/180e390d5aeb0e1d072e1300645fd0df42ade226",
+      "parents": [
+        "804812a7423bcf764a5ab5b48705543e9c2c6770",
+        "d6bd9f39cb3d3d289b6d675587a60ce89f84ad26"
+      ],
+      "stats": {
+        "additions": 76,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 76,
+          "deletions": 6,
+          "patch": "@@ -1859,6 +1859,13 @@   TPdfCanvas = class\n     procedure PointI(x, y: single);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\r\n+    // size of one device pixel of the metafile, in logical units\r\n+    function DevPixelX: single;\r\n+    function DevPixelY: single;\r\n+    // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n+    function BoxInclI(Box: TRect): TPdfBox;\r\n+    // exclusive GDI box (FillRect = EMR_BITBLT PATCOPY)\r\n+    function BoxExclI(Box: TRect): TPdfBox;\r\n     procedure DrawXObjectPrepare(const AXObjectName: PdfString);\r\n     // wrappers about offset calculation\r\n     function ViewOffsetX(X: single): single;\r\n@@ -7914,6 +7921,7 @@ function TPdfDocument.CreateOrGetImage(\n var\r\n   jpg: TJpegImage;\r\n   img: TPdfImage;\r\n+  usejpeg: boolean;\r\n   hash: THash128Rec; // no DefaultHasher128() because AesNiHash128() makes GPF\r\n   y, w, h, row: integer;\r\n   palcount: cardinal;\r\n@@ -7955,7 +7963,11 @@ function TPdfDocument.CreateOrGetImage(\n   if result = '' then\r\n   begin\r\n      // create new if no existing TPdfImage match\r\n-    if ForceJPEGCompression = 0 then\r\n+    // a colour-keyed bitmap (e.g. from EMR_TRANSPARENTBLT) must stay lossless:\r\n+    // JPEG would drop its /Mask and alter the key colour\r\n+    usejpeg := (ForceJPEGCompression <> 0) and\r\n+               (B.TransparentMode <> tmFixed);\r\n+    if not usejpeg then\r\n       img := TPdfImage.Create(Canvas.fDoc, B, true)\r\n     else\r\n     begin\r\n@@ -7970,7 +7982,7 @@ function TPdfDocument.CreateOrGetImage(\n     if not ForceNoBitmapReuse then\r\n       img.fHash := hash;\r\n     result := 'SynImg' + UInt32ToPdfString(fXObjectList.ItemCount);\r\n-    if ForceJPEGCompression = 0 then\r\n+    if not usejpeg then\r\n       AddXObject(result, img)\r\n     else\r\n       RegisterXObject(img, result);\r\n@@ -9498,8 +9510,11 @@ procedure TPdfCanvas.LineToS(x, y: single);\n \r\n procedure TPdfCanvas.RoundRectI(x1, y1, x2, y2, cx, cy: integer);\r\n begin\r\n-  RoundRect(I2X(x1), I2Y(y1), I2X(x2), I2Y(y2),\r\n-    cx * fDevScaleX * fWorldFactorX, -cy * fDevScaleY * fWorldFactorY);\r\n+  // the corner size goes through the same window/viewport mapping as the\r\n+  // coordinates (MM_ANISOTROPIC metafiles), and the GDI box is\r\n+  // inclusive-inclusive: one device pixel is added to the right/bottom edges\r\n+  RoundRect(I2X(x1), I2Y(y1), S2X(x2 + DevPixelX), S2Y(y2 + DevPixelY),\r\n+    I2X(x1 + cx) - I2X(x1), I2Y(y1 + cy) - I2Y(y1));\r\n end;\r\n \r\n procedure TPdfCanvas.ArcI(centerx, centery, W, H, Sx, Sy, Ex, Ey: integer;\r\n@@ -9556,6 +9571,61 @@ function TPdfCanvas.RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\n     NormalizeRect(result);\r\n end;\r\n \r\n+function TPdfCanvas.DevPixelX: single;\r\n+begin\r\n+  if (fViewSize.cx <> 0) and\r\n+     (fWinSize.cx <> 0) then\r\n+    result := Abs(fWinSize.cx / fViewSize.cx)\r\n+  else\r\n+    result := 1;\r\n+end;\r\n+\r\n+function TPdfCanvas.DevPixelY: single;\r\n+begin\r\n+  if (fViewSize.cy <> 0) and\r\n+     (fWinSize.cy <> 0) then\r\n+    result := Abs(fWinSize.cy / fViewSize.cy)\r\n+  else\r\n+    result := 1;\r\n+end;\r\n+\r\n+function PdfRectToBox(r: TPdfRect): TPdfBox;\r\n+begin\r\n+  NormalizeRect(r);\r\n+  result.Left   := r.Left;\r\n+  result.Top    := r.Top;\r\n+  result.Width  := r.Right - r.Left;\r\n+  result.Height := r.Bottom - r.Top;\r\n+end;\r\n+\r\n+// GDI records the Right/Bottom of Rectangle/Ellipse one DEVICE pixel inside\r\n+// the shape, i.e. several logical units with a screen reference DC: RectI()\r\n+// removed one logical unit instead, and shapes were too small\r\n+function TPdfCanvas.BoxInclI(Box: TRect): TPdfBox;\r\n+var\r\n+  r: TPdfRect;\r\n+begin\r\n+  NormalizeRect(Box);\r\n+  r.Left   := I2X(Box.Left);\r\n+  r.Right  := S2X(Box.Right + DevPixelX);\r\n+  r.Top    := I2Y(Box.Top);\r\n+  r.Bottom := S2Y(Box.Bottom + DevPixelY);\r\n+  result := PdfRectToBox(r);\r\n+end;\r\n+\r\n+// FillRect() boxes are exclusive: no pixel nor unit to remove\r\n+function TPdfCanvas.BoxExclI(Box: TRect): TPdfBox;\r\n+var\r\n+  r: TPdfRect;\r\n+begin\r\n+  NormalizeRect(Box);\r\n+ \n... [truncated, 1040 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 686,
+      "is_merge": true
+    },
+    {
+      "sha": "804812a7423bcf764a5ab5b48705543e9c2c6770",
+      "short_sha": "804812a7",
+      "subject": "Merge pull request #679 from chowette/fix-gdiplus-emf-world-transform",
+      "body": "gdiplus: fixed EMF conversion of world transforms and extended pens",
+      "author": "ab",
+      "date": "2026-10-25T20:05:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/804812a7423bcf764a5ab5b48705543e9c2c6770",
+      "parents": [
+        "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0",
+        "ad18571319e434054347c332879030ffa39744e0"
+      ],
+      "stats": {
+        "additions": 57,
+        "deletions": 13,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 57,
+          "deletions": 13,
+          "patch": "@@ -1134,6 +1134,7 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n   EMR_SAVEDC = 33;\r\n   EMR_RESTOREDC = 34;\r\n   EMR_SETWORLDTRANSFORM = 35;\r\n+  EMR_MODIFYWORLDTRANSFORM = 36;\r\n   EMR_SELECTOBJECT = 37;\r\n   EMR_CREATEPEN = 38;\r\n   EMR_CREATEBRUSHINDIRECT = 39;\r\n@@ -1152,6 +1153,7 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n   EMR_POLYBEZIER16 = 85;\r\n   EMR_POLYGON16 = 86;\r\n   EMR_POLYLINE16 = 87;\r\n+  EMR_EXTCREATEPEN = 95;\r\n \r\n type\r\n   TEMRExtTextOut = TEMREXTTEXTOUTW;\r\n@@ -1185,6 +1187,7 @@   TGdiplusEnumState = record\n     fontColor, fontAlign: integer;\r\n     fontSpec: TFontSpec;\r\n     BkMode, BkColor: cardinal;\r\n+    WorldTransform: TXForm;\r\n   end;\r\n \r\n   /// internal data used by EnumEmfCallback() callback function\r\n@@ -1231,7 +1234,7 @@   TGdiplusEnum = record\n     Temp: TSynTempBuffer;\r\n     procedure SaveDC;\r\n     procedure RestoreDC;\r\n-    procedure ScaleMatrix(matrixOrg: THandle);\r\n+    procedure ScaleMatrix;\r\n     procedure CreatePenObj(index: integer; Color, Width, Style: cardinal);\r\n     procedure DeleteObj(index: integer);\r\n     procedure EnumerateEnd;\r\n@@ -1309,16 +1312,24 @@ procedure Points16To32(PW: PWordArray; var temp: TSynTempBuffer; n: integer);\n begin\r\n   PI := temp.Init(n * 8);\r\n   for i := 0 to n * 2 - 1 do\r\n-    PI^[i] := PW^[i];\r\n+    PI^[i] := smallint(PW^[i]);\r\n end;\r\n \r\n+{$ifdef FPC}\r\n+// FPC declares CombineTransform(LPXFORM; var XFORM; var XFORM): match Delphi\r\n+function CombineTransform(var dest: TXForm; const a, b: TXForm): BOOL;\r\n+begin\r\n+  result := Windows.CombineTransform(@dest, PXForm(@a)^, PXForm(@b)^);\r\n+end;\r\n+{$endif FPC}\r\n+\r\n // EMF enumeration callback function, called from GDI\r\n // - draw most content with GDI+ functions via the TGdiplusEnum state machine\r\n function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\r\n   NumObjects: DWord; var E: TGdiplusEnum): LongBool; stdcall;\r\n var\r\n   x: TXForm;\r\n-  mtx, path: THandle;\r\n+  path: THandle;\r\n begin\r\n   result := true;\r\n   with E.DC[E.nDC] do\r\n@@ -1349,10 +1360,27 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n         BkColor := PEMRSetBkColor(Rec)^.crColor;\r\n       EMR_SETWORLDTRANSFORM:\r\n         begin\r\n-          with PEMRSetWorldTransform(Rec)^.xform do\r\n-            E.gdip.CreateMatrix2(eM11, eM12, eM21, eM22, eDx, eDy, mtx);\r\n-          E.ScaleMatrix(mtx);\r\n-          E.gdip.DeleteMatrix(mtx);\r\n+          WorldTransform := PEMRSetWorldTransform(Rec)^.xform;\r\n+          E.ScaleMatrix;\r\n+        end;\r\n+      EMR_MODIFYWORLDTRANSFORM:\r\n+        begin\r\n+          with PEMRModifyWorldTransform(Rec)^ do\r\n+            case iMode of\r\n+              MWT_IDENTITY:\r\n+                begin\r\n+                  FillCharFast(WorldTransform, SizeOf(WorldTransform), 0);\r\n+                  WorldTransform.eM11 := 1;\r\n+                  WorldTransform.eM22 := 1;\r\n+                end;\r\n+              MWT_LEFTMULTIPLY:\r\n+                CombineTransform(WorldTransform, xform, WorldTransform);\r\n+              MWT_RIGHTMULTIPLY:\r\n+                CombineTransform(WorldTransform, WorldTransform, xform);\r\n+            else\r\n+              WorldTransform := xform; // MWT_SET\r\n+            end;\r\n+          E.ScaleMatrix;\r\n         end;\r\n       EMR_EXTCREATEFONTINDIRECTW:\r\n         with PEMRExtCreateFontIndirect(Rec)^ do\r\n@@ -1376,6 +1404,18 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n           E.CreatePenObj(\r\n             ihPen - 1, lopn.lopnColor, lopn.lopnWidth.x, lopn.lopnStyle);\r\n         end;\r\n+      EMR_EXTCREATEPEN:\r\n+        // approximated: only the color, width and dash style are handled\r\n+        with PEMRExtCreatePen(Rec)^ do\r\n+        begin\r\n+          E.DeleteObj(ihPen - 1);\r\n+          if elp.elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n+            E.CreatePenObj(ihPen - 1, elp.elpColor, 0,\r\n+              elp.elpPenStyle and PS_STYLE_MASK)\r\n+          else\r\n+            E.CreatePenObj(ihPen - 1\n... [truncated, 1828 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": 679,
+      "is_merge": true
+    },
+    {
+      "sha": "d6bd9f39cb3d3d289b6d675587a60ce89f84ad26",
+      "short_sha": "d6bd9f39",
+      "subject": "Add files via upload",
+      "body": "",
+      "author": "koxo",
+      "date": "2026-10-25T13:16:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d6bd9f39cb3d3d289b6d675587a60ce89f84ad26",
+      "parents": [
+        "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0"
+      ],
+      "stats": {
+        "additions": 76,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 76,
+          "deletions": 6,
+          "patch": "@@ -1859,6 +1859,13 @@   TPdfCanvas = class\n     procedure PointI(x, y: single);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\r\n+    // size of one device pixel of the metafile, in logical units\r\n+    function DevPixelX: single;\r\n+    function DevPixelY: single;\r\n+    // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n+    function BoxInclI(Box: TRect): TPdfBox;\r\n+    // exclusive GDI box (FillRect = EMR_BITBLT PATCOPY)\r\n+    function BoxExclI(Box: TRect): TPdfBox;\r\n     procedure DrawXObjectPrepare(const AXObjectName: PdfString);\r\n     // wrappers about offset calculation\r\n     function ViewOffsetX(X: single): single;\r\n@@ -7914,6 +7921,7 @@ function TPdfDocument.CreateOrGetImage(\n var\r\n   jpg: TJpegImage;\r\n   img: TPdfImage;\r\n+  usejpeg: boolean;\r\n   hash: THash128Rec; // no DefaultHasher128() because AesNiHash128() makes GPF\r\n   y, w, h, row: integer;\r\n   palcount: cardinal;\r\n@@ -7955,7 +7963,11 @@ function TPdfDocument.CreateOrGetImage(\n   if result = '' then\r\n   begin\r\n      // create new if no existing TPdfImage match\r\n-    if ForceJPEGCompression = 0 then\r\n+    // a colour-keyed bitmap (e.g. from EMR_TRANSPARENTBLT) must stay lossless:\r\n+    // JPEG would drop its /Mask and alter the key colour\r\n+    usejpeg := (ForceJPEGCompression <> 0) and\r\n+               (B.TransparentMode <> tmFixed);\r\n+    if not usejpeg then\r\n       img := TPdfImage.Create(Canvas.fDoc, B, true)\r\n     else\r\n     begin\r\n@@ -7970,7 +7982,7 @@ function TPdfDocument.CreateOrGetImage(\n     if not ForceNoBitmapReuse then\r\n       img.fHash := hash;\r\n     result := 'SynImg' + UInt32ToPdfString(fXObjectList.ItemCount);\r\n-    if ForceJPEGCompression = 0 then\r\n+    if not usejpeg then\r\n       AddXObject(result, img)\r\n     else\r\n       RegisterXObject(img, result);\r\n@@ -9498,8 +9510,11 @@ procedure TPdfCanvas.LineToS(x, y: single);\n \r\n procedure TPdfCanvas.RoundRectI(x1, y1, x2, y2, cx, cy: integer);\r\n begin\r\n-  RoundRect(I2X(x1), I2Y(y1), I2X(x2), I2Y(y2),\r\n-    cx * fDevScaleX * fWorldFactorX, -cy * fDevScaleY * fWorldFactorY);\r\n+  // the corner size goes through the same window/viewport mapping as the\r\n+  // coordinates (MM_ANISOTROPIC metafiles), and the GDI box is\r\n+  // inclusive-inclusive: one device pixel is added to the right/bottom edges\r\n+  RoundRect(I2X(x1), I2Y(y1), S2X(x2 + DevPixelX), S2Y(y2 + DevPixelY),\r\n+    I2X(x1 + cx) - I2X(x1), I2Y(y1 + cy) - I2Y(y1));\r\n end;\r\n \r\n procedure TPdfCanvas.ArcI(centerx, centery, W, H, Sx, Sy, Ex, Ey: integer;\r\n@@ -9556,6 +9571,61 @@ function TPdfCanvas.RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\n     NormalizeRect(result);\r\n end;\r\n \r\n+function TPdfCanvas.DevPixelX: single;\r\n+begin\r\n+  if (fViewSize.cx <> 0) and\r\n+     (fWinSize.cx <> 0) then\r\n+    result := Abs(fWinSize.cx / fViewSize.cx)\r\n+  else\r\n+    result := 1;\r\n+end;\r\n+\r\n+function TPdfCanvas.DevPixelY: single;\r\n+begin\r\n+  if (fViewSize.cy <> 0) and\r\n+     (fWinSize.cy <> 0) then\r\n+    result := Abs(fWinSize.cy / fViewSize.cy)\r\n+  else\r\n+    result := 1;\r\n+end;\r\n+\r\n+function PdfRectToBox(r: TPdfRect): TPdfBox;\r\n+begin\r\n+  NormalizeRect(r);\r\n+  result.Left   := r.Left;\r\n+  result.Top    := r.Top;\r\n+  result.Width  := r.Right - r.Left;\r\n+  result.Height := r.Bottom - r.Top;\r\n+end;\r\n+\r\n+// GDI records the Right/Bottom of Rectangle/Ellipse one DEVICE pixel inside\r\n+// the shape, i.e. several logical units with a screen reference DC: RectI()\r\n+// removed one logical unit instead, and shapes were too small\r\n+function TPdfCanvas.BoxInclI(Box: TRect): TPdfBox;\r\n+var\r\n+  r: TPdfRect;\r\n+begin\r\n+  NormalizeRect(Box);\r\n+  r.Left   := I2X(Box.Left);\r\n+  r.Right  := S2X(Box.Right + DevPixelX);\r\n+  r.Top    := I2Y(Box.Top);\r\n+  r.Bottom := S2Y(Box.Bottom + DevPixelY);\r\n+  result := PdfRectToBox(r);\r\n+end;\r\n+\r\n+// FillRect() boxes are exclusive: no pixel nor unit to remove\r\n+function TPdfCanvas.BoxExclI(Box: TRect): TPdfBox;\r\n+var\r\n+  r: TPdfRect;\r\n+begin\r\n+  NormalizeRect(Box);\r\n+ \n... [truncated, 1040 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ad18571319e434054347c332879030ffa39744e0",
+      "short_sha": "ad185713",
+      "subject": "gdiplus: EMR_MODIFYWORLDTRANSFORM support in EMF conversion",
+      "body": "EMR_MODIFYWORLDTRANSFORM was ignored. TeeChart draws its lines in 1/16 pixel units set by this record, so they were drawn 16 times too large by the anti-aliased TGDIPages preview. All the modes are now handled with the CombineTransform() API. FPC declares it with a pointer and var parameters, so a proxy with the Delphi signature is defined for FPC only.",
+      "author": "chowette",
+      "date": "2026-10-23T13:47:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ad18571319e434054347c332879030ffa39744e0",
+      "parents": [
+        "ce97a2ff9da6b8cc3a400e29efceb43441badb2e"
+      ],
+      "stats": {
+        "additions": 28,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 0,
+          "patch": "@@ -1134,6 +1134,7 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n   EMR_SAVEDC = 33;\r\n   EMR_RESTOREDC = 34;\r\n   EMR_SETWORLDTRANSFORM = 35;\r\n+  EMR_MODIFYWORLDTRANSFORM = 36;\r\n   EMR_SELECTOBJECT = 37;\r\n   EMR_CREATEPEN = 38;\r\n   EMR_CREATEBRUSHINDIRECT = 39;\r\n@@ -1314,6 +1315,14 @@ procedure Points16To32(PW: PWordArray; var temp: TSynTempBuffer; n: integer);\n     PI^[i] := smallint(PW^[i]);\r\n end;\r\n \r\n+{$ifdef FPC}\r\n+// FPC declares CombineTransform(LPXFORM; var XFORM; var XFORM): match Delphi\r\n+function CombineTransform(var dest: TXForm; const a, b: TXForm): BOOL;\r\n+begin\r\n+  result := Windows.CombineTransform(@dest, PXForm(@a)^, PXForm(@b)^);\r\n+end;\r\n+{$endif FPC}\r\n+\r\n // EMF enumeration callback function, called from GDI\r\n // - draw most content with GDI+ functions via the TGdiplusEnum state machine\r\n function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\r\n@@ -1354,6 +1363,25 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n           WorldTransform := PEMRSetWorldTransform(Rec)^.xform;\r\n           E.ScaleMatrix;\r\n         end;\r\n+      EMR_MODIFYWORLDTRANSFORM:\r\n+        begin\r\n+          with PEMRModifyWorldTransform(Rec)^ do\r\n+            case iMode of\r\n+              MWT_IDENTITY:\r\n+                begin\r\n+                  FillCharFast(WorldTransform, SizeOf(WorldTransform), 0);\r\n+                  WorldTransform.eM11 := 1;\r\n+                  WorldTransform.eM22 := 1;\r\n+                end;\r\n+              MWT_LEFTMULTIPLY:\r\n+                CombineTransform(WorldTransform, xform, WorldTransform);\r\n+              MWT_RIGHTMULTIPLY:\r\n+                CombineTransform(WorldTransform, WorldTransform, xform);\r\n+            else\r\n+              WorldTransform := xform; // MWT_SET\r\n+            end;\r\n+          E.ScaleMatrix;\r\n+        end;\r\n       EMR_EXTCREATEFONTINDIRECTW:\r\n         with PEMRExtCreateFontIndirect(Rec)^ do\r\n         begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ce97a2ff9da6b8cc3a400e29efceb43441badb2e",
+      "short_sha": "ce97a2ff",
+      "subject": "gdiplus: keep the EMF world transform in the DC state",
+      "body": "EMR_SETWORLDTRANSFORM was applied once, and lost at the next RestoreDC or window/viewport change, e.g. when a metafile is nested in another one. The transform is now stored in each DC state, restored by RestoreDC, and combined with the window/viewport matrix by ScaleMatrix(), which does not need a parameter any more.",
+      "author": "chowette",
+      "date": "2026-10-23T13:42:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ce97a2ff9da6b8cc3a400e29efceb43441badb2e",
+      "parents": [
+        "903d1cd01d3fcca8d91df4821a9267a4c3508c62"
+      ],
+      "stats": {
+        "additions": 15,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 12,
+          "patch": "@@ -1186,6 +1186,7 @@   TGdiplusEnumState = record\n     fontColor, fontAlign: integer;\r\n     fontSpec: TFontSpec;\r\n     BkMode, BkColor: cardinal;\r\n+    WorldTransform: TXForm;\r\n   end;\r\n \r\n   /// internal data used by EnumEmfCallback() callback function\r\n@@ -1232,7 +1233,7 @@   TGdiplusEnum = record\n     Temp: TSynTempBuffer;\r\n     procedure SaveDC;\r\n     procedure RestoreDC;\r\n-    procedure ScaleMatrix(matrixOrg: THandle);\r\n+    procedure ScaleMatrix;\r\n     procedure CreatePenObj(index: integer; Color, Width, Style: cardinal);\r\n     procedure DeleteObj(index: integer);\r\n     procedure EnumerateEnd;\r\n@@ -1319,7 +1320,7 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n   NumObjects: DWord; var E: TGdiplusEnum): LongBool; stdcall;\r\n var\r\n   x: TXForm;\r\n-  mtx, path: THandle;\r\n+  path: THandle;\r\n begin\r\n   result := true;\r\n   with E.DC[E.nDC] do\r\n@@ -1350,10 +1351,8 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n         BkColor := PEMRSetBkColor(Rec)^.crColor;\r\n       EMR_SETWORLDTRANSFORM:\r\n         begin\r\n-          with PEMRSetWorldTransform(Rec)^.xform do\r\n-            E.gdip.CreateMatrix2(eM11, eM12, eM21, eM22, eDx, eDy, mtx);\r\n-          E.ScaleMatrix(mtx);\r\n-          E.gdip.DeleteMatrix(mtx);\r\n+          WorldTransform := PEMRSetWorldTransform(Rec)^.xform;\r\n+          E.ScaleMatrix;\r\n         end;\r\n       EMR_EXTCREATEFONTINDIRECTW:\r\n         with PEMRExtCreateFontIndirect(Rec)^ do\r\n@@ -1615,7 +1614,7 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n     EMR_SETWINDOWORGEX,\r\n     EMR_SETVIEWPORTEXTEX,\r\n     EMR_SETVIEWPORTORGEX:\r\n-      E.ScaleMatrix(0);\r\n+      E.ScaleMatrix;\r\n   end;\r\n end;\r\n \r\n@@ -1956,7 +1955,7 @@ procedure TGdiplusEnum.RestoreDC;\n     gdip.DeleteRegion(ClipRegion);\r\n   end;\r\n   dec(nDC);\r\n-  ScaleMatrix(0);\r\n+  ScaleMatrix;\r\n //  with DC[nDC] do\r\n //    Gdip.SetWorldTransform(Graphics,destMatrix);\r\n end;\r\n@@ -1973,10 +1972,10 @@ procedure TGdiplusEnum.SaveDC;\n   end;\r\n end;\r\n \r\n-procedure TGdiplusEnum.ScaleMatrix(matrixOrg: THandle);\r\n+procedure TGdiplusEnum.ScaleMatrix;\r\n var\r\n   P: TPoint;\r\n-  mtx: THandle;\r\n+  mtx, world: THandle;\r\n begin\r\n   with DC[nDC] do\r\n   begin\r\n@@ -1985,8 +1984,10 @@ procedure TGdiplusEnum.ScaleMatrix(matrixOrg: THandle);\n     gdip.CreateMatrix2(\r\n       ViewSize.cx / WinSize.cx, 0, 0, ViewSize.cy / WinSize.cy, P.X, P.Y, mtx);\r\n     gdip.MultiplyMatrix(mtx, destMatrix);\r\n-    if matrixOrg <> 0 then\r\n-      gdip.MultiplyMatrix(mtx, matrixOrg);\r\n+    with WorldTransform do\r\n+      gdip.CreateMatrix2(eM11, eM12, eM21, eM22, eDx, eDy, world);\r\n+    gdip.MultiplyMatrix(mtx, world);\r\n+    gdip.DeleteMatrix(world);\r\n     gdip.SetWorldTransform(gr, mtx);\r\n     gdip.DeleteMatrix(mtx);\r\n   end;\r\n@@ -2083,6 +2084,8 @@ function ConvertToEmfPlus(Source: HENHMETAFILE; Width, Height: integer;\n     begin\r\n       PInt64(@WinSize)^ := PInt64(@R.Width)^;\r\n       ViewSize := WinSize;\r\n+      WorldTransform.eM11 := 1;\r\n+      WorldTransform.eM22 := 1;\r\n     end;\r\n     E.dest := CreateCompatibleDC(Dest);\r\n     E.gdip.Lock;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "903d1cd01d3fcca8d91df4821a9267a4c3508c62",
+      "short_sha": "903d1cd0",
+      "subject": "gdiplus: EMR_EXTCREATEPEN support in EMF conversion",
+      "body": "Extended pens, as created e.g. by TeeChart for its lines, were ignored: no GDI+ pen was created for the handle, so lines were drawn with the previously selected pen. They are now created from the color, width and dash style of the extended pen. This is an approximation: end caps, joins and brush styles are not handled.",
+      "author": "chowette",
+      "date": "2026-10-23T13:38:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/903d1cd01d3fcca8d91df4821a9267a4c3508c62",
+      "parents": [
+        "9bf01841674236e20f9c81a05f3203bcb510711b"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 0,
+          "patch": "@@ -1152,6 +1152,7 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n   EMR_POLYBEZIER16 = 85;\r\n   EMR_POLYGON16 = 86;\r\n   EMR_POLYLINE16 = 87;\r\n+  EMR_EXTCREATEPEN = 95;\r\n \r\n type\r\n   TEMRExtTextOut = TEMREXTTEXTOUTW;\r\n@@ -1376,6 +1377,18 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n           E.CreatePenObj(\r\n             ihPen - 1, lopn.lopnColor, lopn.lopnWidth.x, lopn.lopnStyle);\r\n         end;\r\n+      EMR_EXTCREATEPEN:\r\n+        // approximated: only the color, width and dash style are handled\r\n+        with PEMRExtCreatePen(Rec)^ do\r\n+        begin\r\n+          E.DeleteObj(ihPen - 1);\r\n+          if elp.elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n+            E.CreatePenObj(ihPen - 1, elp.elpColor, 0,\r\n+              elp.elpPenStyle and PS_STYLE_MASK)\r\n+          else\r\n+            E.CreatePenObj(ihPen - 1, elp.elpColor, elp.elpWidth,\r\n+              elp.elpPenStyle and PS_STYLE_MASK);\r\n+        end;\r\n       EMR_CREATEBRUSHINDIRECT:\r\n         with PEMRCreateBrushIndirect(Rec)^ do\r\n         begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9bf01841674236e20f9c81a05f3203bcb510711b",
+      "short_sha": "9bf01841",
+      "subject": "gdiplus: fixed sign extension of 16-bit points in EMF conversion",
+      "body": "The points of EMR_POLYGON16, EMR_POLYLINE16 and EMR_POLYBEZIER16 are signed 16-bit values. Points16To32() copied them as words, so a negative coordinate like -8 became 65528.",
+      "author": "chowette",
+      "date": "2026-10-23T13:36:12Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9bf01841674236e20f9c81a05f3203bcb510711b",
+      "parents": [
+        "7d6480007c2bb756e51a67342f947ac6c977eeb0"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1309,7 +1309,7 @@ procedure Points16To32(PW: PWordArray; var temp: TSynTempBuffer; n: integer);\n begin\r\n   PI := temp.Init(n * 8);\r\n   for i := 0 to n * 2 - 1 do\r\n-    PI^[i] := PW^[i];\r\n+    PI^[i] := smallint(PW^[i]);\r\n end;\r\n \r\n // EMF enumeration callback function, called from GDI\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
