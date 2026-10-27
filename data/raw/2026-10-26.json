@@ -1,0 +1,1417 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-26",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-27T03:42:08Z",
+  "range": {
+    "since": "2026-10-25T23:00:00Z",
+    "until": "2026-10-26T23:00:00Z",
+    "base_sha": "180e390d5aeb0e1d072e1300645fd0df42ade226",
+    "head_sha": "57e2526de090afe6ece88d614b557555dd3c4d76"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 25,
+    "additions": 7001,
+    "deletions": 867
+  },
+  "commits": [
+    {
+      "sha": "57e2526de090afe6ece88d614b557555dd3c4d76",
+      "short_sha": "57e2526d",
+      "subject": "Merge pull request #688 from landrix/fix/pdf-review-673b",
+      "body": "ui: pdf - the fixes of #673 rows 14-22, FPC 3.2.2 Win64 EMF records, #686 under a mirrored axis",
+      "author": "ab",
+      "date": "2026-10-26T19:35:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/57e2526de090afe6ece88d614b557555dd3c4d76",
+      "parents": [
+        "fc4c033da5520d25221025efb78fcc4ea55a55a0",
+        "4bc5c2be6461d689c634e4663a8657fe0e830134"
+      ],
+      "stats": {
+        "additions": 1884,
+        "deletions": 117,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 592,
+          "deletions": 116,
+          "patch": "@@ -576,6 +576,19 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n /// retrieve the current printer resolution\r\n function CurrentPrinterRes: TPoint;\r\n \r\n+/// the code page ExtTextOutA reads the bytes of a font of this charset in\r\n+// - CP_ACP for DEFAULT_CHARSET, CP_OEMCP for OEM_CHARSET, 42 (CP_SYMBOL) for\r\n+// SYMBOL_CHARSET - as GDI records them, U+F020..U+F0FF - else the code page\r\n+// of the charset (1252 for ANSI_CHARSET)\r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+\r\n+/// the code page ExtTextOutA reads the bytes of a stock font in\r\n+// - from the charset of GetStockObject(StockFont) on this system, CP_ACP if\r\n+// it gives none or StockFont is no font: ANSI_FIXED_FONT and ANSI_VAR_FONT\r\n+// are ANSI_CHARSET (1252), OEM_FIXED_FONT is OEM_CHARSET, the system fonts\r\n+// follow the system charset\r\n+function StockFontCodePage(StockFont: integer): cardinal;\r\n+\r\n \r\n {************ Internal classes mapping PDF objects }\r\n \r\n@@ -1859,7 +1872,8 @@   TPdfCanvas = class\n     procedure PointI(x, y: single);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\r\n-    // size of one device pixel of the metafile, in logical units\r\n+    // size of one device pixel of the metafile, in logical units - negative\r\n+    // when the mapping mirrors that axis\r\n     function DevPixelX: single;\r\n     function DevPixelY: single;\r\n     // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n@@ -3312,13 +3326,15 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   result := psUserDefined;\r\n   if not PrinterDriverExists then\r\n     exit;\r\n-  GetProfileString('windows', 'device', nil, name, SizeOf(name) - 1);\r\n+  GetProfileString('windows', 'device', nil, name, length(name)); // chars\r\n   PC := ParseFetchedPrinterStr(name);\r\n   if (PC = nil) or\r\n      (PC^ = #0) then\r\n     exit;\r\n   try\r\n     h := CreateDC(nil, PC, nil, nil);\r\n+    if h = 0 then\r\n+      exit; // no printer DC: nothing to measure\r\n     try\r\n       pt.x := GetDeviceCaps(h, LOGPIXELSX);\r\n       pt.y := GetDeviceCaps(h, LOGPIXELSY);\r\n@@ -3358,8 +3374,38 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   end;\r\n end;\r\n \r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+begin\r\n+  case CharSet of\r\n+    DEFAULT_CHARSET:\r\n+      result := CP_ACP;\r\n+    OEM_CHARSET:\r\n+      result := CP_OEMCP;\r\n+    SYMBOL_CHARSET:\r\n+      result := 42; // CP_SYMBOL: $20..$FF as U+F020..U+F0FF, as GDI records them\r\n+    CHINESEBIG5_CHARSET:\r\n+      result := 950;\r\n+  else\r\n+    result := CharSetToCodePage(CharSet);\r\n+  end;\r\n+end;\r\n+\r\n+function StockFontCodePage(StockFont: integer): cardinal;\r\n+var\r\n+  h: HGDIOBJ;\r\n+  lf: TLogFontW;\r\n+begin\r\n+  h := GetStockObject(StockFont);\r\n+  if (GetObjectType(h) = OBJ_FONT) and\r\n+     (GetObjectW(h, SizeOf(lf), @lf) <> 0) then\r\n+    result := FontCharSetCodePage(lf.lfCharSet)\r\n+  else\r\n+    result := CP_ACP;\r\n+end;\r\n+\r\n function CurrentPrinterRes: TPoint;\r\n var\r\n+  res: TPoint;\r\n   name: array[0..1023] of Char;\r\n   PC: PChar;\r\n   h: THandle;\r\n@@ -3368,16 +3414,22 @@ function CurrentPrinterRes: TPoint;\n   result.Y := 300; // default standard printer resolution\r\n   if not PrinterDriverExists then\r\n     exit;\r\n-  GetProfileString('windows', 'device', nil, name, SizeOf(name) - 1);\r\n+  GetProfileString('windows', 'device', nil, name, length(name)); // chars\r\n   PC := ParseFetchedPrinterStr(name);\r\n   if (PC = nil) or\r\n      (PC^ = #0) then\r\n     exit;\r\n   try\r\n     h := CreateDC(nil, PC, nil, nil);\r\n+    if h = 0 then\r\n+      exit; // no printer DC: the default resolution\r\n     try\r\n-      result.x := GetDeviceCaps(h, LOGPIXELSX);\r\n-      result.y := GetDeviceCaps(h, LOGPIXELSY);\r\n+      res.x := GetDeviceCaps(h, LOGPIXELSX);\r\n+      res.y := GetDeviceCaps(h, LOGPIXELSY);\r\n+      if res.x > 0 then\r\n+        result.x := res.x;\r\n+      if res.y > 0 then\r\n+        result.y := res.y;\r\n     finally\r\n       DeleteDC(h);\r\n     end;\r\n@@ -3497,14 +3549,17 @@ function RGBA(r, g, b, a: card\n... [truncated, 44064 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1292,
+          "deletions": 1,
+          "patch": "@@ -53,6 +53,20 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusPlaybackOrder;\r\n     procedure EmfPlusWindowOrigin;\r\n     procedure EmfPlusRecordLayout;\r\n+    procedure EmfAlphaBlendOpaque;\r\n+    procedure EmfPolyPolylineOpen;\r\n+    procedure EmfRestoreDCDepth;\r\n+    procedure EmfScaledRotation;\r\n+    procedure EmfAnsiText;\r\n+    procedure EmfAnsiStockFont;\r\n+    procedure EmfStockCodePages;\r\n+    procedure EmfDIBitsKept;\r\n+    procedure EmfPrinterResZero;\r\n+    procedure ReducedFontSearchFields;\r\n+    procedure EmfRecordLayout;\r\n+    procedure EmfMirroredBoxes;\r\n+    procedure EmfClipRestoreDC;\r\n+    procedure EmfUnderlineClipped;\r\n   end;\r\n \r\n implementation\r\n@@ -356,7 +370,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $FE2D27CA);\r\n+        CheckHash(S, $456748FC); // the boxes of #686\r\n       end;\r\n     finally\r\n       Free;\r\n@@ -1526,6 +1540,1283 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   Check(RedPixels(CloseEmf(dc)) > 0, 'the extended pen colour');\r\n end;\r\n \r\n+const\r\n+  // the record types, by number: the windows unit of FPC lacks some names\r\n+  R_POLYPOLYLINE = 7;\r\n+  R_SAVEDC = 33;\r\n+  R_RESTOREDC = 34;\r\n+  R_SELECTOBJECT = 37;\r\n+  R_CREATEBRUSHINDIRECT = 39;\r\n+  R_STRETCHDIBITS = 81;\r\n+  R_EXTTEXTOUTA = 83;\r\n+  R_EXTTEXTOUTW = 84;\r\n+  R_POLYPOLYLINE16 = 90;\r\n+  R_POLYPOLYGON16 = 91;\r\n+  R_EXTCREATEPEN = 95;\r\n+  R_ALPHABLEND = 114;\r\n+\r\n+// AlphaBlend under its gdi32 name: the windows unit of FPC lacks it\r\n+function GdiAlphaBlend(Dest: HDC; X, Y, W, H: integer; Src: HDC;\r\n+  XS, YS, WS, HS: integer; Blend: DWord): BOOL; stdcall; external 'gdi32.dll';\r\n+\r\n+// the bytes of a metafile, as GetEnhMetaFileBits gives them\r\n+function MetaFileBytes(Mf: TMetaFile): RawByteString;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := GetEnhMetaFileBits(Mf.Handle, 0, nil);\r\n+  SetLength(result, n);\r\n+  if n > 0 then\r\n+    GetEnhMetaFileBits(Mf.Handle, n, pointer(result));\r\n+end;\r\n+\r\n+// the offsets of the records of type RecType in the bytes of a metafile\r\n+function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynArray;\r\n+var\r\n+  o, n: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  o := 0;\r\n+  while o + 8 <= length(Bytes) do\r\n+  begin\r\n+    if PCardinal(@PByteArray(Bytes)[o])^ = RecType then\r\n+    begin\r\n+      n := length(result);\r\n+      SetLength(result, n + 1);\r\n+      result[n] := o;\r\n+    end;\r\n+    n := PCardinal(@PByteArray(Bytes)[o + 4])^;\r\n+    if n < 8 then\r\n+      break;\r\n+    inc(o, n);\r\n+  end;\r\n+end;\r\n+\r\n+// the metafile rendered into one page of an uncompressed PDF\r\n+function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\r\n+  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip): RawUtf8;\r\n+var\r\n+  doc: TPdfDocumentGdi;\r\n+begin\r\n+  doc := TPdfDocumentGdi.Create;\r\n+  try\r\n+    doc.Info.CreationDate := FIXED_DATE;\r\n+    doc.CompressionMethod := cmNone;\r\n+    doc.EmbeddedTTF := false;\r\n+    doc.StandardFontsReplace := true;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n+    doc.AddPage;\r\n+    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0, tpSetTextJustification,\r\n+      99, 101, TextClipping);\r\n+    result := SavedPdf(doc);\r\n+  finally\r\n+    doc.Free;\r\n+  end;\r\n+end;\r\n+\r\n+// the operands of the last Op (' rg', ' Tm') before Marker in the content\r\n+function OperandsBefore(const Txt, Marker, Op: RawUtf8): RawUtf8;\r\n+var\r\n+  p, i, j, k: PtrInt;\r\n+begin\r\n+  result := '';\r\n+  p := PosEx(Marker, Txt);\r\n+  i := 1;\r\n+  repeat\r\n+    j := PosEx(Op, Txt, i);\r\n+    if (j = 0) or\r\n+       (j > p) then\r\n+      break;\r\n+    i := j + length(Op);\r\n+    k := j;\r\n+    while (k > 1) and\r\n+          not (Txt[k - 1] in [#10, #13]) do\r\n+      dec(k);\r\n+    result := copy(Txt, k, j - k);\r\n+  until false;\r\n+end;\r\n+\r\n+function BinaryOf(const B: array of byte): RawByteString;\r\n+be\n... [truncated, 39215 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 688,
+      "is_merge": true
+    },
+    {
+      "sha": "4bc5c2be6461d689c634e4663a8657fe0e830134",
+      "short_sha": "4bc5c2be",
+      "subject": "ui: pdf - a GDI path is painted under the clip and with the pen of its painting record",
+      "body": "GDI paints a path under the clip selected when StrokePath or FillPath runs. The renderer wrote the path's operators as the records came. A clip changed in between could only apply after the painting, and the pen's w, RG and d came inside the path object.\n\nHow it works now:\n- From EMR_BEGINPATH to EMR_ENDPATH, only the records of the path's geometry (moves, lines, curves, shapes, EMR_CLOSEFIGURE) write to a stream of their own.\n- Everything else goes to the page as it comes: clips, pen operators, text, bitmaps and the miter limit.\n- The painting records end what the page left open, set the pen and the brush, write the kept path, then paint.\n- EMR_ABORTPATH, EMR_SELECTCLIPPATH and the end of the metafile drop the path.\n\nFixed on the way (they broke paths before too):\n- Text or a bitmap in a path bracket made the next line stroke the half-built path.\n- A pen selected inside a path bracket stroked the pending line, an S with no path on the page.\n- Arc, pie, chord, polygons, polylines, rectangles and ellipses painted at once inside a path, and the painting record painted them again.\n- A polygon with a null pen and brush was left out of the path.\n- FILLPATH filled with f under ALTERNATE.\n- STROKEANDFILLPATH did not close the open figures.\n- The Q after a clipped text forgot only the fill colour, while its underline had set the pen. TPdfEnum.GStateRestored now resets all four cached values, from TextOut and from SelectClip.\n\nStill open:\n- Text in a path: GDI adds its outlines to the path, the renderer draws it at once.\n- Lines of a null pen outside a path leave their m l open on the page.\n\nTests: EmfClipRestoreDC has 9 more checks and EmfUnderlineClipped is new (2 checks); 10 of the new checks fail before.\n\nThis is the same change as in our engine (martin-doyle/mORMot2-PDF-CrossPlatform#94), without the path artifacts of tagged output, which this unit does not write.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T15:32:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4bc5c2be6461d689c634e4663a8657fe0e830134",
+      "parents": [
+        "851ad20c9177e3be3b154756ba3ee9ad0968ac6b"
+      ],
+      "stats": {
+        "additions": 406,
+        "deletions": 63,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 232,
+          "deletions": 58,
+          "patch": "@@ -10871,17 +10871,38 @@   TPdfEnum = class\n     // what the q of the canvas hold: fMetaActive, then fClipActive; 0 if none\r\n     fMetaActive: integer;\r\n     fClipActive: integer;\r\n-    // from EMR_BEGINPATH until the path is painted or aborted\r\n-    fPathOpen: boolean;\r\n+    // from EMR_BEGINPATH to EMR_ENDPATH: the path's geometry goes to a stream\r\n+    // of its own, all else (pen, text, bitmaps) to the page\r\n+    fPathRecording: boolean;\r\n+    fPathStream: TPdfStream;\r\n+    // within a geometry record: the page's contents\r\n+    fPathIn: boolean;\r\n+    fPathSaved: TPdfStream;\r\n+    // the recorded path until its painting record\r\n+    fPathBuf: RawByteString;\r\n   public\r\n     constructor Create(ACanvas: TPdfCanvas);\r\n     procedure SaveDC;\r\n     procedure RestoreDC(Relative: integer);\r\n     // make Meta and Region (0 = none) the clip of the canvas: Q of the q\r\n     // that are not part of it\r\n     procedure SelectClip(Meta, Region: integer);\r\n-    // the path is painted or aborted: the clip selected meanwhile applies\r\n-    procedure PathEnded;\r\n+    // after a Q: the colours, the line width and the dash are those of before\r\n+    procedure GStateRestored;\r\n+    // EMR_BEGINPATH: record the path apart, PDF allows no q/Q within it\r\n+    procedure PathBegin;\r\n+    // around a record of the path's geometry: to its stream and back\r\n+    procedure PathIn;\r\n+    procedure PathOut;\r\n+    // EMR_ENDPATH: back to the page's contents, the path kept\r\n+    procedure PathClose;\r\n+    // a painting record: back to the page, what it left open ended\r\n+    procedure PathPaint;\r\n+    // write the kept path, after the clip and the pen of its painting\r\n+    // - CloseFigures for EMR_STROKEANDFILLPATH, which closes each figure\r\n+    procedure PathReplay(CloseFigures: boolean = false);\r\n+    // the path is painted or dropped\r\n+    procedure PathDone;\r\n     procedure NeedPen;\r\n     procedure NeedBrushAndPen;\r\n     procedure FlushPenBrush;\r\n@@ -10942,6 +10963,16 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n   bmicopy: RawByteString;\r\n begin\r\n   result := true;\r\n+  if E.fPathRecording then\r\n+    case R^.iType of\r\n+      EMR_MOVETOEX, EMR_LINETO, EMR_RECTANGLE, EMR_ELLIPSE, EMR_ROUNDRECT,\r\n+      EMR_ARC, EMR_ARCTO, EMR_PIE, EMR_CHORD, EMR_POLYGON, EMR_POLYLINE,\r\n+      EMR_POLYGON16, EMR_POLYLINE16, EMR_POLYPOLYGON, EMR_POLYPOLYGON16,\r\n+      EMR_POLYPOLYLINE, EMR_POLYPOLYLINE16, EMR_POLYBEZIER, EMR_POLYBEZIER16,\r\n+      EMR_POLYBEZIERTO, EMR_POLYBEZIERTO16, EMR_POLYLINETO, EMR_POLYLINETO16,\r\n+      EMR_POLYDRAW, EMR_POLYDRAW16, EMR_CLOSEFIGURE:\r\n+        E.PathIn;\r\n+    end;\r\n   with E.DC[E.nDC] do\r\n     case R^.iType of\r\n       EMR_HEADER:\r\n@@ -11074,7 +11105,8 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               rclBox.Bottom - rclBox.Top, ptlStart.x, ptlStart.y,\r\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOCKWISE,\r\n               acArc, position);\r\n-          E.Canvas.Stroke;\r\n+          if not E.Canvas.fNewPath then\r\n+            E.Canvas.Stroke;\r\n         end;\r\n       EMR_ARCTO:\r\n         begin\r\n@@ -11106,10 +11138,11 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               rclBox.Bottom - rclBox.Top, ptlStart.x, ptlStart.y,\r\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOCKWISE,\r\n               acPie, position);\r\n-          if pen.null then\r\n-            E.Canvas.Fill\r\n-          else\r\n-            E.Canvas.FillStroke;\r\n+          if not E.fPathRecording then // else painted by the painting record\r\n+            if pen.null then\r\n+              E.Canvas.Fill\r\n+            else\r\n+              E.Canvas.FillStroke;\r\n         end;\r\n       EMR_CHORD:\r\n         begin\r\n@@ -11120,10 +11153,11 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               rclBox.Bottom - rclBox.Top, ptlStart.x, ptlStart.y,\r\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOC\n... [truncated, 12914 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 174,
+          "deletions": 5,
+          "patch": "@@ -66,6 +66,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfRecordLayout;\r\n     procedure EmfMirroredBoxes;\r\n     procedure EmfClipRestoreDC;\r\n+    procedure EmfUnderlineClipped;\r\n   end;\r\n \r\n implementation\r\n@@ -2428,7 +2429,8 @@ function OpenBefore(const Txt, Marker: RawUtf8): integer;\n   result := CountOccurrences('q'#10, s) - CountOccurrences('Q'#10, s);\r\n end;\r\n \r\n-// no q or Q within a path, no l or c without a current point\r\n+// no q, Q or other graphics state operator within a path, no l, c or\r\n+// painting operator without a path\r\n function ValidPaths(const Txt: RawUtf8): boolean;\r\n var\r\n   p: PUtf8Char;\r\n@@ -2457,7 +2459,19 @@ function ValidPaths(const Txt: RawUtf8): boolean;\n         exit;\r\n     end\r\n     else if (line = 'q') or\r\n-            (line = 'Q') then\r\n+            (line = 'Q') or\r\n+            (op = 'w') or\r\n+            (op = 'd') or\r\n+            (op = 'J') or\r\n+            (op = 'j') or\r\n+            (op = 'M') or\r\n+            (op = 'RG') or\r\n+            (op = 'rg') or\r\n+            (op = 'gs') or\r\n+            (op = 'cm') or\r\n+            (op = 'BMC') or\r\n+            (op = 'BDC') or\r\n+            (op = 'EMC') then\r\n     begin\r\n       if inpath then\r\n         exit;\r\n@@ -2466,8 +2480,13 @@ function ValidPaths(const Txt: RawUtf8): boolean;\n             (line = 'f') or\r\n             (line = 'f*') or\r\n             (line = 'B') or\r\n-            (line = 'B*') or\r\n-            (line = 'n') then\r\n+            (line = 'B*') then\r\n+    begin\r\n+      if not inpath then\r\n+        exit;\r\n+      inpath := false;\r\n+    end\r\n+    else if line = 'n' then\r\n       inpath := false;\r\n   end;\r\n   result := true;\r\n@@ -2478,8 +2497,11 @@ procedure TTestUiPdf.EmfClipRestoreDC;\n   mf, mf2: TMetaFile;\r\n   mc: TMetaFileCanvas;\r\n   pen: HPEN;\r\n+  bmp: TBitmap;\r\n+  pts: array[0..2] of TPoint;\r\n   doc: TPdfDocumentGdi;\r\n-  txt, meta, two: RawUtf8;\r\n+  txt, meta, two, more, fill: RawUtf8;\r\n+  i: PtrInt;\r\n \r\n   procedure Text(Y: integer; const Value: WideString);\r\n   begin\r\n@@ -2580,13 +2602,91 @@ procedure TTestUiPdf.EmfClipRestoreDC;\n       LineTo(mc.Handle, 200, 265); // after the path: a line of its own\r\n       Clip(0, 0, 350, 350);\r\n       Text(270, 'After');\r\n+      BeginPath(mc.Handle); // painted under the clip of StrokePath, as GDI\r\n+      MoveToEx(mc.Handle, 20, 290, nil);\r\n+      LineTo(mc.Handle, 200, 290);\r\n+      Clip(0, 0, 30, 350);\r\n+      EndPath(mc.Handle);\r\n+      StrokePath(mc.Handle);\r\n     finally\r\n       mc.Free;\r\n     end;\r\n     meta := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n   finally\r\n     mf.Free;\r\n   end;\r\n+  // what is drawn in a path bracket but is no geometry goes to the page\r\n+  mf := TMetaFile.Create;\r\n+  bmp := TBitmap.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    bmp.PixelFormat := pf24bit;\r\n+    bmp.Width := 4;\r\n+    bmp.Height := 4;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      BeginPath(mc.Handle);\r\n+      Text(20, 'InPath');\r\n+      mc.Draw(10, 40, bmp);\r\n+      MoveToEx(mc.Handle, 20, 80, nil);\r\n+      LineTo(mc.Handle, 200, 80);\r\n+      SelectObject(mc.Handle, GetStockObject(BLACK_PEN)); // a pen of the bracket\r\n+      LineTo(mc.Handle, 200, 120);\r\n+      EndPath(mc.Handle);\r\n+      StrokePath(mc.Handle);\r\n+      BeginPath(mc.Handle); // a shape adds to the path, painted once\r\n+      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n+      EndPath(mc.Handle);\r\n+      SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n+      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH)); // as FPC selects none\r\n+      MoveToEx(mc.Handle, 20, 350, nil);\r\n+      LineTo(mc.Handle, 200, 350); // its geometry left open on the page\r\n+      FillPath(mc.Handle);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    more := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    bmp.Free;\r\n+    mf.Free;\r\n+  end;\r\n+  // the painting records as GDI paints: fill mode, closed figures\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFi\n... [truncated, 4514 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "851ad20c9177e3be3b154756ba3ee9ad0968ac6b",
+      "short_sha": "851ad20c",
+      "subject": "ui: pdf - EMR_RESTOREDC restores the clip of EMR_EXTSELECTCLIPRGN, q and Q balanced",
+      "body": "TPdfEnum applied EMR_EXTSELECTCLIPRGN as q ... W n, but only the current DC state knew of it:\n- after EMR_RESTOREDC the inner clip stayed in force;\n- a clip selected after SaveDC, or one that SetMetaRgn made part of the meta region, left its q open, so the content stream had more q than Q;\n- after the Q of a new clip, a line drawn with the same pen came out in the stroke colour, width and dash of before.\n\nThe regions are now kept as PDF boxes. Each DC state names its own region and the regions SetMetaRgn kept. SelectClip makes the canvas hold that clip; it runs from ExtSelectClipRgn, from RestoreDC, from PathEnded after a path is painted, and at the end of RenderMetaFile. After its Q it forgets the cached pen and fill values.\n\nA clip changed between BeginPath and the painting of the path now waits for the painting record. PDF allows no q or Q within a path, and before, the q or Q of such a clip was written in the middle of the path. In the same case:\n- ScaleMatrix no longer strokes the half-built path;\n- EMR_SELECTCLIPPATH ends the path (its clip is still not applied);\n- a path never painted is ended with the metafile;\n- the next segment after a path starts with its own m.\n\nGDI paints such a path under the new clip, the renderer under the one of before; fixing that needs the path buffered. Test EmfClipRestoreDC, 13 checks: 8 of them fail before. This is the same change as in our engine (martin-doyle/mORMot2-PDF-CrossPlatform#93).",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T13:36:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/851ad20c9177e3be3b154756ba3ee9ad0968ac6b",
+      "parents": [
+        "2fcdaf6130f6881b8820a72952cb61db70a14165"
+      ],
+      "stats": {
+        "additions": 385,
+        "deletions": 20,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 135,
+          "deletions": 18,
+          "patch": "@@ -10794,6 +10794,12 @@   TPdfEnumState = record\n     MetaRgn: TPdfBox;      //clipping\r\n     ClipRgn: TPdfBox;      //clipping\r\n     ClipRgnNull: boolean;  //clipping\r\n+    // the region of EMR_EXTSELECTCLIPRGN, 1-based in TPdfEnum.fClipRegions:\r\n+    // 0 if none\r\n+    ClipRegion: integer;\r\n+    // the regions EMR_SETMETARGN made part of the meta region, 1-based in\r\n+    // TPdfEnum.fMetaClips: 0 if none\r\n+    MetaClip: integer;\r\n     MappingMode: integer;\r\n     PolyFillMode: integer;\r\n     StretchBltMode: integer;\r\n@@ -10855,10 +10861,27 @@   TPdfEnum = class\n     // scope after E.SaveDC\r\n     nDC: integer;\r\n     DC: array of TPdfEnumState;\r\n+    // the clip regions as PDF boxes, kept so that RestoreDC can apply the\r\n+    // one of the state it restores\r\n+    fClipRegions: array of array of TPdfBox;\r\n+    // a region SetMetaRgn kept, inside the ones kept before it (Parent)\r\n+    fMetaClips: array of record\r\n+      Region, Parent: integer;\r\n+    end;\r\n+    // what the q of the canvas hold: fMetaActive, then fClipActive; 0 if none\r\n+    fMetaActive: integer;\r\n+    fClipActive: integer;\r\n+    // from EMR_BEGINPATH until the path is painted or aborted\r\n+    fPathOpen: boolean;\r\n   public\r\n     constructor Create(ACanvas: TPdfCanvas);\r\n     procedure SaveDC;\r\n     procedure RestoreDC(Relative: integer);\r\n+    // make Meta and Region (0 = none) the clip of the canvas: Q of the q\r\n+    // that are not part of it\r\n+    procedure SelectClip(Meta, Region: integer);\r\n+    // the path is painted or aborted: the clip selected meanwhile applies\r\n+    procedure PathEnded;\r\n     procedure NeedPen;\r\n     procedure NeedBrushAndPen;\r\n     procedure FlushPenBrush;\r\n@@ -11554,6 +11577,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         MappingMode := PEMRSetMapMode(R)^.iMode;\r\n       EMR_BEGINPATH:\r\n         begin\r\n+          E.fPathOpen := true;\r\n           E.Canvas.NewPath;\r\n           if not Moved then\r\n           begin\r\n@@ -11563,10 +11587,12 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         end;\r\n       EMR_ENDPATH:\r\n         E.Canvas.fNewPath := false;\r\n-      EMR_ABORTPATH:\r\n+      EMR_ABORTPATH,\r\n+      EMR_SELECTCLIPPATH: // the clip of a path is not applied\r\n         begin\r\n           E.Canvas.NewPath;\r\n           E.Canvas.fNewPath := false;\r\n+          E.PathEnded;\r\n         end;\r\n       EMR_CLOSEFIGURE:\r\n         E.Canvas.ClosePath;\r\n@@ -11579,6 +11605,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           end;\r\n           E.Canvas.NewPath;\r\n           E.Canvas.fNewPath := false;\r\n+          E.PathEnded;\r\n         end;\r\n       EMR_STROKEPATH:\r\n         begin\r\n@@ -11589,6 +11616,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           end;\r\n           E.Canvas.NewPath;\r\n           E.Canvas.fNewPath := false;\r\n+          E.PathEnded;\r\n         end;\r\n       EMR_STROKEANDFILLPATH:\r\n         begin\r\n@@ -11613,6 +11641,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           end;\r\n           E.Canvas.NewPath;\r\n           E.Canvas.fNewPath := false;\r\n+          E.PathEnded;\r\n         end;\r\n       EMR_SETPOLYFILLMODE:\r\n         PolyFillMode := PEMRSetPolyFillMode(R)^.iMode;\r\n@@ -11717,6 +11746,11 @@ procedure RenderMetaFile(C: TPdfCanvas; MF: TMetaFile; ScaleX, ScaleY,\n       EnumEnhMetaFile(C.fDoc.fDC, MF.Handle, @EnumEMFFunc, E, TRect(R));\r\n       {$endif FPC}\r\n     finally\r\n+      if E.fPathOpen then\r\n+        C.NewPath; // a path never painted, before the Q\r\n+      E.fPathOpen := false;\r\n+      E.SelectClip(0, 0); // the q of a clip still selected\r\n+      C.fNewPath := false;\r\n       C.GRestore;\r\n     end;\r\n   finally\r\n@@ -12235,6 +12269,7 @@ procedure TPdfEnum.RestoreDC(Relative: integer);\n      (Relative < -nDC) then\r\n     exit;\r\n   inc(nDC, Relative);\r\n+  SelectClip(DC[nDC].MetaClip, DC[nDC].ClipRegion);\r\n end;\r\n \r\n procedure TPdfEnum.SaveDC;\r\n@@ -12254,7 +12289,8\n... [truncated, 4516 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 250,
+          "deletions": 2,
+          "patch": "@@ -65,6 +65,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure ReducedFontSearchFields;\r\n     procedure EmfRecordLayout;\r\n     procedure EmfMirroredBoxes;\r\n+    procedure EmfClipRestoreDC;\r\n   end;\r\n \r\n implementation\r\n@@ -1591,7 +1592,8 @@ function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynA\n end;\r\n \r\n // the metafile rendered into one page of an uncompressed PDF\r\n-function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0): RawUtf8;\r\n+function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\r\n+  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip): RawUtf8;\r\n var\r\n   doc: TPdfDocumentGdi;\r\n begin\r\n@@ -1604,7 +1606,8 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0): RawUtf8\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n     doc.AddPage;\r\n-    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0);\r\n+    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0, tpSetTextJustification,\r\n+      99, 101, TextClipping);\r\n     result := SavedPdf(doc);\r\n   finally\r\n     doc.Free;\r\n@@ -2400,6 +2403,251 @@ procedure TTestUiPdf.EmfMirroredBoxes;\n   SameAsPolygon(Shapes(10, -100, -100), PathBox(px[0]), 'mirrored in X and Y');\r\n end;\r\n \r\n+// the position of the last Op before Marker in the content, 0 if none\r\n+function PosBefore(const Txt, Marker, Op: RawUtf8): PtrInt;\r\n+var\r\n+  p, j: PtrInt;\r\n+begin\r\n+  result := 0;\r\n+  p := PosEx(Marker, Txt);\r\n+  j := PosEx(Op, Txt);\r\n+  while (j <> 0) and\r\n+        (j < p) do\r\n+  begin\r\n+    result := j;\r\n+    j := PosEx(Op, Txt, j + 1);\r\n+  end;\r\n+end;\r\n+\r\n+// the number of q not closed by a Q before Marker in the content\r\n+function OpenBefore(const Txt, Marker: RawUtf8): integer;\r\n+var\r\n+  s: RawUtf8;\r\n+begin\r\n+  s := copy(Txt, 1, PosEx(Marker, Txt));\r\n+  result := CountOccurrences('q'#10, s) - CountOccurrences('Q'#10, s);\r\n+end;\r\n+\r\n+// no q or Q within a path, no l or c without a current point\r\n+function ValidPaths(const Txt: RawUtf8): boolean;\r\n+var\r\n+  p: PUtf8Char;\r\n+  line, op: RawUtf8;\r\n+  i: PtrInt;\r\n+  inpath: boolean;\r\n+begin\r\n+  result := false;\r\n+  inpath := false;\r\n+  p := pointer(Txt);\r\n+  while p <> nil do\r\n+  begin\r\n+    line := GetNextLine(p, p);\r\n+    i := length(line);\r\n+    while (i > 0) and\r\n+          (line[i] <> ' ') do\r\n+      dec(i);\r\n+    op := copy(line, i + 1, length(line)); // case matters: M is the miter limit\r\n+    if (op = 'm') or\r\n+       (op = 're') then\r\n+      inpath := true\r\n+    else if (op = 'l') or\r\n+            (op = 'c') then\r\n+    begin\r\n+      if not inpath then\r\n+        exit;\r\n+    end\r\n+    else if (line = 'q') or\r\n+            (line = 'Q') then\r\n+    begin\r\n+      if inpath then\r\n+        exit;\r\n+    end\r\n+    else if (line = 'S') or\r\n+            (line = 'f') or\r\n+            (line = 'f*') or\r\n+            (line = 'B') or\r\n+            (line = 'B*') or\r\n+            (line = 'n') then\r\n+      inpath := false;\r\n+  end;\r\n+  result := true;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfClipRestoreDC;\r\n+var\r\n+  mf, mf2: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  pen: HPEN;\r\n+  doc: TPdfDocumentGdi;\r\n+  txt, meta, two: RawUtf8;\r\n+\r\n+  procedure Text(Y: integer; const Value: WideString);\r\n+  begin\r\n+    TextOutW(mc.Handle, 10, Y, pointer(Value), length(Value));\r\n+  end;\r\n+\r\n+  procedure Clip(L, T, R, B: integer);\r\n+  var\r\n+    rgn: HRGN;\r\n+  begin\r\n+    rgn := CreateRectRgn(L, T, R, B);\r\n+    SelectClipRgn(mc.Handle, rgn); // EMR_EXTSELECTCLIPRGN, RGN_COPY\r\n+    DeleteObject(rgn);\r\n+  end;\r\n+\r\n+begin\r\n+  { EMR_RESTOREDC kept the clip of EMR_EXTSELECTCLIPRGN: the inner one stayed\r\n+    and its q was left open; the Q of a new clip kept the pen of before }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SaveDC(mc.Handle);\r\n+      Clip(150, 150, 200, 200);\r\n+      Text(160, 'Saved');\r\n+      RestoreDC(mc.Handle, \n... [truncated, 4964 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2fcdaf6130f6881b8820a72952cb61db70a14165",
+      "short_sha": "2fcdaf61",
+      "subject": "ui: pdf - a stock font reads its bytes in the code page of its own charset",
+      "body": "EMR_EXTTEXTOUTA after a stock font decoded its bytes in CP_ACP (CP_OEMCP for OEM_FIXED_FONT), though ANSI_FIXED_FONT and ANSI_VAR_FONT are ANSI_CHARSET, cp1252, and the system fonts follow the system charset. The stock font's charset is now read with GetObjectW (CP_ACP if it gives none, or if the index is no font) and mapped as the charset of a selected font, by the new FontCharSetCodePage and StockFontCodePage. Measured here (code page 1252, OEM 850): lfCharSet 255 for OEM_FIXED_FONT, 0 for the others. The decoded text differs only where the system code page is not 1252; test EmfStockCodePages checks the code pages, and fails before. Found by Martin Doyle in our engine, where the same change is.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T10:13:06Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2fcdaf6130f6881b8820a72952cb61db70a14165",
+      "parents": [
+        "7e1833d138818cf9759e5c0832018fbaad037819"
+      ],
+      "stats": {
+        "additions": 59,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 45,
+          "deletions": 17,
+          "patch": "@@ -576,6 +576,19 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n /// retrieve the current printer resolution\r\n function CurrentPrinterRes: TPoint;\r\n \r\n+/// the code page ExtTextOutA reads the bytes of a font of this charset in\r\n+// - CP_ACP for DEFAULT_CHARSET, CP_OEMCP for OEM_CHARSET, 42 (CP_SYMBOL) for\r\n+// SYMBOL_CHARSET - as GDI records them, U+F020..U+F0FF - else the code page\r\n+// of the charset (1252 for ANSI_CHARSET)\r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+\r\n+/// the code page ExtTextOutA reads the bytes of a stock font in\r\n+// - from the charset of GetStockObject(StockFont) on this system, CP_ACP if\r\n+// it gives none or StockFont is no font: ANSI_FIXED_FONT and ANSI_VAR_FONT\r\n+// are ANSI_CHARSET (1252), OEM_FIXED_FONT is OEM_CHARSET, the system fonts\r\n+// follow the system charset\r\n+function StockFontCodePage(StockFont: integer): cardinal;\r\n+\r\n \r\n {************ Internal classes mapping PDF objects }\r\n \r\n@@ -3361,6 +3374,35 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   end;\r\n end;\r\n \r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+begin\r\n+  case CharSet of\r\n+    DEFAULT_CHARSET:\r\n+      result := CP_ACP;\r\n+    OEM_CHARSET:\r\n+      result := CP_OEMCP;\r\n+    SYMBOL_CHARSET:\r\n+      result := 42; // CP_SYMBOL: $20..$FF as U+F020..U+F0FF, as GDI records them\r\n+    CHINESEBIG5_CHARSET:\r\n+      result := 950;\r\n+  else\r\n+    result := CharSetToCodePage(CharSet);\r\n+  end;\r\n+end;\r\n+\r\n+function StockFontCodePage(StockFont: integer): cardinal;\r\n+var\r\n+  h: HGDIOBJ;\r\n+  lf: TLogFontW;\r\n+begin\r\n+  h := GetStockObject(StockFont);\r\n+  if (GetObjectType(h) = OBJ_FONT) and\r\n+     (GetObjectW(h, SizeOf(lf), @lf) <> 0) then\r\n+    result := FontCharSetCodePage(lf.lfCharSet)\r\n+  else\r\n+    result := CP_ACP;\r\n+end;\r\n+\r\n function CurrentPrinterRes: TPoint;\r\n var\r\n   res: TPoint;\r\n@@ -10772,7 +10814,7 @@   TPdfEnumState = record\n       Spec: TFontSpec;\r\n       // a font of the metafile is selected, not a stock font\r\n       Selected: boolean;\r\n-      // the code page of the stock font while none is: CP_ACP or CP_OEMCP\r\n+      // the code page of the stock font while none is (StockFontCodePage)\r\n       StockCodePage: cardinal;\r\n       LogFont: TLogFontW; // better be the last entry in TPdfEnumState record\r\n     end;\r\n@@ -12004,10 +12046,7 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n             // its LogFont is not known: EMR_EXTTEXTOUTA decodes in the code\r\n             // page of its charset, not in the one of the font selected before\r\n             Font.Selected := false;\r\n-            if iObject = OEM_FIXED_FONT then\r\n-              Font.StockCodePage := CP_OEMCP\r\n-            else\r\n-              Font.StockCodePage := CP_ACP;\r\n+            Font.StockCodePage := StockFontCodePage(iObject);\r\n           end;\r\n         NULL_PEN:\r\n           begin\r\n@@ -12551,18 +12590,7 @@ procedure TPdfEnum.TextOut(var R: TEMRExtTextOut);\n         if not Font.Selected then\r\n           cp := Font.StockCodePage // CP_ACP (0) at the start\r\n         else\r\n-          case Font.LogFont.lfCharSet of\r\n-            DEFAULT_CHARSET:\r\n-              cp := CP_ACP;\r\n-            OEM_CHARSET:\r\n-              cp := CP_OEMCP;\r\n-            SYMBOL_CHARSET:\r\n-              cp := 42; // CP_SYMBOL: $20..$FF as U+F020..U+F0FF, as GDI records them\r\n-            CHINESEBIG5_CHARSET:\r\n-              cp := 950;\r\n-          else\r\n-            cp := CharSetToCodePage(Font.LogFont.lfCharSet);\r\n-          end;\r\n+          cp := FontCharSetCodePage(Font.LogFont.lfCharSet);\r\n         n := MultiByteToWideChar(cp, 0,\r\n           pointer(PtrUInt(@R) + R.emrtext.offString), R.emrtext.nChars, nil, 0);\r\n         if n = 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 0,
+          "patch": "@@ -59,6 +59,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfScaledRotation;\r\n     procedure EmfAnsiText;\r\n     procedure EmfAnsiStockFont;\r\n+    procedure EmfStockCodePages;\r\n     procedure EmfDIBitsKept;\r\n     procedure EmfPrinterResZero;\r\n     procedure ReducedFontSearchFields;\r\n@@ -2037,6 +2038,19 @@ procedure TTestUiPdf.EmfAnsiStockFont;\n   CheckEqual(a, w, 'decoded in the code page of the stock font');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfStockCodePages;\r\n+begin\r\n+  { ANSI_FIXED_FONT and ANSI_VAR_FONT got CP_ACP, though their charset is\r\n+    ANSI_CHARSET, cp1252: the decoded text differs only where the system\r\n+    code page is not 1252, the code page everywhere }\r\n+  CheckEqual(StockFontCodePage(ANSI_VAR_FONT), 1252, 'ANSI_VAR_FONT');\r\n+  CheckEqual(StockFontCodePage(ANSI_FIXED_FONT), 1252, 'ANSI_FIXED_FONT');\r\n+  CheckEqual(StockFontCodePage(OEM_FIXED_FONT), CP_OEMCP, 'OEM_FIXED_FONT');\r\n+  CheckEqual(FontCharSetCodePage(DEFAULT_CHARSET), CP_ACP, 'DEFAULT_CHARSET');\r\n+  CheckEqual(FontCharSetCodePage(GREEK_CHARSET), 1253, 'GREEK_CHARSET');\r\n+  CheckEqual(StockFontCodePage(BLACK_BRUSH), CP_ACP, 'no font');\r\n+end;\r\n+\r\n procedure TTestUiPdf.EmfDIBitsKept;\r\n var\r\n   mf: TMetaFile;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7e1833d138818cf9759e5c0832018fbaad037819",
+      "short_sha": "7e1833d1",
+      "subject": "ui: pdf - the boxes of #686 under a mirrored axis",
+      "body": "With an axis mirrored, GDI records the box of Rectangle, Ellipse and RoundRect(100, 100, 500, 500) as 500,100,110,490 at 10 units per pixel: the recorded right is the smaller value. BoxInclI and RoundRectI normalized first and added the device pixel to the other side, so the shape moved by one pixel. DevPixelX/Y are signed now and the pixel goes to the recorded right/bottom before the box is normalized; RoundRectI passes its corners as TPdfCanvas.RoundRect wants them, and EMR_ROUNDRECT no longer normalizes the record in place. Not changed: under a world scale the pixel is not divided by the world factor - the record holds integer logical units, what GDI rounds to is not measured yet. Test EmfMirroredBoxes.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:42:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7e1833d138818cf9759e5c0832018fbaad037819",
+      "parents": [
+        "2055447ad93aa825295eee23522fbdf5d5b5cb52"
+      ],
+      "stats": {
+        "additions": 193,
+        "deletions": 8,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 8,
+          "patch": "@@ -1859,7 +1859,8 @@   TPdfCanvas = class\n     procedure PointI(x, y: single);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\r\n-    // size of one device pixel of the metafile, in logical units\r\n+    // size of one device pixel of the metafile, in logical units - negative\r\n+    // when the mapping mirrors that axis\r\n     function DevPixelX: single;\r\n     function DevPixelY: single;\r\n     // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n@@ -9553,12 +9554,20 @@ procedure TPdfCanvas.LineToS(x, y: single);\n end;\r\n \r\n procedure TPdfCanvas.RoundRectI(x1, y1, x2, y2, cx, cy: integer);\r\n+var\r\n+  r: TPdfRect;\r\n begin\r\n   // the corner size goes through the same window/viewport mapping as the\r\n   // coordinates (MM_ANISOTROPIC metafiles), and the GDI box is\r\n-  // inclusive-inclusive: one device pixel is added to the right/bottom edges\r\n-  RoundRect(I2X(x1), I2Y(y1), S2X(x2 + DevPixelX), S2Y(y2 + DevPixelY),\r\n-    I2X(x1 + cx) - I2X(x1), I2Y(y1 + cy) - I2Y(y1));\r\n+  // inclusive-inclusive: one device pixel is added to the recorded\r\n+  // right/bottom edges, before normalizing - see BoxInclI\r\n+  r.Left   := I2X(x1);\r\n+  r.Right  := S2X(x2 + DevPixelX);\r\n+  r.Top    := I2Y(y1);\r\n+  r.Bottom := S2Y(y2 + DevPixelY);\r\n+  NormalizeRect(r);\r\n+  RoundRect(r.Left, r.Bottom, r.Right, r.Top,\r\n+    Abs(I2X(x1 + cx) - I2X(x1)), -Abs(I2Y(y1 + cy) - I2Y(y1)));\r\n end;\r\n \r\n procedure TPdfCanvas.ArcI(centerx, centery, W, H, Sx, Sy, Ex, Ey: integer;\r\n@@ -9619,7 +9628,7 @@ function TPdfCanvas.DevPixelX: single;\n begin\r\n   if (fViewSize.cx <> 0) and\r\n      (fWinSize.cx <> 0) then\r\n-    result := Abs(fWinSize.cx / fViewSize.cx)\r\n+    result := fWinSize.cx / fViewSize.cx\r\n   else\r\n     result := 1;\r\n end;\r\n@@ -9628,7 +9637,7 @@ function TPdfCanvas.DevPixelY: single;\n begin\r\n   if (fViewSize.cy <> 0) and\r\n      (fWinSize.cy <> 0) then\r\n-    result := Abs(fWinSize.cy / fViewSize.cy)\r\n+    result := fWinSize.cy / fViewSize.cy\r\n   else\r\n     result := 1;\r\n end;\r\n@@ -9645,11 +9654,13 @@ function PdfRectToBox(r: TPdfRect): TPdfBox;\n // GDI records the Right/Bottom of Rectangle/Ellipse one DEVICE pixel inside\r\n // the shape, i.e. several logical units with a screen reference DC: RectI()\r\n // removed one logical unit instead, and shapes were too small\r\n+// - under a mirrored mapping the recorded Right is the smaller value (500,110\r\n+// for 100..500 at -10 units per pixel): the signed pixel is added before the\r\n+// box is normalized\r\n function TPdfCanvas.BoxInclI(Box: TRect): TPdfBox;\r\n var\r\n   r: TPdfRect;\r\n begin\r\n-  NormalizeRect(Box);\r\n   r.Left   := I2X(Box.Left);\r\n   r.Right  := S2X(Box.Right + DevPixelX);\r\n   r.Top    := I2Y(Box.Top);\r\n@@ -10983,7 +10994,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         end;\r\n       EMR_ROUNDRECT:\r\n         begin\r\n-          NormalizeRect(PRect(@PEMRRoundRect(R)^.rclBox)^);\r\n           E.NeedBrushAndPen;\r\n           with PEMRRoundRect(R)^ do\r\n             E.Canvas.RoundRectI(rclBox.left, rclBox.top, rclBox.right,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 175,
+          "deletions": 0,
+          "patch": "@@ -63,6 +63,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPrinterResZero;\r\n     procedure ReducedFontSearchFields;\r\n     procedure EmfRecordLayout;\r\n+    procedure EmfMirroredBoxes;\r\n   end;\r\n \r\n implementation\r\n@@ -2211,6 +2212,180 @@ procedure TTestUiPdf.EmfRecordLayout;\n   Check(PosEx(#10'0 0 1 RG'#10, txt) > 0, 'the extended pen colour');\r\n end;\r\n \r\n+// the paths of the content that are painted, one item per path: its\r\n+// construction lines (m, l, c, re); a path ended by n (a clip) is dropped\r\n+function PaintedPaths(const Txt: RawUtf8): TRawUtf8DynArray;\r\n+var\r\n+  lines: TRawUtf8DynArray;\r\n+  path, op: RawUtf8;\r\n+  i, j, n: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  lines := nil;\r\n+  CsvToRawUtf8DynArray(pointer(Txt), lines, #10);\r\n+  path := '';\r\n+  for i := 0 to high(lines) do\r\n+  begin\r\n+    j := length(lines[i]);\r\n+    while (j > 0) and\r\n+          (lines[i][j] <> ' ') do\r\n+      dec(j);\r\n+    op := copy(lines[i], j + 1, maxInt);\r\n+    if (op = 'm') or (op = 'l') or (op = 'c') or (op = 're') then\r\n+      path := path + lines[i] + #10\r\n+    else if op = 'n' then\r\n+      path := ''\r\n+    else if (op = 'f') or (op = 'f*') or (op = 'S') or (op = 's') or\r\n+            (op = 'B') or (op = 'B*') or (op = 'b') or (op = 'b*') then\r\n+    begin\r\n+      if path <> '' then\r\n+      begin\r\n+        n := length(result);\r\n+        SetLength(result, n + 1);\r\n+        result[n] := path;\r\n+      end;\r\n+      path := '';\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n+// the box around the points of a path of PaintedPaths\r\n+function PathBox(const Path: RawUtf8): TPdfBox;\r\n+var\r\n+  lines, v: TRawUtf8DynArray;\r\n+  num: TDoubleDynArray;\r\n+  x1, y1, x2, y2: double;\r\n+  i, j, n: PtrInt;\r\n+  first: boolean;\r\n+begin\r\n+  lines := nil;\r\n+  CsvToRawUtf8DynArray(pointer(Path), lines, #10);\r\n+  first := true;\r\n+  x1 := 0;\r\n+  y1 := 0;\r\n+  x2 := 0;\r\n+  y2 := 0;\r\n+  for i := 0 to high(lines) do\r\n+  begin\r\n+    v := nil;\r\n+    CsvToRawUtf8DynArray(pointer(lines[i]), v, ' ');\r\n+    n := length(v) - 1; // the numbers, without the operator\r\n+    SetLength(num, n);\r\n+    for j := 0 to n - 1 do\r\n+      num[j] := GetExtended(pointer(v[j]));\r\n+    if v[n] = 're' then\r\n+    begin\r\n+      // x y w h: the second corner\r\n+      num[2] := num[0] + num[2];\r\n+      num[3] := num[1] + num[3];\r\n+    end;\r\n+    j := 0;\r\n+    while j + 1 < n do\r\n+    begin\r\n+      if first or (num[j] < x1) then\r\n+        x1 := num[j];\r\n+      if first or (num[j] > x2) then\r\n+        x2 := num[j];\r\n+      if first or (num[j + 1] < y1) then\r\n+        y1 := num[j + 1];\r\n+      if first or (num[j + 1] > y2) then\r\n+        y2 := num[j + 1];\r\n+      first := false;\r\n+      inc(j, 2);\r\n+    end;\r\n+  end;\r\n+  result := PdfBox(x1, y1, x2 - x1, y2 - y1);\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfMirroredBoxes;\r\n+\r\n+  // the painted paths of a polygon and of four shapes on its corners,\r\n+  // recorded at K logical units per pixel, VX and VY < 0 mirroring an axis\r\n+  function Shapes(K, VX, VY: integer): TRawUtf8DynArray;\r\n+  var\r\n+    mf: TMetaFile;\r\n+    mc: TMetaFileCanvas;\r\n+    r: TRect;\r\n+    pts: array[0..3] of TPoint;\r\n+    i: integer;\r\n+  begin\r\n+    mf := TMetaFile.Create;\r\n+    try\r\n+      mf.Width := 100;\r\n+      mf.Height := 100;\r\n+      mc := TMetaFileCanvas.Create(mf, 0);\r\n+      try\r\n+        if K > 1 then\r\n+        begin\r\n+          SetMapMode(mc.Handle, MM_ANISOTROPIC);\r\n+          SetWindowExtEx(mc.Handle, 100 * K, 100 * K, nil);\r\n+          SetViewportExtEx(mc.Handle, VX, VY, nil);\r\n+          SetViewportOrgEx(mc.Handle, 60 * ord(VX < 0), 60 * ord(VY < 0), nil);\r\n+        end;\r\n+        // the reference: GDI records the points of a polygon as they are\r\n+        for i := 0 to 3 do\r\n+        begin\r\n+          pts[i].X := (10 + 40 * ord(i in [1, 2])) * K;\r\n+          pts[i].Y := (10 + 40 * ord(i >= 2)) * K;\r\n+        end;\r\n+        Polygon(mc.Handle, pts, 4);\r\n+        Rectangle(mc.Handle, 10 * K, 10 * K, 50 * K, 50 * K);\r\n+        Ellipse(mc.Handle, 10 * K, 10 * K, 50 * K, 50 * K);\r\n+        Rou\n... [truncated, 1991 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 686,
+      "is_merge": false
+    },
+    {
+      "sha": "2055447ad93aa825295eee23522fbdf5d5b5cb52",
+      "short_sha": "2055447a",
+      "subject": "ui: pdf - EMR_CREATEBRUSHINDIRECT and EMR_EXTCREATEPEN read in their EMF layout (FPC 3.2.2 on Win64)",
+      "body": "The windows unit of FPC 3.2.2 declares both records with the native LOGBRUSH and EXTLOGPEN, whose ULONG_PTR hatch moves the fields on Win64 (lbColor at offset 20 instead of 16): every brush and extended pen of a metafile was drawn black there. TPdfEnum reads them through its own TEmrCreateBrushIndirect32 and TEmrExtCreatePen32, as #687 does in mormot.lib.gdiplus. Test EmfRecordLayout (fails on FPC 3.2.2 Win64 only).",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:42:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2055447ad93aa825295eee23522fbdf5d5b5cb52",
+      "parents": [
+        "5646c26bd934d78d75f583a8443a9a40ddb49b00"
+      ],
+      "stats": {
+        "additions": 70,
+        "deletions": 8,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 8,
+          "patch": "@@ -10710,6 +10710,25 @@   TPdfEnumStatePen = record\n     Width: single;\r\n   end;\r\n \r\n+  /// EMR_CREATEBRUSHINDIRECT as the EMF stores it, with a 32-bit LOGBRUSH\r\n+  // - the windows unit of FPC 3.2.2 declares lb as LOGBRUSH, whose ULONG_PTR\r\n+  // lbHatch moves the fields on Win64: every brush was read as black there\r\n+  TEmrCreateBrushIndirect32 = record\r\n+    emr: TEMR;\r\n+    ihBrush: cardinal;\r\n+    lbStyle, lbColor, lbHatch: cardinal;\r\n+  end;\r\n+  PEmrCreateBrushIndirect32 = ^TEmrCreateBrushIndirect32;\r\n+\r\n+  /// EMR_EXTCREATEPEN as the EMF stores it, with a 32-bit EXTLOGPEN\r\n+  // - the same with FPC 3.2.2 on Win64: elpHatch is a ULONG_PTR there\r\n+  TEmrExtCreatePen32 = record\r\n+    emr: TEMR;\r\n+    ihPen, offBmi, cbBmi, offBits, cbBits: cardinal;\r\n+    elpPenStyle, elpWidth, elpBrushStyle, elpColor, elpHatch: cardinal;\r\n+  end;\r\n+  PEmrExtCreatePen32 = ^TEmrExtCreatePen32;\r\n+\r\n   /// a state of the EMF enumeration engine, for the PDF canvas\r\n   // - used also for the SaveDC/RestoreDC stack\r\n   TPdfEnumState = record\r\n@@ -10907,14 +10926,14 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               PenStyle := lopn.lopnStyle;\r\n             end;\r\n       EMR_CREATEBRUSHINDIRECT:\r\n-        with PEMRCreateBrushIndirect(R)^ do\r\n+        with PEmrCreateBrushIndirect32(R)^ do\r\n           if ihBrush - 1 < cardinal(length(E.Obj)) then\r\n             with E.obj[ihBrush - 1] do\r\n             begin\r\n               kind := OBJ_BRUSH;\r\n-              BrushColor := lb.lbColor;\r\n-              BrushNull := (lb.lbStyle = BS_NULL);\r\n-              BrushStyle := lb.lbStyle;\r\n+              BrushColor := lbColor;\r\n+              BrushNull := (lbStyle = BS_NULL);\r\n+              BrushStyle := lbStyle;\r\n             end;\r\n       EMR_EXTCREATEFONTINDIRECTW:\r\n         E.CreateFont(PEMRExtCreateFontIndirect(R));\r\n@@ -11460,14 +11479,14 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         with PEMRModifyWorldTransform(R)^ do\r\n           E.ScaleMatrix(@xform, iMode);\r\n       EMR_EXTCREATEPEN: // approx. - fast solution\r\n-        with PEMRExtCreatePen(R)^ do\r\n+        with PEmrExtCreatePen32(R)^ do\r\n           if ihPen - 1 < cardinal(length(E.Obj)) then\r\n             with E.obj[ihPen - 1] do\r\n             begin\r\n               kind := OBJ_PEN;\r\n-              PenColor := elp.elpColor;\r\n-              PenWidth := elp.elpWidth;\r\n-              PenStyle := elp.elpPenStyle and (PS_STYLE_MASK or PS_ENDCAP_MASK);\r\n+              PenColor := elpColor;\r\n+              PenWidth := elpWidth;\r\n+              PenStyle := elpPenStyle and (PS_STYLE_MASK or PS_ENDCAP_MASK);\r\n             end;\r\n       EMR_SETMITERLIMIT:\r\n         if PEMRSetMiterLimit(R)^.eMiterLimit > 0.1 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 43,
+          "deletions": 0,
+          "patch": "@@ -62,6 +62,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfDIBitsKept;\r\n     procedure EmfPrinterResZero;\r\n     procedure ReducedFontSearchFields;\r\n+    procedure EmfRecordLayout;\r\n   end;\r\n \r\n implementation\r\n@@ -2168,6 +2169,48 @@ procedure TTestUiPdf.ReducedFontSearchFields;\n end;\r\n {$endif NO_USE_UNISCRIBE}\r\n \r\n+procedure TTestUiPdf.EmfRecordLayout;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  lb: TLogBrush;\r\n+  bytes: RawByteString;\r\n+  txt: RawUtf8;\r\n+begin\r\n+  { the windows unit of FPC 3.2.2 declares EMR_CREATEBRUSHINDIRECT and\r\n+    EMR_EXTCREATEPEN with the native LOGBRUSH and EXTLOGPEN, whose ULONG_PTR\r\n+    hatch moves the fields on Win64: every brush and extended pen was black }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 100;\r\n+    mf.Height := 100;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      DeleteObject(SelectObject(mc.Handle, CreateSolidBrush(RGB(255, 0, 0))));\r\n+      Rectangle(mc.Handle, 10, 10, 50, 50);\r\n+      lb.lbStyle := BS_SOLID;\r\n+      lb.lbColor := RGB(0, 0, 255);\r\n+      lb.lbHatch := 0;\r\n+      DeleteObject(SelectObject(mc.Handle,\r\n+        ExtCreatePen(PS_GEOMETRIC or PS_SOLID, 4, lb, 0, nil)));\r\n+      MoveToEx(mc.Handle, 10, 80, nil);\r\n+      LineTo(mc.Handle, 90, 80);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    bytes := MetaFileBytes(mf);\r\n+    Check(length(EmfRecords(bytes, R_CREATEBRUSHINDIRECT)) > 0,\r\n+      'recorded as EMR_CREATEBRUSHINDIRECT');\r\n+    CheckEqual(length(EmfRecords(bytes, R_EXTCREATEPEN)), 1,\r\n+      'recorded as EMR_EXTCREATEPEN');\r\n+    txt := RenderedEmf(mf);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  Check(PosEx(#10'1 0 0 rg'#10, txt) > 0, 'the brush colour');\r\n+  Check(PosEx(#10'0 0 1 RG'#10, txt) > 0, 'the extended pen colour');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5646c26bd934d78d75f583a8443a9a40ddb49b00",
+      "short_sha": "5646c26b",
+      "subject": "ui: pdf - ReduceTTF reads within the subset and writes within its result (#673, row 22)",
+      "body": "It checked SubSetSize against SizeOf(PTtfTableDirectory), the pointer instead of the 12-byte header, and none of the directory entries. Now the header and its entries must lie in the subset, each kept table in the subset and in the result, which is as long as the subset - entries sharing one table wrote past it - and a head must hold checkSumAdjustment; otherwise the subset is used as it is, as with fewer than eight kept tables. The binary search fields of the directory are computed from the number of tables: the fixed values were right for ten only.\n\nReduceTTF is not in the interface and FontSub's output is sane, so only the search fields are tested here: ReducedFontSearchFields embeds Mongolian Baiti, which has no 'cvt ' table, so its subset keeps nine. Our engine tests the bounds on the same code (TestReducedFontBounds).",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:42:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5646c26bd934d78d75f583a8443a9a40ddb49b00",
+      "parents": [
+        "d9a99cf3b25e7b2013a7e9d574c55672bc2250c9"
+      ],
+      "stats": {
+        "additions": 76,
+        "deletions": 13,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 31,
+          "deletions": 13,
+          "patch": "@@ -6397,8 +6397,8 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n   dir: PTtfTableDirectory;\r\n   d, e: PTtfTableEntry;\r\n   head: ^TCmapHEAD;\r\n-  n, i, len: PtrInt;\r\n-  checksum: cardinal;\r\n+  n, i, len, sel: PtrInt;\r\n+  checksum, off, size: cardinal;\r\n begin\r\n   SetLength(ttf, SubSetSize); // maximum size\r\n   d := pointer(ttf);\r\n@@ -6407,7 +6407,11 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n   e := SubSetData;\r\n   inc(PTtfTableDirectory(e));\r\n   n := 0;\r\n-  if SubSetSize > SizeOf(PTtfTableDirectory) then\r\n+  // the directory and its entries within the subset (FontSub output)\r\n+  if (SubSetSize >= SizeOf(TTtfTableDirectory)) and\r\n+     (SizeOf(TTtfTableDirectory) +\r\n+      PtrInt(bswap16(PTtfTableDirectory(SubSetData)^.numTables)) *\r\n+      SizeOf(TTtfTableEntry) <= SubSetSize) then\r\n     for i := 1 to bswap16(PTtfTableDirectory(SubSetData)^.numTables) do\r\n     begin\r\n       if IntegerScanIndex(@TTF_SUBSET, length(TTF_SUBSET), e^.tag) >= 0 then\r\n@@ -6418,7 +6422,8 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n       end;\r\n       inc(e);\r\n     end;\r\n-  if n < 8 then // pdf expects 10 tables, and 8..15 for our fixed dir^ values\r\n+  if (n < 8) or // pdf expects 10 tables\r\n+     (n * SizeOf(TTtfTableEntry) > $ffff) then\r\n   begin\r\n     MoveFast(SubSetData^, pointer(ttf)^, SubSetSize); // paranoid\r\n     exit;\r\n@@ -6427,22 +6432,35 @@ procedure ReduceTTF(out ttf: PdfString; SubSetData: pointer; SubSetSize: integer\n   dir := pointer(ttf);\r\n   dir^.sfntVersion := PTtfTableDirectory(SubSetData)^.sfntVersion;\r\n   dir^.numTables := bswap16(n);\r\n-  //len := HighBit(n); // always 8 when n in 8..15\r\n-  //dir^.searchRange := bswap16(len * 16);\r\n-  //dir^.entrySelector := bswap16(Floor(log2(len))); // requires the Math unit\r\n-  //dir^.rangeShift := bswap16((integer(n) - len) * 16);\r\n-  dir^.searchRange := 32768; // pre-computed values for n in 8..15\r\n-  dir^.entrySelector := 768;\r\n-  dir^.rangeShift := 8192;\r\n+  sel := 0; // the binary search fields of n tables: 128, 3, 32 for ten\r\n+  while 2 shl sel <= n do\r\n+    inc(sel);\r\n+  dir^.searchRange := bswap16(16 shl sel);\r\n+  dir^.entrySelector := bswap16(sel);\r\n+  dir^.rangeShift := bswap16(n * 16 - 16 shl sel);\r\n   // include the associated data\r\n   checksum := 0;\r\n   head := nil;\r\n   e := pointer(ttf);\r\n   inc(PTtfTableDirectory(e));\r\n   for i := 1 to n do\r\n   begin\r\n-    len := bswap32(e^.length);\r\n-    MoveFast(PByteArray(SubSetData)[bswap32(e^.offset)], d^, len);\r\n+    size := bswap32(e^.length);\r\n+    off := bswap32(e^.offset);\r\n+    // a table past the subset, more data than it held (entries sharing a\r\n+    // table), or a head too short for checkSumAdjustment: the subset as it is\r\n+    if (off > cardinal(SubSetSize)) or\r\n+       (size > cardinal(SubSetSize) - off) or\r\n+       ((e^.tag = HEAD_TABLE) and\r\n+        (size < 12)) or\r\n+       (cardinal(PtrUInt(d) - PtrUInt(ttf)) + ((size + 3) and not 3) >\r\n+        cardinal(SubSetSize)) then\r\n+    begin\r\n+      MoveFast(SubSetData^, pointer(ttf)^, SubSetSize);\r\n+      exit;\r\n+    end;\r\n+    len := size;\r\n+    MoveFast(PByteArray(SubSetData)[off], d^, len);\r\n     e^.offset := bswap32(PtrUInt(d) - PtrUInt(ttf));\r\n     if e^.tag = HEAD_TABLE then // 'head'\r\n       head := pointer(d);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 45,
+          "deletions": 0,
+          "patch": "@@ -61,6 +61,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfAnsiStockFont;\r\n     procedure EmfDIBitsKept;\r\n     procedure EmfPrinterResZero;\r\n+    procedure ReducedFontSearchFields;\r\n   end;\r\n \r\n implementation\r\n@@ -2123,6 +2124,50 @@ procedure TTestUiPdf.EmfPrinterResZero;\n   CheckEqual(zero, auto, 'asked again');\r\n end;\r\n \r\n+procedure TTestUiPdf.ReducedFontSearchFields;\r\n+{$ifndef NO_USE_UNISCRIBE}\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+  p: integer;\r\n+begin\r\n+  { ReduceTTF wrote the binary search fields of ten tables whatever their\r\n+    number: Mongolian Baiti has no 'cvt ', its subset keeps nine tables }\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    if TPdfDocumentAccess(pdf).GetTrueTypeFontIndex('Mongolian Baiti') < 0 then\r\n+    begin\r\n+      Check(true, 'no Mongolian Baiti');\r\n+      exit;\r\n+    end;\r\n+    pdf.GeneratePDF15File := false;\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.EmbeddedTtf := true;\r\n+    pdf.AddPage;\r\n+    pdf.Canvas.SetFont('Mongolian Baiti', 10, []);\r\n+    pdf.Canvas.TextOut(20, 700, 'Hello');\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  p := PosEx('/Length1 ', s);\r\n+  if not Check(p > 0, 'FontFile2') then\r\n+    exit;\r\n+  p := PosEx('stream', s, p);\r\n+  if not Check(p > 0, 'stream') then\r\n+    exit;\r\n+  inc(p, 6);\r\n+  if s[p] = #13 then\r\n+    inc(p);\r\n+  inc(p); // #10\r\n+  // numTables 9, searchRange 128, entrySelector 3, rangeShift 16\r\n+  CheckEqual(BinToHex(copy(s, p + 4, 8)), '0009008000030010', 'nine tables');\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_UNISCRIBE}\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "d9a99cf3b25e7b2013a7e9d574c55672bc2250c9",
+      "short_sha": "d9a99cf3",
+      "subject": "ui: pdf - a printer resolution of 0 is asked again, not divided by (#673, row 21)",
+      "body": "CurrentPrinterRes kept a resolution of 0 when CreateDC or GetDeviceCaps failed, and MM_ISOTROPIC divided by it; RenderMetaFile checked only its X. It keeps 300 dpi now, and RenderMetaFile asks again when either axis is 0 or less. CurrentPrinterRes and CurrentPrinterPaperSize passed GetProfileString a size in bytes, twice their buffer on Unicode compilers. Test EmfPrinterResZero.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d9a99cf3b25e7b2013a7e9d574c55672bc2250c9",
+      "parents": [
+        "ac12db429c64c269ae737c19d54325250258d549"
+      ],
+      "stats": {
+        "additions": 55,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 6,
+          "patch": "@@ -3312,13 +3312,15 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   result := psUserDefined;\r\n   if not PrinterDriverExists then\r\n     exit;\r\n-  GetProfileString('windows', 'device', nil, name, SizeOf(name) - 1);\r\n+  GetProfileString('windows', 'device', nil, name, length(name)); // chars\r\n   PC := ParseFetchedPrinterStr(name);\r\n   if (PC = nil) or\r\n      (PC^ = #0) then\r\n     exit;\r\n   try\r\n     h := CreateDC(nil, PC, nil, nil);\r\n+    if h = 0 then\r\n+      exit; // no printer DC: nothing to measure\r\n     try\r\n       pt.x := GetDeviceCaps(h, LOGPIXELSX);\r\n       pt.y := GetDeviceCaps(h, LOGPIXELSY);\r\n@@ -3360,6 +3362,7 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n \r\n function CurrentPrinterRes: TPoint;\r\n var\r\n+  res: TPoint;\r\n   name: array[0..1023] of Char;\r\n   PC: PChar;\r\n   h: THandle;\r\n@@ -3368,16 +3371,22 @@ function CurrentPrinterRes: TPoint;\n   result.Y := 300; // default standard printer resolution\r\n   if not PrinterDriverExists then\r\n     exit;\r\n-  GetProfileString('windows', 'device', nil, name, SizeOf(name) - 1);\r\n+  GetProfileString('windows', 'device', nil, name, length(name)); // chars\r\n   PC := ParseFetchedPrinterStr(name);\r\n   if (PC = nil) or\r\n      (PC^ = #0) then\r\n     exit;\r\n   try\r\n     h := CreateDC(nil, PC, nil, nil);\r\n+    if h = 0 then\r\n+      exit; // no printer DC: the default resolution\r\n     try\r\n-      result.x := GetDeviceCaps(h, LOGPIXELSX);\r\n-      result.y := GetDeviceCaps(h, LOGPIXELSY);\r\n+      res.x := GetDeviceCaps(h, LOGPIXELSX);\r\n+      res.y := GetDeviceCaps(h, LOGPIXELSY);\r\n+      if res.x > 0 then\r\n+        result.x := res.x;\r\n+      if res.y > 0 then\r\n+        result.y := res.y;\r\n     finally\r\n       DeleteDC(h);\r\n     end;\r\n@@ -11601,8 +11610,10 @@ procedure RenderMetaFile(C: TPdfCanvas; MF: TMetaFile; ScaleX, ScaleY,\n     C.fUseMetaFileTextClipping := TextClipping;\r\n     C.fKerningHScaleBottom := KerningHScaleBottom;\r\n     C.fKerningHScaleTop := KerningHScaleTop;\r\n-    if C.fDoc.fPrinterPxPerInch.X = 0 then\r\n-      C.fDoc.fPrinterPxPerInch := CurrentPrinterRes; // caching for major speedup\r\n+    if (C.fDoc.fPrinterPxPerInch.X <= 0) or\r\n+       (C.fDoc.fPrinterPxPerInch.Y <= 0) then\r\n+      // caching for major speedup; MM_ISOTROPIC divides by both\r\n+      C.fDoc.fPrinterPxPerInch := CurrentPrinterRes;\r\n     C.fPrinterPxPerInch := C.fDoc.fPrinterPxPerInch;\r\n     with E.DC[0] do\r\n     begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 38,
+          "deletions": 0,
+          "patch": "@@ -60,6 +60,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfAnsiText;\r\n     procedure EmfAnsiStockFont;\r\n     procedure EmfDIBitsKept;\r\n+    procedure EmfPrinterResZero;\r\n   end;\r\n \r\n implementation\r\n@@ -2085,6 +2086,43 @@ procedure TTestUiPdf.EmfDIBitsKept;\n   CheckEqual(second, first, 'drawn the same twice');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfPrinterResZero;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  auto, zero: RawUtf8;\r\n+  raised: boolean;\r\n+begin\r\n+  { MM_ISOTROPIC divides by the printer resolution: one of 0 - a printer DC\r\n+    that failed - was kept, as only its X was checked }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SetMapMode(mc.Handle, MM_ISOTROPIC);\r\n+      SetWindowExtEx(mc.Handle, 1000, 1000, nil);\r\n+      SetViewportExtEx(mc.Handle, 300, 300, nil);\r\n+      Rectangle(mc.Handle, 100, 100, 600, 400);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    auto := RenderedEmf(mf); // the resolution asked from the printer\r\n+    raised := false;\r\n+    try\r\n+      zero := RenderedEmf(mf, 300, 0);\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  Check(not raised, 'rendered with a resolution of 0');\r\n+  Check(auto <> '', 'rendered');\r\n+  CheckEqual(zero, auto, 'asked again');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "ac12db429c64c269ae737c19d54325250258d549",
+      "short_sha": "ac12db42",
+      "subject": "ui: pdf - EMR_STRETCHDIBITS flips a copy of its header (#673, row 20)",
+      "body": "Under a flipped transform it negated biHeight inside the record, which EnumEnhMetaFile hands out as const: a second rendering of the same metafile drew the bitmap the other way round. It flips a copy of the header now (cbBmiSrc bytes, checked against the record size). The same goes for EMR_ROUNDRECT, which normalized its box in the record - see the mirrored boxes commit. Test EmfDIBitsKept.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ac12db429c64c269ae737c19d54325250258d549",
+      "parents": [
+        "7fc8ed0e84cb2ceb689888d0a47dab2a39df6b9b"
+      ],
+      "stats": {
+        "additions": 71,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 5,
+          "patch": "@@ -10816,6 +10816,8 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n   i: PtrInt;\r\n   InitTransX: XForm;\r\n   polytypes: PByteArray;\r\n+  bmi: PBitmapInfo;\r\n+  bmicopy: RawByteString;\r\n begin\r\n   result := true;\r\n   with E.DC[E.nDC] do\r\n@@ -11382,12 +11384,23 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if (offBmiSrc <> 0) and\r\n              (offBitsSrc <> 0) then\r\n           begin\r\n+            bmi := pointer(PtrUInt(R) + offBmiSrc);\r\n             if WorldTransform.eM22 < 0 then\r\n-              with PBitmapInfo(PtrUInt(R) + offBmiSrc)^ do\r\n-                bmiHeader.biHeight := -bmiHeader.biHeight;\r\n-            E.DrawBitmap(xSrc, ySrc, cxSrc, cySrc, xDest, yDest, cxDest, cyDest,\r\n-              iUsageSrc, pointer(PtrUInt(R) + offBmiSrc),\r\n-              pointer(PtrUInt(R) + offBitsSrc), @rclBounds, nil, dwRop);\r\n+              // flipped in a copy: the record belongs to the metafile\r\n+              if (cbBmiSrc >= SizeOf(TBitmapInfoHeader)) and\r\n+                 (offBmiSrc + cbBmiSrc <= R^.nSize) then\r\n+              begin\r\n+                SetLength(bmicopy, cbBmiSrc);\r\n+                MoveFast(bmi^, pointer(bmicopy)^, cbBmiSrc);\r\n+                bmi := pointer(bmicopy);\r\n+                bmi^.bmiHeader.biHeight := -bmi^.bmiHeader.biHeight;\r\n+              end\r\n+              else\r\n+                bmi := nil;\r\n+            if bmi <> nil then\r\n+              E.DrawBitmap(xSrc, ySrc, cxSrc, cySrc, xDest, yDest, cxDest, cyDest,\r\n+                iUsageSrc, bmi, pointer(PtrUInt(R) + offBitsSrc), @rclBounds,\r\n+                nil, dwRop);\r\n           end;\r\n       EMR_TRANSPARENTBLT:\r\n         with PEMRTransparentBLT(R)^ do // only handle RGB bitmaps (no palette)\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 53,
+          "deletions": 0,
+          "patch": "@@ -59,6 +59,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfScaledRotation;\r\n     procedure EmfAnsiText;\r\n     procedure EmfAnsiStockFont;\r\n+    procedure EmfDIBitsKept;\r\n   end;\r\n \r\n implementation\r\n@@ -2032,6 +2033,58 @@ procedure TTestUiPdf.EmfAnsiStockFont;\n   CheckEqual(a, w, 'decoded in the code page of the stock font');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfDIBitsKept;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  xf: TXForm;\r\n+  bmi: TBitmapInfo;\r\n+  pix: array[0..15] of cardinal;\r\n+  before: RawByteString;\r\n+  first, second: RawUtf8;\r\n+  i: integer;\r\n+begin\r\n+  { with eM22 < 0, EMR_STRETCHDIBITS negated biHeight inside the record,\r\n+    which EnumEnhMetaFile hands out read-only: a second rendering of the same\r\n+    metafile drew the bitmap the other way round }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 200;\r\n+    mf.Height := 200;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SetGraphicsMode(mc.Handle, GM_ADVANCED);\r\n+      FillChar(xf, SizeOf(xf), 0);\r\n+      xf.eM11 := 1;\r\n+      xf.eM22 := -1;\r\n+      xf.eDy := 150;\r\n+      SetWorldTransform(mc.Handle, xf);\r\n+      FillChar(bmi, SizeOf(bmi), 0);\r\n+      bmi.bmiHeader.biSize := SizeOf(bmi.bmiHeader);\r\n+      bmi.bmiHeader.biWidth := 4;\r\n+      bmi.bmiHeader.biHeight := 4;\r\n+      bmi.bmiHeader.biPlanes := 1;\r\n+      bmi.bmiHeader.biBitCount := 32;\r\n+      for i := 0 to high(pix) do\r\n+        pix[i] := cardinal(i) * $00101010; // a top-bottom gradient\r\n+      StretchDIBits(mc.Handle, 10, 10, 64, 64, 0, 0, 4, 4, @pix, bmi,\r\n+        DIB_RGB_COLORS, SRCCOPY);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    before := MetaFileBytes(mf);\r\n+    CheckEqual(length(EmfRecords(before, R_STRETCHDIBITS)), 1,\r\n+      'recorded as EMR_STRETCHDIBITS');\r\n+    first := RenderedEmf(mf);\r\n+    second := RenderedEmf(mf);\r\n+    Check(MetaFileBytes(mf) = before, 'the metafile unchanged');\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  CheckEqual(CountOccurrences('/Subtype/Image', first), 1, 'the bitmap');\r\n+  CheckEqual(second, first, 'drawn the same twice');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "7fc8ed0e84cb2ceb689888d0a47dab2a39df6b9b",
+      "short_sha": "7fc8ed0e",
+      "subject": "ui: pdf - EMR_EXTTEXTOUTA reads its bytes in the code page of the font (#673, row 19)",
+      "body": "The A record went through the Unicode path, reading twice its bytes as WideChars. Its bytes are converted in the code page of the font's charset - CP_ACP for DEFAULT_CHARSET and for a stock font, CP_OEMCP for OEM_FIXED_FONT (selecting a stock font clears the font of the metafile) - glyph indexes are left as they are, and the per-byte dx is dropped when the character count differs. Windows records ExtTextOutA as EMR_EXTTEXTOUTW, so the tests build their A records from W ones: EmfAnsiText (ANSI, Greek and Shift-JIS) and EmfAnsiStockFont.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7fc8ed0e84cb2ceb689888d0a47dab2a39df6b9b",
+      "parents": [
+        "8e60a6ad8b4d3577b1cb7c9aa71272730009554d"
+      ],
+      "stats": {
+        "additions": 254,
+        "deletions": 8,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 62,
+          "deletions": 8,
+          "patch": "@@ -10713,6 +10713,10 @@   TPdfEnumState = record\n       Align: integer;\r\n       BkMode, BkColor: integer;\r\n       Spec: TFontSpec;\r\n+      // a font of the metafile is selected, not a stock font\r\n+      Selected: boolean;\r\n+      // the code page of the stock font while none is: CP_ACP or CP_OEMCP\r\n+      StockCodePage: cardinal;\r\n       LogFont: TLogFontW; // better be the last entry in TPdfEnumState record\r\n     end;\r\n   end;\r\n@@ -11922,6 +11926,18 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n             brush.color := STOCKBRUSHCOLOR[iObject];\r\n             brush.null := false;\r\n           end;\r\n+        OEM_FIXED_FONT..DEVICE_DEFAULT_FONT,\r\n+        SYSTEM_FIXED_FONT,\r\n+        DEFAULT_GUI_FONT:\r\n+          begin\r\n+            // its LogFont is not known: EMR_EXTTEXTOUTA decodes in the code\r\n+            // page of its charset, not in the one of the font selected before\r\n+            Font.Selected := false;\r\n+            if iObject = OEM_FIXED_FONT then\r\n+              Font.StockCodePage := CP_OEMCP\r\n+            else\r\n+              Font.StockCodePage := CP_ACP;\r\n+          end;\r\n         NULL_PEN:\r\n           begin\r\n             if fInLined and\r\n@@ -11978,6 +11994,7 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n           OBJ_FONT:\r\n             begin\r\n               Font.spec := FontSpec;\r\n+              Font.Selected := true;\r\n               MoveFast(LogFont, Font.LogFont, SizeOf(LogFont));\r\n             end;\r\n         end;\r\n@@ -12401,6 +12418,8 @@ procedure TPdfEnum.TextOut(var R: TEMRExtTextOut);\n   posi: TPoint;\r\n   tmp: array of WideChar; // R.emrtext is not #0 terminated -> use tmp[]\r\n   hasdx, clipped, isopaque: boolean;\r\n+  n: integer; // the WideChars of tmp, or the glyphs\r\n+  cp: cardinal;\r\n   tmp2: array[0..1] of WideChar;\r\n   clip: TPdfBox;\r\n   back: TRect;\r\n@@ -12454,8 +12473,40 @@ procedure TPdfEnum.TextOut(var R: TEMRExtTextOut);\n   if R.emrtext.nChars > 0 then\r\n     with DC[nDC] do\r\n     begin\r\n-      SetLength(tmp, R.emrtext.nChars + 1); // faster than WideString for our purpose\r\n-      MoveFast(pointer(PtrUInt(@R) + R.emrtext.offString)^, tmp[0], R.emrtext.nChars * 2);\r\n+      if (R.emr.iType = EMR_EXTTEXTOUTA) and\r\n+         (R.emrtext.fOptions and ETO_GLYPH_INDEX = 0) then\r\n+      begin\r\n+        // bytes in the code page of the font's charset, as ExtTextOutA reads them\r\n+        if not Font.Selected then\r\n+          cp := Font.StockCodePage // CP_ACP (0) at the start\r\n+        else\r\n+          case Font.LogFont.lfCharSet of\r\n+            DEFAULT_CHARSET:\r\n+              cp := CP_ACP;\r\n+            OEM_CHARSET:\r\n+              cp := CP_OEMCP;\r\n+            SYMBOL_CHARSET:\r\n+              cp := 42; // CP_SYMBOL: $20..$FF as U+F020..U+F0FF, as GDI records them\r\n+            CHINESEBIG5_CHARSET:\r\n+              cp := 950;\r\n+          else\r\n+            cp := CharSetToCodePage(Font.LogFont.lfCharSet);\r\n+          end;\r\n+        n := MultiByteToWideChar(cp, 0,\r\n+          pointer(PtrUInt(@R) + R.emrtext.offString), R.emrtext.nChars, nil, 0);\r\n+        if n = 0 then\r\n+          exit; // not text in that code page\r\n+        SetLength(tmp, n + 1);\r\n+        MultiByteToWideChar(cp, 0, pointer(PtrUInt(@R) + R.emrtext.offString),\r\n+          R.emrtext.nChars, pointer(tmp), n);\r\n+      end\r\n+      else\r\n+      begin\r\n+        n := R.emrtext.nChars;\r\n+        SetLength(tmp, n + 1); // faster than WideString for our purpose\r\n+        MoveFast(pointer(PtrUInt(@R) + R.emrtext.offString)^, tmp[0], n * 2);\r\n+      end;\r\n+      tmp[n] := #0;\r\n       sy := 1;\r\n       sx := 1;\r\n       if (Canvas.fWorldFactorY) < 0 then\r\n@@ -12483,23 +12534,26 @@ procedure TPdfEnum.TextOut(var R: TEMRExtTextOut);\n            fnt.InheritsFrom(TPdfFontTrueType) then\r\n         begin\r\n           dest := Canvas.fDoc.GetDCWithFont(TPdfFontTrueType(fnt));\r\n-          if GetTextExtentPoint32W(dest, pointer(tmp), R.emrtext.nChars, siz) then\r\n+          if GetTextExtentPoint32W(dest, pointer(tmp), n, siz) then\r\n\n... [truncated, 2007 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 192,
+          "deletions": 0,
+          "patch": "@@ -57,6 +57,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPolyPolylineOpen;\r\n     procedure EmfRestoreDCDepth;\r\n     procedure EmfScaledRotation;\r\n+    procedure EmfAnsiText;\r\n+    procedure EmfAnsiStockFont;\r\n   end;\r\n \r\n implementation\r\n@@ -1840,6 +1842,196 @@ procedure TTestUiPdf.EmfScaledRotation;\n   Check((m <> '') and (m[1] = '-'), 'turned by 180 degrees: ' + Utf8ToString(m));\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfAnsiText;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  bytes: RawByteString;\r\n+  recs: TIntegerDynArray;\r\n+  w, a: RawUtf8;\r\n+  i: integer;\r\n+\r\n+  // draw Codes at Y in an Arial of CharSet\r\n+  procedure Text(Y, CharSet: integer; const Codes: array of word);\r\n+  var\r\n+    lf: TLogFontW;\r\n+    f, old: HFONT;\r\n+    ws: WideString;\r\n+    c: integer;\r\n+  begin\r\n+    FillChar(lf, SizeOf(lf), 0);\r\n+    lf.lfHeight := -16;\r\n+    lf.lfCharSet := CharSet;\r\n+    Utf8ToWideChar(@lf.lfFaceName, 'Arial');\r\n+    f := CreateFontIndirectW(lf);\r\n+    old := SelectObject(mc.Handle, f);\r\n+    SetLength(ws, length(Codes));\r\n+    for c := 0 to high(Codes) do\r\n+      ws[c + 1] := WideChar(Codes[c]);\r\n+    TextOutW(mc.Handle, 10, Y, pointer(ws), length(ws));\r\n+    SelectObject(mc.Handle, old);\r\n+    DeleteObject(f);\r\n+  end;\r\n+\r\n+  // the W record at o as an A record of Ansi, its UTF-16 zeroed past the bytes\r\n+  procedure ToAnsi(o: integer; const Ansi: RawByteString);\r\n+  var\r\n+    str: PtrInt;\r\n+  begin\r\n+    PCardinal(@PByteArray(bytes)[o])^ := R_EXTTEXTOUTA;\r\n+    // EMRTEXT.nChars at 44, offString at 48 of the record: room for 4 bytes\r\n+    PCardinal(@PByteArray(bytes)[o + 44])^ := length(Ansi);\r\n+    str := o + PInteger(@PByteArray(bytes)[o + 48])^;\r\n+    FillChar(PByteArray(bytes)[str], 4, 0);\r\n+    MoveFast(pointer(Ansi)^, PByteArray(bytes)[str], length(Ansi));\r\n+  end;\r\n+\r\n+  // a dx of 100 per byte after the 4 bytes of the A record at o, which held\r\n+  // the UTF-16 and the dx of 3 WideChars: wider than the text, so it is used\r\n+  procedure WideDx(o: integer);\r\n+  var\r\n+    j, str: PtrInt;\r\n+  begin\r\n+    str := PInteger(@PByteArray(bytes)[o + 48])^;\r\n+    PInteger(@PByteArray(bytes)[o + 72])^ := str + 4; // EMRTEXT.offDx\r\n+    for j := 0 to 3 do\r\n+      PInteger(@PByteArray(bytes)[o + str + 4 + j * 4])^ := 100;\r\n+  end;\r\n+\r\n+begin\r\n+  { EMR_EXTTEXTOUTA went through the Unicode path: its bytes were read as\r\n+    WideChars, twice as many as the record holds. Windows records ExtTextOutA\r\n+    as EMR_EXTTEXTOUTW, so the A records are made from W ones, in the ANSI\r\n+    code page, in the one of a Greek font and in Shift-JIS, three characters\r\n+    of four bytes. The W records lose their dx, which an A record has per\r\n+    byte: the Shift-JIS one gets a dx of 4 entries, which cannot fit its 3\r\n+    WideChars and is dropped - all draw by the measured text }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      Text(10, ANSI_CHARSET, [ord('A'), ord('b')]);\r\n+      Text(40, GREEK_CHARSET, [$03B1, $03B2]); // alpha beta\r\n+      Text(70, SHIFTJIS_CHARSET, [ord('A'), $3042, ord('B')]); // hiragana a\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    bytes := MetaFileBytes(mf);\r\n+    recs := EmfRecords(bytes, R_EXTTEXTOUTW);\r\n+    if CheckEqual(length(recs), 3, 'three W records') then\r\n+    begin\r\n+      for i := 0 to 2 do\r\n+      begin\r\n+        CheckEqual(PCardinal(@PByteArray(bytes)[recs[i] + 44])^, 2 + i shr 1,\r\n+          'the characters');\r\n+        PCardinal(@PByteArray(bytes)[recs[i] + 72])^ := 0; // EMRTEXT.offDx\r\n+      end;\r\n+      mf.Handle := SetEnhMetaFileBits(length(bytes), pointer(bytes));\r\n+      w := RenderedEmf(mf);\r\n+      ToAnsi(recs[0], 'Ab');\r\n+      ToAnsi(recs[1], BinaryOf([$E1, $E2])); // code page 1253\r\n+      ToAnsi(recs[2], BinaryOf([ord('A'), $82, $A0, ord('B')])); // code page 932\r\n+      WideDx(recs[2]);\r\n+      mf.Handle := SetEnhMetaFileBits(length(bytes), pointer(bytes));\r\n+      a := RenderedEmf(m\n... [truncated, 3308 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "8e60a6ad8b4d3577b1cb7c9aa71272730009554d",
+      "short_sha": "8e60a6ad",
+      "subject": "ui: pdf - a scaled rotation is drawn without ArcSin/ArcCos past 1 (#673, row 18)",
+      "body": "ScaleMatrix took ArcSin(eM12) and TextOut ArcCos(eM11): a rotation scaled by 2 gave them a value past 1 - EInvalidOp on Delphi, NaN on FPC, where 180-degree text then came out upright. The angle is ArcTan2(eM12, eM11) now. Test EmfScaledRotation.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8e60a6ad8b4d3577b1cb7c9aa71272730009554d",
+      "parents": [
+        "450a3e8322918feffc2ef98d10d692313931fe54"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 4,
+          "patch": "@@ -12248,7 +12248,8 @@ procedure TPdfEnum.ScaleMatrix(Custom: PXForm; iMode: integer);\n     else if (xf.eM22 = xf.eM11) and\r\n             (xf.eM21 = -xf.eM12) then\r\n     begin // Rotate\r\n-      fAngle := ArcSin(xf.eM12) * c180divPI;\r\n+      // ArcTan2, not ArcSin: a scaled rotation has |eM12| > 1\r\n+      fAngle := ArcTan2(xf.eM12, xf.eM11) * c180divPI;\r\n       fWorldOffsetCos := xf.eM11;\r\n       fWorldOffsetSin := xf.eM12;\r\n     end\r\n@@ -12653,12 +12654,15 @@ procedure TPdfEnum.TextOut(var R: TEMRExtTextOut);\n               (WorldTransform.eM12 = -WorldTransform.eM21) and\r\n               // a pure positive uniform scaling is no rotation: default branch below\r\n               not ((WorldTransform.eM12 = 0) and (WorldTransform.eM11 > 0)) and\r\n-              not SameValue(ArcCos(WorldTransform.eM11), 0, 0.0001) then\r\n+              // the angle by ArcTan2: ArcCos(eM11) fails for a scaled rotation\r\n+              not SameValue(ArcTan2(WorldTransform.eM12, WorldTransform.eM11),\r\n+                0, 0.0001) then\r\n       begin\r\n         xs := 0;\r\n         ys := 0;\r\n-        if SameValue(ArcCos(WorldTransform.eM11), 0, 0.0001) or      // 0 grad\r\n-           SameValue(ArcCos(WorldTransform.eM11), cPI, 0.0001) then  // 180 grad\r\n+        a := Abs(ArcTan2(WorldTransform.eM12, WorldTransform.eM11));\r\n+        if SameValue(a, 0, 0.0001) or    // 0 grad\r\n+           SameValue(a, cPI, 0.0001) then // 180 grad\r\n           Canvas.SetTextMatrix(WorldTransform.eM11, WorldTransform.eM12,\r\n             WorldTransform.eM21, WorldTransform.eM22,\r\n             Canvas.S2X(posi.X * WorldTransform.eM11 +\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 54,
+          "deletions": 0,
+          "patch": "@@ -56,6 +56,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfAlphaBlendOpaque;\r\n     procedure EmfPolyPolylineOpen;\r\n     procedure EmfRestoreDCDepth;\r\n+    procedure EmfScaledRotation;\r\n   end;\r\n \r\n implementation\r\n@@ -1786,6 +1787,59 @@ procedure TTestUiPdf.EmfRestoreDCDepth;\n     OperandsBefore(txt, '(Level)', ' rg'), 'restored past 32 states');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfScaledRotation;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  xf: TXForm;\r\n+  txt, m: RawUtf8;\r\n+  raised: boolean;\r\n+begin\r\n+  { ScaleMatrix took ArcSin(eM12) and TextOut ArcCos(eM11): with a rotation\r\n+    scaled by 2 both get a value past 1 and raise (Delphi) or give NaN (FPC) }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      mc.Font.Name := 'Arial';\r\n+      mc.Font.Size := 10;\r\n+      SetGraphicsMode(mc.Handle, GM_ADVANCED);\r\n+      FillChar(xf, SizeOf(xf), 0);\r\n+      xf.eM12 := 2; // 90 degrees, twice the size\r\n+      xf.eM21 := -2;\r\n+      xf.eDx := 200;\r\n+      SetWorldTransform(mc.Handle, xf);\r\n+      mc.TextOut(10, 10, 'Ninety');\r\n+      xf.eM11 := -2; // 180 degrees, twice the size\r\n+      xf.eM12 := 0;\r\n+      xf.eM21 := 0;\r\n+      xf.eM22 := -2;\r\n+      xf.eDx := 300;\r\n+      xf.eDy := 300;\r\n+      SetWorldTransform(mc.Handle, xf);\r\n+      mc.TextOut(10, 10, 'Turned');\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    raised := false;\r\n+    try\r\n+      txt := RenderedEmf(mf);\r\n+    except\r\n+      raised := true;\r\n+    end;\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  Check(not raised, 'rendered');\r\n+  Check(PosEx('(Ninety)', txt) > 0, 'the text at 90 degrees');\r\n+  Check(PosEx('(Turned)', txt) > 0, 'the text at 180 degrees');\r\n+  // FPC's ArcCos(-2) is NaN: the text took the negated matrix, drawn upright\r\n+  m := OperandsBefore(txt, '(Turned)', ' Tm');\r\n+  Check((m <> '') and (m[1] = '-'), 'turned by 180 degrees: ' + Utf8ToString(m));\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "450a3e8322918feffc2ef98d10d692313931fe54",
+      "short_sha": "450a3e83",
+      "subject": "ui: pdf - EMR_RESTOREDC restores the state it names, however deep (#673, row 17)",
+      "body": "RESTOREDC popped one state whatever its iRelative, and the 32 saved states were guarded by Assert only. The stack is a dynamic array grown by SaveDC (the \"with DC[nDC]\" of EnumEMFFunc is evaluated per record, so it stays valid); a restore of a state not saved is ignored, as GDI fails it. Test EmfRestoreDCDepth.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/450a3e8322918feffc2ef98d10d692313931fe54",
+      "parents": [
+        "f768636f9a203cbbeb9c098dc46c67032ab83d3a"
+      ],
+      "stats": {
+        "additions": 77,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 9,
+          "patch": "@@ -10747,13 +10747,15 @@   TPdfEnum = class\n            BrushNull: boolean;\r\n            BrushStyle: integer);\r\n     end;\r\n-    // SaveDC/RestoreDC stack\r\n+    // SaveDC/RestoreDC stack, as deep as the metafile saves it: SaveDC may\r\n+    // reallocate it, so EnumEMFFunc must not use its \"with E.DC[E.nDC]\"\r\n+    // scope after E.SaveDC\r\n     nDC: integer;\r\n-    DC: array[0..31] of TPdfEnumState;\r\n+    DC: array of TPdfEnumState;\r\n   public\r\n     constructor Create(ACanvas: TPdfCanvas);\r\n     procedure SaveDC;\r\n-    procedure RestoreDC;\r\n+    procedure RestoreDC(Relative: integer);\r\n     procedure NeedPen;\r\n     procedure NeedBrushAndPen;\r\n     procedure FlushPenBrush;\r\n@@ -10856,9 +10858,9 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n       EMR_EXTTEXTOUTW:\r\n         E.TextOut(PEMRExtTextOut(R)^);\r\n       EMR_SAVEDC:\r\n-        E.SaveDC;\r\n+        E.SaveDC; // may reallocate E.DC: nothing of this with-scope after it\r\n       EMR_RESTOREDC:\r\n-        E.RestoreDC;\r\n+        E.RestoreDC(PEMRRestoreDC(R)^.iRelative);\r\n       EMR_SETWORLDTRANSFORM:\r\n         E.ScaleMatrix(@PEMRSetWorldTransform(R)^.xform, MWT_SET);\r\n       EMR_CREATEPEN:\r\n@@ -11612,6 +11614,7 @@ procedure RenderMetaFile(C: TPdfCanvas; MF: TMetaFile; ScaleX, ScaleY,\n constructor TPdfEnum.Create(ACanvas: TPdfCanvas);\r\n begin\r\n   Canvas := ACanvas;\r\n+  SetLength(DC, 32);\r\n   // set invalid colors or style -> force paint\r\n   fFillColor := -1;\r\n   fStrokeColor := -1;\r\n@@ -12097,15 +12100,20 @@ procedure TPdfEnum.NeedPen;\n     end;\r\n end;\r\n \r\n-procedure TPdfEnum.RestoreDC;\r\n+procedure TPdfEnum.RestoreDC(Relative: integer);\r\n begin\r\n-  Assert(nDC > 0);\r\n-  dec(nDC);\r\n+  // an EMF record restores relatively (-1 = the last saved); a state that\r\n+  // was not saved is ignored, as the playback of GDI does\r\n+  if (Relative >= 0) or\r\n+     (Relative < -nDC) then\r\n+    exit;\r\n+  inc(nDC, Relative);\r\n end;\r\n \r\n procedure TPdfEnum.SaveDC;\r\n begin\r\n-  Assert(nDC < high(DC));\r\n+  if nDC >= high(DC) then\r\n+    SetLength(DC, length(DC) * 2);\r\n   DC[nDC + 1] := DC[nDC];\r\n   inc(nDC);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 60,
+          "deletions": 0,
+          "patch": "@@ -55,6 +55,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusRecordLayout;\r\n     procedure EmfAlphaBlendOpaque;\r\n     procedure EmfPolyPolylineOpen;\r\n+    procedure EmfRestoreDCDepth;\r\n   end;\r\n \r\n implementation\r\n@@ -1726,6 +1727,65 @@ procedure TTestUiPdf.EmfPolyPolylineOpen;\n   CheckEqual(CountOccurrences(' l'#10, txt), 2 * 2 + 2 * 2 + 2 * 3, 'line segments');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfRestoreDCDepth;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  bytes: RawByteString;\r\n+  recs: TIntegerDynArray;\r\n+  txt, rel: RawUtf8;\r\n+  i: integer;\r\n+\r\n+  procedure Text(Y: integer; const Value: WideString);\r\n+  begin\r\n+    TextOutW(mc.Handle, 10, Y, pointer(Value), length(Value));\r\n+  end;\r\n+\r\n+begin\r\n+  { EMR_RESTOREDC popped one state whatever its iRelative, and the saved\r\n+    states were an array of 32 guarded by Assert only }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SetTextColor(mc.Handle, RGB(255, 0, 0));\r\n+      SaveDC(mc.Handle);\r\n+      SetTextColor(mc.Handle, RGB(0, 255, 0));\r\n+      SaveDC(mc.Handle);\r\n+      SetTextColor(mc.Handle, RGB(0, 0, 255));\r\n+      RestoreDC(mc.Handle, -2); // back to red\r\n+      Text(10, 'Red');\r\n+      for i := 1 to 40 do\r\n+      begin\r\n+        SetTextColor(mc.Handle, RGB(i * 6, 0, 0));\r\n+        if i = 37 then\r\n+          Text(40, 'Level');\r\n+        SaveDC(mc.Handle);\r\n+      end;\r\n+      RestoreDC(mc.Handle, -4); // the state saved after Level\r\n+      Text(70, 'Deep');\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    bytes := MetaFileBytes(mf);\r\n+    CheckEqual(length(EmfRecords(bytes, R_SAVEDC)), 42, 'the saves');\r\n+    recs := EmfRecords(bytes, R_RESTOREDC); // the canvas adds one of its own\r\n+    rel := '';\r\n+    for i := 0 to high(recs) do\r\n+      rel := rel + Int32ToUtf8(PInteger(@PByteArray(bytes)[recs[i] + 8])^) + ' ';\r\n+    Check(PosEx('-2 -4 ', rel) = 1, 'the restores');\r\n+    txt := RenderedEmf(mf);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  CheckEqual(OperandsBefore(txt, '(Red)', ' rg'), '1 0 0', 'RestoreDC(-2)');\r\n+  Check(OperandsBefore(txt, '(Level)', ' rg') <> '', 'the colour of level 37');\r\n+  CheckEqual(OperandsBefore(txt, '(Deep)', ' rg'),\r\n+    OperandsBefore(txt, '(Level)', ' rg'), 'restored past 32 states');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "f768636f9a203cbbeb9c098dc46c67032ab83d3a",
+      "short_sha": "f768636f",
+      "subject": "ui: pdf - the polylines of EMR_POLYPOLYLINE stay open (#673, row 16)",
+      "body": "Each polyline of EMR_POLYPOLYLINE and EMR_POLYPOLYLINE16 got a segment back to its first point; only the polygons are closed now. Test EmfPolyPolylineOpen.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:32Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f768636f9a203cbbeb9c098dc46c67032ab83d3a",
+      "parents": [
+        "618e24d5fded0f67b62b75e462ae973c8704136c"
+      ],
+      "stats": {
+        "additions": 55,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -11814,7 +11814,8 @@ procedure TPdfEnum.PolyPoly(data: PEMRPolyPolygon; iType: integer);\n               a[o].Y);\r\n             inc(o);\r\n           end;\r\n-          Canvas.LineToI(a[f].x, a[f].Y);\r\n+          if iType = EMR_POLYPOLYGON then // a polyline stays open\r\n+            Canvas.LineToI(a[f].x, a[f].Y);\r\n           DC[nDC].Moved := false;\r\n         end;\r\n       end;\r\n@@ -11837,7 +11838,8 @@ procedure TPdfEnum.PolyPoly(data: PEMRPolyPolygon; iType: integer);\n               a16[o].Y);\r\n             inc(o);\r\n           end;\r\n-          Canvas.LineToI(a16[f].x, a16[f].Y);\r\n+          if iType = EMR_POLYPOLYGON16 then\r\n+            Canvas.LineToI(a16[f].x, a16[f].Y);\r\n           DC[nDC].Moved := false;\r\n         end;\r\n       end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 0,
+          "patch": "@@ -54,6 +54,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusWindowOrigin;\r\n     procedure EmfPlusRecordLayout;\r\n     procedure EmfAlphaBlendOpaque;\r\n+    procedure EmfPolyPolylineOpen;\r\n   end;\r\n \r\n implementation\r\n@@ -1675,6 +1676,56 @@ procedure TTestUiPdf.EmfAlphaBlendOpaque;\n   CheckEqual(CountOccurrences('/Mask', txt), 0, 'no colour key');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfPolyPolylineOpen;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  pts: array[0..5] of TPoint;\r\n+  lines: array[0..1] of DWord;\r\n+  polys: array[0..1] of integer;\r\n+  bytes: RawByteString;\r\n+  txt: RawUtf8;\r\n+  i: integer;\r\n+begin\r\n+  { every polyline of EMR_POLYPOLYLINE/16 got a segment back to its first\r\n+    point; a polygon keeps it }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      lines[0] := 3;\r\n+      lines[1] := 3;\r\n+      polys[0] := 3;\r\n+      polys[1] := 3;\r\n+      for i := 0 to 5 do\r\n+      begin\r\n+        pts[i].X := 20 + i * 30;\r\n+        pts[i].Y := 20 + (i and 1) * 40;\r\n+      end;\r\n+      PolyPolyline(mc.Handle, pts[0], lines[0], 2); // 16-bit coordinates\r\n+      for i := 0 to 5 do\r\n+        inc(pts[i].Y, 100);\r\n+      PolyPolygon(mc.Handle, pts[0], polys[0], 2);\r\n+      for i := 0 to 5 do\r\n+        pts[i].X := 40000 + i * 30; // past 16 bits: the 32-bit record\r\n+      PolyPolyline(mc.Handle, pts[0], lines[0], 2);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    bytes := MetaFileBytes(mf);\r\n+    CheckEqual(length(EmfRecords(bytes, R_POLYPOLYLINE16)), 1, 'EMR_POLYPOLYLINE16');\r\n+    CheckEqual(length(EmfRecords(bytes, R_POLYPOLYLINE)), 1, 'EMR_POLYPOLYLINE');\r\n+    CheckEqual(length(EmfRecords(bytes, R_POLYPOLYGON16)), 1, 'EMR_POLYPOLYGON16');\r\n+    txt := RenderedEmf(mf);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  // two open polylines of two segments in each record, two closed triangles\r\n+  CheckEqual(CountOccurrences(' l'#10, txt), 2 * 2 + 2 * 2 + 2 * 3, 'line segments');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "618e24d5fded0f67b62b75e462ae973c8704136c",
+      "short_sha": "618e24d5",
+      "subject": "ui: pdf - EMR_ALPHABLEND draws its bitmap opaque (#673, row 15)",
+      "body": "Its BLENDFUNCTION was passed to DrawBitmap as the transparent colour: with AC_SRC_OVER and a constant alpha of 255 ($00FF0000), every pure blue pixel became a hole. Constant and per-pixel alpha stay unsupported. Test EmfAlphaBlendOpaque.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/618e24d5fded0f67b62b75e462ae973c8704136c",
+      "parents": [
+        "c4e1f0d69b24d834df44c739c3f1988aa7504ae3"
+      ],
+      "stats": {
+        "additions": 151,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -11395,9 +11395,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         with PEMRAlphaBlend(R)^ do // only handle RGB bitmaps (no palette nor transparency)\r\n           if (offBmiSrc <> 0) and\r\n              (offBitsSrc <> 0) then\r\n+            // drawn opaque: dwRop is a BLENDFUNCTION, no transparent colour\r\n             E.DrawBitmap (xSrc, ySrc, cxSrc, cySrc, xDest, yDest, cxDest, cyDest,\r\n               iUsageSrc, pointer(PtrUInt(R) + offBmiSrc), pointer(\r\n-               PtrUInt(R) + offBitsSrc), @rclBounds, @xformSrc, SRCCOPY, dwRop)\r\n+               PtrUInt(R) + offBitsSrc), @rclBounds, @xformSrc, SRCCOPY)\r\n           else\r\n             case dwRop of // we only handle PATCOPY = fillrect\r\n               PATCOPY:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 149,
+          "deletions": 0,
+          "patch": "@@ -53,6 +53,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusPlaybackOrder;\r\n     procedure EmfPlusWindowOrigin;\r\n     procedure EmfPlusRecordLayout;\r\n+    procedure EmfAlphaBlendOpaque;\r\n   end;\r\n \r\n implementation\r\n@@ -1526,6 +1527,154 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   Check(RedPixels(CloseEmf(dc)) > 0, 'the extended pen colour');\r\n end;\r\n \r\n+const\r\n+  // the record types, by number: the windows unit of FPC lacks some names\r\n+  R_POLYPOLYLINE = 7;\r\n+  R_SAVEDC = 33;\r\n+  R_RESTOREDC = 34;\r\n+  R_SELECTOBJECT = 37;\r\n+  R_CREATEBRUSHINDIRECT = 39;\r\n+  R_STRETCHDIBITS = 81;\r\n+  R_EXTTEXTOUTA = 83;\r\n+  R_EXTTEXTOUTW = 84;\r\n+  R_POLYPOLYLINE16 = 90;\r\n+  R_POLYPOLYGON16 = 91;\r\n+  R_EXTCREATEPEN = 95;\r\n+  R_ALPHABLEND = 114;\r\n+\r\n+// AlphaBlend under its gdi32 name: the windows unit of FPC lacks it\r\n+function GdiAlphaBlend(Dest: HDC; X, Y, W, H: integer; Src: HDC;\r\n+  XS, YS, WS, HS: integer; Blend: DWord): BOOL; stdcall; external 'gdi32.dll';\r\n+\r\n+// the bytes of a metafile, as GetEnhMetaFileBits gives them\r\n+function MetaFileBytes(Mf: TMetaFile): RawByteString;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := GetEnhMetaFileBits(Mf.Handle, 0, nil);\r\n+  SetLength(result, n);\r\n+  if n > 0 then\r\n+    GetEnhMetaFileBits(Mf.Handle, n, pointer(result));\r\n+end;\r\n+\r\n+// the offsets of the records of type RecType in the bytes of a metafile\r\n+function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynArray;\r\n+var\r\n+  o, n: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  o := 0;\r\n+  while o + 8 <= length(Bytes) do\r\n+  begin\r\n+    if PCardinal(@PByteArray(Bytes)[o])^ = RecType then\r\n+    begin\r\n+      n := length(result);\r\n+      SetLength(result, n + 1);\r\n+      result[n] := o;\r\n+    end;\r\n+    n := PCardinal(@PByteArray(Bytes)[o + 4])^;\r\n+    if n < 8 then\r\n+      break;\r\n+    inc(o, n);\r\n+  end;\r\n+end;\r\n+\r\n+// the metafile rendered into one page of an uncompressed PDF\r\n+function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0): RawUtf8;\r\n+var\r\n+  doc: TPdfDocumentGdi;\r\n+begin\r\n+  doc := TPdfDocumentGdi.Create;\r\n+  try\r\n+    doc.Info.CreationDate := FIXED_DATE;\r\n+    doc.CompressionMethod := cmNone;\r\n+    doc.EmbeddedTTF := false;\r\n+    doc.StandardFontsReplace := true;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n+    doc.AddPage;\r\n+    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0);\r\n+    result := SavedPdf(doc);\r\n+  finally\r\n+    doc.Free;\r\n+  end;\r\n+end;\r\n+\r\n+// the operands of the last Op (' rg', ' Tm') before Marker in the content\r\n+function OperandsBefore(const Txt, Marker, Op: RawUtf8): RawUtf8;\r\n+var\r\n+  p, i, j, k: PtrInt;\r\n+begin\r\n+  result := '';\r\n+  p := PosEx(Marker, Txt);\r\n+  i := 1;\r\n+  repeat\r\n+    j := PosEx(Op, Txt, i);\r\n+    if (j = 0) or\r\n+       (j > p) then\r\n+      break;\r\n+    i := j + length(Op);\r\n+    k := j;\r\n+    while (k > 1) and\r\n+          not (Txt[k - 1] in [#10, #13]) do\r\n+      dec(k);\r\n+    result := copy(Txt, k, j - k);\r\n+  until false;\r\n+end;\r\n+\r\n+function BinaryOf(const B: array of byte): RawByteString;\r\n+begin\r\n+  FastSetRawByteString(result, @B[0], length(B));\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfAlphaBlendOpaque;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  mem: HDC;\r\n+  bmp, old: HBITMAP;\r\n+  bi: TBitmapInfo;\r\n+  bits: PCardinalArray;\r\n+  txt: RawUtf8;\r\n+  i: integer;\r\n+begin\r\n+  { the BLENDFUNCTION of EMR_ALPHABLEND was taken as the transparent colour:\r\n+    the usual AC_SRC_OVER with SourceConstantAlpha 255 is $00FF0000, blue }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 100;\r\n+    mf.Height := 100;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      // a 32-bit DIB of blue pixels, whatever the depth of the screen\r\n+      FillChar(bi, SizeOf(bi), 0);\r\n+      bi.bmiHeader.biSize := SizeOf(bi.bmiHeader);\r\n+      bi.bmiHeader.biWidth := 8;\r\n+      bi.bmiHeader.biHeight := 8;\r\n+      bi.bmiHeader.biPlanes := 1;\r\n+      bi.bmiHeader.biBitCou\n... [truncated, 815 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "c4e1f0d69b24d834df44c739c3f1988aa7504ae3",
+      "short_sha": "c4e1f0d6",
+      "subject": "ui: pdf - TPdfTtf reads the format 4 cmap within its table (#673, row 14)",
+      "body": "Only the start of the subtable was checked. Now the bound is the table's own byte length (GetTtfData gives it through a new optional Size): a table shorter than its header, a directory of more records than it holds, or a format 4 header and arrays (segCountX2 * 4 + 2 bytes) past it is not read; a segment with startCode > endCode holds no code (it made the count negative, then later segments wrote past the arrays); a glyph read through idRangeOffset must lie in the table - an index before the glyph array, inside the table, stays as it was: GDI maps it so too.\n\nNo test: GDI refuses to load a face whose (3,1) cmap is broken in any of these ways (measured with AddFontMemResourceEx on a patched Tahoma), so the trunk cannot reach them through GDI - defensive, as row 14 says. Our engine gets the tables from FreeType too, and tests them there.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c4e1f0d69b24d834df44c739c3f1988aa7504ae3",
+      "parents": [
+        "78501a4ae52071204d6c921b760d8116ca596761"
+      ],
+      "stats": {
+        "additions": 25,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 8,
+          "patch": "@@ -3497,14 +3497,17 @@ function RGBA(r, g, b, a: cardinal): COLORREF;\n   result := ((r shr 8) or ((g shr 8) shl 8) or ((b shr 8) shl 16) or ((a shr 8) shl 24));\r\n end;\r\n \r\n-function GetTtfData(aDC: HDC; aTableName: PAnsiChar; var Ref: TWordDynArray): pointer;\r\n+function GetTtfData(aDC: HDC; aTableName: PAnsiChar; var Ref: TWordDynArray;\r\n+  Size: PCardinal = nil): pointer;\r\n var\r\n   L: cardinal;\r\n begin\r\n   result := nil;\r\n   L := windows.GetFontData(aDC, PCardinal(aTableName)^, 0, nil, 0);\r\n   if L = GDI_ERROR then\r\n     exit;\r\n+  if Size <> nil then\r\n+    Size^ := L; // the bytes of the table, without the word added below\r\n   SetLength(Ref, L shr 1 + 1);\r\n   if windows.GetFontData(aDC, PCardinal(aTableName)^, 0, pointer(Ref), L) = GDI_ERROR then\r\n     exit;\r\n@@ -5959,8 +5962,8 @@ constructor TPdfTtf.Create(aUnicodeTtf: TPdfFontTrueType);\n   P: pointer;\r\n   SubTable: ^TCmapSubTableArray absolute P;\r\n   Header: ^TCmapHeader;\r\n-  i, n, code, ndx: PtrInt;\r\n-  off: cardinal;\r\n+  i, n, code, ndx, ndx2: PtrInt;\r\n+  off, len: cardinal;\r\n   glyph: integer;\r\n   delta, offs: PtrInt;\r\n   W, numOfLongHorMetrics: word;\r\n@@ -5969,10 +5972,14 @@ constructor TPdfTtf.Create(aUnicodeTtf: TPdfFontTrueType);\n   // retrieve the 'cmap' (character code mapping) table\r\n   // see http://developer.apple.com/fonts/TTRefMan/RM06/Chap6cmap.html\r\n   // and http://www.microsoft.com/typography/OTSPEC/cmap.htm\r\n-  P := GetTtfData(aUnicodeTtf.fDoc.fDC, 'cmap', fcmap);\r\n-  if P = nil then\r\n+  P := GetTtfData(aUnicodeTtf.fDoc.fDC, 'cmap', fcmap, @len);\r\n+  if (P = nil) or\r\n+     (len < cardinal(SizeOf(TCmapHeader))) then\r\n     exit;\r\n   Header := P;\r\n+  if cardinal(SizeOf(TCmapHeader)) +\r\n+     cardinal(Header^.numberSubtables) * cardinal(SizeOf(SubTable^[0])) > len then\r\n+    exit; // a directory past the table\r\n   inc(PByte(P), SizeOf(TCmapHeader));\r\n   off := 0;\r\n   for i := 0 to Header^.numberSubtables - 1 do\r\n@@ -5995,13 +6002,16 @@ constructor TPdfTtf.Create(aUnicodeTtf: TPdfFontTrueType);\n   i := LongRec(off).Lo; // offset swap to bswap conversion :)\r\n   LongRec(off).Lo := LongRec(off).Hi;\r\n   LongRec(off).Hi := i;\r\n-  if off > cardinal(Length(fcmap) * 2) then\r\n+  if (off > len) or\r\n+     (len - off < cardinal(SizeOf(TCmapFmt4))) then\r\n     exit; // avoid GPF\r\n   fmt4 := pointer(PtrUInt(fcmap) + off);\r\n   with fmt4^ do\r\n   begin\r\n     if format <> 4 then\r\n       exit; // we handle only cmap table format 4\r\n+    if len - off - cardinal(SizeOf(TCmapFmt4)) < cardinal(segCountX2) * 4 + 2 then\r\n+      exit; // the four arrays and reservedPad past the table\r\n     endCode := pointer(PtrUInt(@format) + SizeOf(TCmapFmt4));\r\n     startCode := pointer(PtrUInt(endCode) + segCountX2 + 2); // +2 = reservedPad\r\n     idDelta := pointer(PtrUInt(startCode) + segCountX2);\r\n@@ -6024,7 +6034,8 @@ constructor TPdfTtf.Create(aUnicodeTtf: TPdfFontTrueType);\n   with aUnicodeTtf.fUsedWideChar do\r\n   begin\r\n     for i := 0 to n - 1 do\r\n-      inc(Count, endCode[i] - startCode[i] + 1);\r\n+      if startCode[i] <= endCode[i] then // a broken segment holds no code\r\n+        inc(Count, endCode[i] - startCode[i] + 1);\r\n     SetLength(Values, Count);\r\n     SetLength(aUnicodeTtf.fUsedWide, Count);\r\n   end;\r\n@@ -6042,7 +6053,13 @@ constructor TPdfTtf.Create(aUnicodeTtf: TPdfFontTrueType);\n         glyph := code + delta\r\n       else\r\n       begin\r\n-        glyph := glyphIndexArray[offs + code];\r\n+        // within the table: a broken cmap is no glyph, not a GPF\r\n+        ndx2 := offs + code;\r\n+        if (PtrUInt(@glyphIndexArray[ndx2]) >= PtrUInt(fcmap)) and\r\n+           (PtrUInt(@glyphIndexArray[ndx2]) + 2 <= PtrUInt(fcmap) + len) then\r\n+          glyph := glyphIndexArray[ndx2]\r\n+        else\r\n+          glyph := 0;\r\n         if glyph <> 0 then\r\n           inc(glyph, delta);\r\n       end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 673,
+      "is_merge": false
+    },
+    {
+      "sha": "78501a4ae52071204d6c921b760d8116ca596761",
+      "short_sha": "78501a4a",
+      "subject": "test: ui pdf - the expected hash of the metafile rendered since #686",
+      "body": "#686 draws the rectangles and ellipses of a metafile one device pixel larger, as GDI records them. Diffing the PDF of MetafileRenderingAndOrientation before and after #686 shows only these boxes (the dots 6 pt wide instead of 4.5, a rectangle 405 x 196.5 pt instead of 403.5 x 195), so the expected hash was stale - it is checked on Delphi Win32 only, code page 1252.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T08:41:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/78501a4ae52071204d6c921b760d8116ca596761",
+      "parents": [
+        "fc4c033da5520d25221025efb78fcc4ea55a55a0"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -356,7 +356,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $FE2D27CA);\r\n+        CheckHash(S, $456748FC); // the boxes of #686\r\n       end;\r\n     finally\r\n       Free;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 686,
+      "is_merge": false
+    },
+    {
+      "sha": "fc4c033da5520d25221025efb78fcc4ea55a55a0",
+      "short_sha": "fc4c033d",
+      "subject": "Merge pull request #687 from landrix/fix/gdiplus-emf-679",
+      "body": "gdiplus: finishing #679 - RESTOREDC, PS_NULL pens, the mapping, FPC 3.2.2 Win64 records",
+      "author": "ab",
+      "date": "2026-10-26T07:26:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fc4c033da5520d25221025efb78fcc4ea55a55a0",
+      "parents": [
+        "d41a446735bb17c318ab88dabe26e7b422ec8539",
+        "3ca285f13932a8d5c81189d043228875185e386f"
+      ],
+      "stats": {
+        "additions": 463,
+        "deletions": 38,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 79,
+          "deletions": 35,
+          "patch": "@@ -1111,6 +1111,11 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n \r\n { *************** AntiAliased Rendering of GDI MetaFile }\r\n \r\n+const\r\n+  // the order of GdipMultiplyMatrix: the second matrix on the left or right\r\n+  MATRIX_ORDER_PREPEND = 0;\r\n+  MATRIX_ORDER_APPEND = 1;\r\n+\r\n {$ifdef FPC}\r\n \r\n const\r\n@@ -1178,6 +1183,25 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n     strikeout: boolean;\r\n   end;\r\n \r\n+  /// EMR_CREATEBRUSHINDIRECT as the EMF stores it, with a 32-bit LOGBRUSH\r\n+  // - the windows unit of FPC 3.2.2 declares lb as LOGBRUSH, whose ULONG_PTR\r\n+  // lbHatch moves the fields on Win64: every brush was read as black there\r\n+  TEmrCreateBrushIndirect32 = record\r\n+    emr: TEMR;\r\n+    ihBrush: cardinal;\r\n+    lbStyle, lbColor, lbHatch: cardinal;\r\n+  end;\r\n+  PEmrCreateBrushIndirect32 = ^TEmrCreateBrushIndirect32;\r\n+\r\n+  /// EMR_EXTCREATEPEN as the EMF stores it, with a 32-bit EXTLOGPEN\r\n+  // - the same with FPC 3.2.2 on Win64: elpHatch is a ULONG_PTR there\r\n+  TEmrExtCreatePen32 = record\r\n+    emr: TEMR;\r\n+    ihPen, offBmi, cbBmi, offBits, cbBits: cardinal;\r\n+    elpPenStyle, elpWidth, elpBrushStyle, elpColor, elpHatch: cardinal;\r\n+  end;\r\n+  PEmrExtCreatePen32 = ^TEmrExtCreatePen32;\r\n+\r\n   /// one DC state properties\r\n   TGdiplusEnumState = record\r\n     pen, brush, font, ClipRegion: THandle;\r\n@@ -1225,15 +1249,16 @@   TGdiplusEnum = record\n       objfont: TFontSpec;\r\n       logfont: TLogFontW;\r\n     end;\r\n-    // the DC states, as stored by SaveDC / RestoreDC methods\r\n+    // the DC states, as stored by SaveDC / RestoreDC methods: as deep as the\r\n+    // metafile saves them, grown by SaveDC only\r\n     nDC: integer;\r\n-    DC: array[0..10] of TGdiplusEnumState;\r\n+    DC: array of TGdiplusEnumState;\r\n     // if true, DrawText() will use DrawString and not DrawDriverString\r\n     UseDrawString: boolean;\r\n     // owned buffer to reduce memory allocations e.g. for Points16To32()\r\n     Temp: TSynTempBuffer;\r\n     procedure SaveDC;\r\n-    procedure RestoreDC;\r\n+    procedure RestoreDC(Relative: integer);\r\n     procedure ScaleMatrix;\r\n     procedure CreatePenObj(index: integer; Color, Width, Style: cardinal);\r\n     procedure DeleteObj(index: integer);\r\n@@ -1343,9 +1368,9 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n             x.eM11, x.eM12, x.eM21, x.eM22, x.eDx, x.eDy, E.destMatrix);\r\n         end;\r\n       EMR_SAVEDC:\r\n-        E.SaveDC;\r\n+        E.SaveDC; // may grow DC: no field of the with can be used after it\r\n       EMR_RESTOREDC:\r\n-        E.RestoreDC;\r\n+        E.RestoreDC(PEMRRestoreDC(Rec)^.iRelative);\r\n       EMR_SETWINDOWEXTEX:\r\n         WinSize := PEMRSetWindowExtEx(Rec)^.szlExtent;\r\n       EMR_SETWINDOWORGEX:\r\n@@ -1406,28 +1431,28 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n         end;\r\n       EMR_EXTCREATEPEN:\r\n         // approximated: only the color, width and dash style are handled\r\n-        with PEMRExtCreatePen(Rec)^ do\r\n+        with PEmrExtCreatePen32(Rec)^ do\r\n         begin\r\n           E.DeleteObj(ihPen - 1);\r\n-          if elp.elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n-            E.CreatePenObj(ihPen - 1, elp.elpColor, 0,\r\n-              elp.elpPenStyle and PS_STYLE_MASK)\r\n+          if elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n+            E.CreatePenObj(ihPen - 1, elpColor, 0,\r\n+              elpPenStyle and PS_STYLE_MASK)\r\n           else\r\n-            E.CreatePenObj(ihPen - 1, elp.elpColor, elp.elpWidth,\r\n-              elp.elpPenStyle and PS_STYLE_MASK);\r\n+            E.CreatePenObj(ihPen - 1, elpColor, elpWidth,\r\n+              elpPenStyle and PS_STYLE_MASK);\r\n         end;\r\n       EMR_CREATEBRUSHINDIRECT:\r\n-        with PEMRCreateBrushIndirect(Rec)^ do\r\n+        with PEmrCreateBrushIndirect32(Rec)^ do\r\n         begin\r\n           E.DeleteObj(ihBrush - 1);\r\n           with E.obj[ihBrush - 1] do\r\n           begin\r\n             kind := OBJ_BRUSH;\r\n-            \n... [truncated, 4388 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 384,
+          "deletions": 3,
+          "patch": "@@ -46,6 +46,13 @@   TTestUiPdf = class(TSynTestCase)\n     procedure ZeroAdvanceMeasured;\r\n     procedure ReducedFontChecksum;\r\n     procedure BidiEmbeddingOrder;\r\n+    procedure EmfPlusClipRestored;\r\n+    procedure EmfPlusRestoreDepth;\r\n+    procedure EmfPlusNullPen;\r\n+    procedure EmfPlusViewportOrigin;\r\n+    procedure EmfPlusPlaybackOrder;\r\n+    procedure EmfPlusWindowOrigin;\r\n+    procedure EmfPlusRecordLayout;\r\n   end;\r\n \r\n implementation\r\n@@ -55,16 +62,19 @@ implementation\n   Windows,\r\n   Graphics,\r\n   mormot.ui.core,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n {$else}\r\n   {$ifdef NEEDVCLPREFIX}\r\n   WinApi.Windows,\r\n   VCL.Graphics,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n   {$else}\r\n   Windows,\r\n   Graphics,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n   {$endif NEEDVCLPREFIX}\r\n {$endif FPC}\r\n   ;\r\n@@ -1145,6 +1155,377 @@ procedure TTestUiPdf.BidiEmbeddingOrder;\n end;\r\n {$endif NO_USE_UNISCRIBE}\r\n \r\n+const\r\n+  EMF_SIZE = 100;\r\n+  EMF_WHITE = $ffffff;\r\n+  EMF_RED = $ff0000; // in a 32-bit DIB: BGRX\r\n+\r\n+// the pixels of Emf converted by our own EMF+ conversion, on white\r\n+function EmfPlusPixels(Emf: HENHMETAFILE): TCardinalDynArray;\r\n+var\r\n+  dc: HDC;\r\n+  bmp, old: HBITMAP;\r\n+  bi: TBitmapInfo;\r\n+  bits: PCardinalArray;\r\n+  r: TRect;\r\n+  i: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  FillCharFast(bi, SizeOf(bi), 0);\r\n+  bi.bmiHeader.biSize := SizeOf(bi.bmiHeader);\r\n+  bi.bmiHeader.biWidth := EMF_SIZE;\r\n+  bi.bmiHeader.biHeight := -EMF_SIZE; // top-down\r\n+  bi.bmiHeader.biPlanes := 1;\r\n+  bi.bmiHeader.biBitCount := 32;\r\n+  dc := CreateCompatibleDC(0);\r\n+  bmp := CreateDIBSection(dc, bi, DIB_RGB_COLORS, pointer(bits), 0, 0);\r\n+  old := SelectObject(dc, bmp);\r\n+  try\r\n+    FillCharFast(bits^, EMF_SIZE * EMF_SIZE * 4, $ff);\r\n+    r.Left := 0; // not Rect(): a type of the windows unit on FPC\r\n+    r.Top := 0;\r\n+    r.Right := EMF_SIZE;\r\n+    r.Bottom := EMF_SIZE;\r\n+    DrawAntiAliased(Emf, EMF_SIZE, EMF_SIZE, dc, r, [ecoInternalConvert], smNone);\r\n+    GdiFlush;\r\n+    SetLength(result, EMF_SIZE * EMF_SIZE);\r\n+    for i := 0 to high(result) do\r\n+      result[i] := bits[i] and $ffffff;\r\n+  finally\r\n+    SelectObject(dc, old);\r\n+    DeleteObject(bmp);\r\n+    DeleteDC(dc);\r\n+    DeleteEnhMetaFile(Emf);\r\n+  end;\r\n+end;\r\n+\r\n+// a metafile DC in advanced graphics mode, its brush red and its pen null\r\n+// - two black corners fix the bounds of the picture: the conversion draws\r\n+// the metafile scaled to them\r\n+function NewEmf: HDC;\r\n+begin\r\n+  result := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SetGraphicsMode(result, GM_ADVANCED);\r\n+  SelectObject(result, GetStockObject(NULL_PEN));\r\n+  SelectObject(result, GetStockObject(BLACK_BRUSH));\r\n+  Rectangle(result, 0, 0, 2, 2);\r\n+  Rectangle(result, EMF_SIZE - 2, EMF_SIZE - 2, EMF_SIZE, EMF_SIZE);\r\n+  SelectObject(result, CreateSolidBrush(RGB(255, 0, 0)));\r\n+end;\r\n+\r\n+// the bytes of a metafile; frees it\r\n+function EmfBits(Emf: HENHMETAFILE): RawByteString;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := GetEnhMetaFileBits(Emf, 0, nil);\r\n+  SetLength(result, n);\r\n+  GetEnhMetaFileBits(Emf, n, pointer(result));\r\n+  DeleteEnhMetaFile(Emf);\r\n+end;\r\n+\r\n+// close a metafile DC of NewEmf, freeing the brush and pen it selected\r\n+function CloseEmf(DC: HDC): HENHMETAFILE;\r\n+var\r\n+  brush, pen: HGDIOBJ;\r\n+begin\r\n+  brush := SelectObject(DC, GetStockObject(WHITE_BRUSH));\r\n+  pen := SelectObject(DC, GetStockObject(NULL_PEN));\r\n+  result := CloseEnhMetaFile(DC);\r\n+  DeleteObject(brush); // a stock object is ignored\r\n+  DeleteObject(pen);\r\n+end;\r\n+\r\n+procedure ScaleEmf(DC: HDC; Factor: single);\r\n+var\r\n+  xf: TXForm;\r\n+begin\r\n+  FillCharFast(xf, SizeO\n... [truncated, 9433 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": 687,
+      "is_merge": true
+    },
+    {
+      "sha": "d41a446735bb17c318ab88dabe26e7b422ec8539",
+      "short_sha": "d41a4467",
+      "subject": "Merge pull request #672 from dkounal/batchracefix",
+      "body": "orm: fixed TRestStorageExternal regular writes from another thread during a BATCH",
+      "author": "ab",
+      "date": "2026-10-26T07:24:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d41a446735bb17c318ab88dabe26e7b422ec8539",
+      "parents": [
+        "180e390d5aeb0e1d072e1300645fd0df42ade226",
+        "a3185d538fb2baa46a9d7c7aab009202875d5f54"
+      ],
+      "stats": {
+        "additions": 130,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/orm/mormot.orm.sql.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 7,
+          "patch": "@@ -176,6 +176,11 @@   TRestStorageExternal = class(TRestStorage)\n     procedure InternalBatchStop; override;\r\n     /// called internally by EngineAdd/EngineUpdate/EngineDelete in batch mode\r\n     procedure InternalBatchAppend(const aValue: RawUtf8; aID: TID);\r\n+    /// true if the current thread is within its own InternalBatchStart/Stop\r\n+    // - a regular Engine*() call from another thread during this BATCH should\r\n+    // not see fBatchMethod, but wait for the storage lock as a regular call\r\n+    // - fBatchMethod is read only within the (reentrant) storage lock\r\n+    function InBatchOfCurrentThread: boolean;\r\n     /// TRestServer.Uri use it for Static.EngineList to by-pass virtual table\r\n     // - overridden method to handle most potential simple queries, e.g. like\r\n     // $ SELECT Field1,RowID FROM table WHERE RowID=... AND/OR/NOT Field2=\r\n@@ -1225,6 +1230,21 @@ procedure TRestStorageExternal.InternalBatchStop;\n   end;\r\n end;\r\n \r\n+function TRestStorageExternal.InBatchOfCurrentThread: boolean;\r\n+begin\r\n+  // the BATCH owner keeps the storage lock from InternalBatchStart to\r\n+  // InternalBatchStop: since the lock is reentrant, the owner thread enters\r\n+  // at once, whereas any other thread waits here for the BATCH to be sent\r\n+  // - so once we own the lock, fBatchMethod <> mNone means that the current\r\n+  // thread is the BATCH owner, with no unlocked read of a shared field\r\n+  StorageLock(false {$ifdef DEBUGSTORAGELOCK}, 'ExtInBatch' {$endif});\r\n+  try\r\n+    result := fBatchMethod <> mNone;\r\n+  finally\r\n+    StorageUnLock;\r\n+  end;\r\n+end;\r\n+\r\n procedure TRestStorageExternal.InternalBatchAppend(const aValue: RawUtf8;\r\n   aID: TID);\r\n begin\r\n@@ -1255,7 +1275,7 @@ function TRestStorageExternal.EngineAdd(TableModelIndex: integer;\n      (fModel.Tables[TableModelIndex] <> fStoredClass) then\r\n     result := 0 // avoid GPF\r\n   else\r\n-    if fBatchMethod <> mNone then\r\n+    if InBatchOfCurrentThread then\r\n       // BATCH process\r\n       if fBatchMethod <> mPOST then\r\n         result := 0\r\n@@ -1274,7 +1294,8 @@ function TRestStorageExternal.EngineAdd(TableModelIndex: integer;\n     else\r\n     begin\r\n       // regular insert with EngineLockedNextID (UpdatedID=0)\r\n-      result := ExecuteFromJson(SentData, ooInsert, 0, fBatchOptions);\r\n+      // - fBatchOptions may belong to a BATCH of another thread: ignore them\r\n+      result := ExecuteFromJson(SentData, ooInsert, 0, []);\r\n       if (result > 0) and\r\n          (Owner <> nil) then\r\n       begin\r\n@@ -1293,7 +1314,7 @@ function TRestStorageExternal.EngineUpdate(TableModelIndex: integer; ID: TID;\n      (TableModelIndex < 0) or\r\n      (Model.Tables[TableModelIndex] <> fStoredClass) then\r\n     result := false\r\n-  else if fBatchMethod <> mNone then\r\n+  else if InBatchOfCurrentThread then\r\n     // BATCH process\r\n     if fBatchMethod <> mPUT then\r\n       result := false\r\n@@ -1304,8 +1325,8 @@ function TRestStorageExternal.EngineUpdate(TableModelIndex: integer; ID: TID;\n     end\r\n   else\r\n   begin\r\n-    // regular update\r\n-    result := ExecuteFromJson(SentData, ooUpdate, ID, fBatchOptions) = ID;\r\n+    // regular update - may wait for a BATCH of another thread\r\n+    result := ExecuteFromJson(SentData, ooUpdate, ID, []) = ID;\r\n     if result and\r\n        (Owner <> nil) then\r\n     begin\r\n@@ -1323,7 +1344,7 @@ function TRestStorageExternal.EngineDelete(TableModelIndex: integer;\n      (TableModelIndex < 0) or\r\n      (Model.Tables[TableModelIndex] <> fStoredClass) then\r\n     result := false\r\n-  else if fBatchMethod <> mNone then\r\n+  else if InBatchOfCurrentThread then\r\n     // BATCH process\r\n     if fBatchMethod <> mDELETE then\r\n       result := false\r\n@@ -1359,7 +1380,7 @@ function TRestStorageExternal.EngineDeleteWhere(TableModelIndex: integer;\n      (Model.Tables[TableModelIndex] <> fStoredClass) then\r\n     exit;\r\n   n := length(IDs);\r\n-  if fBatchMethod <> mNone then\r\n+  if InBatchOfCurrentThread then\r\n     // BATCH process\r\n     if fBatchMethod <> mDELETE then\r\n       exit\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 102,
+          "deletions": 0,
+          "patch": "@@ -9,6 +9,7 @@ interface\n \r\n uses\r\n   sysutils,\r\n+  classes,\r\n   mormot.core.base,\r\n   mormot.core.os,\r\n   mormot.core.text,\r\n@@ -78,6 +79,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// regular Engine*() from another thread during a BATCH of this thread\r\n+    procedure BatchFromOtherThread;\r\n     /// SharedTransaction() when the actual Commit fails\r\n     procedure SharedTransactionCommitFailure;\r\n     /// initialize needed RESTful client (and server) instances\r\n@@ -197,6 +200,30 @@   TSqlDBSQLite3ConnectionPropertiesNoStatement = class(TSqlDBSQLite3ConnectionPr\n     function NewConnection: TSqlDBConnection; override;\r\n   end;\r\n \r\n+  // a regular EngineUpdate() run from its own thread\r\n+  TBatchOtherThreadUpdate = class(TThread)\r\n+  protected\r\n+    fExt: TRestStorageExternal;\r\n+    fNdx: PtrInt;\r\n+    procedure Execute; override;\r\n+  public\r\n+    Updated, Done: boolean;\r\n+    constructor Create(aExt: TRestStorageExternal; aNdx: PtrInt);\r\n+  end;\r\n+\r\n+constructor TBatchOtherThreadUpdate.Create(aExt: TRestStorageExternal; aNdx: PtrInt);\r\n+begin\r\n+  fExt := aExt;\r\n+  fNdx := aNdx;\r\n+  inherited Create({suspended=}false);\r\n+end;\r\n+\r\n+procedure TBatchOtherThreadUpdate.Execute;\r\n+begin\r\n+  Updated := fExt.EngineUpdate(fNdx, 10, '{\"FirstName\":\"after\"}');\r\n+  Done := true;\r\n+end;\r\n+\r\n function TSqlDBSQLite3ConnectionNoStatement.NewStatement: TSqlDBStatement;\r\n begin\r\n   raise ESynLogSilent.Create('NewStatement failed');\r\n@@ -1284,6 +1311,81 @@ procedure TTestExternalDatabase.NextIDSelectMaxFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.BatchFromOtherThread;\r\n+var\r\n+  model: TOrmModel;\r\n+  server: TRestServerFullMemory;\r\n+  props: TSqlDBConnectionProperties;\r\n+  ext: TRestStorageExternalHook;\r\n+  ndx: PtrInt;\r\n+  th: TBatchOtherThreadUpdate;\r\n+  i: integer;\r\n+begin\r\n+  // EngineAdd/Update/Delete/DeleteWhere did check fBatchMethod BEFORE the\r\n+  // storage lock: during a BATCH POST of one thread, a regular Update from\r\n+  // another thread returned false at once - with no exception nor DB error\r\n+  model := TOrmModel.Create([TOrmPeopleExt]);\r\n+  try\r\n+    server := TRestServerFullMemory.Create(model);\r\n+    try\r\n+      DeleteFile('batchthread.db3');\r\n+      props := TSqlDBSQLite3ConnectionProperties.Create(\r\n+        'batchthread.db3', '', '', '');\r\n+      try\r\n+        OrmMapExternal(model, TOrmPeopleExt, props, 'BatchThread');\r\n+        ext := TRestStorageExternalHook.Create(\r\n+          TOrmPeopleExt, server.OrmInstance as TRestOrmServer);\r\n+        try\r\n+          ndx := model.GetTableIndexExisting(TOrmPeopleExt);\r\n+          props.ExecuteNoResult(\r\n+            'insert into BatchThread (ID,FirstName) values (?,?)', [10, 'before']);\r\n+          th := nil;\r\n+          Check(ext.InternalBatchStart(encPost, []), 'batch');\r\n+          try\r\n+            // the BATCH thread itself still appends its own rows\r\n+            CheckEqual(ext.EngineAdd(ndx, '{\"ID\":20,\"FirstName\":\"batch\"}'), 20, 'add');\r\n+            th := TBatchOtherThreadUpdate.Create(ext, ndx);\r\n+            try\r\n+              for i := 1 to 20 do\r\n+                if th.Done then\r\n+                  break\r\n+                else\r\n+                  SleepHiRes(10);\r\n+              // the other thread waits for the storage lock, as a regular update\r\n+              Check(not th.Done, 'other thread waits for the batch');\r\n+            finally\r\n+              ext.InternalBatchStop;\r\n+            end;\r\n+            th.WaitFor;\r\n+            Check(th.Updated, 'update from other thread after the batch');\r\n+          finally\r\n+            th.Free;\r\n+          end;\r\n+          with props.Execute('select FirstName from BatchThread where ID=?', [10]) do\r\n+          begin\r\n+            Check(Step, 'row 10');\r\n+            CheckEqual(ColumnUtf8(0), 'after', 'updated');\r\n+          end;\r\n+          with props\n... [truncated, 525 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "ORM",
+        "Tests"
+      ],
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "pr": 672,
+      "is_merge": true
+    },
+    {
+      "sha": "3ca285f13932a8d5c81189d043228875185e386f",
+      "short_sha": "3ca285f1",
+      "subject": "gdiplus: EMR_CREATEBRUSHINDIRECT and EMR_EXTCREATEPEN read in their EMF layout (FPC 3.2.2 on Win64)",
+      "body": "The windows unit of FPC 3.2.2 declares both records with the native LOGBRUSH and EXTLOGPEN, whose ULONG_PTR hatch moves the fields on Win64: lb.lbColor is at offset 20 instead of 16, the elp fields 4 bytes off. Every brush was read black there. FPC trunk declares them with LOGBRUSH32 and EXTLOGPEN32, as Delphi does; the converter now reads them through its own TEmrCreateBrushIndirect32 and TEmrExtCreatePen32 on every compiler. Test EmfPlusRecordLayout.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T06:03:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3ca285f13932a8d5c81189d043228875185e386f",
+      "parents": [
+        "aceee0f76dfb79306dd7cc3946e5529bc62f61f7"
+      ],
+      "stats": {
+        "additions": 51,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 9,
+          "patch": "@@ -1183,6 +1183,25 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n     strikeout: boolean;\r\n   end;\r\n \r\n+  /// EMR_CREATEBRUSHINDIRECT as the EMF stores it, with a 32-bit LOGBRUSH\r\n+  // - the windows unit of FPC 3.2.2 declares lb as LOGBRUSH, whose ULONG_PTR\r\n+  // lbHatch moves the fields on Win64: every brush was read as black there\r\n+  TEmrCreateBrushIndirect32 = record\r\n+    emr: TEMR;\r\n+    ihBrush: cardinal;\r\n+    lbStyle, lbColor, lbHatch: cardinal;\r\n+  end;\r\n+  PEmrCreateBrushIndirect32 = ^TEmrCreateBrushIndirect32;\r\n+\r\n+  /// EMR_EXTCREATEPEN as the EMF stores it, with a 32-bit EXTLOGPEN\r\n+  // - the same with FPC 3.2.2 on Win64: elpHatch is a ULONG_PTR there\r\n+  TEmrExtCreatePen32 = record\r\n+    emr: TEMR;\r\n+    ihPen, offBmi, cbBmi, offBits, cbBits: cardinal;\r\n+    elpPenStyle, elpWidth, elpBrushStyle, elpColor, elpHatch: cardinal;\r\n+  end;\r\n+  PEmrExtCreatePen32 = ^TEmrExtCreatePen32;\r\n+\r\n   /// one DC state properties\r\n   TGdiplusEnumState = record\r\n     pen, brush, font, ClipRegion: THandle;\r\n@@ -1412,28 +1431,28 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n         end;\r\n       EMR_EXTCREATEPEN:\r\n         // approximated: only the color, width and dash style are handled\r\n-        with PEMRExtCreatePen(Rec)^ do\r\n+        with PEmrExtCreatePen32(Rec)^ do\r\n         begin\r\n           E.DeleteObj(ihPen - 1);\r\n-          if elp.elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n-            E.CreatePenObj(ihPen - 1, elp.elpColor, 0,\r\n-              elp.elpPenStyle and PS_STYLE_MASK)\r\n+          if elpPenStyle and PS_TYPE_MASK = PS_COSMETIC then\r\n+            E.CreatePenObj(ihPen - 1, elpColor, 0,\r\n+              elpPenStyle and PS_STYLE_MASK)\r\n           else\r\n-            E.CreatePenObj(ihPen - 1, elp.elpColor, elp.elpWidth,\r\n-              elp.elpPenStyle and PS_STYLE_MASK);\r\n+            E.CreatePenObj(ihPen - 1, elpColor, elpWidth,\r\n+              elpPenStyle and PS_STYLE_MASK);\r\n         end;\r\n       EMR_CREATEBRUSHINDIRECT:\r\n-        with PEMRCreateBrushIndirect(Rec)^ do\r\n+        with PEmrCreateBrushIndirect32(Rec)^ do\r\n         begin\r\n           E.DeleteObj(ihBrush - 1);\r\n           with E.obj[ihBrush - 1] do\r\n           begin\r\n             kind := OBJ_BRUSH;\r\n-            if lb.lbStyle = BS_NULL then\r\n+            if lbStyle = BS_NULL then\r\n               brush := 0\r\n             else\r\n             begin\r\n-              handle := E.GetCachedSolidBrush(lb.lbColor);\r\n+              handle := E.GetCachedSolidBrush(lbColor);\r\n               brush := handle;\r\n             end;\r\n           end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 23,
+          "deletions": 0,
+          "patch": "@@ -52,6 +52,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusViewportOrigin;\r\n     procedure EmfPlusPlaybackOrder;\r\n     procedure EmfPlusWindowOrigin;\r\n+    procedure EmfPlusRecordLayout;\r\n   end;\r\n \r\n implementation\r\n@@ -1503,6 +1504,28 @@ procedure TTestUiPdf.EmfPlusWindowOrigin;\n   Check(SameRedBounds(CloseEmf(dc), CloseEmf(expected)), 'not rounded');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfPlusRecordLayout;\r\n+var\r\n+  dc: HDC;\r\n+  lb: TLogBrush;\r\n+begin\r\n+  // FPC 3.2.2 declares EMR_CREATEBRUSHINDIRECT and EMR_EXTCREATEPEN with the\r\n+  // native LOGBRUSH and EXTLOGPEN, whose ULONG_PTR hatch moves the fields on\r\n+  // Win64: every brush and extended pen was read black\r\n+  if not Check(Gdip.Exists, 'GDI+') then\r\n+    exit;\r\n+  Check(RedPixels(RectangleEmf(10, 10, 50, 50)) > 0, 'the brush colour');\r\n+  dc := NewEmf;\r\n+  lb.lbStyle := BS_SOLID;\r\n+  lb.lbColor := RGB(255, 0, 0);\r\n+  lb.lbHatch := 0;\r\n+  DeleteObject(SelectObject(dc, // the null pen of NewEmf is a stock object\r\n+    ExtCreatePen(PS_GEOMETRIC or PS_SOLID, 10, lb, 0, nil)));\r\n+  MoveToEx(dc, 10, 50, nil);\r\n+  LineTo(dc, 90, 50);\r\n+  Check(RedPixels(CloseEmf(dc)) > 0, 'the extended pen colour');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aceee0f76dfb79306dd7cc3946e5529bc62f61f7",
+      "short_sha": "aceee0f7",
+      "subject": "gdiplus: the window/viewport mapping, then the playback transform, without rounding",
+      "body": "Follow-up to #679. ScaleMatrix translated by ViewOrg * Win / View - WinOrg, rounded by MulDiv; a page point is at (p - WinOrg) * View / Win + ViewOrg, now in floating point, since the playback transform may scale it a lot. It also applied that playback transform - the one EnumEnhMetaFile sets on the target DC, mapping the metafile frame to the picture - before the mapping: GDI+ multiplies row vectors, so the order is now World x Map x Dest. Tests EmfPlusViewportOrigin, EmfPlusPlaybackOrder and EmfPlusWindowOrigin.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T06:03:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aceee0f76dfb79306dd7cc3946e5529bc62f61f7",
+      "parents": [
+        "169490f1edfb1329554eddf9742bc5a8602d23d4"
+      ],
+      "stats": {
+        "additions": 90,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 6,
+          "patch": "@@ -1111,6 +1111,11 @@ procedure EnsureGdipExistsAndLock(const caller: ShortString);\n \r\n { *************** AntiAliased Rendering of GDI MetaFile }\r\n \r\n+const\r\n+  // the order of GdipMultiplyMatrix: the second matrix on the left or right\r\n+  MATRIX_ORDER_PREPEND = 0;\r\n+  MATRIX_ORDER_APPEND = 1;\r\n+\r\n {$ifdef FPC}\r\n \r\n const\r\n@@ -2016,19 +2021,24 @@ procedure TGdiplusEnum.SaveDC;\n \r\n procedure TGdiplusEnum.ScaleMatrix;\r\n var\r\n-  P: TPoint;\r\n+  sx, sy: single;\r\n   mtx, world: THandle;\r\n begin\r\n   with DC[nDC] do\r\n   begin\r\n-    P.X := MulDiv(ViewOrg.x, WinSize.cx, ViewSize.cx) - WinOrg.x;\r\n-    P.Y := MulDiv(ViewOrg.y, WinSize.cy, ViewSize.cy) - WinOrg.y;\r\n+    // a page point p is at (p - WinOrg) * View / Win + ViewOrg on the device,\r\n+    // not rounded: the playback transform may scale it a lot\r\n+    sx := ViewSize.cx / WinSize.cx;\r\n+    sy := ViewSize.cy / WinSize.cy;\r\n     gdip.CreateMatrix2(\r\n-      ViewSize.cx / WinSize.cx, 0, 0, ViewSize.cy / WinSize.cy, P.X, P.Y, mtx);\r\n-    gdip.MultiplyMatrix(mtx, destMatrix);\r\n+      sx, 0, 0, sy, ViewOrg.x - WinOrg.x * sx, ViewOrg.y - WinOrg.y * sy, mtx);\r\n+    // GDI+ multiplies row vectors: World x Map x Dest applies the world\r\n+    // transform, then the mapping, then the playback transform of the target\r\n+    // (EnumEnhMetaFile maps the frame of the metafile to its rectangle)\r\n+    gdip.MultiplyMatrix(mtx, destMatrix, MATRIX_ORDER_APPEND);\r\n     with WorldTransform do\r\n       gdip.CreateMatrix2(eM11, eM12, eM21, eM22, eDx, eDy, world);\r\n-    gdip.MultiplyMatrix(mtx, world);\r\n+    gdip.MultiplyMatrix(mtx, world, MATRIX_ORDER_PREPEND);\r\n     gdip.DeleteMatrix(world);\r\n     gdip.SetWorldTransform(gr, mtx);\r\n     gdip.DeleteMatrix(mtx);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 74,
+          "deletions": 0,
+          "patch": "@@ -49,6 +49,9 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusClipRestored;\r\n     procedure EmfPlusRestoreDepth;\r\n     procedure EmfPlusNullPen;\r\n+    procedure EmfPlusViewportOrigin;\r\n+    procedure EmfPlusPlaybackOrder;\r\n+    procedure EmfPlusWindowOrigin;\r\n   end;\r\n \r\n implementation\r\n@@ -1429,6 +1432,77 @@ function DoubledEmf: HDC;\n   SetViewportExtEx(result, 100, 100, nil);\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfPlusViewportOrigin;\r\n+var\r\n+  dc, expected: HDC;\r\n+begin\r\n+  // the viewport origin was taken in logical units: ViewOrg * Win / View\r\n+  // instead of ViewOrg - WinOrg * View / Win; compared with the same\r\n+  // rectangle moved by the logical units of the origin, rounded alike\r\n+  if not Check(Gdip.Exists, 'GDI+') then\r\n+    exit;\r\n+  dc := DoubledEmf;\r\n+  SetViewportOrgEx(dc, 30, 30, nil);\r\n+  Rectangle(dc, 0, 0, 20, 20); // the device pixels 30..70\r\n+  expected := DoubledEmf;\r\n+  Rectangle(expected, 15, 15, 35, 35);\r\n+  // GDI rounds the recorded right and bottom edges in logical units, so\r\n+  // the two may differ by one device pixel there: without the fix they are\r\n+  // 15 apart\r\n+  Check(SameRedBounds(CloseEmf(dc), CloseEmf(expected)),\r\n+    'at the viewport origin');\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfPlusPlaybackOrder;\r\n+var\r\n+  dc, expected: HDC;\r\n+begin\r\n+  // the transform EnumEnhMetaFile sets on the target - the bounds of the\r\n+  // drawing mapped to the picture - was applied before the window/viewport\r\n+  // mapping, not after it; without corners, the bounds are those of the\r\n+  // rectangle, and the same rectangle drawn in device units must match\r\n+  if not Check(Gdip.Exists, 'GDI+') then\r\n+    exit;\r\n+  dc := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SelectObject(dc, GetStockObject(NULL_PEN));\r\n+  SelectObject(dc, CreateSolidBrush(RGB(255, 0, 0)));\r\n+  SetMapMode(dc, MM_ANISOTROPIC);\r\n+  SetWindowExtEx(dc, 50, 50, nil);\r\n+  SetViewportExtEx(dc, 100, 100, nil);\r\n+  SetViewportOrgEx(dc, 30, 30, nil);\r\n+  Rectangle(dc, 0, 0, 20, 20); // the device pixels 30..70\r\n+  expected := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SelectObject(expected, GetStockObject(NULL_PEN));\r\n+  SelectObject(expected, CreateSolidBrush(RGB(255, 0, 0)));\r\n+  Rectangle(expected, 30, 30, 70, 70);\r\n+  Check(SameRedBounds(CloseEmf(dc), CloseEmf(expected)), 'mapped, then played');\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfPlusWindowOrigin;\r\n+var\r\n+  dc, expected: HDC;\r\n+begin\r\n+  // the window origin was rounded to device units before the playback\r\n+  // transform scaled it: with a third of the size and no corners, the\r\n+  // drawing is scaled 10 times to the picture, 2 / 3 rounded to 1 is 3 pixels\r\n+  // off\r\n+  if not Check(Gdip.Exists, 'GDI+') then\r\n+    exit;\r\n+  dc := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SelectObject(dc, GetStockObject(NULL_PEN));\r\n+  SelectObject(dc, CreateSolidBrush(RGB(255, 0, 0)));\r\n+  SetMapMode(dc, MM_ANISOTROPIC);\r\n+  SetWindowExtEx(dc, 300, 300, nil);\r\n+  SetViewportExtEx(dc, 100, 100, nil);\r\n+  SetWindowOrgEx(dc, 2, 2, nil);\r\n+  Rectangle(dc, 2, 2, 32, 32); // the device pixels 0..10\r\n+  expected := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SelectObject(expected, GetStockObject(NULL_PEN));\r\n+  SelectObject(expected, CreateSolidBrush(RGB(255, 0, 0)));\r\n+  Rectangle(expected, 0, 0, 10, 10);\r\n+  Check(SameRedBounds(CloseEmf(dc), CloseEmf(expected)), 'not rounded');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "169490f1edfb1329554eddf9742bc5a8602d23d4",
+      "short_sha": "169490f1",
+      "subject": "gdiplus: a PS_NULL pen draws nothing",
+      "body": "Follow-up to #679: CreatePenObj made a solid GDI+ pen of the colour and width given for EMR_CREATEPEN and EMR_EXTCREATEPEN with PS_NULL; it now gets handle 0, as the stock NULL_PEN. Windows records CreatePen(PS_NULL) as the stock pen, so the test EmfPlusNullPen patches PS_NULL into the records of two solid pens.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T06:03:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/169490f1edfb1329554eddf9742bc5a8602d23d4",
+      "parents": [
+        "d80a4a6b9c123431a7708ed970230958877d2e81"
+      ],
+      "stats": {
+        "additions": 73,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 3,
+          "patch": "@@ -1656,9 +1656,14 @@ procedure TGdiplusEnum.CreatePenObj(index: integer; Color, Width, Style: cardina\n     with Obj[index] do\r\n     begin\r\n       kind := OBJ_PEN;\r\n-      gdip.CreatePen(ColorRefToARGB(Color), Width, uWorld, handle);\r\n-      if Style in [PS_DASH..PS_DASHDOTDOT] then\r\n-        gdip.SetPenDashStyle(handle, PS_DASH); // force PS_DASH on GDI+\r\n+      if Style = PS_NULL then\r\n+        handle := 0 // draws nothing, as the stock NULL_PEN\r\n+      else\r\n+      begin\r\n+        gdip.CreatePen(ColorRefToARGB(Color), Width, uWorld, handle);\r\n+        if Style in [PS_DASH..PS_DASHDOTDOT] then\r\n+          gdip.SetPenDashStyle(handle, PS_DASH); // force PS_DASH on GDI+\r\n+      end;\r\n       DC[nDC].pen := handle;\r\n     end;\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 65,
+          "deletions": 0,
+          "patch": "@@ -48,6 +48,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure BidiEmbeddingOrder;\r\n     procedure EmfPlusClipRestored;\r\n     procedure EmfPlusRestoreDepth;\r\n+    procedure EmfPlusNullPen;\r\n   end;\r\n \r\n implementation\r\n@@ -1364,6 +1365,70 @@ procedure TTestUiPdf.EmfPlusRestoreDepth;\n     'not scaled');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfPlusNullPen;\r\n+const\r\n+  EMR_CREATEPEN_ = 38; // the record types, by number\r\n+  EMR_EXTCREATEPEN_ = 95;\r\n+var\r\n+  dc: HDC;\r\n+  lb: TLogBrush;\r\n+  bits: RawByteString;\r\n+  emf: HENHMETAFILE;\r\n+  o, n, patched: PtrInt;\r\n+begin\r\n+  // a PS_NULL pen was created as a solid one, of the colour and width given;\r\n+  // Windows records CreatePen(PS_NULL) as the stock NULL_PEN, so the style of\r\n+  // two solid pens is set to PS_NULL in the records\r\n+  if not Check(Gdip.Exists, 'GDI+') then\r\n+    exit;\r\n+  dc := NewEmf;\r\n+  SelectObject(dc, CreatePen(PS_SOLID, 10, RGB(255, 0, 0)));\r\n+  MoveToEx(dc, 0, 30, nil);\r\n+  LineTo(dc, EMF_SIZE, 30);\r\n+  lb.lbStyle := BS_SOLID;\r\n+  lb.lbColor := RGB(255, 0, 0);\r\n+  lb.lbHatch := 0;\r\n+  DeleteObject(SelectObject(dc, // the first pen\r\n+    ExtCreatePen(PS_GEOMETRIC or PS_SOLID, 10, lb, 0, nil)));\r\n+  MoveToEx(dc, 0, 70, nil);\r\n+  LineTo(dc, EMF_SIZE, 70);\r\n+  bits := EmfBits(CloseEmf(dc));\r\n+  o := 0;\r\n+  patched := 0;\r\n+  while o + 8 <= length(bits) do\r\n+  begin\r\n+    case PCardinal(@PByteArray(bits)[o])^ of\r\n+      EMR_CREATEPEN_: // lopn.lopnStyle at 12\r\n+        begin\r\n+          PCardinal(@PByteArray(bits)[o + 12])^ := PS_NULL;\r\n+          inc(patched);\r\n+        end;\r\n+      EMR_EXTCREATEPEN_: // elp.elpPenStyle at 28\r\n+        begin\r\n+          PCardinal(@PByteArray(bits)[o + 28])^ := PS_GEOMETRIC or PS_NULL;\r\n+          inc(patched);\r\n+        end;\r\n+    end;\r\n+    n := PCardinal(@PByteArray(bits)[o + 4])^;\r\n+    if n < 8 then\r\n+      break;\r\n+    inc(o, n);\r\n+  end;\r\n+  CheckEqual(patched, 2, 'both pens recorded');\r\n+  emf := SetEnhMetaFileBits(length(bits), pointer(bits));\r\n+  if Check(emf <> 0, 'the patched metafile') then\r\n+    CheckEqual(RedPixels(emf), 0, 'nothing drawn');\r\n+end;\r\n+\r\n+// a metafile DC drawing twice the size of its logical units\r\n+function DoubledEmf: HDC;\r\n+begin\r\n+  result := NewEmf;\r\n+  SetMapMode(result, MM_ANISOTROPIC);\r\n+  SetWindowExtEx(result, 50, 50, nil);\r\n+  SetViewportExtEx(result, 100, 100, nil);\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d80a4a6b9c123431a7708ed970230958877d2e81",
+      "short_sha": "d80a4a6b",
+      "subject": "gdiplus: EMR_RESTOREDC restores the depth it names, and the saved clip under its own transform",
+      "body": "Follow-up to #679. TGdiplusEnum.RestoreDC popped one state whatever the record's iRelative, and set the saved clip region before restoring the transform: GdipGetClip gave that region under the transform of the saved state, so SAVEDC; MODIFYWORLDTRANSFORM scale 1/16; RESTOREDC left the clip at 1/16 of its size. It now drops -iRelative states (ignoring a state that was not saved, as GDI fails it), frees their regions, restores the transform, then the clip. The states are a dynamic array, grown by SaveDC, instead of 11 guarded by Assert. EnumerateEnd freed DC[nDC].ClipRegion nDC times instead of DC[i]. Tests EmfPlusClipRestored and EmfPlusRestoreDepth.",
+      "author": "Sven Harazim",
+      "date": "2026-10-26T06:03:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d80a4a6b9c123431a7708ed970230958877d2e81",
+      "parents": [
+        "180e390d5aeb0e1d072e1300645fd0df42ade226"
+      ],
+      "stats": {
+        "additions": 249,
+        "deletions": 20,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gdiplus.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 17,
+          "patch": "@@ -1225,15 +1225,16 @@   TGdiplusEnum = record\n       objfont: TFontSpec;\r\n       logfont: TLogFontW;\r\n     end;\r\n-    // the DC states, as stored by SaveDC / RestoreDC methods\r\n+    // the DC states, as stored by SaveDC / RestoreDC methods: as deep as the\r\n+    // metafile saves them, grown by SaveDC only\r\n     nDC: integer;\r\n-    DC: array[0..10] of TGdiplusEnumState;\r\n+    DC: array of TGdiplusEnumState;\r\n     // if true, DrawText() will use DrawString and not DrawDriverString\r\n     UseDrawString: boolean;\r\n     // owned buffer to reduce memory allocations e.g. for Points16To32()\r\n     Temp: TSynTempBuffer;\r\n     procedure SaveDC;\r\n-    procedure RestoreDC;\r\n+    procedure RestoreDC(Relative: integer);\r\n     procedure ScaleMatrix;\r\n     procedure CreatePenObj(index: integer; Color, Width, Style: cardinal);\r\n     procedure DeleteObj(index: integer);\r\n@@ -1343,9 +1344,9 @@ function EnumEmfCallback(DC: HDC; var Table: THandleTable; Rec: PEnhMetaRecord;\n             x.eM11, x.eM12, x.eM21, x.eM22, x.eDx, x.eDy, E.destMatrix);\r\n         end;\r\n       EMR_SAVEDC:\r\n-        E.SaveDC;\r\n+        E.SaveDC; // may grow DC: no field of the with can be used after it\r\n       EMR_RESTOREDC:\r\n-        E.RestoreDC;\r\n+        E.RestoreDC(PEMRRestoreDC(Rec)^.iRelative);\r\n       EMR_SETWINDOWEXTEX:\r\n         WinSize := PEMRSetWindowExtEx(Rec)^.szlExtent;\r\n       EMR_SETWINDOWORGEX:\r\n@@ -1853,7 +1854,7 @@ procedure TGdiplusEnum.EnumerateEnd;\n   i: PtrInt;\r\n begin\r\n   for i := 1 to nDC do\r\n-    gdip.DeleteRegion(DC[nDC].ClipRegion);\r\n+    gdip.DeleteRegion(DC[i].ClipRegion);\r\n   for i := 0 to high(obj) do\r\n     DeleteObj(i);\r\n   for i := 0 to high(CachedPen) do\r\n@@ -1974,23 +1975,31 @@ function TGdiplusEnum.GetCachedSolidBrush(color: cardinal): THandle;\n   CachedBrush[n].handle := result;\r\n end;\r\n \r\n-procedure TGdiplusEnum.RestoreDC;\r\n+procedure TGdiplusEnum.RestoreDC(Relative: integer);\r\n+var\r\n+  saved: THandle;\r\n+  i: PtrInt;\r\n begin\r\n-  assert(nDC > 0);\r\n-  with DC[nDC] do\r\n-  begin\r\n-    gdip.SetClipRegion(gr, ClipRegion, cmReplace);\r\n-    gdip.DeleteRegion(ClipRegion);\r\n-  end;\r\n-  dec(nDC);\r\n+  // an EMF record restores relatively (-1 = the last saved): a state which\r\n+  // was not saved is ignored, as GDI fails it\r\n+  if (Relative >= 0) or\r\n+     (Relative < -nDC) then\r\n+    exit;\r\n+  saved := DC[nDC + Relative + 1].ClipRegion; // the clip when it was saved\r\n+  for i := nDC + Relative + 2 to nDC do\r\n+    gdip.DeleteRegion(DC[i].ClipRegion);\r\n+  inc(nDC, Relative);\r\n+  // GetClip gave the region under the transform of the saved state: set it\r\n+  // again once that transform is back\r\n   ScaleMatrix;\r\n-//  with DC[nDC] do\r\n-//    Gdip.SetWorldTransform(Graphics,destMatrix);\r\n+  gdip.SetClipRegion(gr, saved, cmReplace);\r\n+  gdip.DeleteRegion(saved);\r\n end;\r\n \r\n procedure TGdiplusEnum.SaveDC;\r\n begin\r\n-  Assert(nDC < high(DC));\r\n+  if nDC >= high(DC) then\r\n+    SetLength(DC, length(DC) * 2 + 16);\r\n   DC[nDC + 1] := DC[nDC];\r\n   inc(nDC);\r\n   with DC[nDC] do\r\n@@ -2108,6 +2117,7 @@ function ConvertToEmfPlus(Source: HENHMETAFILE; Width, Height: integer;\n   begin\r\n     // our manual (and not 100% complete yet) conversion\r\n     E.UseDrawString := ecoDrawString in ConvertOptions;\r\n+    SetLength(E.DC, 16);\r\n     with E.DC[0] do\r\n     begin\r\n       PInt64(@WinSize)^ := PInt64(@R.Width)^;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 222,
+          "deletions": 3,
+          "patch": "@@ -46,6 +46,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure ZeroAdvanceMeasured;\r\n     procedure ReducedFontChecksum;\r\n     procedure BidiEmbeddingOrder;\r\n+    procedure EmfPlusClipRestored;\r\n+    procedure EmfPlusRestoreDepth;\r\n   end;\r\n \r\n implementation\r\n@@ -55,16 +57,19 @@ implementation\n   Windows,\r\n   Graphics,\r\n   mormot.ui.core,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n {$else}\r\n   {$ifdef NEEDVCLPREFIX}\r\n   WinApi.Windows,\r\n   VCL.Graphics,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n   {$else}\r\n   Windows,\r\n   Graphics,\r\n-  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif}\r\n+  {$ifdef NO_USE_SYNGDIPLUS} jpeg {$else} mormot.ui.gdiplus {$endif},\r\n+  mormot.lib.gdiplus\r\n   {$endif NEEDVCLPREFIX}\r\n {$endif FPC}\r\n   ;\r\n@@ -1145,6 +1150,220 @@ procedure TTestUiPdf.BidiEmbeddingOrder;\n end;\r\n {$endif NO_USE_UNISCRIBE}\r\n \r\n+const\r\n+  EMF_SIZE = 100;\r\n+  EMF_WHITE = $ffffff;\r\n+  EMF_RED = $ff0000; // in a 32-bit DIB: BGRX\r\n+\r\n+// the pixels of Emf converted by our own EMF+ conversion, on white\r\n+function EmfPlusPixels(Emf: HENHMETAFILE): TCardinalDynArray;\r\n+var\r\n+  dc: HDC;\r\n+  bmp, old: HBITMAP;\r\n+  bi: TBitmapInfo;\r\n+  bits: PCardinalArray;\r\n+  r: TRect;\r\n+  i: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  FillCharFast(bi, SizeOf(bi), 0);\r\n+  bi.bmiHeader.biSize := SizeOf(bi.bmiHeader);\r\n+  bi.bmiHeader.biWidth := EMF_SIZE;\r\n+  bi.bmiHeader.biHeight := -EMF_SIZE; // top-down\r\n+  bi.bmiHeader.biPlanes := 1;\r\n+  bi.bmiHeader.biBitCount := 32;\r\n+  dc := CreateCompatibleDC(0);\r\n+  bmp := CreateDIBSection(dc, bi, DIB_RGB_COLORS, pointer(bits), 0, 0);\r\n+  old := SelectObject(dc, bmp);\r\n+  try\r\n+    FillCharFast(bits^, EMF_SIZE * EMF_SIZE * 4, $ff);\r\n+    r.Left := 0; // not Rect(): a type of the windows unit on FPC\r\n+    r.Top := 0;\r\n+    r.Right := EMF_SIZE;\r\n+    r.Bottom := EMF_SIZE;\r\n+    DrawAntiAliased(Emf, EMF_SIZE, EMF_SIZE, dc, r, [ecoInternalConvert], smNone);\r\n+    GdiFlush;\r\n+    SetLength(result, EMF_SIZE * EMF_SIZE);\r\n+    for i := 0 to high(result) do\r\n+      result[i] := bits[i] and $ffffff;\r\n+  finally\r\n+    SelectObject(dc, old);\r\n+    DeleteObject(bmp);\r\n+    DeleteDC(dc);\r\n+    DeleteEnhMetaFile(Emf);\r\n+  end;\r\n+end;\r\n+\r\n+// a metafile DC in advanced graphics mode, its brush red and its pen null\r\n+// - two black corners fix the bounds of the picture: the conversion draws\r\n+// the metafile scaled to them\r\n+function NewEmf: HDC;\r\n+begin\r\n+  result := CreateEnhMetaFileW(0, nil, nil, nil);\r\n+  SetGraphicsMode(result, GM_ADVANCED);\r\n+  SelectObject(result, GetStockObject(NULL_PEN));\r\n+  SelectObject(result, GetStockObject(BLACK_BRUSH));\r\n+  Rectangle(result, 0, 0, 2, 2);\r\n+  Rectangle(result, EMF_SIZE - 2, EMF_SIZE - 2, EMF_SIZE, EMF_SIZE);\r\n+  SelectObject(result, CreateSolidBrush(RGB(255, 0, 0)));\r\n+end;\r\n+\r\n+// the bytes of a metafile; frees it\r\n+function EmfBits(Emf: HENHMETAFILE): RawByteString;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := GetEnhMetaFileBits(Emf, 0, nil);\r\n+  SetLength(result, n);\r\n+  GetEnhMetaFileBits(Emf, n, pointer(result));\r\n+  DeleteEnhMetaFile(Emf);\r\n+end;\r\n+\r\n+// close a metafile DC of NewEmf, freeing the brush and pen it selected\r\n+function CloseEmf(DC: HDC): HENHMETAFILE;\r\n+var\r\n+  brush, pen: HGDIOBJ;\r\n+begin\r\n+  brush := SelectObject(DC, GetStockObject(WHITE_BRUSH));\r\n+  pen := SelectObject(DC, GetStockObject(NULL_PEN));\r\n+  result := CloseEnhMetaFile(DC);\r\n+  DeleteObject(brush); // a stock object is ignored\r\n+  DeleteObject(pen);\r\n+end;\r\n+\r\n+procedure ScaleEmf(DC: HDC; Factor: single);\r\n+var\r\n+  xf: TXForm;\r\n+begin\r\n+  FillCharFast(xf, SizeOf(xf), 0);\r\n+  xf.eM11 := Factor;\r\n+  xf.eM22 := Factor;\r\n+  ModifyWorldTransform(DC, xf, MWT_LEFTMULTIPLY);\r\n+end;\r\n+\r\n+function HasRed(const Pixels: TCardinalDynArray): boolean;\r\n+va\n... [truncated, 3436 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "External libs",
+        "Tests"
+      ],
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a3185d538fb2baa46a9d7c7aab009202875d5f54",
+      "short_sha": "a3185d53",
+      "subject": "Merge upstream/master into batchracefix",
+      "body": "- test/test.orm.extdb.pas: kept both BatchFromOtherThread and\n  SharedTransactionCommitFailure",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-25T18:07:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a3185d538fb2baa46a9d7c7aab009202875d5f54",
+      "parents": [
+        "c6048bcd16103c918598527f8892265b53d8e46e",
+        "7b9353c34f095d6f7ae7441fa6b6bdaa237a89e0"
+      ],
+      "stats": {
+        "additions": 1982,
+        "deletions": 478,
+        "files": 28
+      },
+      "files": [
+        {
+          "path": "docs/mORMot2-SAD-Recommended-Patterns.md",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -556,7 +556,7 @@ tests/\n \n **The `TOrm` lives in `dom/`, on purpose.** Because the `TOrm` doubles as the domain object ([B.3](#b3-two-types-per-entity-not-three)), it belongs with the domain, not with the persistence machinery. The cost is precise and acceptable: `dom/` depends on the ORM **base type** (`mormot.orm.core`) but never on the ORM **runtime** — no `IRestOrm`, no REST server, no SQL. Those stay in `infra/`. This keeps the dependency direction clean: the port interface in `dom/` can name the entity it returns without reaching into `infra/`, and `infra/` depends on `dom/`, never the reverse. (Some older code merges the two into a single `kdom/`-style folder — that is the case this split is meant to avoid.)\n \n-**The CQRS interfaces live in `app/<entity>/interface/`, not in `dom/`.** `I<Entity>Query` / `I<Entity>Command` take and return the DTOs, so declaring them in `dom/` would make the domain depend on the application layer — the inverted direction this layout exists to prevent. They are the application layer's public contract, the use-case boundary clients call (a *driving* port), whereas `I<Entity>Repository` is a port the domain needs (a *driven* port) and stays in `dom/`. Consumer code compiles against `interface/` (plus the `dom/` types the DTOs embed), never against `implementation/`, which is linked only by the server and the [A.6.1](#a61-trusted--local-deployment) in-process stack.\n+**The CQRS interfaces live in `app/<entity>/interface/`, not in `dom/`.** `I<Entity>Query` / `I<Entity>Command` take and return the DTOs, so declaring them in `dom/` would make the domain depend on the application layer — the inverted direction this layout exists to prevent. They are the application layer's public contract, the use-case boundary clients call (a *driving* port), whereas `I<Entity>Repository` is a port the domain needs (a *driven* port) and stays in `dom/`. Consumer code compiles against `interface/`, never against `dom/` or `implementation/`, which are linked only by the server and the [A.6.1](#a61-trusted--local-deployment) in-process stack.\n \n | Pattern | Layer | Role |\n |---|---|---|\n@@ -574,7 +574,9 @@ tests/\n | `App<Name>ClientLocal.pas` / `…Remote.pas` | (root) | topology selection ([A.6](#a6-minimum-recommended-server-configuration)) |\n | `<entity>_tests.pas` | tests | one `TSynTestCase` per entity |\n \n-**The one rule the layout exists to enforce:** `app/<entity>/implementation/*_impl.pas` depends on the `dom/` repository ports and its own `interface/` contract, **never** on `infra/*_repository_orm.pas`. `serv/` is the only place that names the concrete `T<Entity>RepositoryOrm` class — it constructs each repository, registers it for injection, and hands the resolver to the services ([B.5](#b5-soa-composition-root-and-dependency-injection), [B.9](#b9-the-two-server-approach-and-its-ambiguous-orm)). Swapping SQLite for another backend, or a stub for tests, is an `infra/` change that nothing in `app/` or `dom/` sees.\n+**The first rule the layout exists to enforce:** `app/<entity>/implementation/*_impl.pas` depends on the `dom/` repository ports and its own `interface/` contract, **never** on `infra/*_repository_orm.pas`. `serv/` is the only place that names the concrete `T<Entity>RepositoryOrm` class — it constructs each repository, registers it for injection, and hands the resolver to the services ([B.5](#b5-soa-composition-root-and-dependency-injection), [B.9](#b9-the-two-server-approach-and-its-ambiguous-orm)). Swapping SQLite for another backend, or a stub for tests, is an `infra/` change that nothing in `app/` or `dom/` sees.\n+\n+**The second rule:** `app/<entity>/interface/` uses no `dom/` unit. When a DTO needs a type the aggregate also has — a record embedded in the `TOrm`, for instance — the DTO unit declares its own record with the same fields, and `<entity>_mappers.pas` copies between the two with `TRttiMap` ([A.7](#a7-copying-between-objects-records-and-dtos)). The wire contract then does not chan\n... [truncated, 227 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/docs/API.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -393,7 +393,7 @@ Pascal record member is the same name in `PascalCase`.\n | updatedAt | TDateTime | Last update timestamp |\n | commentCount | integer | Number of comments |\n | tagIDs | TIDDynArray | Associated tag IDs |\n-| comments | TTaskCommentDynArray | Embedded comments |\n+| comments | TTaskCommentDTODynArray | Embedded comments |\n \n ### TTaskListItemDTO\n | Field | Type | Description |",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/ARCHITECTURE.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -151,7 +151,7 @@ A **family** of operation-specific `packed record` DTOs per entity — no single\n \n All registered via `Rtti.RegisterFromText(TypeInfo(T), 'field definitions')` in the unit's `initialization` section for JSON serialization on FPC 3.2.2.\n \n-**JSON casing** — each DTO unit normalizes its wire contract to camelCase right after the `RegisterFromText` calls (the FPC ordering required by *Recommended Patterns* [A.7](https://github.com/synopse/mORMot2/blob/master/docs/mORMot2-SAD-Recommended-Patterns.md#a7-copying-between-objects-records-and-dtos), Gotcha 3) with `Rtti[TypeInfo(T)].Props.NameChangeCase(DtoJsonCase)`, where `DtoJsonCase = scLowerCaseFirst` is the single switch in `shared_types.pas`. This is applied to the DTO record types **only — never the `TOrm`** (`NameChangeCase` is a no-op on ORM JSON anyway, since the ORM serializes via its own `TOrmProperties`). `scLowerCaseFirst` lowercases the first character only, so a bare `ID` field goes out as `iD`; see [API.md](API.md) for the exact wire names. The embedded `TTaskComment` record follows the same convention (its call lives in `dom/tasks/task.pas`, alongside its own `RegisterFromText`).\n+**JSON casing** — each DTO unit normalizes its wire contract to camelCase right after the `RegisterFromText` calls (the FPC ordering required by *Recommended Patterns* [A.7](https://github.com/synopse/mORMot2/blob/master/docs/mORMot2-SAD-Recommended-Patterns.md#a7-copying-between-objects-records-and-dtos), Gotcha 3) with `Rtti[TypeInfo(T)].Props.NameChangeCase(DtoJsonCase)`, where `DtoJsonCase = scLowerCaseFirst` is the single switch in `shared_types.pas`. This is applied to the DTO record types **only — never the `TOrm`** (`NameChangeCase` is a no-op on ORM JSON anyway, since the ORM serializes via its own `TOrmProperties`). `scLowerCaseFirst` lowercases the first character only, so a bare `ID` field goes out as `iD`; see [API.md](API.md) for the exact wire names. Comments go out as `TTaskCommentDTO`, declared and normalized in `task_dtos.pas` like the other DTOs, so the wire contract does not depend on the domain unit; `task_mappers` copies them from the aggregate's embedded `TTaskComment`, which keeps its own camelCase registration in `dom/tasks/task.pas` for the JSON column.\n \n `string` is **forbidden** on the wire — `RawUtf8` for text (zero-copy at the HTTP boundary), `RawByteString` / `TSQLRawBlob` for binary.\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/COMMENTS_FEATURE.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -102,7 +102,7 @@ Contains embedded comments:\n TTaskViewDTO = packed record\n   // ... task fields\n   CommentCount: integer;\n-  Comments: TTaskCommentDynArray;  // Full comment data\n+  Comments: TTaskCommentDTODynArray;  // Full comment data, copied from TTaskComment by task_mappers\n end;\n ```\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/recommended-patterns/docs/DEVELOPMENT.md",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 4,
+          "patch": "@@ -58,7 +58,9 @@ The hard rule: `app/*/implementation/*_impl.pas` depends on `dom/*_repository.pa\n - **Lazarus**: open `prj/lazarus/task_manager.lpi` or `prj/lazarus/cli_client.lpi`.\n   Both require the `mormot2` package (`packages/lazarus/mormot2.lpk` in the\n   enclosing repository). The `cli_client.lpi` \"local\" build mode adds\n-  `-dLOCAL_MODE`. Headless builds work too:\n+  `-dLOCAL_MODE` and the `dom`, `infra` and `app/*/implementation` folders to\n+  the unit search path; the other modes build the remote client from the\n+  `app/*/interface` folders alone. Headless builds work too:\n \n   ```bash\n   lazbuild --add-package-link ../../packages/lazarus/mormot2.lpk   # once\n@@ -363,7 +365,7 @@ No manual cleanup needed: `InjectInstance` ref-counts the repos, and `Dispatcher\n \n ### 11. Update the build files\n \n-**FPC**: add the new folders to `prj/fpc/compile.sh` and `prj/fpc/compile_cli.sh`, and the same paths to their Windows twins `compile.bat` / `compile_cli.bat` (`^` line continuations). `-Futests/myfeature` goes in `compile.*` only — the CLI does not link the tests:\n+**FPC**: add the new folders to `prj/fpc/compile.sh` and `prj/fpc/compile_cli.sh`, and the same paths to their Windows twins `compile.bat` / `compile_cli.bat` (`^` line continuations). `-Futests/myfeature` goes in `compile.*` only — the CLI does not link the tests. In `compile_cli.*` only the `interface` folder is listed unconditionally; the `dom`, `infra` and `implementation` folders go in the `SERVER_PATHS` variable, which is set in local mode only, so the remote client cannot reach into the domain:\n \n ```\n -Fusrc/dom/myfeature \\\n@@ -373,7 +375,7 @@ No manual cleanup needed: `InjectInstance` ref-counts the repos, and `Dispatcher\n -Futests/myfeature \\\n ```\n \n-**Delphi / Lazarus**: the `.lpi` projects use `prj/delphi/*.dpr` as their main source, so both toolchains resolve project units through the `.dpr` `in` clauses — the `.lpi` files need no change. Add each new unit to `prj/delphi/task_manager.dpr`:\n+**Delphi / Lazarus**: the `.lpi` projects use `prj/delphi/*.dpr` as their main source, so both toolchains resolve project units through the `.dpr` `in` clauses. The `.lpi` files additionally list every unit (for the Project Inspector) and the source folders as unit search paths (for code navigation in the editor), so new units and folders go there too. Add each new unit to `prj/delphi/task_manager.dpr`:\n \n ```pascal\n myfeature in '..\\..\\src\\dom\\myfeature\\myfeature.pas',\n@@ -382,7 +384,7 @@ myfeature_query in '..\\..\\src\\app\\myfeature\\interface\\myfeature_query.pas',\n // ... and so on for the infra/, implementation/ and tests/ units\n ```\n \n-In `prj/delphi/cli_client.dpr`, list the `interface/` units (and any `dom/` unit they use) unconditionally, and the remaining units inside the existing `{$ifdef LOCAL_MODE}` block. Then mirror them as `<DCCReference Include=\"…\"/>` items, which msbuild and the Delphi IDE read: every new unit in `task_manager.dproj`, only the unconditional ones in `cli_client.dproj`. The new units also go in the `uses` clause of `AppTaskManagerClientLocal.pas` (step 10).\n+In `prj/delphi/cli_client.dpr`, list the `interface/` units unconditionally, and the remaining units (`dom/` included) inside the existing `{$ifdef LOCAL_MODE}` block. The `*_dtos.pas` units must not use a `dom/` unit (see [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)), so the remote client needs none. Then mirror them as `<DCCReference Include=\"…\"/>` items, which msbuild and the Delphi IDE read: every new unit in `task_manager.dproj`, only the unconditional ones in `cli_client.dproj`. In the `.lpi` files, add every new unit as a project unit (Project Inspector → Add) and the new folders to *Project Options → Paths → Other unit files*: in every build mode of `task_manager.lpi`; in `cli_client.lpi` the `interface/` folder in every build mode, the `dom/`, `infra/` and `implementation/` folders in the \"local\" mode only, so the remote build keeps failing on a stray domain dependency. Th\n... [truncated, 104 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/docs/PROJECT_STRUCTURE.md",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 5,
+          "patch": "@@ -96,7 +96,7 @@ All SQL/FTS5 knowledge lives here. If the application layer ever calls `IRestOrm\n \n ### `app/` — Application (contract, DTOs, mappers, services)\n \n-Each `app/<entity>/` is split in two. **`interface/`** is the public contract shared by the server and its clients — the client-facing units (`AppTaskManagerClient`, `AppTaskManagerClientRemote`, `cli_client_core`) reference this folder (plus the `dom/` types the DTOs embed, and `shared_types`), never `implementation/`. **`implementation/`** holds the server-side services and mappers; clients never reference it. The exceptions run server-side code in-process: the CLI's `LOCAL_MODE` backend (`AppTaskManagerClientLocal`), which hosts the services, and the tests, which exercise the mappers directly.\n+Each `app/<entity>/` is split in two. **`interface/`** is t\n... [truncated, 5185 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/delphi/cli_client.dpr",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 838 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/delphi/cli_client.dproj",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "\n... [truncated, 506 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/fpc/compile_cli.bat",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 6,
+          "patch": "\n... [truncated, 1111 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/fpc/compile_cli.sh",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 6,
+          "patch": "\n... [truncated, 1073 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/lazarus/cli_client.lpi",
+          "status": "modified",
+          "additions": 101,
+          "deletions": 2,
+          "patch": "\n... [truncated, 5185 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/prj/lazarus/task_manager.lpi",
+          "status": "modified",
+          "additions": 97,
+          "deletions": 2,
+          "patch": "\n... [truncated, 5520 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/app/tasks/implementation/task_mappers.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 2,
+          "patch": "\n... [truncated, 1378 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/app/tasks/interface/task_dtos.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 4,
+          "patch": "\n... [truncated, 2396 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/cli_client_core.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "\n... [truncated, 151 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/src/dom/tasks/task.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "\n... [truncated, 863 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "ex/recommended-patterns/tests/tasks/task_tests.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 2,
+          "patch": "\n... [truncated, 2777 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 183,
+          "deletions": 0,
+          "patch": "\n... [truncated, 6828 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 218,
+          "deletions": 301,
+          "patch": "\n... [truncated, 33681 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "\n... [truncated, 2678 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.sqlite3.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 4,
+          "patch": "\n... [truncated, 469 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "\n... [truncated, 633 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 34,
+          "deletions": 3,
+          "patch": "\n... [truncated, 2690 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 241,
+          "deletions": 79,
+          "patch": "\n... [truncated, 24188 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 61,
+          "deletions": 39,
+          "patch": "\n... [truncated, 4485 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 137,
+          "deletions": 0,
+          "patch": "\n... [truncated, 6199 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 75,
+          "deletions": 0,
+          "patch": "\n... [truncated, 3979 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 683,
+          "deletions": 3,
+          "patch": "\n... [truncated, 20321 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Docs",
+        "Network",
+        "Samples",
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql",
+        "mormot.db.sql.duckdb",
+        "mormot.db.sql.sqlite3",
+        "mormot.db.sql.zeos",
+        "mormot.net.async",
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "c6048bcd16103c918598527f8892265b53d8e46e",
+      "short_sha": "c6048bcd",
+      "subject": "orm: InBatchOfCurrentThread checks fBatchMethod within the storage lock",
+      "body": "no unlocked read of fBatchMethod/fBatchThread\nthe BATCH owner keeps the (reentrant) storage lock from InternalBatchStart to InternalBatchStop, so it enters at once, whereas any other thread waits  for the BATCH to be sent: once the lock is acquired, fBatchMethod <> mNone  means that the current thread is the BATCH owner",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-25T18:01:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c6048bcd16103c918598527f8892265b53d8e46e",
+      "parents": [
+        "1fc8504fc0bfe6a00154a04f124a7ee4b72e786b"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 9,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/orm/mormot.orm.sql.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 9,
+          "patch": "@@ -93,8 +93,6 @@   TRestStorageExternal = class(TRestStorage)\n     fBatchMethod: TUriMethod;\r\n     fBatchOptions: TRestBatchOptions;\r\n     fBatchCapacity, fBatchCount: integer;\r\n-    // the thread which called InternalBatchStart (and owns the storage lock)\r\n-    fBatchThread: TThreadID;\r\n     // BATCH sending uses TEXT storage for direct sending to database driver\r\n     fBatchIDs: TIDDynArray;\r\n     fBatchValues: TRawUtf8DynArray;\r\n@@ -181,8 +179,8 @@   TRestStorageExternal = class(TRestStorage)\n     /// true if the current thread is within its own InternalBatchStart/Stop\r\n     // - a regular Engine*() call from another thread during this BATCH should\r\n     // not see fBatchMethod, but wait for the storage lock as a regular call\r\n+    // - fBatchMethod is read only within the (reentrant) storage lock\r\n     function InBatchOfCurrentThread: boolean;\r\n-      {$ifdef HASINLINE} inline; {$endif}\r\n     /// TRestServer.Uri use it for Static.EngineList to by-pass virtual table\r\n     // - overridden method to handle most potential simple queries, e.g. like\r\n     // $ SELECT Field1,RowID FROM table WHERE RowID=... AND/OR/NOT Field2=\r\n@@ -1040,7 +1038,6 @@ function TRestStorageExternal.InternalBatchStart(Encoding: TRestBatchEncoding;\n       fBatchMethod := Method;\r\n       fBatchOptions := BatchOptions;\r\n       fBatchCount := 0;\r\n-      fBatchThread := GetCurrentThreadId;\r\n       result := true; // means BATCH mode is supported\r\n     finally\r\n       if not result then\r\n@@ -1229,17 +1226,23 @@ procedure TRestStorageExternal.InternalBatchStop;\n     fBatchCapacity := 0;\r\n     fBatchMethod := mNone;\r\n     fBatchOptions := [];\r\n-    fBatchThread := TThreadID(0);\r\n     StorageUnLock;\r\n   end;\r\n end;\r\n \r\n function TRestStorageExternal.InBatchOfCurrentThread: boolean;\r\n begin\r\n-  // fBatchThread is only set within StorageLock, so may equal the current\r\n-  // thread ID only if this thread did actually start the BATCH\r\n-  result := (fBatchMethod <> mNone) and\r\n-            (fBatchThread = GetCurrentThreadId);\r\n+  // the BATCH owner keeps the storage lock from InternalBatchStart to\r\n+  // InternalBatchStop: since the lock is reentrant, the owner thread enters\r\n+  // at once, whereas any other thread waits here for the BATCH to be sent\r\n+  // - so once we own the lock, fBatchMethod <> mNone means that the current\r\n+  // thread is the BATCH owner, with no unlocked read of a shared field\r\n+  StorageLock(false {$ifdef DEBUGSTORAGELOCK}, 'ExtInBatch' {$endif});\r\n+  try\r\n+    result := fBatchMethod <> mNone;\r\n+  finally\r\n+    StorageUnLock;\r\n+  end;\r\n end;\r\n \r\n procedure TRestStorageExternal.InternalBatchAppend(const aValue: RawUtf8;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "ORM"
+      ],
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1fc8504fc0bfe6a00154a04f124a7ee4b72e786b",
+      "short_sha": "1fc8504f",
+      "subject": "orm: fixed TRestStorageExternal regular writes from another thread during a BATCH",
+      "body": "- EngineAdd/EngineUpdate/EngineDelete/EngineDeleteWhere did check fBatchMethod\n  BEFORE taking the storage lock: while a thread was within its own\n  InternalBatchStart/InternalBatchStop (which owns the lock), a regular write\n  from ANOTHER thread on the same table did see this BATCH state\n- e.g. a regular Update during a BATCH POST of another thread returned false\n  at once, with no exception nor DB error; and with a matching method, the\n  write was appended into the BATCH of the other thread, without the lock\n- the BATCH owner thread is now stored in fBatchThread: only this thread uses\n  the BATCH process, others follow the regular path, which waits for the\n  storage lock, i.e. for the BATCH to be sent\n- the regular path does not use fBatchOptions any more, which may belong to\n  the BATCH of another thread (e.g. boInsertOrIgnore)\n- added TTestExternalDatabase.BatchFromOtherThread regression test",
+      "author": "Dimitris Kounalakis",
+      "date": "2026-10-17T15:49:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1fc8504fc0bfe6a00154a04f124a7ee4b72e786b",
+      "parents": [
+        "587ce16741a610dc1a84c86d2687063b5af5da6b"
+      ],
+      "stats": {
+        "additions": 127,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/orm/mormot.orm.sql.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 7,
+          "patch": "@@ -93,6 +93,8 @@   TRestStorageExternal = class(TRestStorage)\n     fBatchMethod: TUriMethod;\r\n     fBatchOptions: TRestBatchOptions;\r\n     fBatchCapacity, fBatchCount: integer;\r\n+    // the thread which called InternalBatchStart (and owns the storage lock)\r\n+    fBatchThread: TThreadID;\r\n     // BATCH sending uses TEXT storage for direct sending to database driver\r\n     fBatchIDs: TIDDynArray;\r\n     fBatchValues: TRawUtf8DynArray;\r\n@@ -176,6 +178,11 @@   TRestStorageExternal = class(TRestStorage)\n     procedure InternalBatchStop; override;\r\n     /// called internally by EngineAdd/EngineUpdate/EngineDelete in batch mode\r\n     procedure InternalBatchAppend(const aValue: RawUtf8; aID: TID);\r\n+    /// true if the current thread is within its own InternalBatchStart/Stop\r\n+    // - a regular Engine*() call from another thread during this BATCH should\r\n+    // not see fBatchMethod, but wait for the storage lock as a regular call\r\n+    function InBatchOfCurrentThread: boolean;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n     /// TRestServer.Uri use it for Static.EngineList to by-pass virtual table\r\n     // - overridden method to handle most potential simple queries, e.g. like\r\n     // $ SELECT Field1,RowID FROM table WHERE RowID=... AND/OR/NOT Field2=\r\n@@ -1033,6 +1040,7 @@ function TRestStorageExternal.InternalBatchStart(Encoding: TRestBatchEncoding;\n       fBatchMethod := Method;\r\n       fBatchOptions := BatchOptions;\r\n       fBatchCount := 0;\r\n+      fBatchThread := GetCurrentThreadId;\r\n       result := true; // means BATCH mode is supported\r\n     finally\r\n       if not result then\r\n@@ -1221,10 +1229,19 @@ procedure TRestStorageExternal.InternalBatchStop;\n     fBatchCapacity := 0;\r\n     fBatchMethod := mNone;\r\n     fBatchOptions := [];\r\n+    fBatchThread := TThreadID(0);\r\n     StorageUnLock;\r\n   end;\r\n end;\r\n \r\n+function TRestStorageExternal.InBatchOfCurrentThread: boolean;\r\n+begin\r\n+  // fBatchThread is only set within StorageLock, so may equal the current\r\n+  // thread ID only if this thread did actually start the BATCH\r\n+  result := (fBatchMethod <> mNone) and\r\n+            (fBatchThread = GetCurrentThreadId);\r\n+end;\r\n+\r\n procedure TRestStorageExternal.InternalBatchAppend(const aValue: RawUtf8;\r\n   aID: TID);\r\n begin\r\n@@ -1255,7 +1272,7 @@ function TRestStorageExternal.EngineAdd(TableModelIndex: integer;\n      (fModel.Tables[TableModelIndex] <> fStoredClass) then\r\n     result := 0 // avoid GPF\r\n   else\r\n-    if fBatchMethod <> mNone then\r\n+    if InBatchOfCurrentThread then\r\n       // BATCH process\r\n       if fBatchMethod <> mPOST then\r\n         result := 0\r\n@@ -1274,7 +1291,8 @@ function TRestStorageExternal.EngineAdd(TableModelIndex: integer;\n     else\r\n     begin\r\n       // regular insert with EngineLockedNextID (UpdatedID=0)\r\n-      result := ExecuteFromJson(SentData, ooInsert, 0, fBatchOptions);\r\n+      // - fBatchOptions may belong to a BATCH of another thread: ignore them\r\n+      result := ExecuteFromJson(SentData, ooInsert, 0, []);\r\n       if (result > 0) and\r\n          (Owner <> nil) then\r\n       begin\r\n@@ -1293,7 +1311,7 @@ function TRestStorageExternal.EngineUpdate(TableModelIndex: integer; ID: TID;\n      (TableModelIndex < 0) or\r\n      (Model.Tables[TableModelIndex] <> fStoredClass) then\r\n     result := false\r\n-  else if fBatchMethod <> mNone then\r\n+  else if InBatchOfCurrentThread then\r\n     // BATCH process\r\n     if fBatchMethod <> mPUT then\r\n       result := false\r\n@@ -1304,8 +1322,8 @@ function TRestStorageExternal.EngineUpdate(TableModelIndex: integer; ID: TID;\n     end\r\n   else\r\n   begin\r\n-    // regular update\r\n-    result := ExecuteFromJson(SentData, ooUpdate, ID, fBatchOptions) = ID;\r\n+    // regular update - may wait for a BATCH of another thread\r\n+    result := ExecuteFromJson(SentData, ooUpdate, ID, []) = ID;\r\n     if result and\r\n        (Owner <> nil) then\r\n     begin\r\n@@ -1323,7 +1341,7 @@ function TRestStorageExternal.EngineDelete(TableModelIndex: integer;\n      (TableModelIndex < 0) or\r\n      (Model\n... [truncated, 566 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 102,
+          "deletions": 0,
+          "patch": "@@ -9,6 +9,7 @@ interface\n \r\n uses\r\n   sysutils,\r\n+  classes,\r\n   mormot.core.base,\r\n   mormot.core.os,\r\n   mormot.core.text,\r\n@@ -78,6 +79,8 @@   TTestExternalDatabase = class(TSynTestCase)\n     procedure NewStatementFailure;\r\n     /// EngineLockedNextID() when 'select max(ID)' fails (e.g. connection lost)\r\n     procedure NextIDSelectMaxFailure;\r\n+    /// regular Engine*() from another thread during a BATCH of this thread\r\n+    procedure BatchFromOtherThread;\r\n     /// initialize needed RESTful client (and server) instances\r\n     // - i.e. a RESTful direct access to an external DB\r\n     procedure ExternalRecords;\r\n@@ -195,6 +198,30 @@   TSqlDBSQLite3ConnectionPropertiesNoStatement = class(TSqlDBSQLite3ConnectionPr\n     function NewConnection: TSqlDBConnection; override;\r\n   end;\r\n \r\n+  // a regular EngineUpdate() run from its own thread\r\n+  TBatchOtherThreadUpdate = class(TThread)\r\n+  protected\r\n+    fExt: TRestStorageExternal;\r\n+    fNdx: PtrInt;\r\n+    procedure Execute; override;\r\n+  public\r\n+    Updated, Done: boolean;\r\n+    constructor Create(aExt: TRestStorageExternal; aNdx: PtrInt);\r\n+  end;\r\n+\r\n+constructor TBatchOtherThreadUpdate.Create(aExt: TRestStorageExternal; aNdx: PtrInt);\r\n+begin\r\n+  fExt := aExt;\r\n+  fNdx := aNdx;\r\n+  inherited Create({suspended=}false);\r\n+end;\r\n+\r\n+procedure TBatchOtherThreadUpdate.Execute;\r\n+begin\r\n+  Updated := fExt.EngineUpdate(fNdx, 10, '{\"FirstName\":\"after\"}');\r\n+  Done := true;\r\n+end;\r\n+\r\n function TSqlDBSQLite3ConnectionNoStatement.NewStatement: TSqlDBStatement;\r\n begin\r\n   raise ESynLogSilent.Create('NewStatement failed');\r\n@@ -1209,6 +1236,81 @@ procedure TTestExternalDatabase.NextIDSelectMaxFailure;\n   end;\r\n end;\r\n \r\n+procedure TTestExternalDatabase.BatchFromOtherThread;\r\n+var\r\n+  model: TOrmModel;\r\n+  server: TRestServerFullMemory;\r\n+  props: TSqlDBConnectionProperties;\r\n+  ext: TRestStorageExternalHook;\r\n+  ndx: PtrInt;\r\n+  th: TBatchOtherThreadUpdate;\r\n+  i: integer;\r\n+begin\r\n+  // EngineAdd/Update/Delete/DeleteWhere did check fBatchMethod BEFORE the\r\n+  // storage lock: during a BATCH POST of one thread, a regular Update from\r\n+  // another thread returned false at once - with no exception nor DB error\r\n+  model := TOrmModel.Create([TOrmPeopleExt]);\r\n+  try\r\n+    server := TRestServerFullMemory.Create(model);\r\n+    try\r\n+      DeleteFile('batchthread.db3');\r\n+      props := TSqlDBSQLite3ConnectionProperties.Create(\r\n+        'batchthread.db3', '', '', '');\r\n+      try\r\n+        OrmMapExternal(model, TOrmPeopleExt, props, 'BatchThread');\r\n+        ext := TRestStorageExternalHook.Create(\r\n+          TOrmPeopleExt, server.OrmInstance as TRestOrmServer);\r\n+        try\r\n+          ndx := model.GetTableIndexExisting(TOrmPeopleExt);\r\n+          props.ExecuteNoResult(\r\n+            'insert into BatchThread (ID,FirstName) values (?,?)', [10, 'before']);\r\n+          th := nil;\r\n+          Check(ext.InternalBatchStart(encPost, []), 'batch');\r\n+          try\r\n+            // the BATCH thread itself still appends its own rows\r\n+            CheckEqual(ext.EngineAdd(ndx, '{\"ID\":20,\"FirstName\":\"batch\"}'), 20, 'add');\r\n+            th := TBatchOtherThreadUpdate.Create(ext, ndx);\r\n+            try\r\n+              for i := 1 to 20 do\r\n+                if th.Done then\r\n+                  break\r\n+                else\r\n+                  SleepHiRes(10);\r\n+              // the other thread waits for the storage lock, as a regular update\r\n+              Check(not th.Done, 'other thread waits for the batch');\r\n+            finally\r\n+              ext.InternalBatchStop;\r\n+            end;\r\n+            th.WaitFor;\r\n+            Check(th.Updated, 'update from other thread after the batch');\r\n+          finally\r\n+            th.Free;\r\n+          end;\r\n+          with props.Execute('select FirstName from BatchThread where ID=?', [10]) do\r\n+          begin\r\n+            Check(Step, 'row 10');\r\n+            CheckEqual(ColumnUtf8(0), 'after', 'updated');\r\n+          end;\r\n+          with props.Execute('select\n... [truncated, 509 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "ORM",
+        "Tests"
+      ],
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
