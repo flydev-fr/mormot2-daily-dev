@@ -1,0 +1,824 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-26",
+  "edition_title": {
+    "en": "External-database batch races close as EMF rendering hardens",
+    "fr": "Les courses de lots SQL se ferment et le rendu EMF se renforce",
+    "zh": "外部数据库批次竞争修复，EMF 渲染进一步加固",
+    "ru": "Закрыта гонка SQL-пакетов, усилен рендеринг EMF"
+  },
+  "intro": {
+    "en": "The most important fix closes a race in TRestStorageExternal: a regular write from one thread can no longer fail silently or join another thread’s active BATCH. The final follow-up performs the ownership check under the reentrant storage lock. A broad Windows rendering series also corrects EMF-to-PDF paths, clips, fonts and mirrored geometry, while GDI+ playback gains matching record-layout and state-restoration fixes.",
+    "fr": "Le correctif principal ferme une course dans TRestStorageExternal : une écriture ordinaire ne peut plus échouer silencieusement ni rejoindre le BATCH actif d’un autre thread. Le suivi final vérifie le propriétaire sous le verrou réentrant du stockage. Une large série Windows corrige aussi les chemins, clips, polices et géométries miroir des conversions EMF vers PDF, tandis que GDI+ reçoit les mêmes corrections de layout et de restauration d’état.",
+    "zh": "最重要的修复关闭了 TRestStorageExternal 中的数据竞争：一个线程的普通写入不再会静默失败或混入另一个线程的活动 BATCH。最终后续提交在可重入存储锁内判断批次所有者。大量 Windows 渲染修复也改进了 EMF 转 PDF 的路径、裁剪、字体和镜像几何，同时为 GDI+ 回放修正了记录布局与状态恢复。",
+    "ru": "Главное исправление закрывает гонку в TRestStorageExternal: обычная запись одного потока больше не завершается молча и не попадает в активный BATCH другого потока. Финальный follow-up проверяет владельца под реентерабельной блокировкой. Большая серия для Windows также исправляет пути, clip, шрифты и зеркальную геометрию EMF-to-PDF, а GDI+ получает аналогичные исправления разметки записей и восстановления состояния."
+  },
+  "tldr": {
+    "en": [
+      "Concurrent regular writes now wait for another thread’s external-database BATCH instead of failing or joining it.",
+      "The batch-owner decision is made under the reentrant storage lock, removing the remaining unsynchronised field read.",
+      "EMF-to-PDF paths and clip regions now follow the graphics state active when GDI actually paints or restores them.",
+      "ANSI text, mirrored boxes, scaled rotations and malformed TrueType tables receive targeted PDF fixes.",
+      "FPC 3.2.2 Win64 reads fixed-width EMF brush and pen records correctly in both PDF and GDI+ paths."
+    ],
+    "fr": [
+      "Les écritures ordinaires concurrentes attendent désormais le BATCH externe d’un autre thread au lieu d’échouer ou de le rejoindre.",
+      "Le propriétaire du lot est déterminé sous le verrou réentrant, supprimant la dernière lecture non synchronisée.",
+      "Les chemins et clips EMF vers PDF suivent maintenant l’état graphique actif lorsque GDI peint ou restaure.",
+      "Le texte ANSI, les cadres miroir, les rotations mises à l’échelle et les tables TrueType invalides sont corrigés.",
+      "FPC 3.2.2 Win64 lit correctement les enregistrements EMF fixes des brosses et stylos dans PDF et GDI+."
+    ],
+    "zh": [
+      "并发普通写入现在会等待其他线程的外部数据库 BATCH，不再失败或混入其中。",
+      "批次所有者在可重入存储锁内判定，消除了剩余的无同步字段读取。",
+      "EMF 转 PDF 的路径与裁剪区现在会遵循 GDI 实际绘制或恢复时的图形状态。",
+      "ANSI 文本、镜像框、缩放旋转和异常 TrueType 表分别得到针对性 PDF 修复。",
+      "FPC 3.2.2 Win64 在 PDF 与 GDI+ 路径中都能正确读取固定宽度的 EMF 画刷和画笔记录。"
+    ],
+    "ru": [
+      "Обычные конкурентные записи теперь ждут BATCH другого потока вместо ошибки или попадания в него.",
+      "Владелец пакета определяется под реентерабельной блокировкой, устраняя последнее несинхронное чтение.",
+      "Пути и clip EMF-to-PDF теперь следуют состоянию графики в момент фактического рисования или восстановления GDI.",
+      "Исправлены ANSI-текст, зеркальные рамки, масштабированные повороты и повреждённые таблицы TrueType.",
+      "FPC 3.2.2 Win64 корректно читает fixed-width записи кистей и перьев EMF в путях PDF и GDI+."
+    ]
+  },
+  "risk_level": "worth-a-look",
+  "upgrade_advice": {
+    "en": "For services that share TRestStorageExternal across threads, take the complete 57e2526de090afe6ece88d614b557555dd3c4d76 head so the locking follow-up accompanies the original batch fix; stress mixed BATCH and regular writes. Windows PDF or EMF users should also retest path clipping, locale-specific text, mirrored shapes and FPC Win64 colours. The raw payload records no superseded_by successor.",
+    "fr": "Pour les services qui partagent TRestStorageExternal entre threads, prenez le head complet 57e2526de090afe6ece88d614b557555dd3c4d76 afin que le suivi de verrouillage accompagne le premier correctif, puis chargez les BATCH et écritures ordinaires en concurrence. Les utilisateurs PDF/EMF Windows doivent aussi retester clips, textes locaux, miroirs et couleurs FPC Win64. Le payload ne contient aucun successeur superseded_by.",
+    "zh": "在线程间共享 TRestStorageExternal 的服务应采用完整 head 57e2526de090afe6ece88d614b557555dd3c4d76，确保锁定后续与首个批次修复同时落地，并压测 BATCH 与普通写入混用。Windows PDF/EMF 用户还应复测路径裁剪、本地化文本、镜像形状和 FPC Win64 颜色。原始 payload 未记录 superseded_by 后继。",
+    "ru": "Сервисам, разделяющим TRestStorageExternal между потоками, следует брать полный head 57e2526de090afe6ece88d614b557555dd3c4d76 вместе с locking follow-up и нагрузочно проверить смешанные BATCH и обычные записи. Пользователям Windows PDF/EMF стоит повторно проверить clip путей, локальный текст, зеркальные фигуры и цвета FPC Win64. В raw payload нет successor superseded_by."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "External-database batch concurrency",
+        "fr": "Concurrence des lots de base externe",
+        "zh": "外部数据库批次并发",
+        "ru": "Конкурентность пакетов внешней БД"
+      },
+      "summary": {
+        "en": "Two commits first separate batch-owner writes from other threads, then move the ownership decision under the storage lock to remove the remaining race.",
+        "fr": "Deux commits séparent d’abord les écritures du propriétaire de celles des autres threads, puis déplacent la décision sous le verrou pour supprimer la dernière course.",
+        "zh": "两个提交先区分批次所有者写入与其他线程写入，再把所有者判断移入存储锁以消除剩余竞争。",
+        "ru": "Два коммита сначала отделяют записи владельца пакета от других потоков, затем переносят проверку под блокировку, устраняя оставшуюся гонку."
+      },
+      "shas": [
+        "1fc8504fc0bfe6a00154a04f124a7ee4b72e786b",
+        "c6048bcd16103c918598527f8892265b53d8e46e"
+      ]
+    },
+    {
+      "title": {
+        "en": "PDF metafile correctness and bounds",
+        "fr": "Fidélité et bornes des métafichiers PDF",
+        "zh": "PDF 图元文件正确性与边界校验",
+        "ru": "Корректность и границы PDF-метафайлов"
+      },
+      "summary": {
+        "en": "Fifteen commits repair path and clip state, text decoding, transforms, boxes, bitmaps and defensive TrueType parsing in mormot.ui.pdf, with regression coverage for the reachable cases.",
+        "fr": "Quinze commits corrigent chemins, clips, décodage, transformations, cadres, bitmaps et parsing TrueType défensif dans mormot.ui.pdf, avec des tests pour les cas atteignables.",
+        "zh": "十五个提交修复 mormot.ui.pdf 的路径与裁剪状态、文本解码、变换、框体、位图和 TrueType 防御性解析，并为可达场景增加回归覆盖。",
+        "ru": "Пятнадцать коммитов исправляют пути, clip, декодирование текста, transform, рамки, bitmap и защитный разбор TrueType в mormot.ui.pdf, добавляя доступные regression-тесты."
+      },
+      "shas": [
+        "4bc5c2be6461d689c634e4663a8657fe0e830134",
+        "851ad20c9177e3be3b154756ba3ee9ad0968ac6b",
+        "2fcdaf6130f6881b8820a72952cb61db70a14165",
+        "7e1833d138818cf9759e5c0832018fbaad037819",
+        "2055447ad93aa825295eee23522fbdf5d5b5cb52",
+        "5646c26bd934d78d75f583a8443a9a40ddb49b00",
+        "d9a99cf3b25e7b2013a7e9d574c55672bc2250c9",
+        "ac12db429c64c269ae737c19d54325250258d549",
+        "7fc8ed0e84cb2ceb689888d0a47dab2a39df6b9b",
+        "8e60a6ad8b4d3577b1cb7c9aa71272730009554d",
+        "450a3e8322918feffc2ef98d10d692313931fe54",
+        "f768636f9a203cbbeb9c098dc46c67032ab83d3a",
+        "618e24d5fded0f67b62b75e462ae973c8704136c",
+        "c4e1f0d69b24d834df44c739c3f1988aa7504ae3",
+        "78501a4ae52071204d6c921b760d8116ca596761"
+      ]
+    },
+    {
+      "title": {
+        "en": "GDI+ EMF playback parity",
+        "fr": "Parité de lecture EMF par GDI+",
+        "zh": "GDI+ EMF 回放一致性",
+        "ru": "Соответствие воспроизведения EMF через GDI+"
+      },
+      "summary": {
+        "en": "Four commits align fixed-width record parsing, transform order, null pens and deep DC restores with Windows GDI semantics.",
+        "fr": "Quatre commits alignent le parsing fixe, l’ordre des transformations, les stylos nuls et les restaurations DC profondes sur GDI.",
+        "zh": "四个提交让固定宽度记录解析、变换顺序、空画笔和深层 DC 恢复与 Windows GDI 语义一致。",
+        "ru": "Четыре коммита приводят fixed-width разбор, порядок transform, null-перья и глубокий RestoreDC к семантике Windows GDI."
+      },
+      "shas": [
+        "3ca285f13932a8d5c81189d043228875185e386f",
+        "aceee0f76dfb79306dd7cc3946e5529bc62f61f7",
+        "169490f1edfb1329554eddf9742bc5a8602d23d4",
+        "d80a4a6b9c123431a7708ed970230958877d2e81"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "1fc8504fc0bfe6a00154a04f124a7ee4b72e786b",
+      "headline": {
+        "en": "Concurrent writes no longer enter another thread’s external-database batch",
+        "fr": "Les écritures concurrentes n’entrent plus dans le lot externe d’un autre thread",
+        "zh": "并发写入不再进入其他线程的外部数据库批次",
+        "ru": "Параллельные записи больше не попадают в пакет другого потока"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TRestStorageExternal now routes EngineAdd, EngineUpdate, EngineDelete and EngineDeleteWhere through InBatchOfCurrentThread. A regular write from another thread takes the normal locked path instead of failing or appending to the active BATCH, and regular writes no longer reuse that batch’s fBatchOptions. BatchFromOtherThread adds a SQLite-backed regression test.",
+        "fr": "TRestStorageExternal fait désormais passer EngineAdd, EngineUpdate, EngineDelete et EngineDeleteWhere par InBatchOfCurrentThread. Une écriture ordinaire d’un autre thread suit le chemin normal verrouillé au lieu d’échouer ou de rejoindre le BATCH actif, et elle ne réutilise plus ses fBatchOptions. BatchFromOtherThread ajoute un test de régression avec SQLite.",
+        "zh": "TRestStorageExternal 现在让 EngineAdd、EngineUpdate、EngineDelete 和 EngineDeleteWhere 通过 InBatchOfCurrentThread 判断。其他线程的普通写入会走正常加锁路径，不再失败或混入活动 BATCH，也不再复用该批次的 fBatchOptions。BatchFromOtherThread 增加了 SQLite 回归测试。",
+        "ru": "TRestStorageExternal теперь направляет EngineAdd, EngineUpdate, EngineDelete и EngineDeleteWhere через InBatchOfCurrentThread. Обычная запись из другого потока идёт по нормальному пути с блокировкой, а не завершается ошибкой и не попадает в активный BATCH; его fBatchOptions также не переиспользуются. Добавлен SQLite-тест BatchFromOtherThread."
+      },
+      "impact": {
+        "en": "External SQL backends that share one TRestStorageExternal across threads no longer silently lose an update or contaminate another thread’s batch. Delphi and FPC application APIs are unchanged, but concurrent write behaviour is corrected.",
+        "fr": "Les backends SQL externes qui partagent un TRestStorageExternal entre threads ne perdent plus silencieusement une mise à jour et ne contaminent plus le lot d’un autre thread. Les API Delphi et FPC restent inchangées, mais le comportement concurrent est corrigé.",
+        "zh": "在线程间共享同一 TRestStorageExternal 的外部 SQL 后端不再静默丢失更新，也不会污染其他线程的批次。Delphi 与 FPC 应用 API 不变，但并发写入行为已修正。",
+        "ru": "Внешние SQL-backend, разделяющие один TRestStorageExternal между потоками, больше не теряют обновление молча и не загрязняют чужой пакет. API приложений Delphi и FPC не меняется, исправляется поведение конкурентной записи."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade services that combine BATCH operations with regular writes on the same external table, then rerun mixed add, update and delete workloads under concurrency.",
+        "fr": "Mettez à jour les services qui combinent des BATCH et des écritures ordinaires sur la même table externe, puis rejouez les ajouts, mises à jour et suppressions concurrents.",
+        "zh": "若服务会在同一外部表上混用 BATCH 与普通写入，请升级并重新执行并发添加、更新和删除负载。",
+        "ru": "Обновите сервисы, где BATCH сочетается с обычными записями в одной внешней таблице, и повторите конкурентные add, update и delete."
+      }
+    },
+    {
+      "sha": "c6048bcd16103c918598527f8892265b53d8e46e",
+      "headline": {
+        "en": "Batch ownership is decided while holding the storage lock",
+        "fr": "Владелец пакета определяется под блокировкой хранилища",
+        "zh": "批次归属在持有存储锁时判定",
+        "ru": "Владелец пакета определяется под блокировкой хранилища"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "InBatchOfCurrentThread no longer reads fBatchMethod and fBatchThread without synchronization. It acquires the reentrant storage lock, where fBatchMethod <> mNone identifies the owner; the explicit fBatchThread field introduced by the preceding fix is removed.",
+        "fr": "InBatchOfCurrentThread ne lit plus fBatchMethod et fBatchThread sans synchronisation. La méthode prend le verrou réentrant du stockage, où fBatchMethod <> mNone identifie le propriétaire ; le champ fBatchThread ajouté par le correctif précédent est supprimé.",
+        "zh": "InBatchOfCurrentThread 不再无同步地读取 fBatchMethod 和 fBatchThread。它先获取可重入存储锁，在锁内以 fBatchMethod <> mNone 识别批次所有者，并移除了上一提交引入的 fBatchThread 字段。",
+        "ru": "InBatchOfCurrentThread больше не читает fBatchMethod и fBatchThread без синхронизации. Метод берёт реентерабельную блокировку хранилища, где fBatchMethod <> mNone определяет владельца; поле fBatchThread из предыдущего исправления удалено."
+      },
+      "impact": {
+        "en": "The final implementation removes the remaining data race in the batch-owner test. Other threads wait until the active batch releases the lock, while its owner re-enters immediately; Delphi and FPC callers need no code changes.",
+        "fr": "L’implémentation finale supprime la dernière course dans le test du propriétaire du lot. Les autres threads attendent la libération du verrou, tandis que le propriétaire le reprend immédiatement ; aucun changement de code n’est requis sous Delphi ou FPC.",
+        "zh": "最终实现消除了批次所有者判断中剩余的数据竞争。其他线程会等待活动批次释放锁，而所有者可立即重入；Delphi 和 FPC 调用方无需改代码。",
+        "ru": "Итоговая реализация устраняет оставшуюся гонку при проверке владельца пакета. Другие потоки ждут освобождения блокировки, а владелец входит повторно сразу; код Delphi и FPC менять не нужно."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Take this follow-up together with 1fc8504fc0bfe6a00154a04f124a7ee4b72e786b; do not cherry-pick only the first version of the batch fix.",
+        "fr": "Prenez ce suivi avec 1fc8504fc0bfe6a00154a04f124a7ee4b72e786b ; ne conservez pas seulement la première version du correctif de lot.",
+        "zh": "请将此后续提交与 1fc8504fc0bfe6a00154a04f124a7ee4b72e786b 一起采用，不要只挑选第一版批次修复。",
+        "ru": "Берите этот follow-up вместе с 1fc8504fc0bfe6a00154a04f124a7ee4b72e786b; не оставляйте только первую версию исправления BATCH."
+      }
+    },
+    {
+      "sha": "4bc5c2be6461d689c634e4663a8657fe0e830134",
+      "headline": {
+        "en": "PDF path painting now uses the clip and pen active at paint time",
+        "fr": "Le tracé PDF utilise désormais le clip et le stylo au moment de peindre",
+        "zh": "PDF 路径绘制改用实际绘制时的裁剪区和画笔",
+        "ru": "PDF-путь использует clip и перо, активные в момент рисования"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnum buffers geometry between EMR_BEGINPATH and EMR_ENDPATH in a separate TPdfStream. StrokePath, FillPath and StrokeAndFillPath then apply the current clip, pen and brush before replaying and painting that geometry; abort, clip-path and end-of-metafile records discard it. GStateRestored also clears all cached graphics-state values.",
+        "fr": "TPdfEnum met en mémoire la géométrie entre EMR_BEGINPATH et EMR_ENDPATH dans un TPdfStream séparé. StrokePath, FillPath et StrokeAndFillPath appliquent ensuite le clip, le stylo et la brosse courants avant de rejouer et peindre la géométrie ; abort, clip-path et la fin du métafichier la suppriment. GStateRestored efface aussi tout le cache graphique.",
+        "zh": "TPdfEnum 将 EMR_BEGINPATH 与 EMR_ENDPATH 之间的几何记录缓存在独立 TPdfStream 中。StrokePath、FillPath 和 StrokeAndFillPath 会先应用当前裁剪区、画笔和画刷，再重放并绘制几何；abort、clip-path 与图元文件结束会丢弃它。GStateRestored 也会清除全部图形状态缓存。",
+        "ru": "TPdfEnum буферизует геометрию между EMR_BEGINPATH и EMR_ENDPATH в отдельном TPdfStream. StrokePath, FillPath и StrokeAndFillPath применяют текущие clip, перо и кисть перед воспроизведением и рисованием; abort, clip-path и конец metafile её сбрасывают. GStateRestored также очищает весь кэш графического состояния."
+      },
+      "impact": {
+        "en": "EMF-to-PDF output now matches GDI for clips or pens changed inside a path bracket and avoids premature or duplicate painting of shapes. The change affects Windows rendering only; Delphi and FPC call sites stay compatible.",
+        "fr": "Les sorties EMF vers PDF suivent maintenant GDI lorsque le clip ou le stylo change dans un chemin et évitent les dessins prématurés ou doublés. Seul le rendu Windows change ; les appels Delphi et FPC restent compatibles.",
+        "zh": "EMF 转 PDF 在路径括号内切换裁剪区或画笔时现在与 GDI 一致，并避免形状被提前或重复绘制。只有 Windows 渲染行为变化，Delphi 与 FPC 调用保持兼容。",
+        "ru": "Вывод EMF в PDF теперь совпадает с GDI при смене clip или пера внутри path bracket и не рисует фигуры преждевременно или дважды. Меняется только Windows-рендеринг; вызовы Delphi и FPC совместимы."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest EMF files that combine BeginPath with clipping, pen changes, text, bitmaps, alternate fills or StrokeAndFillPath. Text outlines inside paths remain explicitly unsupported.",
+        "fr": "Retestez les EMF qui combinent BeginPath avec clips, changements de stylo, texte, bitmaps, remplissage alternate ou StrokeAndFillPath. Les contours de texte dans les chemins restent non pris en charge.",
+        "zh": "请复测将 BeginPath 与裁剪、画笔切换、文本、位图、alternate 填充或 StrokeAndFillPath 组合使用的 EMF。路径中的文本轮廓仍明确不支持。",
+        "ru": "Повторно проверьте EMF с BeginPath, clip, сменой пера, текстом, bitmap, alternate fill или StrokeAndFillPath. Контуры текста внутри путей по-прежнему не поддерживаются."
+      }
+    },
+    {
+      "sha": "851ad20c9177e3be3b154756ba3ee9ad0968ac6b",
+      "headline": {
+        "en": "PDF clip regions survive RestoreDC and keep graphics state balanced",
+        "fr": "Les régions de clip PDF survivent à RestoreDC et équilibrent l’état graphique",
+        "zh": "PDF 裁剪区可随 RestoreDC 恢复并保持图形状态平衡",
+        "ru": "PDF-области clip восстанавливаются через RestoreDC без разбаланса"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnumState now records the active EMR_EXTSELECTCLIPRGN and SetMetaRgn regions as PDF boxes. SelectClip reapplies the saved region after RestoreDC, closes obsolete q scopes with Q, and resets cached pen and fill values; path handling delays clip changes until the path is finished.",
+        "fr": "TPdfEnumState enregistre les régions EMR_EXTSELECTCLIPRGN et SetMetaRgn actives sous forme de cadres PDF. SelectClip réapplique la région sauvegardée après RestoreDC, ferme les q obsolètes avec Q et réinitialise le cache des stylos et remplissages ; les changements de clip attendent la fin du chemin.",
+        "zh": "TPdfEnumState 现在把活动的 EMR_EXTSELECTCLIPRGN 和 SetMetaRgn 区域记录为 PDF 框。SelectClip 在 RestoreDC 后重新应用保存区域，以 Q 关闭过期的 q 作用域并重置画笔与填充缓存；路径处理会延迟裁剪变化直到路径结束。",
+        "ru": "TPdfEnumState теперь хранит активные области EMR_EXTSELECTCLIPRGN и SetMetaRgn как PDF-блоки. SelectClip повторно применяет сохранённую область после RestoreDC, закрывает устаревшие q через Q и сбрасывает кэш пера и заливки; смена clip откладывается до конца пути."
+      },
+      "impact": {
+        "en": "Nested clipping and saved DC states no longer leave a stale inner clip or unbalanced PDF operators. Existing Delphi and FPC APIs are unchanged; generated PDF content changes for affected EMF records.",
+        "fr": "Les clips imbriqués et les états DC sauvegardés ne laissent plus un clip interne périmé ni des opérateurs PDF déséquilibrés. Les API Delphi et FPC restent identiques ; le PDF généré change pour les EMF concernés.",
+        "zh": "嵌套裁剪与保存的 DC 状态不再遗留旧的内部裁剪区或不平衡的 PDF 操作符。Delphi 和 FPC API 不变；受影响 EMF 的 PDF 内容会变化。",
+        "ru": "Вложенные clip и сохранённые состояния DC больше не оставляют старую внутреннюю область или несбалансированные PDF-операторы. API Delphi и FPC не меняется; PDF для таких EMF изменится."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Compare PDFs made from EMF files using SaveDC, RestoreDC, ExtSelectClipRgn, SetMetaRgn and path painting, especially nested clips.",
+        "fr": "Comparez les PDF issus d’EMF qui utilisent SaveDC, RestoreDC, ExtSelectClipRgn, SetMetaRgn et les chemins, notamment avec des clips imbriqués.",
+        "zh": "请对比使用 SaveDC、RestoreDC、ExtSelectClipRgn、SetMetaRgn 和路径绘制的 EMF 所生成的 PDF，尤其是嵌套裁剪。",
+        "ru": "Сравните PDF из EMF с SaveDC, RestoreDC, ExtSelectClipRgn, SetMetaRgn и рисованием путей, особенно при вложенных clip."
+      }
+    },
+    {
+      "sha": "2fcdaf6130f6881b8820a72952cb61db70a14165",
+      "headline": {
+        "en": "Stock-font ANSI text uses the font’s own Windows code page",
+        "fr": "Le texte ANSI des polices stock utilise leur propre page de codes",
+        "zh": "库存字体的 ANSI 文本使用字体自身的 Windows 代码页",
+        "ru": "ANSI-текст stock-шрифта использует его собственную кодовую страницу"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.ui.pdf adds the public FontCharSetCodePage and StockFontCodePage helpers. TPdfEnum uses GetObjectW to derive a selected stock font’s charset, then decodes EMR_EXTTEXTOUTA bytes with that charset’s code page instead of assuming CP_ACP, except for documented fallbacks.",
+        "fr": "mormot.ui.pdf ajoute les fonctions publiques FontCharSetCodePage et StockFontCodePage. TPdfEnum utilise GetObjectW pour déterminer le charset d’une police stock, puis décode EMR_EXTTEXTOUTA avec sa page de codes au lieu de supposer CP_ACP, sauf replis documentés.",
+        "zh": "mormot.ui.pdf 新增公共函数 FontCharSetCodePage 和 StockFontCodePage。TPdfEnum 通过 GetObjectW 获取库存字体字符集，并使用对应代码页解码 EMR_EXTTEXTOUTA 字节，而不再一律假定 CP_ACP；仅保留文档说明的回退。",
+        "ru": "mormot.ui.pdf добавляет публичные функции FontCharSetCodePage и StockFontCodePage. TPdfEnum получает charset stock-шрифта через GetObjectW и декодирует байты EMR_EXTTEXTOUTA в его кодовой странице вместо безусловного CP_ACP, кроме описанных fallback."
+      },
+      "impact": {
+        "en": "On Windows systems whose ANSI page is not 1252, stock-font text in exported PDFs is decoded correctly. Delphi and FPC gain two source-compatible helper functions; existing signatures are untouched.",
+        "fr": "Sur les systèmes Windows dont la page ANSI n’est pas 1252, le texte des polices stock est correctement décodé dans les PDF. Delphi et FPC gagnent deux fonctions compatibles ; aucune signature existante ne change.",
+        "zh": "在 ANSI 代码页不是 1252 的 Windows 系统上，导出 PDF 中的库存字体文本可正确解码。Delphi 与 FPC 新增两个源码兼容的辅助函数，现有签名不变。",
+        "ru": "В Windows с ANSI-страницей не 1252 текст stock-шрифтов в PDF декодируется правильно. Delphi и FPC получают две совместимые helper-функции; существующие сигнатуры не меняются."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest EMR_EXTTEXTOUTA output that selects ANSI_FIXED_FONT, ANSI_VAR_FONT, OEM_FIXED_FONT or locale-specific system fonts.",
+        "fr": "Retestez EMR_EXTTEXTOUTA avec ANSI_FIXED_FONT, ANSI_VAR_FONT, OEM_FIXED_FONT ou des polices système locales.",
+        "zh": "请复测选择 ANSI_FIXED_FONT、ANSI_VAR_FONT、OEM_FIXED_FONT 或本地化系统字体的 EMR_EXTTEXTOUTA 输出。",
+        "ru": "Повторно проверьте EMR_EXTTEXTOUTA с ANSI_FIXED_FONT, ANSI_VAR_FONT, OEM_FIXED_FONT и локальными системными шрифтами."
+      },
+      "api_changes": [
+        {
+          "symbol": "FontCharSetCodePage",
+          "change": "added",
+          "note": {
+            "en": "Public helper maps a Windows font charset to the code page used by ExtTextOutA.",
+            "fr": "Fonction publique qui associe un charset Windows à la page de codes d’ExtTextOutA.",
+            "zh": "公共辅助函数，把 Windows 字体字符集映射到 ExtTextOutA 使用的代码页。",
+            "ru": "Публичная функция сопоставляет charset Windows с кодовой страницей ExtTextOutA."
+          }
+        },
+        {
+          "symbol": "StockFontCodePage",
+          "change": "added",
+          "note": {
+            "en": "Public helper resolves the code page of a Windows stock font.",
+            "fr": "Fonction publique qui résout la page de codes d’une police stock Windows.",
+            "zh": "公共辅助函数，用于解析 Windows 库存字体的代码页。",
+            "ru": "Публичная функция определяет кодовую страницу stock-шрифта Windows."
+          }
+        }
+      ]
+    },
+    {
+      "sha": "7e1833d138818cf9759e5c0832018fbaad037819",
+      "headline": {
+        "en": "Mirrored PDF shapes keep their recorded edge",
+        "fr": "Les formes PDF en miroir conservent leur bord enregistré",
+        "zh": "镜像 PDF 形状保留记录中的边缘",
+        "ru": "Зеркальные PDF-фигуры сохраняют записанную границу"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "BoxInclI and RoundRectI now add the signed device pixel to the recorded right and bottom edges before normalizing mirrored coordinates. DevPixelX and DevPixelY become signed, RoundRectI passes corners in TPdfCanvas order, and EMR_ROUNDRECT no longer mutates the source record.",
+        "fr": "BoxInclI et RoundRectI ajoutent désormais le pixel signé aux bords droit et bas enregistrés avant de normaliser les coordonnées miroir. DevPixelX et DevPixelY deviennent signés, RoundRectI transmet les coins dans l’ordre TPdfCanvas et EMR_ROUNDRECT ne modifie plus la source.",
+        "zh": "BoxInclI 和 RoundRectI 现在先把带符号设备像素加到记录的右边与下边，再规范化镜像坐标。DevPixelX 与 DevPixelY 改为有符号值，RoundRectI 按 TPdfCanvas 顺序传递角点，EMR_ROUNDRECT 不再修改源记录。",
+        "ru": "BoxInclI и RoundRectI теперь добавляют знаковый пиксель устройства к записанным правой и нижней границам до нормализации зеркальных координат. DevPixelX и DevPixelY стали знаковыми, углы идут в порядке TPdfCanvas, а EMR_ROUNDRECT не меняет исходную запись."
+      },
+      "impact": {
+        "en": "Rectangle, Ellipse and RoundRect output under a mirrored axis no longer shifts by one device pixel. Delphi and FPC interfaces are unchanged; only affected EMF-to-PDF geometry changes.",
+        "fr": "Rectangle, Ellipse et RoundRect ne sont plus décalés d’un pixel sous un axe miroir. Les interfaces Delphi et FPC restent identiques ; seule la géométrie EMF vers PDF change.",
+        "zh": "镜像轴下的 Rectangle、Ellipse 与 RoundRect 不再偏移一个设备像素。Delphi 与 FPC 接口不变，只有受影响的 EMF 转 PDF 几何会变化。",
+        "ru": "Rectangle, Ellipse и RoundRect при зеркальной оси больше не сдвигаются на один пиксель. Интерфейсы Delphi и FPC не меняются; меняется только геометрия EMF-to-PDF."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest EMF exports with negative viewport extents or other mirrored axes.",
+        "fr": "Retestez les exports EMF avec des extents de viewport négatifs ou d’autres axes miroir.",
+        "zh": "请复测 viewport 范围为负或使用其他镜像轴的 EMF 导出。",
+        "ru": "Повторно проверьте EMF с отрицательным viewport extent или другими зеркальными осями."
+      }
+    },
+    {
+      "sha": "2055447ad93aa825295eee23522fbdf5d5b5cb52",
+      "headline": {
+        "en": "FPC Win64 PDF brushes and extended pens read the 32-bit EMF layout",
+        "fr": "FPC Win64 lit correctement les brosses et stylos étendus des EMF",
+        "zh": "FPC Win64 按 32 位 EMF 布局读取画刷和扩展画笔",
+        "ru": "FPC Win64 читает кисти и расширенные перья в 32-битной разметке EMF"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnum introduces TEmrCreateBrushIndirect32 and TEmrExtCreatePen32 and uses them instead of FPC 3.2.2’s native-pointer LOGBRUSH and EXTLOGPEN declarations. This keeps lbColor and extended-pen fields at their on-disk EMF offsets.",
+        "fr": "TPdfEnum introduit TEmrCreateBrushIndirect32 et TEmrExtCreatePen32 à la place des déclarations LOGBRUSH et EXTLOGPEN à pointeur natif de FPC 3.2.2. lbColor et les champs du stylo restent ainsi aux offsets EMF sur disque.",
+        "zh": "TPdfEnum 新增 TEmrCreateBrushIndirect32 与 TEmrExtCreatePen32，替代 FPC 3.2.2 使用原生指针宽度的 LOGBRUSH 和 EXTLOGPEN 声明，使 lbColor 与扩展画笔字段保持在 EMF 磁盘偏移。",
+        "ru": "TPdfEnum вводит TEmrCreateBrushIndirect32 и TEmrExtCreatePen32 вместо объявлений LOGBRUSH и EXTLOGPEN с native pointer из FPC 3.2.2. lbColor и поля расширенного пера остаются на дисковых смещениях EMF."
+      },
+      "impact": {
+        "en": "PDF conversion on FPC 3.2.2 Win64 no longer renders every indirect brush and extended pen as black. Delphi and newer FPC layouts keep the same result and require no caller changes.",
+        "fr": "Sur FPC 3.2.2 Win64, la conversion PDF ne rend plus toutes les brosses indirectes et tous les stylos étendus en noir. Delphi et les FPC plus récents gardent le même résultat sans changement d’appel.",
+        "zh": "FPC 3.2.2 Win64 的 PDF 转换不再把所有间接画刷和扩展画笔渲染为黑色。Delphi 与较新 FPC 的结果不变，调用方无需修改。",
+        "ru": "На FPC 3.2.2 Win64 PDF-конвертация больше не делает все косвенные кисти и расширенные перья чёрными. Для Delphi и новых FPC результат прежний, вызовы менять не нужно."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade FPC 3.2.2 Win64 applications that convert coloured EMF content to PDF and compare brush and pen colours.",
+        "fr": "Mettez à jour les applications FPC 3.2.2 Win64 qui convertissent des EMF colorés en PDF et comparez les couleurs.",
+        "zh": "使用 FPC 3.2.2 Win64 将彩色 EMF 转为 PDF 的应用应升级并核对画刷与画笔颜色。",
+        "ru": "Обновите приложения FPC 3.2.2 Win64, конвертирующие цветные EMF в PDF, и сравните цвета кистей и перьев."
+      }
+    },
+    {
+      "sha": "5646c26bd934d78d75f583a8443a9a40ddb49b00",
+      "headline": {
+        "en": "TrueType subset reduction validates every input and output table bound",
+        "fr": "Сокращение поднабора TrueType проверяет границы каждой таблицы",
+        "zh": "TrueType 子集精简校验每个输入和输出表边界",
+        "ru": "Сокращение поднабора TrueType проверяет границы каждой таблицы"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "ReduceTTF now checks the 12-byte table-directory header, every directory entry, each retained table in the input subset and each write in the result. It validates checkSumAdjustment in head and computes searchRange, entrySelector and rangeShift from the actual number of retained tables.",
+        "fr": "ReduceTTF vérifie maintenant l’en-tête de 12 octets, chaque entrée du répertoire, chaque table conservée dans le sous-ensemble et chaque écriture du résultat. Il valide checkSumAdjustment dans head et calcule searchRange, entrySelector et rangeShift selon le nombre réel de tables.",
+        "zh": "ReduceTTF 现在校验 12 字节表目录头、每个目录项、输入子集中的每个保留表以及结果中的每次写入。它验证 head 的 checkSumAdjustment，并按实际保留表数计算 searchRange、entrySelector 和 rangeShift。",
+        "ru": "ReduceTTF теперь проверяет 12-байтовый заголовок каталога, каждую запись, каждую сохраняемую таблицу во входном поднаборе и каждую запись в результат. Проверяется checkSumAdjustment в head, а searchRange, entrySelector и rangeShift вычисляются по фактическому числу таблиц."
+      },
+      "impact": {
+        "en": "Malformed or unusually deduplicated font subsets no longer risk out-of-bounds reads or writes during PDF font embedding. The routine is internal, so Delphi and FPC application code remains source-compatible.",
+        "fr": "Les sous-ensembles de polices mal formés ou dédupliqués ne risquent plus des lectures ou écritures hors limites pendant l’incorporation PDF. La routine est interne ; le code Delphi et FPC reste compatible.",
+        "zh": "格式异常或特殊去重的字体子集在 PDF 字体嵌入时不再有越界读写风险。该例程是内部实现，Delphi 与 FPC 应用代码保持源码兼容。",
+        "ru": "Повреждённые или необычно дедуплицированные поднаборы шрифтов больше не приводят к чтению или записи за границами при встраивании в PDF. Процедура внутренняя, код Delphi и FPC совместим."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Regenerate PDFs that embed uncommon TrueType subsets and compare font rendering and file validity.",
+        "fr": "Régénérez les PDF qui incorporent des sous-ensembles TrueType inhabituels et vérifiez rendu et validité.",
+        "zh": "请重新生成嵌入少见 TrueType 子集的 PDF，并比较字体渲染与文件有效性。",
+        "ru": "Пересоздайте PDF с редкими поднаборами TrueType и проверьте рендеринг и валидность файлов."
+      }
+    },
+    {
+      "sha": "d9a99cf3b25e7b2013a7e9d574c55672bc2250c9",
+      "headline": {
+        "en": "Missing printer DPI falls back safely instead of dividing by zero",
+        "fr": "Une résolution d’imprimante absente utilise un repli sûr",
+        "zh": "缺失的打印机 DPI 使用安全回退而非除以零",
+        "ru": "При отсутствии DPI принтера используется безопасный fallback"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "CurrentPrinterRes retains the 300 dpi default when CreateDC or GetDeviceCaps fails, and RenderMetaFile retries if either axis is zero or negative. CurrentPrinterRes and CurrentPrinterPaperSize also pass GetProfileString the character count rather than a byte count on Unicode compilers.",
+        "fr": "CurrentPrinterRes conserve 300 dpi si CreateDC ou GetDeviceCaps échoue, et RenderMetaFile réessaie si un axe vaut zéro ou moins. CurrentPrinterRes et CurrentPrinterPaperSize passent aussi à GetProfileString un nombre de caractères et non d’octets en Unicode.",
+        "zh": "CurrentPrinterRes 在 CreateDC 或 GetDeviceCaps 失败时保留 300 dpi 默认值，RenderMetaFile 会在任一轴为零或负数时重试。Unicode 编译器下，CurrentPrinterRes 和 CurrentPrinterPaperSize 也改为向 GetProfileString 传递字符数而非字节数。",
+        "ru": "CurrentPrinterRes сохраняет 300 dpi при сбое CreateDC или GetDeviceCaps, а RenderMetaFile повторяет запрос, если любая ось нулевая или отрицательная. В Unicode-сборках CurrentPrinterRes и CurrentPrinterPaperSize передают GetProfileString число символов, а не байтов."
+      },
+      "impact": {
+        "en": "EMF-to-PDF conversion in printer-less or failing printer environments avoids a divide-by-zero path and unsafe buffer length. Both Delphi and FPC keep the same public API.",
+        "fr": "La conversion EMF vers PDF sans imprimante ou avec un pilote défaillant évite une division par zéro et une taille de tampon incorrecte. L’API publique reste identique sous Delphi et FPC.",
+        "zh": "在无打印机或打印机驱动失败的环境中，EMF 转 PDF 避免了除零路径与不安全的缓冲区长度。Delphi 与 FPC 的公共 API 不变。",
+        "ru": "Преобразование EMF в PDF без принтера или при сбое драйвера избегает деления на ноль и неверной длины буфера. Публичный API Delphi и FPC не меняется."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade headless or server deployments that render EMF to PDF without a reliable default printer.",
+        "fr": "Mettez à jour les déploiements headless ou serveur qui rendent des EMF en PDF sans imprimante fiable.",
+        "zh": "无可靠默认打印机却要将 EMF 渲染为 PDF 的无头或服务器部署应升级。",
+        "ru": "Обновите headless- и серверные системы, рендерящие EMF в PDF без надёжного принтера."
+      }
+    },
+    {
+      "sha": "ac12db429c64c269ae737c19d54325250258d549",
+      "headline": {
+        "en": "Repeated bitmap rendering no longer mutates the source EMF",
+        "fr": "Les rendus bitmap répétés ne modifient plus l’EMF source",
+        "zh": "重复位图渲染不再修改源 EMF",
+        "ru": "Повторный рендеринг bitmap больше не изменяет исходный EMF"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "For EMR_STRETCHDIBITS under a flipped transform, TPdfEnum copies the bounded bitmap header before negating biHeight instead of modifying the const record returned by EnumEnhMetaFile. The related mirrored-box change likewise stops editing EMR_ROUNDRECT in place.",
+        "fr": "Pour EMR_STRETCHDIBITS sous transformation inversée, TPdfEnum copie l’en-tête bitmap borné avant de nier biHeight au lieu de modifier l’enregistrement const fourni par EnumEnhMetaFile. Le correctif des cadres miroir évite aussi de modifier EMR_ROUNDRECT sur place.",
+        "zh": "对于翻转变换下的 EMR_STRETCHDIBITS，TPdfEnum 会复制经过边界检查的位图头后再取反 biHeight，而不再修改 EnumEnhMetaFile 返回的 const 记录。相关镜像框修复也停止原地修改 EMR_ROUNDRECT。",
+        "ru": "Для EMR_STRETCHDIBITS при перевёрнутом transform TPdfEnum копирует проверенный bitmap-заголовок перед сменой знака biHeight, не изменяя const-запись EnumEnhMetaFile. Связанное исправление зеркальных рамок также не меняет EMR_ROUNDRECT на месте."
+      },
+      "impact": {
+        "en": "Rendering the same metafile more than once now keeps bitmap orientation stable. Delphi and FPC callers need no changes; only repeat rendering of flipped bitmap records is affected.",
+        "fr": "Le rendu répété du même métafichier conserve désormais l’orientation du bitmap. Aucun changement n’est requis sous Delphi ou FPC ; seuls les bitmaps inversés rendus plusieurs fois sont concernés.",
+        "zh": "同一图元文件重复渲染时位图方向现在保持稳定。Delphi 与 FPC 调用方无需修改；仅翻转位图记录的重复渲染受影响。",
+        "ru": "Повторный рендеринг одного metafile теперь сохраняет ориентацию bitmap. Вызовы Delphi и FPC менять не нужно; затронут только повторный рендеринг перевёрнутых bitmap-записей."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Render the same EMF twice when it contains flipped EMR_STRETCHDIBITS records and compare the outputs.",
+        "fr": "Rendez deux fois le même EMF contenant des EMR_STRETCHDIBITS inversés et comparez les sorties.",
+        "zh": "请将包含翻转 EMR_STRETCHDIBITS 记录的同一 EMF 渲染两次并比较输出。",
+        "ru": "Отрендерите один EMF с перевёрнутым EMR_STRETCHDIBITS дважды и сравните результат."
+      }
+    },
+    {
+      "sha": "7fc8ed0e84cb2ceb689888d0a47dab2a39df6b9b",
+      "headline": {
+        "en": "ANSI EMF text is decoded with the selected font’s charset",
+        "fr": "Le texte ANSI des EMF suit le charset de la police sélectionnée",
+        "zh": "ANSI EMF 文本按所选字体字符集解码",
+        "ru": "ANSI-текст EMF декодируется в charset выбранного шрифта"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnum.TextOut now distinguishes EMR_EXTTEXTOUTA from the Unicode record, converts its byte string through the selected font charset’s code page and preserves glyph-index records. Per-byte dx advances are dropped only when multibyte conversion changes the character count.",
+        "fr": "TPdfEnum.TextOut distingue désormais EMR_EXTTEXTOUTA de l’enregistrement Unicode, convertit ses octets avec la page de codes du charset sélectionné et préserve les glyph-index. Les avances dx par octet sont abandonnées seulement si la conversion multioctet change le nombre de caractères.",
+        "zh": "TPdfEnum.TextOut 现在区分 EMR_EXTTEXTOUTA 与 Unicode 记录，按所选字体字符集的代码页转换字节串，并保留 glyph-index 记录。只有多字节转换改变字符数时，才丢弃逐字节 dx 间距。",
+        "ru": "TPdfEnum.TextOut теперь отличает EMR_EXTTEXTOUTA от Unicode-записи, преобразует байты через кодовую страницу charset выбранного шрифта и сохраняет glyph-index. Побайтовые dx отбрасываются только когда multibyte-конверсия меняет число символов."
+      },
+      "impact": {
+        "en": "ANSI, Greek, Shift-JIS and OEM text in EMF-to-PDF output is no longer read as pairs of WideChar values. The correction is shared by Delphi and FPC without changing application-facing signatures.",
+        "fr": "Les textes ANSI, grecs, Shift-JIS et OEM ne sont plus lus comme des paires de WideChar lors de la conversion EMF vers PDF. Le correctif vaut pour Delphi et FPC sans modifier les signatures publiques.",
+        "zh": "EMF 转 PDF 中的 ANSI、希腊文、Shift-JIS 与 OEM 文本不再被当作成对 WideChar 读取。Delphi 与 FPC 共用该修复，应用层签名不变。",
+        "ru": "ANSI, Greek, Shift-JIS и OEM-текст при EMF-to-PDF больше не читается парами WideChar. Исправление общее для Delphi и FPC, публичные сигнатуры не меняются."
+      },
+      "action": "review",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Compare non-Unicode EMF text under the actual Windows locales and fonts used in production.",
+        "fr": "Comparez les textes EMF non Unicode avec les locales et polices Windows de production.",
+        "zh": "请在生产使用的真实 Windows 区域设置与字体下对比非 Unicode EMF 文本。",
+        "ru": "Сравните non-Unicode текст EMF на реальных Windows locale и шрифтах production."
+      }
+    },
+    {
+      "sha": "8e60a6ad8b4d3577b1cb7c9aa71272730009554d",
+      "headline": {
+        "en": "Scaled rotations avoid invalid inverse-trigonometric inputs",
+        "fr": "Les rotations mises à l’échelle évitent les entrées trigonométriques invalides",
+        "zh": "缩放旋转避免无效反三角函数输入",
+        "ru": "Масштабированные повороты избегают недопустимых аргументов тригонометрии"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "ScaleMatrix and TextOut now derive rotation with ArcTan2(eM12, eM11) instead of passing scaled matrix components to ArcSin or ArcCos. Values above one therefore no longer raise EInvalidOp on Delphi or yield NaN on FPC.",
+        "fr": "ScaleMatrix et TextOut calculent désormais la rotation avec ArcTan2(eM12, eM11) au lieu de passer des composantes mises à l’échelle à ArcSin ou ArcCos. Les valeurs supérieures à un ne provoquent plus EInvalidOp sous Delphi ni NaN sous FPC.",
+        "zh": "ScaleMatrix 与 TextOut 现在用 ArcTan2(eM12, eM11) 计算旋转角，不再把缩放后的矩阵分量传给 ArcSin 或 ArcCos。因此大于 1 的值不会在 Delphi 中触发 EInvalidOp，也不会在 FPC 中得到 NaN。",
+        "ru": "ScaleMatrix и TextOut теперь получают угол через ArcTan2(eM12, eM11), а не передают масштабированные компоненты матрицы в ArcSin или ArcCos. Значения больше единицы больше не вызывают EInvalidOp в Delphi и NaN в FPC."
+      },
+      "impact": {
+        "en": "Rotated text and graphics under a world scale render instead of failing on Delphi or appearing upright on FPC. No public API changes are introduced.",
+        "fr": "Le texte et les graphiques tournés sous une mise à l’échelle sont rendus sans erreur sous Delphi ni redressement sous FPC. L’API publique ne change pas.",
+        "zh": "世界缩放下的旋转文本与图形现在可正常渲染，不会在 Delphi 中失败或在 FPC 中变成正向。没有公共 API 变化。",
+        "ru": "Повернутый текст и графика при world scale теперь рендерятся без ошибки Delphi и без выпрямления в FPC. Публичный API не меняется."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade if EMF input can combine scaling with 90-degree or 180-degree rotations, then compare Delphi and FPC output.",
+        "fr": "Mettez à jour si les EMF combinent échelle et rotations à 90 ou 180 degrés, puis comparez Delphi et FPC.",
+        "zh": "若 EMF 可能组合缩放与 90 或 180 度旋转，请升级并比较 Delphi 与 FPC 输出。",
+        "ru": "Обновитесь, если EMF сочетает масштаб и поворот на 90 или 180 градусов, затем сравните Delphi и FPC."
+      }
+    },
+    {
+      "sha": "450a3e8322918feffc2ef98d10d692313931fe54",
+      "headline": {
+        "en": "RestoreDC honours the requested depth beyond 32 saved states",
+        "fr": "RestoreDC respecte la profondeur demandée au-delà de 32 états",
+        "zh": "RestoreDC 在超过 32 个保存状态时仍遵循指定深度",
+        "ru": "RestoreDC учитывает заданную глубину после 32 состояний"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPdfEnum replaces its fixed 32-slot DC array with a dynamically grown stack. RestoreDC now consumes the record’s negative iRelative value, ignores invalid targets as GDI does and restores the named state rather than always popping one.",
+        "fr": "TPdfEnum remplace son tableau DC fixe de 32 cases par une pile dynamique. RestoreDC utilise désormais la valeur négative iRelative, ignore les cibles invalides comme GDI et restaure l’état nommé au lieu de dépiler toujours un seul niveau.",
+        "zh": "TPdfEnum 将固定 32 项的 DC 数组改为动态增长的栈。RestoreDC 现在使用记录中的负 iRelative，像 GDI 一样忽略无效目标，并恢复指定状态而不是总弹出一层。",
+        "ru": "TPdfEnum заменяет фиксированный массив DC из 32 элементов динамическим стеком. RestoreDC использует отрицательный iRelative, игнорирует неверные цели как GDI и восстанавливает указанное состояние вместо одного pop."
+      },
+      "impact": {
+        "en": "Deeply nested EMF save/restore sequences now recover the intended graphics state. Delphi and FPC application code is unaffected; generated PDFs differ only for such metafiles.",
+        "fr": "Les séquences EMF SaveDC/RestoreDC profondément imbriquées retrouvent le bon état graphique. Le code Delphi et FPC ne change pas ; seuls ces PDF sont modifiés.",
+        "zh": "深度嵌套的 EMF 保存/恢复序列现在会恢复预期图形状态。Delphi 与 FPC 应用代码不受影响；只有此类图元文件生成的 PDF 会变化。",
+        "ru": "Глубоко вложенные последовательности SaveDC/RestoreDC теперь восстанавливают нужное состояние. Код Delphi и FPC не меняется; отличаются только PDF из таких metafile."
+      },
+      "action": "none",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f768636f9a203cbbeb9c098dc46c67032ab83d3a",
+      "headline": {
+        "en": "EMF poly-polylines remain open in PDF output",
+        "fr": "Полилинии EMF остаются открытыми в PDF",
+        "zh": "EMF 多折线在 PDF 输出中保持开放",
+        "ru": "Полилинии EMF остаются открытыми в PDF"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPdfEnum.PolyPoly closes only EMR_POLYPOLYGON and EMR_POLYPOLYGON16 figures. EMR_POLYPOLYLINE and EMR_POLYPOLYLINE16 no longer receive an extra segment back to each subline’s first point.",
+        "fr": "TPdfEnum.PolyPoly ne ferme plus que les figures EMR_POLYPOLYGON et EMR_POLYPOLYGON16. EMR_POLYPOLYLINE et EMR_POLYPOLYLINE16 ne reçoivent plus de segment supplémentaire vers le premier point de chaque sous-ligne.",
+        "zh": "TPdfEnum.PolyPoly 现在只闭合 EMR_POLYPOLYGON 和 EMR_POLYPOLYGON16 图形。EMR_POLYPOLYLINE 与 EMR_POLYPOLYLINE16 不再额外连回每条子线的起点。",
+        "ru": "TPdfEnum.PolyPoly замыкает только EMR_POLYPOLYGON и EMR_POLYPOLYGON16. EMR_POLYPOLYLINE и EMR_POLYPOLYLINE16 больше не получают лишний сегмент к первой точке каждой линии."
+      },
+      "impact": {
+        "en": "Multi-part polylines exported from EMF no longer become closed polygons. There is no application-code impact for Delphi or FPC; only the rendered path changes.",
+        "fr": "Les polylignes multiparties exportées depuis EMF ne deviennent plus des polygones fermés. Aucun impact sur le code Delphi ou FPC ; seul le tracé rendu change.",
+        "zh": "从 EMF 导出的多段折线不再变成闭合多边形。Delphi 或 FPC 应用代码不受影响；仅渲染路径变化。",
+        "ru": "Составные полилинии из EMF больше не превращаются в замкнутые полигоны. На код Delphi и FPC это не влияет; меняется только путь."
+      },
+      "action": "none",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "618e24d5fded0f67b62b75e462ae973c8704136c",
+      "headline": {
+        "en": "AlphaBlend records no longer turn pure blue pixels transparent",
+        "fr": "AlphaBlend ne rend plus transparents les pixels bleu pur",
+        "zh": "AlphaBlend 记录不再让纯蓝像素透明",
+        "ru": "AlphaBlend больше не делает чисто синие пиксели прозрачными"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TPdfEnum stops passing the EMR_ALPHABLEND BLENDFUNCTION value to DrawBitmap as if it were a transparent colour. The record is rendered opaque for now; constant and per-pixel alpha remain unsupported.",
+        "fr": "TPdfEnum ne passe plus la valeur BLENDFUNCTION d’EMR_ALPHABLEND à DrawBitmap comme s’il s’agissait d’une couleur transparente. L’enregistrement est rendu opaque ; l’alpha constant ou par pixel reste non pris en charge.",
+        "zh": "TPdfEnum 不再把 EMR_ALPHABLEND 的 BLENDFUNCTION 值当作透明色传给 DrawBitmap。该记录目前按不透明方式渲染；常量 alpha 与逐像素 alpha 仍不支持。",
+        "ru": "TPdfEnum больше не передаёт BLENDFUNCTION из EMR_ALPHABLEND в DrawBitmap как прозрачный цвет. Запись пока рисуется непрозрачно; constant и per-pixel alpha не поддерживаются."
+      },
+      "impact": {
+        "en": "Opaque AlphaBlend bitmaps no longer acquire holes where pixels happen to match the packed blend value. Delphi and FPC APIs are unchanged, but true alpha blending is still unavailable.",
+        "fr": "Les bitmaps AlphaBlend opaques ne présentent plus de trous lorsque des pixels correspondent à la valeur blend. Les API Delphi et FPC ne changent pas, mais le véritable alpha blending reste absent.",
+        "zh": "不透明 AlphaBlend 位图不再因为像素碰巧匹配打包 blend 值而出现空洞。Delphi 与 FPC API 不变，但真正的 alpha 混合仍不可用。",
+        "ru": "В непрозрачных AlphaBlend bitmap больше нет дыр там, где пиксель совпал с упакованным blend-значением. API Delphi и FPC не меняется, но настоящее alpha blending всё ещё отсутствует."
+      },
+      "action": "none",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c4e1f0d69b24d834df44c739c3f1988aa7504ae3",
+      "headline": {
+        "en": "PDF font mapping rejects malformed format 4 cmap bounds",
+        "fr": "Le mapping des polices PDF rejette les cmap format 4 mal bornées",
+        "zh": "PDF 字体映射拒绝越界的 format 4 cmap",
+        "ru": "PDF-сопоставление шрифтов отвергает неверные границы cmap format 4"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfTtf now receives the exact cmap byte length from GetTtfData and validates its header, subtable directory, format 4 arrays, segment ranges and idRangeOffset glyph accesses. Invalid segments produce no glyph instead of a negative count or out-of-bounds access.",
+        "fr": "TPdfTtf reçoit désormais la longueur exacte de cmap via GetTtfData et vérifie son en-tête, son répertoire, les tableaux format 4, les plages de segments et les accès glyphes via idRangeOffset. Un segment invalide ne produit aucun glyphe au lieu d’un compte négatif ou d’un accès hors limites.",
+        "zh": "TPdfTtf 现在从 GetTtfData 获取 cmap 的精确字节长度，并校验头部、子表目录、format 4 数组、分段范围和通过 idRangeOffset 的字形访问。无效分段会产生空字形，而不是负计数或越界访问。",
+        "ru": "TPdfTtf теперь получает точную длину cmap из GetTtfData и проверяет заголовок, каталог подтаблиц, массивы format 4, диапазоны сегментов и доступ к glyph через idRangeOffset. Неверный сегмент даёт пустой glyph вместо отрицательного счётчика или выхода за границы."
+      },
+      "impact": {
+        "en": "Defensive parsing prevents malformed TrueType cmap data from causing memory errors during PDF font embedding. Normal GDI-loaded fonts render as before, and Delphi/FPC application APIs do not change.",
+        "fr": "Le parsing défensif empêche un cmap TrueType mal formé de provoquer des erreurs mémoire pendant l’incorporation PDF. Les polices chargées normalement par GDI restent identiques et les API Delphi/FPC ne changent pas.",
+        "zh": "防御性解析可阻止异常 TrueType cmap 数据在 PDF 字体嵌入时造成内存错误。正常由 GDI 加载的字体渲染不变，Delphi/FPC 应用 API 不变。",
+        "ru": "Защитный разбор не даёт повреждённому TrueType cmap вызвать ошибку памяти при встраивании в PDF. Обычные GDI-шрифты рендерятся как прежде, API Delphi/FPC не меняется."
+      },
+      "action": "none",
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "78501a4ae52071204d6c921b760d8116ca596761",
+      "headline": {
+        "en": "The Win32 PDF metafile checksum now matches the corrected box geometry",
+        "fr": "Le checksum Win32 suit désormais la géométrie corrigée des cadres PDF",
+        "zh": "Win32 PDF 图元文件校验值已匹配修正后的框体几何",
+        "ru": "Checksum Win32 теперь соответствует исправленной геометрии PDF-рамок"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "MetafileRenderingAndOrientation updates its Delphi Win32, code-page-1252 expected hash from FE2D27CA to 456748FC. The fixture change records the one-device-pixel rectangle and ellipse correction from pull request 686.",
+        "fr": "MetafileRenderingAndOrientation remplace le hash attendu Delphi Win32 en page 1252, FE2D27CA, par 456748FC. Ce changement enregistre la correction d’un pixel des rectangles et ellipses de la PR 686.",
+        "zh": "MetafileRenderingAndOrientation 将 Delphi Win32、代码页 1252 下的预期哈希从 FE2D27CA 更新为 456748FC。该夹具变更记录了 PR 686 对矩形与椭圆一个设备像素的修正。",
+        "ru": "MetafileRenderingAndOrientation меняет ожидаемый hash для Delphi Win32 и code page 1252 с FE2D27CA на 456748FC. Fixture фиксирует коррекцию прямоугольников и эллипсов на один пиксель из PR 686."
+      },
+      "impact": {
+        "en": "This is a test expectation only and introduces no additional runtime or API change for Delphi or FPC applications.",
+        "fr": "Il s’agit uniquement d’une attente de test, sans changement supplémentaire d’exécution ou d’API pour les applications Delphi ou FPC.",
+        "zh": "这只是测试预期更新，不会给 Delphi 或 FPC 应用带来额外运行时或 API 变化。",
+        "ru": "Это только изменение ожидаемого результата теста, без дополнительного runtime- или API-эффекта для Delphi и FPC."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3ca285f13932a8d5c81189d043228875185e386f",
+      "headline": {
+        "en": "FPC Win64 GDI+ conversion reads EMF brush and pen records correctly",
+        "fr": "FPC Win64 lit correctement les brosses et stylos EMF dans GDI+",
+        "zh": "FPC Win64 的 GDI+ 转换正确读取 EMF 画刷和画笔",
+        "ru": "FPC Win64 корректно читает кисти и перья EMF в GDI+"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.lib.gdiplus adds compiler-independent TEmrCreateBrushIndirect32 and TEmrExtCreatePen32 layouts. CreatePenObj and brush creation read those fixed-width records instead of FPC 3.2.2 Win64’s pointer-sized declarations.",
+        "fr": "mormot.lib.gdiplus ajoute les layouts TEmrCreateBrushIndirect32 et TEmrExtCreatePen32 indépendants du compilateur. CreatePenObj et la création des brosses lisent ces enregistrements fixes plutôt que les déclarations à taille de pointeur de FPC 3.2.2 Win64.",
+        "zh": "mormot.lib.gdiplus 新增与编译器无关的 TEmrCreateBrushIndirect32 和 TEmrExtCreatePen32 布局。CreatePenObj 与画刷创建读取这些固定宽度记录，不再使用 FPC 3.2.2 Win64 的指针宽度声明。",
+        "ru": "mormot.lib.gdiplus добавляет независимые от компилятора TEmrCreateBrushIndirect32 и TEmrExtCreatePen32. CreatePenObj и создание кисти читают эти fixed-width записи вместо pointer-sized объявлений FPC 3.2.2 Win64."
+      },
+      "impact": {
+        "en": "GDI+ EMF preview on FPC 3.2.2 Win64 no longer turns indirect brushes black or misreads extended pens. Delphi and newer FPC builds keep compatible behaviour.",
+        "fr": "L’aperçu EMF par GDI+ sous FPC 3.2.2 Win64 ne rend plus les brosses indirectes en noir et ne décale plus les stylos étendus. Delphi et les FPC plus récents restent compatibles.",
+        "zh": "FPC 3.2.2 Win64 的 GDI+ EMF 预览不再把间接画刷变黑，也不会错读扩展画笔。Delphi 与较新 FPC 行为保持兼容。",
+        "ru": "Предпросмотр EMF через GDI+ на FPC 3.2.2 Win64 больше не делает кисти чёрными и не смещает поля расширенных перьев. Delphi и новые FPC совместимы."
+      },
+      "action": "upgrade-recommended",
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Upgrade FPC 3.2.2 Win64 preview paths and compare coloured brushes and extended pen styles.",
+        "fr": "Mettez à jour les aperçus FPC 3.2.2 Win64 et comparez les brosses colorées et styles de stylos.",
+        "zh": "请升级 FPC 3.2.2 Win64 预览路径，并比较彩色画刷与扩展画笔样式。",
+        "ru": "Обновите preview на FPC 3.2.2 Win64 и сравните цветные кисти и стили расширенных перьев."
+      }
+    },
+    {
+      "sha": "aceee0f76dfb79306dd7cc3946e5529bc62f61f7",
+      "headline": {
+        "en": "GDI+ applies viewport mapping before the playback transform",
+        "fr": "GDI+ applique le mapping viewport avant la transformation de lecture",
+        "zh": "GDI+ 先应用 viewport 映射再应用回放变换",
+        "ru": "GDI+ применяет viewport mapping до transform воспроизведения"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TGdiplusEnum.ScaleMatrix now computes window-to-viewport translation in floating point and composes row-vector matrices as World x Map x Dest. This removes MulDiv rounding and applies the destination playback transform after the logical mapping.",
+        "fr": "TGdiplusEnum.ScaleMatrix calcule désormais la translation window/viewport en virgule flottante et compose les matrices de vecteurs-lignes comme World x Map x Dest. Cela supprime l’arrondi MulDiv et applique la transformation de destination après le mapping logique.",
+        "zh": "TGdiplusEnum.ScaleMatrix 现在用浮点数计算 window 到 viewport 的平移，并按行向量顺序组合 World x Map x Dest。这样消除了 MulDiv 舍入，并在逻辑映射后应用目标回放变换。",
+        "ru": "TGdiplusEnum.ScaleMatrix теперь вычисляет window-to-viewport translation в floating point и компонует row-vector матрицы как World x Map x Dest. Убрано округление MulDiv, а destination transform применяется после логического mapping."
+      },
+      "impact": {
+        "en": "EMF previews with non-zero window or viewport origins and a playback scale now align with GDI instead of accumulating rounding or transform-order errors. Delphi and FPC APIs are unchanged.",
+        "fr": "Les aperçus EMF avec origines window/viewport non nulles et mise à l’échelle de lecture s’alignent maintenant sur GDI sans erreurs d’arrondi ou d’ordre. Les API Delphi et FPC restent identiques.",
+        "zh": "带非零 window/viewport 原点与回放缩放的 EMF 预览现在与 GDI 对齐，不再累积舍入或变换顺序错误。Delphi 与 FPC API 不变。",
+        "ru": "Предпросмотр EMF с ненулевыми window/viewport origin и playback scale теперь совпадает с GDI без ошибок округления и порядка transform. API Delphi и FPC не меняется."
+      },
+      "action": "review",
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Compare GDI+ previews that combine viewport origins, window origins and destination scaling.",
+        "fr": "Comparez les aperçus GDI+ qui combinent origines viewport, window et mise à l’échelle de destination.",
+        "zh": "请比较同时使用 viewport 原点、window 原点和目标缩放的 GDI+ 预览。",
+        "ru": "Сравните GDI+ preview с viewport origin, window origin и destination scaling."
+      }
+    },
+    {
+      "sha": "169490f1edfb1329554eddf9742bc5a8602d23d4",
+      "headline": {
+        "en": "PS_NULL pens stop drawing in GDI+ EMF previews",
+        "fr": "Les stylos PS_NULL cessent de tracer dans les aperçus GDI+",
+        "zh": "PS_NULL 画笔不再在 GDI+ EMF 预览中绘制",
+        "ru": "Перо PS_NULL больше не рисует в GDI+ preview"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "CreatePenObj now assigns handle 0 to EMR_CREATEPEN and EMR_EXTCREATEPEN records whose style is PS_NULL, matching the stock NULL_PEN. It no longer creates a visible solid GDI+ pen from their colour and width.",
+        "fr": "CreatePenObj affecte désormais le handle 0 aux enregistrements EMR_CREATEPEN et EMR_EXTCREATEPEN de style PS_NULL, comme NULL_PEN. Il ne crée plus un stylo GDI+ solide et visible à partir de leur couleur et largeur.",
+        "zh": "CreatePenObj 现在将样式为 PS_NULL 的 EMR_CREATEPEN 和 EMR_EXTCREATEPEN 记录设为句柄 0，与库存 NULL_PEN 一致，不再根据颜色和宽度创建可见的 GDI+ 实线画笔。",
+        "ru": "CreatePenObj теперь присваивает handle 0 записям EMR_CREATEPEN и EMR_EXTCREATEPEN со стилем PS_NULL, как stock NULL_PEN. Видимое сплошное GDI+ перо из их цвета и ширины больше не создаётся."
+      },
+      "impact": {
+        "en": "Shapes intended to have no outline no longer gain one in GDI+ EMF conversion. There is no source-level effect for Delphi or FPC callers.",
+        "fr": "Les formes sans contour ne reçoivent plus de trait dans la conversion GDI+ des EMF. Aucun effet au niveau source pour les appels Delphi ou FPC.",
+        "zh": "原本不应有轮廓的形状在 GDI+ EMF 转换中不再出现边线。Delphi 或 FPC 调用方没有源码层影响。",
+        "ru": "Фигуры без контура больше не получают обводку при GDI+ конвертации EMF. Для кода Delphi и FPC изменений нет."
+      },
+      "action": "none",
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d80a4a6b9c123431a7708ed970230958877d2e81",
+      "headline": {
+        "en": "GDI+ RestoreDC restores the requested depth and clip transform",
+        "fr": "GDI+ RestoreDC restaure la profondeur et la transformation du clip",
+        "zh": "GDI+ RestoreDC 恢复指定深度与裁剪变换",
+        "ru": "GDI+ RestoreDC восстанавливает глубину и transform clip"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TGdiplusEnum.RestoreDC now honours negative iRelative depth, ignores invalid targets, frees every discarded clip region, restores the saved transform before reapplying its clip and grows the DC-state array dynamically. EnumerateEnd also frees DC[i].ClipRegion rather than repeating DC[nDC].",
+        "fr": "TGdiplusEnum.RestoreDC respecte désormais la profondeur iRelative négative, ignore les cibles invalides, libère chaque région supprimée, restaure la transformation avant le clip et agrandit dynamiquement la pile DC. EnumerateEnd libère aussi DC[i].ClipRegion au lieu de répéter DC[nDC].",
+        "zh": "TGdiplusEnum.RestoreDC 现在遵循负 iRelative 深度、忽略无效目标、释放所有丢弃的裁剪区域、先恢复保存的变换再应用裁剪，并动态扩展 DC 状态数组。EnumerateEnd 也改为释放 DC[i].ClipRegion，而不是重复释放 DC[nDC]。",
+        "ru": "TGdiplusEnum.RestoreDC теперь учитывает отрицательный iRelative, игнорирует неверные цели, освобождает все отброшенные clip-region, восстанавливает transform до clip и динамически растит массив DC. EnumerateEnd освобождает DC[i].ClipRegion, а не повторяет DC[nDC]."
+      },
+      "impact": {
+        "en": "Nested EMF state restores no longer shrink a saved clip under a temporary world scale or fail beyond eleven levels. Delphi and FPC callers remain source-compatible.",
+        "fr": "Les restaurations EMF imbriquées ne réduisent plus un clip sauvegardé sous une échelle temporaire et dépassent onze niveaux. Les appels Delphi et FPC restent compatibles.",
+        "zh": "嵌套 EMF 状态恢复不再因临时世界缩放而缩小保存的裁剪区，也不再受 11 层限制。Delphi 与 FPC 调用保持源码兼容。",
+        "ru": "Вложенный RestoreDC больше не уменьшает сохранённый clip из-за временного world scale и не ограничен одиннадцатью уровнями. Вызовы Delphi и FPC совместимы."
+      },
+      "action": "review",
+      "units": [
+        "mormot.lib.gdiplus"
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Retest GDI+ EMF previews with nested SaveDC/RestoreDC, clipping and temporary world transforms.",
+        "fr": "Retestez les aperçus GDI+ avec SaveDC/RestoreDC imbriqués, clips et transformations temporaires.",
+        "zh": "请复测包含嵌套 SaveDC/RestoreDC、裁剪与临时世界变换的 GDI+ EMF 预览。",
+        "ru": "Повторно проверьте GDI+ EMF с вложенными SaveDC/RestoreDC, clip и временными world transform."
+      }
+    }
+  ]
+}
