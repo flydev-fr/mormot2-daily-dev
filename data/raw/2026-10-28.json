@@ -1,0 +1,389 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-28",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-29T03:34:23Z",
+  "range": {
+    "since": "2026-10-27T23:00:00Z",
+    "until": "2026-10-28T23:00:00Z",
+    "base_sha": "ea5a2bbb6a5750f9fd60f21253fb8c5c4bb4cf67",
+    "head_sha": "c12b33766ebb3731ddda4eaeaf221e31ec578cec"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 8,
+    "additions": 3607,
+    "deletions": 382
+  },
+  "commits": [
+    {
+      "sha": "c12b33766ebb3731ddda4eaeaf221e31ec578cec",
+      "short_sha": "c12b3376",
+      "subject": "Merge pull request #690 from koxo/pdf-aes256",
+      "body": "pdf: AES-256 encryption and PDF 2.0 output",
+      "author": "ab",
+      "date": "2026-10-28T17:11:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c12b33766ebb3731ddda4eaeaf221e31ec578cec",
+      "parents": [
+        "8e59f120d5e9804b110c1b5c7546e46fd5e1803c",
+        "41b3d0c342ba442212d311bcb802f49fa9219a03"
+      ],
+      "stats": {
+        "additions": 552,
+        "deletions": 193,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 454,
+          "deletions": 39,
+          "patch": "@@ -174,12 +174,14 @@   TPdfBox = record\n   PPdfBox = ^TPdfBox;\r\n \r\n   /// the internal pdf file format\r\n+  // - pdf20 is ISO 32000-2 (PDF 2.0), see TPdfDocument.GeneratePdf20File\r\n   TPdfFileFormat = (\r\n     pdf13,\r\n     pdf14,\r\n     pdf15,\r\n     pdf16,\r\n-    pdf17);\r\n+    pdf17,\r\n+    pdf20);\r\n \r\n   /// the PDF/A level\r\n   TPdfALevel = (\r\n@@ -395,15 +397,24 @@   EPdfInvalidOperation = class(ESynException);\n {$ifdef USE_PDFSECURITY}\r\n \r\n   /// the available encryption levels\r\n-  // - in current version only RC4 40-bit and RC4 128-bit are available, which\r\n-  // correspond respectively to PDF 1.3 and PDF 1.4 formats\r\n+  // - RC4 40-bit and RC4 128-bit correspond respectively to PDF 1.3 and PDF 1.4\r\n+  // formats: they are deprecated, and RC4 is weak by today's standards\r\n   // - for RC4 40-bit and RC4 128-bit, associated password are restricted to a\r\n   // maximum length of 32 characters and could contain only characters from the\r\n   // Latin-1 encoding (i.e. no accent)\r\n+  // - elAES_128 (revision 4, /AESV2) is reserved for compatibility with the\r\n+  // cross-platform PDF engine, which implements it: it is not supported by\r\n+  // this unit, and TPdfEncryption.New() raises EPdfInvalidOperation\r\n+  // - elAES_256 is the AES-256 security handler of ISO 32000-2 (PDF 2.0),\r\n+  // revision 6: the file is written as PDF 1.7 with the Adobe extension level\r\n+  // 8, as expected by all current readers; passwords are UTF-8 encoded (with\r\n+  // no SASLprep normalization) and truncated to 127 bytes\r\n   TPdfEncryptionLevel = (\r\n     elNone,\r\n     elRC4_40,\r\n-    elRC4_128);\r\n+    elRC4_128,\r\n+    elAES_128,\r\n+    elAES_256);\r\n \r\n   /// PDF can encode various restrictions on document operations which can be\r\n   // granted or denied individually (some settings depend on others, though):\r\n@@ -613,6 +624,10 @@   TPdfEncryption = class\n     fOwnerPassword: string;\r\n     fDoc: TPdfDocument;\r\n     procedure EncodeBuffer(const BufIn; var BufOut; Count: cardinal); virtual; abstract;\r\n+    /// how many bytes EncodeBuffer() writes for Count input bytes\r\n+    // - RC4 encrypts in place (same length); AES adds an IV and a padding, so\r\n+    // BufOut should then be a distinct buffer of EncodeLength(Count) bytes\r\n+    function EncodeLength(Count: cardinal): cardinal; virtual;\r\n   public\r\n     /// initialize the internal structures with the proper classes\r\n     // - do not call this method directly, but class function TPdfEncryption.New()\r\n@@ -624,8 +639,9 @@   TPdfEncryption = class\n     procedure AttachDocument(aDoc: TPdfDocument); virtual;\r\n     /// will create the expected TPdfEncryption instance, depending on aLevel\r\n     // - to be called as parameter of TPdfDocument/TPdfDocumentGdi.Create()\r\n-    // - currently, only elRC4_40 and elRC4_128 levels are implemented\r\n-    // - both passwords are expected to be ASCII-7 characters only\r\n+    // - elRC4_40, elRC4_128 and elAES_256 levels are implemented; elAES_128\r\n+    // raises EPdfInvalidOperation (reserved for the cross-platform engine)\r\n+    // - for RC4, both passwords are expected to be ASCII-7 characters only\r\n     // - aUserPassword will be asked at file opening: to be set to '' for not\r\n     // blocking display, but optional permission\r\n     // - aOwnerPassword shall not be '', and will be used internally to cypher\r\n@@ -638,6 +654,8 @@   TPdfEncryption = class\n     // !   TPdfEncryption.New(elRC4_40,'','toto',PDF_PERMISSION_NOMODIF));\r\n     // ! Doc := TPdfDocument.Create(false,0,false,\r\n     // !   TPdfEncryption.New(elRC4_128,'','toto',PDF_PERMISSION_NOCOPYNORPRINT));\r\n+    // ! Doc := TPdfDocument.Create(false,0,false,\r\n+    // !   TPdfEncryption.New(elAES_256,'user','owner',PDF_PERMISSION_NOMODIF));\r\n     class function New(aLevel: TPdfEncryptionLevel;\r\n       const aUserPassword, aOwnerPassword: string;\r\n       aPermissions: TPdfEncryptionPermissions): TPdfEncryption;\r\n@@ -660,6 +678,24 @@   TPdfEncryptionRC4MD5 = class(TPdfEncryption)\n     // - will compute the internal keys\r\n     procedur\n... [truncated, 25385 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 98,
+          "deletions": 154,
+          "patch": "@@ -19,6 +19,9 @@ interface\n   mormot.core.unicode,\r\n   mormot.core.text,\r\n   mormot.lib.z,\r\n+  {$ifndef NO_USE_PDFSECURITY}\r\n+  mormot.crypt.core,\r\n+  {$endif NO_USE_PDFSECURITY}\r\n   mormot.ui.pdf;\r\n \r\n type\r\n@@ -67,8 +70,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfMirroredBoxes;\r\n     procedure EmfClipRestoreDC;\r\n     procedure EmfUnderlineClipped;\r\n-    procedure EmfNullPenLines;\r\n-    procedure EmfLineAfterEndedPath;\r\n+    procedure EncryptionAes256;\r\n+    procedure Pdf20File;\r\n   end;\r\n \r\n implementation\r\n@@ -373,7 +376,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $439DB6C2); // no lone S after a line\r\n+        CheckHash(S, $456748FC); // the boxes of #686\r\n       end;\r\n     finally\r\n       Free;\r\n@@ -1604,7 +1607,6 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\n   doc := TPdfDocumentGdi.Create;\r\n   try\r\n     doc.Info.CreationDate := FIXED_DATE;\r\n-    doc.ScreenLogPixels := 96; // the coordinates the checks expect, any screen\r\n     doc.CompressionMethod := cmNone;\r\n     doc.EmbeddedTTF := false;\r\n     doc.StandardFontsReplace := true;\r\n@@ -2645,7 +2647,7 @@ procedure TTestUiPdf.EmfClipRestoreDC;\n       SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n       SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH)); // as FPC selects none\r\n       MoveToEx(mc.Handle, 20, 350, nil);\r\n-      LineTo(mc.Handle, 200, 350); // of a null pen: ended, not in the fill\r\n+      LineTo(mc.Handle, 200, 350); // its geometry left open on the page\r\n       FillPath(mc.Handle);\r\n     finally\r\n       mc.Free;\r\n@@ -2821,171 +2823,113 @@ procedure TTestUiPdf.EmfUnderlineClipped;\n     'the pen width after the Q of the text');\r\n end;\r\n \r\n-procedure TTestUiPdf.EmfNullPenLines;\r\n+\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+type\r\n+  // to read the protected file key of TPdfEncryptionAes256\r\n+  TAesAccess = class(TPdfEncryptionAes256);\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n+procedure TTestUiPdf.EncryptionAes256;\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+const\r\n+  KNOWN = 'Hello AES-256 !'; // 15 bytes: one block once padded\r\n var\r\n-  mf: TMetaFile;\r\n-  mc: TMetaFileCanvas;\r\n-  pen: HPEN;\r\n-  txt, two: RawUtf8;\r\n+  pdf: TPdfDocument;\r\n+  enc: TPdfEncryption;\r\n+  s, sub: RawByteString;\r\n+  key: THash256;\r\n+  aes: TAesCbc;\r\n begin\r\n-  { GDI draws no line of a null pen: its m l and the ArcTo stayed open, the\r\n-    next shape stroked them in the colour of before, and the Arc was\r\n-    stroked at once; a line of a pen is stroked at once, yet the next shape\r\n-    wrote a lone S }\r\n-  mf := TMetaFile.Create;\r\n+  enc := TPdfEncryption.New(elAES_256, 'user', 'owner', PDF_PERMISSION_ALL);\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone, enc);\r\n   try\r\n-    mf.Width := 400;\r\n-    mf.Height := 400;\r\n-    mc := TMetaFileCanvas.Create(mf, 0);\r\n-    try\r\n-      SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n-      MoveToEx(mc.Handle, 20, 20, nil);\r\n-      LineTo(mc.Handle, 200, 20);\r\n-      ArcTo(mc.Handle, 20, 40, 120, 140, 120, 90, 20, 90);\r\n-      Arc(mc.Handle, 150, 40, 250, 140, 250, 90, 150, 90);\r\n-      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH));\r\n-      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n-    finally\r\n-      mc.Free;\r\n-    end;\r\n-    txt := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := KNOWN;\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+    key := TAesAccess(enc).fFileKey; // enc is owned by pdf: read it before\r\n   finally\r\n-    mf.Free;\r\n+    pdf.Free;\r\n   end;\r\n-  mf := TMetaFile.Create;\r\n+  // revision 6 security handler, written as PDF 1.7 + Adobe extension level 8\r\n+  Check(copy(s, 1, 8) = '%PDF-1.7', 'header');\r\n+  Check(PosEx('/V 5', s) > 0, 'V');\r\n+  Check(PosEx('/R 6', s) > 0, 'R');\r\n+  Check(PosEx('/AESV3', s) > 0, 'crypt filter');\r\n+  Check(PosEx('/ExtensionLevel 8', s) > 0, 'Adobe extension');\r\n+  Check(PosEx('/Perms', s) >\n... [truncated, 6866 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 690,
+      "is_merge": true
+    },
+    {
+      "sha": "8e59f120d5e9804b110c1b5c7546e46fd5e1803c",
+      "short_sha": "8e59f120",
+      "subject": "Merge pull request #697 from tobfel/pkcs8-encrypted-private-keys",
+      "body": "crypt: standard PKCS#8 encrypted private keys without OpenSSL",
+      "author": "ab",
+      "date": "2026-10-28T17:05:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8e59f120d5e9804b110c1b5c7546e46fd5e1803c",
+      "parents": [
+        "ea5a2bbb6a5750f9fd60f21253fb8c5c4bb4cf67",
+        "5cdbf675f890eb2151eb8d32c1393bee02028d60"
+      ],
+      "stats": {
+        "additions": 320,
+        "deletions": 6,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 249,
+          "deletions": 5,
+          "patch": "@@ -2326,7 +2326,7 @@   TCryptAbstractKey = class;\n     function ToSubjectPublicKey: RawByteString;\r\n     /// return the private key in the TCryptCertX509.Save expected format\r\n     // - is able to encode and potentially encrypt a serialized key, with a\r\n-    // PKCS#8 Password for OpenSSL, and our proprietary PrivateKeyEncrypt()\r\n+    // standard PKCS#8 Password (see PrivateKeySavePkcs8), or PrivateKeyEncrypt()\r\n     function Save(AsPem: boolean; const Password: SpiUtf8): RawByteString;\r\n     /// sign a memory buffer with RSA or ECC using the stored private key\r\n     function Sign(Algorithm: TCryptAsymAlgo;\r\n@@ -4017,6 +4017,42 @@ function PrivateKeyDecrypt(const Input, Salt: RawByteString;\n   const PrivatePassword: SpiUtf8; AfSplitRounds: integer = 31;\r\n   Pbkdf2Rounds: integer = 1000): RawByteString;\r\n \r\n+/// uncipher a standard PKCS#8 EncryptedPrivateKeyInfo into its PrivateKeyInfo\r\n+// - as generated e.g. by \"openssl genpkey -aes256\" or \"openssl pkcs8 -topk8\"\r\n+// i.e. '-----BEGIN ENCRYPTED PRIVATE KEY-----' PEM content\r\n+// - Input can be either PEM text or DER binary\r\n+// - supports PBES2 (RFC 8018) with PBKDF2 over HMAC-SHA1/SHA224/SHA256/SHA384/\r\n+// SHA512 and AES-128/192/256-CBC, i.e. all OpenSSL 1.1/3.x default formats -\r\n+// but not the legacy PBES1 or 3DES/DES encryption schemes\r\n+// - returns the decrypted PKCS#8 PrivateKeyInfo DER binary, or '' if Input is\r\n+// not a supported EncryptedPrivateKeyInfo or if Password is wrong\r\n+// - used by TCryptPrivateKey.Load and TCryptCertX509.Load to load OpenSSL\r\n+// encrypted private keys without OpenSSL\r\n+// - warning: don't forget FillZero() once done with the sensitive result\r\n+function Pkcs8DecryptPrivateKey(const Input: RawByteString;\r\n+  const Password: SpiUtf8): RawByteString;\r\n+\r\n+/// cipher a PKCS#8 PrivateKeyInfo into a standard EncryptedPrivateKeyInfo\r\n+// - use PBES2 + PBKDF2 HMAC-SHA256 + AES-256-CBC with random salt and IV, i.e.\r\n+// the same algorithms than \"openssl pkcs8 -topk8 -v2 aes256\"\r\n+// - default 100000 PBKDF2 Rounds is safer than OpenSSL 3.x 2048 default\r\n+// - PrivateKeyInfo is expected to be a PKCS#8 PrivateKeyInfo DER binary, not\r\n+// a PKCS#1 RSAPrivateKey as returned by TCryptPrivateKeyRsa.ToDer\r\n+// - returns the EncryptedPrivateKeyInfo DER binary, or '' on invalid input:\r\n+// use DerToPem(result, pemEncryptedPrivateKey) for the PEM text\r\n+// - can be decrypted by Pkcs8DecryptPrivateKey() or any PKCS#8 library\r\n+function Pkcs8EncryptPrivateKey(const PrivateKeyInfo: RawByteString;\r\n+  const Password: SpiUtf8; Rounds: integer = 100000): RawByteString;\r\n+\r\n+var\r\n+  /// if TCryptPrivateKey.Save with a Password should use standard PKCS#8\r\n+  // - true by default, generating '-----BEGIN ENCRYPTED PRIVATE KEY-----' PEM\r\n+  // as Pkcs8EncryptPrivateKey(), readable e.g. by OpenSSL\r\n+  // - set to false to use our proprietary PrivateKeyEncrypt() format, which\r\n+  // could be needed if the key should be loaded by older mORMot 2 versions\r\n+  // - TCryptPrivateKey.Load will always recognize both formats\r\n+  PrivateKeySavePkcs8: boolean = true;\r\n+\r\n \r\n /// compute the number of security bits of a digital signature\r\n // - RSA security depends on the signature size, not the hash size\r\n@@ -9132,13 +9168,41 @@ function TCryptPublicKey.Verify(Algorithm: TCryptAsymAlgo;\n \r\n { TCryptPrivateKey }\r\n \r\n+function PrivateKeyToPkcs8(Algorithm: TCryptKeyAlgo;\r\n+  const Der: RawByteString): RawByteString;\r\n+var\r\n+  pos, vers: integer;\r\n+  oct: RawByteString;\r\n+begin\r\n+  // PKCS#8 PrivateKeyInfo ::= SEQ { INT version, SEQ algorithm, OCTSTR key }\r\n+  // PKCS#1 RSAPrivateKey  ::= SEQ { INT version, INT modulus, ... }\r\n+  pos := 1;\r\n+  if (Algorithm in CKA_RSA) and\r\n+     (AsnNext(pos, Der) = ASN1_SEQ) and\r\n+     (AsnNextInt32(pos, Der, vers) = ASN1_INT) and\r\n+     (pos <= length(Der)) and\r\n+     (ord(Der[pos]) = ASN1_INT) then\r\n+  begin\r\n+    // wrap TCryptPrivateKeyRsa.ToDer PKCS#1 into a PKCS#8 PrivateKeyInfo\r\n+    oct := AsnOctStr(Der);\r\n+    result := Asn(ASN1_SEQ, [\r\n+\n... [truncated, 8383 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4278,7 +4278,7 @@ function TCryptCertX509.Load(const Saved: RawByteString;\n     case Content of\r\n       cccPrivateKeyOnly:\r\n         begin\r\n-          // may use mormot.core.secure encryption, not standard PKCS#8\r\n+          // may use standard PKCS#8 PBES2 or mormot.crypt.secure encryption\r\n           der := PemToDer(Saved); // see also TCryptPrivateKey.Load\r\n           fPrivateKey := CryptPrivateKey[XKA_TO_CKA[AlgoXka]].Create; // replace\r\n           if fPrivateKey.Load(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 70,
+          "deletions": 0,
+          "patch": "@@ -6111,6 +6111,74 @@ procedure TTestCoreCrypto._X509;\n     CheckEqual(y.AsDNText, s);\r\n   end;\r\n \r\n+  procedure CheckPkcs8;\r\n+  const\r\n+    // openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -nocrypt\r\n+    PLAIN =\r\n+      '-----BEGIN PRIVATE KEY-----'#13#10 +\r\n+      'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgL+IJzqADgkK/dKJQ'#13#10 +\r\n+      '0BhnJXk3NLjzl1bGFdHTGoKvc8ahRANCAAQMuf8uzGKxan691Ya9r1r0lR6MHQ4A'#13#10 +\r\n+      '5CeNET6n6mDpQy/az73fpul5azOdTZm8GRftdpys1ILLzdSkewAvnXC+'#13#10 +\r\n+      '-----END PRIVATE KEY-----'#13#10;\r\n+    // openssl pkcs8 -topk8 -v2 aes256 -passout pass:mORMot\r\n+    // i.e. PBES2 + PBKDF2 hmacWithSHA256 2048 rounds + aes-256-cbc\r\n+    AES256 =\r\n+      '-----BEGIN ENCRYPTED PRIVATE KEY-----'#13#10 +\r\n+      'MIHsMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAgDOk7oWWdhRQICCAAw'#13#10 +\r\n+      'DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEKWNbINuOw7sxZWVHakCRn8EgZDJ'#13#10 +\r\n+      'Qrg3osAb7FtbJOcHlZ6DZ2hPm7FqCqybDmeMaiCwr7PEA7EUfUMrozMohx7jgG/B'#13#10 +\r\n+      'G+QOw62Y15qpuASAfKj8Eisnra8sOPMxDz7btpi6p9KQHhMa/7s1ei//ucfrPBCT'#13#10 +\r\n+      'YSqb1a4I/Mqy5GpBJxaYLYlC0gDguzBlek6Yf6ZkdjGCCK0vjvaMsdMScGmTdag='#13#10 +\r\n+      '-----END ENCRYPTED PRIVATE KEY-----'#13#10;\r\n+    // openssl pkcs8 -topk8 -v2 aes128 -v2prf hmacWithSHA1 -iter 1000\r\n+    // i.e. PBES2 + PBKDF2 with default prf (SHA-1) + aes-128-cbc\r\n+    AES128 =\r\n+      '-----BEGIN ENCRYPTED PRIVATE KEY-----'#13#10 +\r\n+      'MIHeMEkGCSqGSIb3DQEFDTA8MBsGCSqGSIb3DQEFDDAOBAiGl/GZEHIuugICA+gw'#13#10 +\r\n+      'HQYJYIZIAWUDBAECBBDhzRcd2uZZA5KywGKgrr/YBIGQp5ZNuWRl+kCnVmXvyPBI'#13#10 +\r\n+      'gWVewTFkGXh1I04bnqU5XHvJgpsGcy+60J6uIUoIJqmOn7ORZiNJV78pCRCgaTfd'#13#10 +\r\n+      'j2YsW3ms9hZAz9uA2bLEDPi7XpjE+pI0tXXxEPLn6QAe6stFsl7NUcgM/DnEfx5/'#13#10 +\r\n+      '0+jKs6Rir7wavUFYDQQ01GkDIZKP3cJrfQusuXml9vDo'#13#10 +\r\n+      '-----END ENCRYPTED PRIVATE KEY-----'#13#10;\r\n+  var\r\n+    der8, dec: RawByteString;\r\n+    k1, k2: ICryptPrivateKey;\r\n+  begin\r\n+    der8 := PemToDer(PLAIN);\r\n+    Check(der8 <> '', 'plain');\r\n+    Check(IsPemEncrypted(AES256), 'enc');\r\n+    dec := Pkcs8DecryptPrivateKey(AES256, 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes256');\r\n+    dec := Pkcs8DecryptPrivateKey(PemToDer(AES256), 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes256der');\r\n+    dec := Pkcs8DecryptPrivateKey(AES128, 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes128');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(AES256, 'mormot'), '', 'wrongpwd');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(AES128, ''), '', 'nopwd');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(PLAIN, 'mORMot'), '', 'notenc');\r\n+    // TCryptPrivateKey.Load should now support OpenSSL encrypted keys\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k1.Load(ckaEcc256, nil, AES256, 'mORMot'), 'load256');\r\n+    k2 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k2.Load(ckaEcc256, nil, PLAIN, ''), 'loadplain');\r\n+    CheckEqual(k1.ToDer, k2.ToDer, 'toder');\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(not k1.Load(ckaEcc256, nil, AES128, 'wrong'), 'loadwrong');\r\n+    // PKCS#8 encryption round-trip\r\n+    dec := Pkcs8EncryptPrivateKey(der8, 'mORMot', 1000);\r\n+    Check(dec <> '', 'encrypt');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(dec, 'mORMot'), der8, 'roundtrip');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(dec, 'mormot'), '', 'roundtripwrong');\r\n+    CheckEqual(Pkcs8EncryptPrivateKey(der8, ''), '', 'encnopwd');\r\n+    // TCryptPrivateKey.Save should now generate standard PKCS#8 by default\r\n+    Check(PrivateKeySavePkcs8, 'savepkcs8');\r\n+    dec := k2.Save({aspem=}true, 'mORMot');\r\n+    Check(IdemPChar(pointer(dec), '-----BEGIN ENCRYPTED PRIVATE KEY-----'), 'pem');\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k1.Load(ckaEcc256, nil, dec, 'mORMot'), 'reload');\r\n+    CheckEqual(k1.ToDer, k2.ToDer, 'resave');\r\n+  end;\r\n+\r\n var\r\n   bin, der: RawByteString;\r\n   pem, sav, sn: RawUtf8;\r\n@@ -6130,6 +6198,8 @@ procedure TTestCoreCrypto._X509;\n   utc: TDateTime;\r\n   timer: TPrecisionTimer;\r\n begin\r\n+  // validate s\n... [truncated, 184 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.secure",
+        "mormot.crypt.x509"
+      ],
+      "pr": 697,
+      "is_merge": true
+    },
+    {
+      "sha": "5cdbf675f890eb2151eb8d32c1393bee02028d60",
+      "short_sha": "5cdbf675",
+      "subject": "crypt: standard PKCS#8 encrypted private keys without OpenSSL",
+      "body": "TCryptPrivateKey (and so TCryptCertX509) could only use our proprietary\nPrivateKeyEncrypt() format, so an OpenSSL \"-aes256\" encrypted key\n('-----BEGIN ENCRYPTED PRIVATE KEY-----') required mormot.crypt.openssl.\n\n- new Pkcs8DecryptPrivateKey(): PBES2 + PBKDF2 (HMAC-SHA1/224/256/384/512)\n  + AES-128/192/256-CBC, i.e. OpenSSL 1.1/3.x default formats\n- new Pkcs8EncryptPrivateKey(): PBES2 + PBKDF2-HMAC-SHA256 + AES-256-CBC,\n  as \"openssl pkcs8 -topk8 -v2 aes256\", with 100000 rounds by default\n- both reuse AsnNext*/Asn*, Pbkdf2() and AesPkcs7() from the core units\n- TCryptPrivateKey.Load tries PKCS#8 first, then PrivateKeyDecrypt()\n- TCryptPrivateKey.Save with a password now writes standard PKCS#8,\n  wrapping PKCS#1 RSA keys into a PrivateKeyInfo\n- PrivateKeySavePkcs8 global to keep writing the proprietary format, e.g.\n  if keys are to be read by older mORMot 2 versions\n- TTestCoreCrypto._X509 tests with OpenSSL 3 generated vectors\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-28T12:30:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5cdbf675f890eb2151eb8d32c1393bee02028d60",
+      "parents": [
+        "ea5a2bbb6a5750f9fd60f21253fb8c5c4bb4cf67"
+      ],
+      "stats": {
+        "additions": 320,
+        "deletions": 6,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 249,
+          "deletions": 5,
+          "patch": "@@ -2326,7 +2326,7 @@   TCryptAbstractKey = class;\n     function ToSubjectPublicKey: RawByteString;\r\n     /// return the private key in the TCryptCertX509.Save expected format\r\n     // - is able to encode and potentially encrypt a serialized key, with a\r\n-    // PKCS#8 Password for OpenSSL, and our proprietary PrivateKeyEncrypt()\r\n+    // standard PKCS#8 Password (see PrivateKeySavePkcs8), or PrivateKeyEncrypt()\r\n     function Save(AsPem: boolean; const Password: SpiUtf8): RawByteString;\r\n     /// sign a memory buffer with RSA or ECC using the stored private key\r\n     function Sign(Algorithm: TCryptAsymAlgo;\r\n@@ -4017,6 +4017,42 @@ function PrivateKeyDecrypt(const Input, Salt: RawByteString;\n   const PrivatePassword: SpiUtf8; AfSplitRounds: integer = 31;\r\n   Pbkdf2Rounds: integer = 1000): RawByteString;\r\n \r\n+/// uncipher a standard PKCS#8 EncryptedPrivateKeyInfo into its PrivateKeyInfo\r\n+// - as generated e.g. by \"openssl genpkey -aes256\" or \"openssl pkcs8 -topk8\"\r\n+// i.e. '-----BEGIN ENCRYPTED PRIVATE KEY-----' PEM content\r\n+// - Input can be either PEM text or DER binary\r\n+// - supports PBES2 (RFC 8018) with PBKDF2 over HMAC-SHA1/SHA224/SHA256/SHA384/\r\n+// SHA512 and AES-128/192/256-CBC, i.e. all OpenSSL 1.1/3.x default formats -\r\n+// but not the legacy PBES1 or 3DES/DES encryption schemes\r\n+// - returns the decrypted PKCS#8 PrivateKeyInfo DER binary, or '' if Input is\r\n+// not a supported EncryptedPrivateKeyInfo or if Password is wrong\r\n+// - used by TCryptPrivateKey.Load and TCryptCertX509.Load to load OpenSSL\r\n+// encrypted private keys without OpenSSL\r\n+// - warning: don't forget FillZero() once done with the sensitive result\r\n+function Pkcs8DecryptPrivateKey(const Input: RawByteString;\r\n+  const Password: SpiUtf8): RawByteString;\r\n+\r\n+/// cipher a PKCS#8 PrivateKeyInfo into a standard EncryptedPrivateKeyInfo\r\n+// - use PBES2 + PBKDF2 HMAC-SHA256 + AES-256-CBC with random salt and IV, i.e.\r\n+// the same algorithms than \"openssl pkcs8 -topk8 -v2 aes256\"\r\n+// - default 100000 PBKDF2 Rounds is safer than OpenSSL 3.x 2048 default\r\n+// - PrivateKeyInfo is expected to be a PKCS#8 PrivateKeyInfo DER binary, not\r\n+// a PKCS#1 RSAPrivateKey as returned by TCryptPrivateKeyRsa.ToDer\r\n+// - returns the EncryptedPrivateKeyInfo DER binary, or '' on invalid input:\r\n+// use DerToPem(result, pemEncryptedPrivateKey) for the PEM text\r\n+// - can be decrypted by Pkcs8DecryptPrivateKey() or any PKCS#8 library\r\n+function Pkcs8EncryptPrivateKey(const PrivateKeyInfo: RawByteString;\r\n+  const Password: SpiUtf8; Rounds: integer = 100000): RawByteString;\r\n+\r\n+var\r\n+  /// if TCryptPrivateKey.Save with a Password should use standard PKCS#8\r\n+  // - true by default, generating '-----BEGIN ENCRYPTED PRIVATE KEY-----' PEM\r\n+  // as Pkcs8EncryptPrivateKey(), readable e.g. by OpenSSL\r\n+  // - set to false to use our proprietary PrivateKeyEncrypt() format, which\r\n+  // could be needed if the key should be loaded by older mORMot 2 versions\r\n+  // - TCryptPrivateKey.Load will always recognize both formats\r\n+  PrivateKeySavePkcs8: boolean = true;\r\n+\r\n \r\n /// compute the number of security bits of a digital signature\r\n // - RSA security depends on the signature size, not the hash size\r\n@@ -9132,13 +9168,41 @@ function TCryptPublicKey.Verify(Algorithm: TCryptAsymAlgo;\n \r\n { TCryptPrivateKey }\r\n \r\n+function PrivateKeyToPkcs8(Algorithm: TCryptKeyAlgo;\r\n+  const Der: RawByteString): RawByteString;\r\n+var\r\n+  pos, vers: integer;\r\n+  oct: RawByteString;\r\n+begin\r\n+  // PKCS#8 PrivateKeyInfo ::= SEQ { INT version, SEQ algorithm, OCTSTR key }\r\n+  // PKCS#1 RSAPrivateKey  ::= SEQ { INT version, INT modulus, ... }\r\n+  pos := 1;\r\n+  if (Algorithm in CKA_RSA) and\r\n+     (AsnNext(pos, Der) = ASN1_SEQ) and\r\n+     (AsnNextInt32(pos, Der, vers) = ASN1_INT) and\r\n+     (pos <= length(Der)) and\r\n+     (ord(Der[pos]) = ASN1_INT) then\r\n+  begin\r\n+    // wrap TCryptPrivateKeyRsa.ToDer PKCS#1 into a PKCS#8 PrivateKeyInfo\r\n+    oct := AsnOctStr(Der);\r\n+    result := Asn(ASN1_SEQ, [\r\n+\n... [truncated, 8383 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4278,7 +4278,7 @@ function TCryptCertX509.Load(const Saved: RawByteString;\n     case Content of\r\n       cccPrivateKeyOnly:\r\n         begin\r\n-          // may use mormot.core.secure encryption, not standard PKCS#8\r\n+          // may use standard PKCS#8 PBES2 or mormot.crypt.secure encryption\r\n           der := PemToDer(Saved); // see also TCryptPrivateKey.Load\r\n           fPrivateKey := CryptPrivateKey[XKA_TO_CKA[AlgoXka]].Create; // replace\r\n           if fPrivateKey.Load(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 70,
+          "deletions": 0,
+          "patch": "@@ -6111,6 +6111,74 @@ procedure TTestCoreCrypto._X509;\n     CheckEqual(y.AsDNText, s);\r\n   end;\r\n \r\n+  procedure CheckPkcs8;\r\n+  const\r\n+    // openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -nocrypt\r\n+    PLAIN =\r\n+      '-----BEGIN PRIVATE KEY-----'#13#10 +\r\n+      'MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgL+IJzqADgkK/dKJQ'#13#10 +\r\n+      '0BhnJXk3NLjzl1bGFdHTGoKvc8ahRANCAAQMuf8uzGKxan691Ya9r1r0lR6MHQ4A'#13#10 +\r\n+      '5CeNET6n6mDpQy/az73fpul5azOdTZm8GRftdpys1ILLzdSkewAvnXC+'#13#10 +\r\n+      '-----END PRIVATE KEY-----'#13#10;\r\n+    // openssl pkcs8 -topk8 -v2 aes256 -passout pass:mORMot\r\n+    // i.e. PBES2 + PBKDF2 hmacWithSHA256 2048 rounds + aes-256-cbc\r\n+    AES256 =\r\n+      '-----BEGIN ENCRYPTED PRIVATE KEY-----'#13#10 +\r\n+      'MIHsMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAgDOk7oWWdhRQICCAAw'#13#10 +\r\n+      'DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEEKWNbINuOw7sxZWVHakCRn8EgZDJ'#13#10 +\r\n+      'Qrg3osAb7FtbJOcHlZ6DZ2hPm7FqCqybDmeMaiCwr7PEA7EUfUMrozMohx7jgG/B'#13#10 +\r\n+      'G+QOw62Y15qpuASAfKj8Eisnra8sOPMxDz7btpi6p9KQHhMa/7s1ei//ucfrPBCT'#13#10 +\r\n+      'YSqb1a4I/Mqy5GpBJxaYLYlC0gDguzBlek6Yf6ZkdjGCCK0vjvaMsdMScGmTdag='#13#10 +\r\n+      '-----END ENCRYPTED PRIVATE KEY-----'#13#10;\r\n+    // openssl pkcs8 -topk8 -v2 aes128 -v2prf hmacWithSHA1 -iter 1000\r\n+    // i.e. PBES2 + PBKDF2 with default prf (SHA-1) + aes-128-cbc\r\n+    AES128 =\r\n+      '-----BEGIN ENCRYPTED PRIVATE KEY-----'#13#10 +\r\n+      'MIHeMEkGCSqGSIb3DQEFDTA8MBsGCSqGSIb3DQEFDDAOBAiGl/GZEHIuugICA+gw'#13#10 +\r\n+      'HQYJYIZIAWUDBAECBBDhzRcd2uZZA5KywGKgrr/YBIGQp5ZNuWRl+kCnVmXvyPBI'#13#10 +\r\n+      'gWVewTFkGXh1I04bnqU5XHvJgpsGcy+60J6uIUoIJqmOn7ORZiNJV78pCRCgaTfd'#13#10 +\r\n+      'j2YsW3ms9hZAz9uA2bLEDPi7XpjE+pI0tXXxEPLn6QAe6stFsl7NUcgM/DnEfx5/'#13#10 +\r\n+      '0+jKs6Rir7wavUFYDQQ01GkDIZKP3cJrfQusuXml9vDo'#13#10 +\r\n+      '-----END ENCRYPTED PRIVATE KEY-----'#13#10;\r\n+  var\r\n+    der8, dec: RawByteString;\r\n+    k1, k2: ICryptPrivateKey;\r\n+  begin\r\n+    der8 := PemToDer(PLAIN);\r\n+    Check(der8 <> '', 'plain');\r\n+    Check(IsPemEncrypted(AES256), 'enc');\r\n+    dec := Pkcs8DecryptPrivateKey(AES256, 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes256');\r\n+    dec := Pkcs8DecryptPrivateKey(PemToDer(AES256), 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes256der');\r\n+    dec := Pkcs8DecryptPrivateKey(AES128, 'mORMot');\r\n+    CheckEqual(dec, der8, 'aes128');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(AES256, 'mormot'), '', 'wrongpwd');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(AES128, ''), '', 'nopwd');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(PLAIN, 'mORMot'), '', 'notenc');\r\n+    // TCryptPrivateKey.Load should now support OpenSSL encrypted keys\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k1.Load(ckaEcc256, nil, AES256, 'mORMot'), 'load256');\r\n+    k2 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k2.Load(ckaEcc256, nil, PLAIN, ''), 'loadplain');\r\n+    CheckEqual(k1.ToDer, k2.ToDer, 'toder');\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(not k1.Load(ckaEcc256, nil, AES128, 'wrong'), 'loadwrong');\r\n+    // PKCS#8 encryption round-trip\r\n+    dec := Pkcs8EncryptPrivateKey(der8, 'mORMot', 1000);\r\n+    Check(dec <> '', 'encrypt');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(dec, 'mORMot'), der8, 'roundtrip');\r\n+    CheckEqual(Pkcs8DecryptPrivateKey(dec, 'mormot'), '', 'roundtripwrong');\r\n+    CheckEqual(Pkcs8EncryptPrivateKey(der8, ''), '', 'encnopwd');\r\n+    // TCryptPrivateKey.Save should now generate standard PKCS#8 by default\r\n+    Check(PrivateKeySavePkcs8, 'savepkcs8');\r\n+    dec := k2.Save({aspem=}true, 'mORMot');\r\n+    Check(IdemPChar(pointer(dec), '-----BEGIN ENCRYPTED PRIVATE KEY-----'), 'pem');\r\n+    k1 := TCryptPrivateKeyEcc.Create;\r\n+    Check(k1.Load(ckaEcc256, nil, dec, 'mORMot'), 'reload');\r\n+    CheckEqual(k1.ToDer, k2.ToDer, 'resave');\r\n+  end;\r\n+\r\n var\r\n   bin, der: RawByteString;\r\n   pem, sav, sn: RawUtf8;\r\n@@ -6130,6 +6198,8 @@ procedure TTestCoreCrypto._X509;\n   utc: TDateTime;\r\n   timer: TPrecisionTimer;\r\n begin\r\n+  // validate s\n... [truncated, 184 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.secure",
+        "mormot.crypt.x509"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "41b3d0c342ba442212d311bcb802f49fa9219a03",
+      "short_sha": "41b3d0c3",
+      "subject": "Merge branch 'master' into pdf-aes256",
+      "body": "",
+      "author": "koxo",
+      "date": "2026-10-28T09:58:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/41b3d0c342ba442212d311bcb802f49fa9219a03",
+      "parents": [
+        "40f34efdc5fdb9bc635cf1f7400b49bdab3d618f",
+        "ea5a2bbb6a5750f9fd60f21253fb8c5c4bb4cf67"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 26,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 25,
+          "patch": "@@ -9158,7 +9158,6 @@ procedure TPdfCanvas.DrawXObjectEx(X, Y, AWidth, AHeight: single;\n   Rectangle(ClipX, ClipY, ClipWidth, ClipHeight);\r\n   Clip;\r\n   NewPath;\r\n-  fNewPath := false;\r\n   ConcatToCTM(AWidth, 0, 0, AHeight, X, Y);\r\n   ExecuteXObject(AXObjectName);\r\n   GRestore;\r\n@@ -9286,7 +9285,6 @@ procedure TPdfCanvas.Closepath;\n \r\n procedure TPdfCanvas.NewPath;\r\n begin\r\n-  fNewPath := true;\r\n   if fContents <> nil then\r\n     fContents.Writer.Add('n'#10);\r\n end;\r\n@@ -11200,7 +11198,6 @@   TPdfEnum = class\n     fFillColor: integer;\r\n     fPenStyle: integer;\r\n     fPenWidth: single;\r\n-    fInLined: boolean;\r\n     fInitTransformMatrix: XFORM;\r\n     fInitMetaRgn: TPdfBox;\r\n     procedure SetFillColor(Value: integer);\r\n@@ -11281,7 +11278,7 @@   TPdfEnum = class\n     procedure DrawBitmap(xs, ys, ws, hs, xd, yd, wd, hd, usage: integer;\r\n       Bmi: PBitmapInfo; bits: pointer; clipRect: PRect; xSrcTransform: PXForm;\r\n       dwRop: DWord; transparent: TPdfColorRGB = $FFFFFFFF);\r\n-    procedure FillRectangle(const Rect: TRect; ResetNewPath: boolean);\r\n+    procedure FillRectangle(const Rect: TRect);\r\n     // the current value set to SetRGBFillColor (rg)\r\n     property FillColor: integer\r\n       read fFillColor write SetFillColor;\r\n@@ -11436,10 +11433,11 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           E.Canvas.LineToI(PEMRLineTo(R)^.ptl.X, PEMRLineTo(R)^.ptl.Y);\r\n           position := PEMRLineTo(R)^.ptl;\r\n           Moved := false;\r\n-          E.fInLined := true;\r\n-          if not E.Canvas.fNewPath then\r\n+          if not E.Canvas.fNewPath then // else painted by the painting record\r\n             if not pen.null then\r\n               E.Canvas.Stroke\r\n+            else\r\n+              E.Canvas.NewPath; // GDI draws nothing: no open path on the page\r\n         end;\r\n       EMR_RECTANGLE,\r\n       EMR_ELLIPSE:\r\n@@ -11489,10 +11487,11 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOCKWISE,\r\n               acArcTo, position);\r\n             Moved := false;\r\n-            E.fInLined := true;\r\n             if not E.Canvas.fNewPath then\r\n               if not pen.null then\r\n-                E.Canvas.Stroke;\r\n+                E.Canvas.Stroke\r\n+              else\r\n+                E.Canvas.NewPath;\r\n           end;\r\n         end;\r\n       EMR_PIE:\r\n@@ -11530,7 +11529,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           E.SelectObjectFromIndex(PEMRFillRgn(R)^.ihBrush);\r\n           E.NeedBrushAndPen;\r\n           E.FillRectangle(\r\n-            TRect(PRgnDataHeader(@PEMRFillRgn(R)^.RgnData[0])^.rcBound), false);\r\n+            TRect(PRgnDataHeader(@PEMRFillRgn(R)^.RgnData[0])^.rcBound));\r\n         end;\r\n       EMR_POLYGON,\r\n       EMR_POLYLINE,\r\n@@ -11712,11 +11711,8 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if not pen.null then\r\n             E.NeedPen;\r\n           if not E.Canvas.fNewPath then\r\n-          begin\r\n-            E.Canvas.NewPath;\r\n             if not Moved then\r\n               E.Canvas.MoveToI(position.X, position.Y);\r\n-          end;\r\n           if R^.iType = EMR_POLYLINETO then\r\n           begin\r\n             if PEMRPolyLineTo(R)^.cptl > 0 then\r\n@@ -11884,7 +11880,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               case dwRop of // we only handle PATCOPY = fillrect\r\n                 PATCOPY:\r\n                   E.FillRectangle(Rect(xDest, yDest,\r\n-                    xDest + cxDest, yDest + cyDest), true);\r\n+                    xDest + cxDest, yDest + cyDest));\r\n               end;\r\n         end;\r\n       EMR_STRETCHBLT:\r\n@@ -11899,7 +11895,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               case dwRop of // we only handle PATCOPY = fillrect\r\n                 PATCOPY:\r\n                   E.FillRectangle(Rect(\r\n-                    xDest, yD\n... [truncated, 2366 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -344,6 +344,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n     try\r\n       Info.CreationDate := FIXED_DATE; // force fixed date and creator for Hash32()\r\n       Info.Data.PdfTextByName('Producer').Value := 'Synopse PDF engine';\r\n+      ScreenLogPixels := 96; // the hash of a 96 DPI screen, any screen\r\n       AddPage;\r\n       MF := TMetaFile.Create;\r\n       try\r\n@@ -360,7 +361,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n       // force constant Arial,Bold and Tahoma FontBBox\r\n       SetString(S, PAnsiChar(MS.Memory), MS.Position);\r\n       if (Unicode_CodePage <> 1252) {$ifdef CPU64} or true{$endif} then\r\n-        Check(length(S) > 6500)\r\n+        Check(length(S) > 6400)\r\n       else\r\n       begin\r\n         i := PosEx('/FontBBox[', S);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "40f34efdc5fdb9bc635cf1f7400b49bdab3d618f",
+      "short_sha": "40f34efd",
+      "subject": "rebase on current master",
+      "body": "",
+      "author": "koxo",
+      "date": "2026-10-27T07:55:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/40f34efdc5fdb9bc635cf1f7400b49bdab3d618f",
+      "parents": [
+        "0e15a8de93aa78daf51fa7913c0a3f6cd523148f"
+      ],
+      "stats": {
+        "additions": 1292,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1292,
+          "deletions": 1,
+          "patch": "@@ -56,6 +56,20 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusPlaybackOrder;\r\n     procedure EmfPlusWindowOrigin;\r\n     procedure EmfPlusRecordLayout;\r\n+    procedure EmfAlphaBlendOpaque;\r\n+    procedure EmfPolyPolylineOpen;\r\n+    procedure EmfRestoreDCDepth;\r\n+    procedure EmfScaledRotation;\r\n+    procedure EmfAnsiText;\r\n+    procedure EmfAnsiStockFont;\r\n+    procedure EmfStockCodePages;\r\n+    procedure EmfDIBitsKept;\r\n+    procedure EmfPrinterResZero;\r\n+    procedure ReducedFontSearchFields;\r\n+    procedure EmfRecordLayout;\r\n+    procedure EmfMirroredBoxes;\r\n+    procedure EmfClipRestoreDC;\r\n+    procedure EmfUnderlineClipped;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -361,7 +375,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $FE2D27CA);\r\n+        CheckHash(S, $456748FC); // the boxes of #686\r\n       end;\r\n     finally\r\n       Free;\r\n@@ -1531,6 +1545,1283 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   Check(RedPixels(CloseEmf(dc)) > 0, 'the extended pen colour');\r\n end;\r\n \r\n+const\r\n+  // the record types, by number: the windows unit of FPC lacks some names\r\n+  R_POLYPOLYLINE = 7;\r\n+  R_SAVEDC = 33;\r\n+  R_RESTOREDC = 34;\r\n+  R_SELECTOBJECT = 37;\r\n+  R_CREATEBRUSHINDIRECT = 39;\r\n+  R_STRETCHDIBITS = 81;\r\n+  R_EXTTEXTOUTA = 83;\r\n+  R_EXTTEXTOUTW = 84;\r\n+  R_POLYPOLYLINE16 = 90;\r\n+  R_POLYPOLYGON16 = 91;\r\n+  R_EXTCREATEPEN = 95;\r\n+  R_ALPHABLEND = 114;\r\n+\r\n+// AlphaBlend under its gdi32 name: the windows unit of FPC lacks it\r\n+function GdiAlphaBlend(Dest: HDC; X, Y, W, H: integer; Src: HDC;\r\n+  XS, YS, WS, HS: integer; Blend: DWord): BOOL; stdcall; external 'gdi32.dll';\r\n+\r\n+// the bytes of a metafile, as GetEnhMetaFileBits gives them\r\n+function MetaFileBytes(Mf: TMetaFile): RawByteString;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := GetEnhMetaFileBits(Mf.Handle, 0, nil);\r\n+  SetLength(result, n);\r\n+  if n > 0 then\r\n+    GetEnhMetaFileBits(Mf.Handle, n, pointer(result));\r\n+end;\r\n+\r\n+// the offsets of the records of type RecType in the bytes of a metafile\r\n+function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynArray;\r\n+var\r\n+  o, n: PtrInt;\r\n+begin\r\n+  result := nil;\r\n+  o := 0;\r\n+  while o + 8 <= length(Bytes) do\r\n+  begin\r\n+    if PCardinal(@PByteArray(Bytes)[o])^ = RecType then\r\n+    begin\r\n+      n := length(result);\r\n+      SetLength(result, n + 1);\r\n+      result[n] := o;\r\n+    end;\r\n+    n := PCardinal(@PByteArray(Bytes)[o + 4])^;\r\n+    if n < 8 then\r\n+      break;\r\n+    inc(o, n);\r\n+  end;\r\n+end;\r\n+\r\n+// the metafile rendered into one page of an uncompressed PDF\r\n+function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\r\n+  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip): RawUtf8;\r\n+var\r\n+  doc: TPdfDocumentGdi;\r\n+begin\r\n+  doc := TPdfDocumentGdi.Create;\r\n+  try\r\n+    doc.Info.CreationDate := FIXED_DATE;\r\n+    doc.CompressionMethod := cmNone;\r\n+    doc.EmbeddedTTF := false;\r\n+    doc.StandardFontsReplace := true;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n+    TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n+    doc.AddPage;\r\n+    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0, tpSetTextJustification,\r\n+      99, 101, TextClipping);\r\n+    result := SavedPdf(doc);\r\n+  finally\r\n+    doc.Free;\r\n+  end;\r\n+end;\r\n+\r\n+// the operands of the last Op (' rg', ' Tm') before Marker in the content\r\n+function OperandsBefore(const Txt, Marker, Op: RawUtf8): RawUtf8;\r\n+var\r\n+  p, i, j, k: PtrInt;\r\n+begin\r\n+  result := '';\r\n+  p := PosEx(Marker, Txt);\r\n+  i := 1;\r\n+  repeat\r\n+    j := PosEx(Op, Txt, i);\r\n+    if (j = 0) or\r\n+       (j > p) then\r\n+      break;\r\n+    i := j + length(Op);\r\n+    k := j;\r\n+    while (k > 1) and\r\n+          not (Txt[k - 1] in [#10, #13]) do\r\n+      dec(k);\r\n+    result := copy(Txt, k, j - k);\r\n+  until false;\r\n+end;\r\n+\r\n+function BinaryOf(con\n... [truncated, 39254 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0e15a8de93aa78daf51fa7913c0a3f6cd523148f",
+      "short_sha": "0e15a8de",
+      "subject": "rebase on current master",
+      "body": "",
+      "author": "koxo",
+      "date": "2026-10-27T07:54:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0e15a8de93aa78daf51fa7913c0a3f6cd523148f",
+      "parents": [
+        "a5c6feff723206a778dc0565b0862e91d01d50f5"
+      ],
+      "stats": {
+        "additions": 626,
+        "deletions": 120,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 626,
+          "deletions": 120,
+          "patch": "@@ -402,6 +402,9 @@   EPdfInvalidOperation = class(ESynException);\n   // - for RC4 40-bit and RC4 128-bit, associated password are restricted to a\r\n   // maximum length of 32 characters and could contain only characters from the\r\n   // Latin-1 encoding (i.e. no accent)\r\n+  // - elAES_128 (revision 4, /AESV2) is reserved for compatibility with the\r\n+  // cross-platform PDF engine, which implements it: it is not supported by\r\n+  // this unit, and TPdfEncryption.New() raises EPdfInvalidOperation\r\n   // - elAES_256 is the AES-256 security handler of ISO 32000-2 (PDF 2.0),\r\n   // revision 6: the file is written as PDF 1.7 with the Adobe extension level\r\n   // 8, as expected by all current readers; passwords are UTF-8 encoded (with\r\n@@ -410,6 +413,7 @@   EPdfInvalidOperation = class(ESynException);\n     elNone,\r\n     elRC4_40,\r\n     elRC4_128,\r\n+    elAES_128,\r\n     elAES_256);\r\n \r\n   /// PDF can encode various restrictions on document operations which can be\r\n@@ -583,6 +587,19 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n /// retrieve the current printer resolution\r\n function CurrentPrinterRes: TPoint;\r\n \r\n+/// the code page ExtTextOutA reads the bytes of a font of this charset in\r\n+// - CP_ACP for DEFAULT_CHARSET, CP_OEMCP for OEM_CHARSET, 42 (CP_SYMBOL) for\r\n+// SYMBOL_CHARSET - as GDI records them, U+F020..U+F0FF - else the code page\r\n+// of the charset (1252 for ANSI_CHARSET)\r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+\r\n+/// the code page ExtTextOutA reads the bytes of a stock font in\r\n+// - from the charset of GetStockObject(StockFont) on this system, CP_ACP if\r\n+// it gives none or StockFont is no font: ANSI_FIXED_FONT and ANSI_VAR_FONT\r\n+// are ANSI_CHARSET (1252), OEM_FIXED_FONT is OEM_CHARSET, the system fonts\r\n+// follow the system charset\r\n+function StockFontCodePage(StockFont: integer): cardinal;\r\n+\r\n \r\n {************ Internal classes mapping PDF objects }\r\n \r\n@@ -622,7 +639,8 @@   TPdfEncryption = class\n     procedure AttachDocument(aDoc: TPdfDocument); virtual;\r\n     /// will create the expected TPdfEncryption instance, depending on aLevel\r\n     // - to be called as parameter of TPdfDocument/TPdfDocumentGdi.Create()\r\n-    // - elRC4_40, elRC4_128 and elAES_256 levels are implemented\r\n+    // - elRC4_40, elRC4_128 and elAES_256 levels are implemented; elAES_128\r\n+    // raises EPdfInvalidOperation (reserved for the cross-platform engine)\r\n     // - for RC4, both passwords are expected to be ASCII-7 characters only\r\n     // - aUserPassword will be asked at file opening: to be set to '' for not\r\n     // blocking display, but optional permission\r\n@@ -1903,7 +1921,8 @@   TPdfCanvas = class\n     procedure PointI(x, y: single);\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function RectI(const Rect: TRect; Normalize: boolean): TPdfRect;\r\n-    // size of one device pixel of the metafile, in logical units\r\n+    // size of one device pixel of the metafile, in logical units - negative\r\n+    // when the mapping mirrors that axis\r\n     function DevPixelX: single;\r\n     function DevPixelY: single;\r\n     // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n@@ -3356,13 +3375,15 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   result := psUserDefined;\r\n   if not PrinterDriverExists then\r\n     exit;\r\n-  GetProfileString('windows', 'device', nil, name, SizeOf(name) - 1);\r\n+  GetProfileString('windows', 'device', nil, name, length(name)); // chars\r\n   PC := ParseFetchedPrinterStr(name);\r\n   if (PC = nil) or\r\n      (PC^ = #0) then\r\n     exit;\r\n   try\r\n     h := CreateDC(nil, PC, nil, nil);\r\n+    if h = 0 then\r\n+      exit; // no printer DC: nothing to measure\r\n     try\r\n       pt.x := GetDeviceCaps(h, LOGPIXELSX);\r\n       pt.y := GetDeviceCaps(h, LOGPIXELSY);\r\n@@ -3402,8 +3423,38 @@ function CurrentPrinterPaperSize: TPdfPaperSize;\n   end;\r\n end;\r\n \r\n+function FontCharSetCodePage(CharSet: integer): cardinal;\r\n+begin\r\n+  case CharSet of\r\n+    DEFAULT_CHARSET:\r\n+      result := CP_ACP;\r\n+    OEM_CHAR\n... [truncated, 48102 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a5c6feff723206a778dc0565b0862e91d01d50f5",
+      "short_sha": "a5c6feff",
+      "subject": "test: AES-256 and PDF 2.0 regression tests",
+      "body": "- EncryptionAes256: revision 6 dictionary, decryption of a string with\r\n  the file key\r\n- Pdf20File: header, XMP metadata, file /ID, AES-256 without the Adobe\r\n  extension, RC4 refused",
+      "author": "koxo",
+      "date": "2026-10-26T11:51:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a5c6feff723206a778dc0565b0862e91d01d50f5",
+      "parents": [
+        "5c94af95bca57bcd8095455a3c535273f5c54cb9"
+      ],
+      "stats": {
+        "additions": 114,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 114,
+          "deletions": 0,
+          "patch": "@@ -19,6 +19,9 @@ interface\n   mormot.core.unicode,\r\n   mormot.core.text,\r\n   mormot.lib.z,\r\n+  {$ifndef NO_USE_PDFSECURITY}\r\n+  mormot.crypt.core,\r\n+  {$endif NO_USE_PDFSECURITY}\r\n   mormot.ui.pdf;\r\n \r\n type\r\n@@ -53,6 +56,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfPlusPlaybackOrder;\r\n     procedure EmfPlusWindowOrigin;\r\n     procedure EmfPlusRecordLayout;\r\n+    procedure EncryptionAes256;\r\n+    procedure Pdf20File;\r\n   end;\r\n \r\n implementation\r\n@@ -1526,6 +1531,115 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   Check(RedPixels(CloseEmf(dc)) > 0, 'the extended pen colour');\r\n end;\r\n \r\n+\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+type\r\n+  // to read the protected file key of TPdfEncryptionAes256\r\n+  TAesAccess = class(TPdfEncryptionAes256);\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n+procedure TTestUiPdf.EncryptionAes256;\r\n+{$ifndef NO_USE_PDFSECURITY}\r\n+const\r\n+  KNOWN = 'Hello AES-256 !'; // 15 bytes: one block once padded\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  enc: TPdfEncryption;\r\n+  s, sub: RawByteString;\r\n+  key: THash256;\r\n+  aes: TAesCbc;\r\n+begin\r\n+  enc := TPdfEncryption.New(elAES_256, 'user', 'owner', PDF_PERMISSION_ALL);\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone, enc);\r\n+  try\r\n+    pdf.CompressionMethod := cmNone;\r\n+    pdf.Info.Subject := KNOWN;\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+    key := TAesAccess(enc).fFileKey; // enc is owned by pdf: read it before\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  // revision 6 security handler, written as PDF 1.7 + Adobe extension level 8\r\n+  Check(copy(s, 1, 8) = '%PDF-1.7', 'header');\r\n+  Check(PosEx('/V 5', s) > 0, 'V');\r\n+  Check(PosEx('/R 6', s) > 0, 'R');\r\n+  Check(PosEx('/AESV3', s) > 0, 'crypt filter');\r\n+  Check(PosEx('/ExtensionLevel 8', s) > 0, 'Adobe extension');\r\n+  Check(PosEx('/Perms', s) > 0, 'Perms');\r\n+  // each string is IV + AES-256-CBC + PKCS#7 padding with the file key\r\n+  sub := PdfStringAfter(s, '/Subject');\r\n+  if not CheckEqual(length(sub), 16 + 16, 'IV and one padded block') then\r\n+    exit;\r\n+  aes := TAesCbc.Create(key, 256);\r\n+  try\r\n+    Check(aes.DecryptPkcs7(sub, {IVAtBeginning=}true) = KNOWN, 'decrypted');\r\n+  finally\r\n+    aes.Free;\r\n+  end;\r\n+  FillCharFast(key, SizeOf(key), 0);\r\n+end;\r\n+{$else}\r\n+begin\r\n+end;\r\n+{$endif NO_USE_PDFSECURITY}\r\n+\r\n+procedure TTestUiPdf.Pdf20File;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  s: RawByteString;\r\n+  {$ifndef NO_USE_PDFSECURITY}\r\n+  refused: boolean;\r\n+  {$endif NO_USE_PDFSECURITY}\r\n+begin\r\n+  // PDF 2.0 without encryption: XMP metadata and file identifier\r\n+  pdf := TPdfDocument.Create;\r\n+  try\r\n+    pdf.GeneratePdf20File := true;\r\n+    pdf.Info.Title := 'PDF 2.0';\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  Check(copy(s, 1, 8) = '%PDF-2.0', 'header');\r\n+  Check(PosEx('/Metadata', s) > 0, 'XMP metadata');\r\n+  Check(PosEx('<dc:title>', s) > 0, 'title in XMP');\r\n+  Check(PosEx('/ID', s) > 0, 'file identifier');\r\n+  {$ifndef NO_USE_PDFSECURITY}\r\n+  // PDF 2.0 + AES-256: native, without the Adobe extension\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elAES_256, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.GeneratePdf20File := true;\r\n+    pdf.AddPage;\r\n+    s := SavedPdf(pdf);\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  Check(copy(s, 1, 8) = '%PDF-2.0', 'header with AES');\r\n+  Check(PosEx('/R 6', s) > 0, 'revision 6');\r\n+  Check(PosEx('/Extensions', s) = 0, 'no Adobe extension in PDF 2.0');\r\n+  // PDF 2.0 + RC4: refused\r\n+  refused := false;\r\n+  pdf := TPdfDocument.Create(false, 0, pdfaNone,\r\n+    TPdfEncryption.New(elRC4_128, '', 'owner', PDF_PERMISSION_ALL));\r\n+  try\r\n+    pdf.GeneratePdf20File := true;\r\n+    pdf.AddPage;\r\n+    try\r\n+      SavedPdf(pdf);\r\n+    except\r\n+      on EPdfInvalidOperation do\r\n+        refused := true;\r\n+    end;\r\n+  finally\r\n+    pdf.Free;\r\n+  end;\r\n+  Check(refused, 'RC4 is not allowed in PDF 2.0');\r\n+  {$endif NO_USE_PDFSECURITY}\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5c94af95bca57bcd8095455a3c535273f5c54cb9",
+      "short_sha": "5c94af95",
+      "subject": "pdf: AES-256 encryption and PDF 2.0 output",
+      "body": "- new elAES_256 level / TPdfEncryptionAes256: ISO 32000-2 security\r\n  handler revision 6 (/AESV3), written as PDF 1.7 + Adobe extension 8\r\n- TPdfEncryption.EncodeLength() for variable-length encryption output\r\n- new TPdfDocument.GeneratePdf20File: PDF 2.0 header, XMP metadata,\r\n  file /ID; RC4 and PDF/A are refused with PDF 2.0",
+      "author": "koxo",
+      "date": "2026-10-26T11:45:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5c94af95bca57bcd8095455a3c535273f5c54cb9",
+      "parents": [
+        "fc4c033da5520d25221025efb78fcc4ea55a55a0"
+      ],
+      "stats": {
+        "additions": 366,
+        "deletions": 30,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 366,
+          "deletions": 30,
+          "patch": "@@ -174,12 +174,14 @@   TPdfBox = record\n   PPdfBox = ^TPdfBox;\r\n \r\n   /// the internal pdf file format\r\n+  // - pdf20 is ISO 32000-2 (PDF 2.0), see TPdfDocument.GeneratePdf20File\r\n   TPdfFileFormat = (\r\n     pdf13,\r\n     pdf14,\r\n     pdf15,\r\n     pdf16,\r\n-    pdf17);\r\n+    pdf17,\r\n+    pdf20);\r\n \r\n   /// the PDF/A level\r\n   TPdfALevel = (\r\n@@ -395,15 +397,20 @@   EPdfInvalidOperation = class(ESynException);\n {$ifdef USE_PDFSECURITY}\r\n \r\n   /// the available encryption levels\r\n-  // - in current version only RC4 40-bit and RC4 128-bit are available, which\r\n-  // correspond respectively to PDF 1.3 and PDF 1.4 formats\r\n+  // - RC4 40-bit and RC4 128-bit correspond respectively to PDF 1.3 and PDF 1.4\r\n+  // formats: they are deprecated, and RC4 is weak by today's standards\r\n   // - for RC4 40-bit and RC4 128-bit, associated password are restricted to a\r\n   // maximum length of 32 characters and could contain only characters from the\r\n   // Latin-1 encoding (i.e. no accent)\r\n+  // - elAES_256 is the AES-256 security handler of ISO 32000-2 (PDF 2.0),\r\n+  // revision 6: the file is written as PDF 1.7 with the Adobe extension level\r\n+  // 8, as expected by all current readers; passwords are UTF-8 encoded (with\r\n+  // no SASLprep normalization) and truncated to 127 bytes\r\n   TPdfEncryptionLevel = (\r\n     elNone,\r\n     elRC4_40,\r\n-    elRC4_128);\r\n+    elRC4_128,\r\n+    elAES_256);\r\n \r\n   /// PDF can encode various restrictions on document operations which can be\r\n   // granted or denied individually (some settings depend on others, though):\r\n@@ -600,6 +607,10 @@   TPdfEncryption = class\n     fOwnerPassword: string;\r\n     fDoc: TPdfDocument;\r\n     procedure EncodeBuffer(const BufIn; var BufOut; Count: cardinal); virtual; abstract;\r\n+    /// how many bytes EncodeBuffer() writes for Count input bytes\r\n+    // - RC4 encrypts in place (same length); AES adds an IV and a padding, so\r\n+    // BufOut should then be a distinct buffer of EncodeLength(Count) bytes\r\n+    function EncodeLength(Count: cardinal): cardinal; virtual;\r\n   public\r\n     /// initialize the internal structures with the proper classes\r\n     // - do not call this method directly, but class function TPdfEncryption.New()\r\n@@ -611,8 +622,8 @@   TPdfEncryption = class\n     procedure AttachDocument(aDoc: TPdfDocument); virtual;\r\n     /// will create the expected TPdfEncryption instance, depending on aLevel\r\n     // - to be called as parameter of TPdfDocument/TPdfDocumentGdi.Create()\r\n-    // - currently, only elRC4_40 and elRC4_128 levels are implemented\r\n-    // - both passwords are expected to be ASCII-7 characters only\r\n+    // - elRC4_40, elRC4_128 and elAES_256 levels are implemented\r\n+    // - for RC4, both passwords are expected to be ASCII-7 characters only\r\n     // - aUserPassword will be asked at file opening: to be set to '' for not\r\n     // blocking display, but optional permission\r\n     // - aOwnerPassword shall not be '', and will be used internally to cypher\r\n@@ -625,6 +636,8 @@   TPdfEncryption = class\n     // !   TPdfEncryption.New(elRC4_40,'','toto',PDF_PERMISSION_NOMODIF));\r\n     // ! Doc := TPdfDocument.Create(false,0,false,\r\n     // !   TPdfEncryption.New(elRC4_128,'','toto',PDF_PERMISSION_NOCOPYNORPRINT));\r\n+    // ! Doc := TPdfDocument.Create(false,0,false,\r\n+    // !   TPdfEncryption.New(elAES_256,'user','owner',PDF_PERMISSION_NOMODIF));\r\n     class function New(aLevel: TPdfEncryptionLevel;\r\n       const aUserPassword, aOwnerPassword: string;\r\n       aPermissions: TPdfEncryptionPermissions): TPdfEncryption;\r\n@@ -647,6 +660,24 @@   TPdfEncryptionRC4MD5 = class(TPdfEncryption)\n     // - will compute the internal keys\r\n     procedure AttachDocument(aDoc: TPdfDocument); override;\r\n   end;\r\n+\r\n+  /// handle PDF security with the AES-256 scheme of ISO 32000-2 (revision 6)\r\n+  // - allowed aLevel parameter for Create() is only elAES_256\r\n+  // - each string and stream is encrypted with AES-256-CBC, a random IV and a\r\n+  // PKCS#7 padding, using the 256-bit file ke\n... [truncated, 17818 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
