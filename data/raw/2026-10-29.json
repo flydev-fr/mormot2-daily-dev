@@ -1,0 +1,831 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-29",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-10-30T03:34:07Z",
+  "range": {
+    "since": "2026-10-28T23:00:00Z",
+    "until": "2026-10-29T23:00:00Z",
+    "base_sha": "05906e36d92c1be1551144761eb8c1f8ab8be816",
+    "head_sha": "50a0c6b536826827965d8f1571c4087f1b0d82a1"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 17,
+    "additions": 2304,
+    "deletions": 494
+  },
+  "commits": [
+    {
+      "sha": "50a0c6b536826827965d8f1571c4087f1b0d82a1",
+      "short_sha": "50a0c6b5",
+      "subject": "Merge pull request #703 from tobfel/fix/duckdb-variant",
+      "body": "db: DuckDB 2.0 VARIANT columns are returned as JSON",
+      "author": "ab",
+      "date": "2026-10-29T22:16:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/50a0c6b536826827965d8f1571c4087f1b0d82a1",
+      "parents": [
+        "211d224303893675d7ab1e88071300a07728223b",
+        "027e139e8dca31c176c7c87e46e25a8d9e2060f3"
+      ],
+      "stats": {
+        "additions": 187,
+        "deletions": 18,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 53,
+          "deletions": 0,
+          "patch": "@@ -440,6 +440,18 @@ procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n /// retrieve the text of an ENUM value, caching all the ENUM dictionary\n function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n \n+/// return true if a type is a VARIANT, or contains a VARIANT as nested type\n+function DuckDBTypeHasVariant(const Info: TDuckDBTypeInfo): boolean;\n+\n+/// wrap a SELECT statement to retrieve its VARIANT columns as JSON\n+// - the VARIANT binary layout is not decoded by our drivers: DuckDB converts\n+// them to JSON, e.g. 'SELECT #1 AS \"a\", NULLIF(#2::JSON, 'null'::JSON) AS \"b\" FROM (sql)'\n+// - positional #n references allow duplicated column names, and a VARIANT NULL\n+// is always returned as SQL NULL (DuckDB 1.5 returned a JSON 'null')\n+// - IsVariant[] flags the columns to be converted\n+function DuckDBVariantSql(const Sql: RawUtf8; const Names: TRawUtf8DynArray;\n+  const IsVariant: TBooleanDynArray): RawUtf8;\n+\n /// convert a DuckDB type into the corresponding mormot.db field type\n function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n \n@@ -1070,6 +1082,47 @@ procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalTy\n   end;\n end;\n \n+function DuckDBTypeHasVariant(const Info: TDuckDBTypeInfo): boolean;\n+var\n+  i: PtrInt;\n+begin\n+  result := Info.TypeId = DUCKDB_TYPE_VARIANT;\n+  if not result then\n+    for i := 0 to Info.ChildCount - 1 do\n+      if DuckDBTypeHasVariant(Info.Children^[i]) then\n+      begin\n+        result := true;\n+        exit;\n+      end;\n+end;\n+\n+function DuckDBVariantSql(const Sql: RawUtf8; const Names: TRawUtf8DynArray;\n+  const IsVariant: TBooleanDynArray): RawUtf8;\n+var\n+  i: PtrInt;\n+  list, text: RawUtf8;\n+begin\n+  // positional #n references support duplicated column names\n+  list := '';\n+  for i := 0 to high(Names) do\n+  begin\n+    if i > 0 then\n+      list := list + ', ';\n+    text := QuotedStr(Names[i], '\"');\n+    if IsVariant[i] then\n+      // the VARIANT NULL is converted to JSON 'null' by some DuckDB versions\n+      list := FormatUtf8('%NULLIF(#%::JSON, ''null''::JSON) AS %',\n+        [list, i + 1, text])\n+    else\n+      list := FormatUtf8('%#% AS %', [list, i + 1, text]);\n+  end;\n+  text := TrimU(Sql);\n+  while (text <> '') and\n+        (text[length(text)] = ';') do\n+    SetLength(text, length(text) - 1); // within a sub-query\n+  result := 'SELECT ' + list + ' FROM (' + text + ')';\n+end;\n+\n procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n var\n   i: PtrInt;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 11,
+          "patch": "@@ -153,6 +153,9 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n+    procedure ExecuteStmt;\n+    function DescribeColumns: TBooleanDynArray;\n+    procedure ExecuteVariantAsJson(const Variants: TBooleanDynArray);\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -1082,13 +1085,7 @@ procedure TSqlDBDuckDBStatement.BindParams;\n \n procedure TSqlDBDuckDBStatement.ExecutePrepared;\n var\n-  i: PtrInt;\n-  msg: RawUtf8;\n-  c: PDuckDBColumnInfo;\n-  col: PSqlDBColumnProperty;\n-  name: RawUtf8;\n-  res: TDuckDBState;\n-  saved: cardinal;\n+  variants: TBooleanDynArray;\n begin\n   SqlLogBegin(sllSQL);\n   inherited ExecutePrepared; // set fConnection.fLastAccessTicks\n@@ -1103,6 +1100,20 @@ procedure TSqlDBDuckDBStatement.ExecutePrepared;\n   if fParamsArrayCount > 0 then\n     ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: BindArray() is not supported - ' +\n       'use OnBatchInsert or a transaction', [self]);\n+  ExecuteStmt;\n+  variants := DescribeColumns;\n+  if variants <> nil then\n+    // DuckDB VARIANT binary layout is not decoded: ask for JSON instead\n+    ExecuteVariantAsJson(variants);\n+  SqlLogEnd;\n+end;\n+\n+procedure TSqlDBDuckDBStatement.ExecuteStmt;\n+var\n+  res: TDuckDBState;\n+  msg: RawUtf8;\n+  saved: cardinal;\n+begin\n   FillCharFast(fRes, SizeOf(fRes), 0);\n   saved := SetFpuFlags; // the C++ engine expects masked FPU exceptions\n   try\n@@ -1126,18 +1137,73 @@ procedure TSqlDBDuckDBStatement.ExecutePrepared;\n   end;\n   fHasResult := true;\n   fUpdateCount := DuckDB.rows_changed(@fRes);\n-  // retrieve the columns description\n+end;\n+\n+function TSqlDBDuckDBStatement.DescribeColumns: TBooleanDynArray;\n+var\n+  i: PtrInt;\n+  c: PDuckDBColumnInfo;\n+  col: PSqlDBColumnProperty;\n+begin\n+  result := nil;\n   SetLength(fInfo, DuckDB.column_count(@fRes));\n   for i := 0 to length(fInfo) - 1 do\n   begin\n     c := @fInfo[i];\n     DuckDBTypeInfoInit(c^.Info, DuckDB.column_logical_type(@fRes, i));\n-    name := RawUtf8(DuckDB.column_name(@fRes, i));\n-    col := AddColumn(name);\n+    col := AddColumn(RawUtf8(DuckDB.column_name(@fRes, i)));\n     col^.ColumnType := DuckDBTypeToField(c^.Info.TypeId, c^.Info.Scale);\n     col^.ColumnAttr := c^.Info.TypeId;\n+    if DuckDBTypeHasVariant(c^.Info) then\n+    begin\n+      if result = nil then\n+        SetLength(result, length(fInfo));\n+      result[i] := true;\n+    end;\n   end;\n-  SqlLogEnd;\n+end;\n+\n+procedure TSqlDBDuckDBStatement.ExecuteVariantAsJson(\n+  const Variants: TBooleanDynArray);\n+var\n+  names: TRawUtf8DynArray;\n+  wrapped, msg: RawUtf8;\n+  i: PtrInt;\n+  state: TDuckDBState;\n+  saved: cardinal;\n+begin\n+  if fDirectQuery then\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: VARIANT is not supported ' +\n+      'by multi-statement SQL - cast it to JSON', [self]);\n+  SetLength(names, length(fInfo));\n+  for i := 0 to high(names) do\n+    names[i] := fColumns[i].ColumnName;\n+  wrapped := DuckDBVariantSql(fSql, names, Variants);\n+  // run again the SQL, with the VARIANT columns converted to JSON\n+  ReleaseResult;\n+  ClearColumns;\n+  fColumnCount := 0;\n+  if fStmt <> nil then\n+    DuckDB.destroy_prepare(fStmt);\n+  fStmt := nil;\n+  saved := SetFpuFlags;\n+  try\n+    state := DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n+      pointer(wrapped), fStmt);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n+  begin\n+    msg := RawUtf8(DuckDB.prepare_error(fStmt));\n+    DuckDB.destroy_prepare(fStmt);\n+    fStmt := nil;\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: % [%]', [self, msg, wrapped]);\n+  end;\n+  ExecuteStmt;\n+  if DescribeColumns <> nil then\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: unexpected VARIANT [%]',\n+      [self, wrapped]);\n end;\n \n function TSqlDBDuckDBStatement.UpdateCount: integer;",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 57,
+          "deletions": 7,
+          "patch": "@@ -43,6 +43,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure NestedTypes;\n     procedure Json;\n     procedure Errors;\n+    procedure Variants;\n     procedure Metadata;\n     procedure Bulk;\n     procedure BatchInsert;\n@@ -195,13 +196,7 @@ procedure TTestDuckDB.BasicTypes;\n   Check(rows.ColumnType(1) = ftBlob, 'geometry type');\n   CheckEqual(BinToHex(rows.ColumnBlob(1)),\n     '0101000000000000000000F03F0000000000000040', 'geometry as wkb');\n-  try\n-    rows.ColumnUtf8(2);\n-    Check(false, 'variant');\n-  except\n-    on E: ESqlDBDuckDB do\n-      Check(Pos('#41', E.Message) > 0, 'variant error');\n-  end;\n+  CheckEqual(rows.ColumnUtf8(2), '42', 'variant as json');\n end;\n \n procedure TTestDuckDB.ParamsAndCrud;\n@@ -377,6 +372,61 @@ procedure TTestDuckDB.Errors;\n     Check(Step and (ColumnInt(0) = 1), 'usable after error');\n end;\n \n+procedure TTestDuckDB.Variants;\n+var\n+  rows: ISqlDBRows;\n+begin\n+  // DuckDB 1.5+ VARIANT columns are retrieved as JSON text\n+  if (fProps = nil) or\n+     (PosEx('v1.4', fProps.LibraryVersion) = 1) then\n+    exit;\n+  fProps.ExecuteNoResult('drop table if exists events', []);\n+  fProps.ExecuteNoResult('create table events (id integer, name varchar, ' +\n+    'payload variant)', []);\n+  fProps.ExecuteNoResult('insert into events values ' +\n+    '(1, ''obj'', {''a'': 1, ''b'': [1, 2]}::variant), ' +\n+    '(2, ''txt'', ''hello''::variant), (3, ''num'', 42::variant), ' +\n+    '(4, ''nul'', null::variant)', []);\n+  rows := fProps.Execute('select * from events where id > ? order by id', [0]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnCount, 3);\n+  CheckEqual(rows.ColumnInt(0), 1);\n+  CheckEqual(rows.ColumnUtf8(1), 'obj');\n+  CheckEqual(rows.ColumnUtf8(2), '{\"a\":1,\"b\":[1,2]}', 'object');\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(2), '\"hello\"', 'text');\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(2), '42', 'number');\n+  Check(rows.Step);\n+  Check(rows.ColumnNull(2), 'variant null is a SQL NULL');\n+  Check(not rows.Step);\n+  rows := nil;\n+  // cached statement with other parameters\n+  rows := fProps.Execute('select id, payload from events where id = ?', [1]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), '{\"a\":1,\"b\":[1,2]}');\n+  rows := fProps.Execute('select id, payload from events where id = ?', [3]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), '42');\n+  rows := nil;\n+  // VARIANT within a nested type\n+  rows := fProps.Execute('select [payload] l from events where id = 2', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(0), '[\"hello\"]');\n+  rows := nil;\n+  // other columns are not affected\n+  rows := fProps.Execute('select id, name from events order by id', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), 'obj');\n+  rows := nil;\n+  // duplicated names are supported\n+  rows := fProps.Execute('select payload, id, payload from events order by id', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(0), '{\"a\":1,\"b\":[1,2]}', 'dup1');\n+  CheckEqual(rows.ColumnUtf8(2), '{\"a\":1,\"b\":[1,2]}', 'dup2');\n+  rows := nil;\n+end;\n+\n procedure TTestDuckDB.Metadata;\n var\n   tables: TRawUtf8DynArray;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": 703,
+      "is_merge": true
+    },
+    {
+      "sha": "027e139e8dca31c176c7c87e46e25a8d9e2060f3",
+      "short_sha": "027e139e",
+      "subject": "db: DuckDB 2.0 VARIANT columns are returned as JSON",
+      "body": "select * on tables with VARIANT columns crashed the driver or raised an\nunsupported type error. The statement is now re-executed wrapped in a\nSELECT using positional #n references (so duplicated column names work)\nwith NULLIF(#n::JSON, 'null'::JSON) for the VARIANT columns, so DuckDB\nconverts VARIANT to JSON text and a VARIANT NULL is a SQL NULL.\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-29T16:44:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/027e139e8dca31c176c7c87e46e25a8d9e2060f3",
+      "parents": [
+        "211d224303893675d7ab1e88071300a07728223b"
+      ],
+      "stats": {
+        "additions": 187,
+        "deletions": 18,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 53,
+          "deletions": 0,
+          "patch": "@@ -440,6 +440,18 @@ procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n /// retrieve the text of an ENUM value, caching all the ENUM dictionary\n function DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt): RawUtf8;\n \n+/// return true if a type is a VARIANT, or contains a VARIANT as nested type\n+function DuckDBTypeHasVariant(const Info: TDuckDBTypeInfo): boolean;\n+\n+/// wrap a SELECT statement to retrieve its VARIANT columns as JSON\n+// - the VARIANT binary layout is not decoded by our drivers: DuckDB converts\n+// them to JSON, e.g. 'SELECT #1 AS \"a\", NULLIF(#2::JSON, 'null'::JSON) AS \"b\" FROM (sql)'\n+// - positional #n references allow duplicated column names, and a VARIANT NULL\n+// is always returned as SQL NULL (DuckDB 1.5 returned a JSON 'null')\n+// - IsVariant[] flags the columns to be converted\n+function DuckDBVariantSql(const Sql: RawUtf8; const Names: TRawUtf8DynArray;\n+  const IsVariant: TBooleanDynArray): RawUtf8;\n+\n /// convert a DuckDB type into the corresponding mormot.db field type\n function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType;\n \n@@ -1070,6 +1082,47 @@ procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalTy\n   end;\n end;\n \n+function DuckDBTypeHasVariant(const Info: TDuckDBTypeInfo): boolean;\n+var\n+  i: PtrInt;\n+begin\n+  result := Info.TypeId = DUCKDB_TYPE_VARIANT;\n+  if not result then\n+    for i := 0 to Info.ChildCount - 1 do\n+      if DuckDBTypeHasVariant(Info.Children^[i]) then\n+      begin\n+        result := true;\n+        exit;\n+      end;\n+end;\n+\n+function DuckDBVariantSql(const Sql: RawUtf8; const Names: TRawUtf8DynArray;\n+  const IsVariant: TBooleanDynArray): RawUtf8;\n+var\n+  i: PtrInt;\n+  list, text: RawUtf8;\n+begin\n+  // positional #n references support duplicated column names\n+  list := '';\n+  for i := 0 to high(Names) do\n+  begin\n+    if i > 0 then\n+      list := list + ', ';\n+    text := QuotedStr(Names[i], '\"');\n+    if IsVariant[i] then\n+      // the VARIANT NULL is converted to JSON 'null' by some DuckDB versions\n+      list := FormatUtf8('%NULLIF(#%::JSON, ''null''::JSON) AS %',\n+        [list, i + 1, text])\n+    else\n+      list := FormatUtf8('%#% AS %', [list, i + 1, text]);\n+  end;\n+  text := TrimU(Sql);\n+  while (text <> '') and\n+        (text[length(text)] = ';') do\n+    SetLength(text, length(text) - 1); // within a sub-query\n+  result := 'SELECT ' + list + ' FROM (' + text + ')';\n+end;\n+\n procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n var\n   i: PtrInt;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 11,
+          "patch": "@@ -153,6 +153,9 @@   TSqlDBDuckDBStatement = class(TSqlDBStatementWithParamsAndColumns)\n     fDirectQuery: boolean;\n     fInfo: TDuckDBColumnInfoDynArray;\n     procedure BindParams;\n+    procedure ExecuteStmt;\n+    function DescribeColumns: TBooleanDynArray;\n+    procedure ExecuteVariantAsJson(const Variants: TBooleanDynArray);\n     procedure ReleaseResult;\n     function NextChunk: boolean;\n     function CheckCol(Col: integer): PDuckDBColumnInfo;\n@@ -1082,13 +1085,7 @@ procedure TSqlDBDuckDBStatement.BindParams;\n \n procedure TSqlDBDuckDBStatement.ExecutePrepared;\n var\n-  i: PtrInt;\n-  msg: RawUtf8;\n-  c: PDuckDBColumnInfo;\n-  col: PSqlDBColumnProperty;\n-  name: RawUtf8;\n-  res: TDuckDBState;\n-  saved: cardinal;\n+  variants: TBooleanDynArray;\n begin\n   SqlLogBegin(sllSQL);\n   inherited ExecutePrepared; // set fConnection.fLastAccessTicks\n@@ -1103,6 +1100,20 @@ procedure TSqlDBDuckDBStatement.ExecutePrepared;\n   if fParamsArrayCount > 0 then\n     ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: BindArray() is not supported - ' +\n       'use OnBatchInsert or a transaction', [self]);\n+  ExecuteStmt;\n+  variants := DescribeColumns;\n+  if variants <> nil then\n+    // DuckDB VARIANT binary layout is not decoded: ask for JSON instead\n+    ExecuteVariantAsJson(variants);\n+  SqlLogEnd;\n+end;\n+\n+procedure TSqlDBDuckDBStatement.ExecuteStmt;\n+var\n+  res: TDuckDBState;\n+  msg: RawUtf8;\n+  saved: cardinal;\n+begin\n   FillCharFast(fRes, SizeOf(fRes), 0);\n   saved := SetFpuFlags; // the C++ engine expects masked FPU exceptions\n   try\n@@ -1126,18 +1137,73 @@ procedure TSqlDBDuckDBStatement.ExecutePrepared;\n   end;\n   fHasResult := true;\n   fUpdateCount := DuckDB.rows_changed(@fRes);\n-  // retrieve the columns description\n+end;\n+\n+function TSqlDBDuckDBStatement.DescribeColumns: TBooleanDynArray;\n+var\n+  i: PtrInt;\n+  c: PDuckDBColumnInfo;\n+  col: PSqlDBColumnProperty;\n+begin\n+  result := nil;\n   SetLength(fInfo, DuckDB.column_count(@fRes));\n   for i := 0 to length(fInfo) - 1 do\n   begin\n     c := @fInfo[i];\n     DuckDBTypeInfoInit(c^.Info, DuckDB.column_logical_type(@fRes, i));\n-    name := RawUtf8(DuckDB.column_name(@fRes, i));\n-    col := AddColumn(name);\n+    col := AddColumn(RawUtf8(DuckDB.column_name(@fRes, i)));\n     col^.ColumnType := DuckDBTypeToField(c^.Info.TypeId, c^.Info.Scale);\n     col^.ColumnAttr := c^.Info.TypeId;\n+    if DuckDBTypeHasVariant(c^.Info) then\n+    begin\n+      if result = nil then\n+        SetLength(result, length(fInfo));\n+      result[i] := true;\n+    end;\n   end;\n-  SqlLogEnd;\n+end;\n+\n+procedure TSqlDBDuckDBStatement.ExecuteVariantAsJson(\n+  const Variants: TBooleanDynArray);\n+var\n+  names: TRawUtf8DynArray;\n+  wrapped, msg: RawUtf8;\n+  i: PtrInt;\n+  state: TDuckDBState;\n+  saved: cardinal;\n+begin\n+  if fDirectQuery then\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: VARIANT is not supported ' +\n+      'by multi-statement SQL - cast it to JSON', [self]);\n+  SetLength(names, length(fInfo));\n+  for i := 0 to high(names) do\n+    names[i] := fColumns[i].ColumnName;\n+  wrapped := DuckDBVariantSql(fSql, names, Variants);\n+  // run again the SQL, with the VARIANT columns converted to JSON\n+  ReleaseResult;\n+  ClearColumns;\n+  fColumnCount := 0;\n+  if fStmt <> nil then\n+    DuckDB.destroy_prepare(fStmt);\n+  fStmt := nil;\n+  saved := SetFpuFlags;\n+  try\n+    state := DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n+      pointer(wrapped), fStmt);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n+  begin\n+    msg := RawUtf8(DuckDB.prepare_error(fStmt));\n+    DuckDB.destroy_prepare(fStmt);\n+    fStmt := nil;\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: % [%]', [self, msg, wrapped]);\n+  end;\n+  ExecuteStmt;\n+  if DescribeColumns <> nil then\n+    ESqlDBDuckDB.RaiseUtf8('%.ExecutePrepared: unexpected VARIANT [%]',\n+      [self, wrapped]);\n end;\n \n function TSqlDBDuckDBStatement.UpdateCount: integer;",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 57,
+          "deletions": 7,
+          "patch": "@@ -43,6 +43,7 @@   TTestDuckDB = class(TSynTestCase)\n     procedure NestedTypes;\n     procedure Json;\n     procedure Errors;\n+    procedure Variants;\n     procedure Metadata;\n     procedure Bulk;\n     procedure BatchInsert;\n@@ -195,13 +196,7 @@ procedure TTestDuckDB.BasicTypes;\n   Check(rows.ColumnType(1) = ftBlob, 'geometry type');\n   CheckEqual(BinToHex(rows.ColumnBlob(1)),\n     '0101000000000000000000F03F0000000000000040', 'geometry as wkb');\n-  try\n-    rows.ColumnUtf8(2);\n-    Check(false, 'variant');\n-  except\n-    on E: ESqlDBDuckDB do\n-      Check(Pos('#41', E.Message) > 0, 'variant error');\n-  end;\n+  CheckEqual(rows.ColumnUtf8(2), '42', 'variant as json');\n end;\n \n procedure TTestDuckDB.ParamsAndCrud;\n@@ -377,6 +372,61 @@ procedure TTestDuckDB.Errors;\n     Check(Step and (ColumnInt(0) = 1), 'usable after error');\n end;\n \n+procedure TTestDuckDB.Variants;\n+var\n+  rows: ISqlDBRows;\n+begin\n+  // DuckDB 1.5+ VARIANT columns are retrieved as JSON text\n+  if (fProps = nil) or\n+     (PosEx('v1.4', fProps.LibraryVersion) = 1) then\n+    exit;\n+  fProps.ExecuteNoResult('drop table if exists events', []);\n+  fProps.ExecuteNoResult('create table events (id integer, name varchar, ' +\n+    'payload variant)', []);\n+  fProps.ExecuteNoResult('insert into events values ' +\n+    '(1, ''obj'', {''a'': 1, ''b'': [1, 2]}::variant), ' +\n+    '(2, ''txt'', ''hello''::variant), (3, ''num'', 42::variant), ' +\n+    '(4, ''nul'', null::variant)', []);\n+  rows := fProps.Execute('select * from events where id > ? order by id', [0]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnCount, 3);\n+  CheckEqual(rows.ColumnInt(0), 1);\n+  CheckEqual(rows.ColumnUtf8(1), 'obj');\n+  CheckEqual(rows.ColumnUtf8(2), '{\"a\":1,\"b\":[1,2]}', 'object');\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(2), '\"hello\"', 'text');\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(2), '42', 'number');\n+  Check(rows.Step);\n+  Check(rows.ColumnNull(2), 'variant null is a SQL NULL');\n+  Check(not rows.Step);\n+  rows := nil;\n+  // cached statement with other parameters\n+  rows := fProps.Execute('select id, payload from events where id = ?', [1]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), '{\"a\":1,\"b\":[1,2]}');\n+  rows := fProps.Execute('select id, payload from events where id = ?', [3]);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), '42');\n+  rows := nil;\n+  // VARIANT within a nested type\n+  rows := fProps.Execute('select [payload] l from events where id = 2', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(0), '[\"hello\"]');\n+  rows := nil;\n+  // other columns are not affected\n+  rows := fProps.Execute('select id, name from events order by id', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(1), 'obj');\n+  rows := nil;\n+  // duplicated names are supported\n+  rows := fProps.Execute('select payload, id, payload from events order by id', []);\n+  Check(rows.Step);\n+  CheckEqual(rows.ColumnUtf8(0), '{\"a\":1,\"b\":[1,2]}', 'dup1');\n+  CheckEqual(rows.ColumnUtf8(2), '{\"a\":1,\"b\":[1,2]}', 'dup2');\n+  rows := nil;\n+end;\n+\n procedure TTestDuckDB.Metadata;\n var\n   tables: TRawUtf8DynArray;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "211d224303893675d7ab1e88071300a07728223b",
+      "short_sha": "211d2243",
+      "subject": "Merge pull request #699 from tobfel/pecoff-exe-signature",
+      "body": "misc: Authenticode signature check of Windows executables",
+      "author": "ab",
+      "date": "2026-10-29T16:08:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/211d224303893675d7ab1e88071300a07728223b",
+      "parents": [
+        "7a77ce0cf36975d8e092152190cccf5963a4c33a",
+        "9f798fe6f3acffa3fe7b4239b1ef8809c9b6a3c7"
+      ],
+      "stats": {
+        "additions": 348,
+        "deletions": 53,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.security.pas",
+          "status": "modified",
+          "additions": 183,
+          "deletions": 0,
+          "patch": "@@ -3252,6 +3252,47 @@ function SetSystemSecurityDescriptor(const fn: TFileName;\n // https://learn.microsoft.com/en-us/windows-server/security/authority-information-access-retrieval\r\n function IsAiaDisabledInWindowsRegistry: boolean;\r\n \r\n+type\r\n+  /// the result of WinVerifyExeSignature()\r\n+  // - wvsValid: the signature is valid and its certificates chain is trusted\r\n+  // - wvsNotSigned: the file has no (embedded) signature\r\n+  // - wvsBadDigest: the file content has been tampered after signing\r\n+  // - wvsUntrustedRoot: certificate chain ends with an untrusted root\r\n+  // - wvsExpired: a certificate of the chain has expired (and no timestamp)\r\n+  // - wvsRevoked: a certificate of the chain has been revoked\r\n+  // - wvsDistrust: a certificate is explicitly distrusted by the user/admin\r\n+  // - wvsNotTrusted: the subject is not trusted for the specified action, or\r\n+  // the local security policy forbids it\r\n+  // - wvsNoRevocationCheck: revocation could not be checked (e.g. offline)\r\n+  // - wvsError: the file can't be read, or any other WinVerifyTrust() error\r\n+  TWinVerifyStatus = (\r\n+    wvsError,\r\n+    wvsValid,\r\n+    wvsNotSigned,\r\n+    wvsBadDigest,\r\n+    wvsUntrustedRoot,\r\n+    wvsExpired,\r\n+    wvsRevoked,\r\n+    wvsDistrust,\r\n+    wvsNotTrusted,\r\n+    wvsNoRevocationCheck);\r\n+\r\n+/// verify the Authenticode digital signature of a file using the Windows API\r\n+// - calls WinVerifyTrust(WINTRUST_ACTION_GENERIC_VERIFY_V2) without any UI\r\n+// - by default, no revocation check is done, so no network access occurs: set\r\n+// CheckRevocation=true to validate the whole certificates chain (with a\r\n+// possible slow network access to the CRL/OCSP servers)\r\n+// - ErrorCode, if not nil, will contain the raw HRESULT of WinVerifyTrust()\r\n+// - only the embedded signature is checked: catalog-signed files (e.g. most\r\n+// Windows system files) will return wvsNotSigned\r\n+function WinVerifyExeSignature(const FileName: TFileName;\r\n+  CheckRevocation: boolean = false; ErrorCode: PCardinal = nil): TWinVerifyStatus;\r\n+\r\n+/// return true if WinVerifyExeSignature() returns wvsValid\r\n+// - a convenient wrapper to check the Authenticode signature of a file\r\n+function IsExeSignatureValid(const FileName: TFileName;\r\n+  CheckRevocation: boolean = false): boolean;\r\n+\r\n \r\n {$endif OSWINDOWS}\r\n \r\n@@ -9159,6 +9200,148 @@ function IsAiaDisabledInWindowsRegistry: boolean;\n     'Software\\Policies\\Microsoft\\SystemCertificates\\ChainEngine', 'Config') = 2;\r\n end;\r\n \r\n+{$ifdef CPU64}\r\n+{$A8}\r\n+{$else}\r\n+{$A4}\r\n+{$endif CPU64}\r\n+type\r\n+  // see https://learn.microsoft.com/en-us/windows/win32/api/wintrust\r\n+  TWinTrustFileInfo = record\r\n+    cbStruct: cardinal;\r\n+    pcwszFilePath: PWideChar;\r\n+    hFile: THandle;\r\n+    pgKnownSubject: PGuid;\r\n+  end;\r\n+\r\n+  TWinTrustData = record\r\n+    cbStruct: cardinal;\r\n+    pPolicyCallbackData: pointer;\r\n+    pSIPClientData: pointer;\r\n+    dwUIChoice: cardinal;\r\n+    fdwRevocationChecks: cardinal;\r\n+    dwUnionChoice: cardinal;\r\n+    pFile: ^TWinTrustFileInfo;\r\n+    dwStateAction: cardinal;\r\n+    hWVTStateData: THandle;\r\n+    pwszURLReference: PWideChar;\r\n+    dwProvFlags: cardinal;\r\n+    dwUIContext: cardinal;\r\n+    pSignatureSettings: pointer;\r\n+  end;\r\n+{$A+}\r\n+\r\n+const\r\n+  WINTRUST_ACTION_GENERIC_VERIFY_V2: TGuid =\r\n+    '{00AAC56B-CD44-11D0-8CC2-00C04FC295EE}';\r\n+  WTD_UI_NONE = 2;\r\n+  WTD_REVOKE_NONE = 0;\r\n+  WTD_REVOKE_WHOLECHAIN = 1;\r\n+  WTD_CHOICE_FILE = 1;\r\n+  WTD_STATEACTION_VERIFY = 1;\r\n+  WTD_STATEACTION_CLOSE = 2;\r\n+  WTD_REVOCATION_CHECK_NONE = $00000010;\r\n+  WTD_REVOCATION_CHECK_CHAIN = $00000040;\r\n+  WTD_CACHE_ONLY_URL_RETRIEVAL = $00001000;\r\n+\r\n+  TRUST_E_PROVIDER_UNKNOWN     = $800B0001;\r\n+  TRUST_E_SUBJECT_FORM_UNKNOWN = $800B0003;\r\n+  TRUST_E_SUBJECT_NOT_TRUSTED  = $800B0004;\r\n+  TRUST_E_NOSIGNATURE          = $800B0100;\r\n+  CERT_E_EXPIRED               = $800B0101;\r\n+  CERT_E_UNTRUSTEDROOT         = $800B0109;\r\n+  CERT_E_CHAINING              = $800B010A;\r\n+  CERT_E_REVOKED               = $800B010C;\r\n\n... [truncated, 2922 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/misc/mormot.misc.pecoff.pas",
+          "status": "modified",
+          "additions": 114,
+          "deletions": 52,
+          "patch": "@@ -10,6 +10,7 @@\n     - Low-Level DOS/PE/COFF Encoding Structures\r\n     - High-Level PE (.exe, .dll...) File Reader\r\n     - Windows Executable Digital Signature Stuffing\r\n+    - Windows Executable Digital Signature Retrieval\r\n \r\n   *****************************************************************************\r\n }\r\n@@ -655,6 +656,24 @@ procedure StuffExeCertificate(const MainFile, NewFile: TFileName;\n function FindStuffExeCertificate(const FileName: TFileName): RawUtf8;\r\n \r\n \r\n+{ ************** Windows Executable Digital Signature Retrieval }\r\n+\r\n+/// return the raw PKCS#7 signed data embedded in a Windows executable\r\n+// - i.e. the Authenticode signature content of the PE certificate table\r\n+// - returns '' if the file is not a PE executable or has no embedded signature\r\n+// - the returned DER binary may include some trailing #0 padding bytes\r\n+// - this function is cross-platform and does not verify anything: use\r\n+// WinVerifyExeSignature() from mormot.core.os.security to actually verify it\r\n+function GetExeSignature(const FileName: TFileName): RawByteString;\r\n+\r\n+/// check if a Windows executable has an embedded Authenticode signature\r\n+// - this function is cross-platform, and only checks the signature presence:\r\n+// use WinVerifyExeSignature() from mormot.core.os.security for a verification\r\n+// - note that Windows system files are usually signed via a catalog file,\r\n+// so have no embedded signature and would return false here\r\n+function IsExeSigned(const FileName: TFileName): boolean;\r\n+\r\n+\r\n implementation\r\n \r\n   \r\n@@ -1131,71 +1150,98 @@   WIN_CERTIFICATE = record\n \r\n const\r\n   PE_ENTRY_OFFSET = $3c;\r\n-  CERTIFICATE_ENTRY_OFFSET = $98;\r\n+  PE_MAGIC_OFFSET = 24; // optional header Magic, after the COFF file header\r\n+  CERTIFICATE_ENTRY_OFFSET = $98;   // with PE32 optional header\r\n+  CERTIFICATE_ENTRY_OFFSET64 = $a8; // with PE32+ optional header\r\n   WIN_CERT_TYPE_PKCS_SIGNED_DATA = 2;\r\n \r\n function FindExeCertificate(const MainFile: TFileName; OutFile: THandleStream;\r\n-  out wc: WIN_CERTIFICATE; lenoffs, offs: PCardinal): RawByteString;\r\n+  out wc: WIN_CERTIFICATE; lenoffs, offs: PCardinal;\r\n+  RaiseOnError: boolean = true): RawByteString;\r\n var\r\n   M: TStream;\r\n+  h: THandle;\r\n   i, read: PtrInt;\r\n   certoffs, certlenoffs, certlen: cardinal;\r\n   firstbuf: boolean;\r\n+  err: PUtf8Char;\r\n   buf: array[0 .. 128 shl 10 - 1] of byte; // 128KB of temp copy buffer on stack\r\n begin\r\n   FastAssignNew(result);\r\n   firstbuf := true;\r\n-  M := TFileStreamEx.Create(MainFile, fmOpenReadShared);\r\n-  try\r\n-    repeat\r\n-      read := M.Read(buf{%H-}, SizeOf(buf));\r\n-      if firstbuf then\r\n-      begin\r\n-        // search for COFF/PE header in the first block\r\n-        if read < 1024 then\r\n-          EStuffExe.RaiseUtf8('% read error', [MainFile]);\r\n-        i := PCardinal(@buf[PE_ENTRY_OFFSET])^; // read DOS header offset\r\n-        if (i >= read) or\r\n-           (PCardinal(@buf[i])^ <> ord('P') + ord('E') shl 8) then\r\n-          EStuffExe.RaiseUtf8('% is not a PE executable', [MainFile]);\r\n-        // parse PE header\r\n-        inc(i, CERTIFICATE_ENTRY_OFFSET);\r\n-        certoffs := PCardinal(@buf[i])^;\r\n-        certlenoffs := i + 4;\r\n-        certlen := PCardinal(@buf[certlenoffs])^;\r\n-        if (certoffs = 0) or\r\n-           (certlen = 0) then\r\n-           EStuffExe.RaiseUtf8('% has no signature', [MainFile]);\r\n-        // parse certificate table\r\n-        if certoffs + certlen <> M.Size then\r\n-          EStuffExe.RaiseUtf8('% should end with a certificate', [MainFile]);\r\n-        M.Seek(certoffs, soBeginning);\r\n-        if (M.Read(wc{%H-}, SizeOf(wc)) <> SizeOf(wc)) or\r\n-           (wc.dwLength <> certlen) or\r\n-           (wc.wRevision <> $200) or\r\n-           (wc.wCertType <> WIN_CERT_TYPE_PKCS_SIGNED_DATA) then\r\n-          EStuffExe.RaiseUtf8('% unsupported signature', [MainFile]);\r\n-        // read original signature\r\n-        dec(certlen, SizeOf(wc));\r\n-        SetLength(result, certlen);\r\n-        if not StreamReadAll(M, poin\n... [truncated, 3927 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 1,
+          "patch": "@@ -34,7 +34,8 @@ interface\n   mormot.crypt.ecc,\r\n   mormot.crypt.rsa,\r\n   mormot.crypt.x509,\r\n-  mormot.crypt.win;\r\n+  mormot.crypt.win,\r\n+  mormot.misc.pecoff;\r\n \r\n type\r\n   /// regression tests for mormot.crypt.core and mormot.crypt.jwt features\r\n@@ -84,6 +85,8 @@   TTestCoreCrypto = class(TSynTestCase)\n     procedure _RSA;\r\n     /// X509 Certificates\r\n     procedure _X509;\r\n+    /// Authenticode signature of Windows executables\r\n+    procedure _Authenticode;\r\n     /// stream-oriented cryptography\r\n     procedure Streams;\r\n     /// Base64/Base58/Base32 encoding/decoding functions\r\n@@ -6740,6 +6743,53 @@ procedure TTestCoreCrypto._X509;\n   Check(st.IsRevoked(chain[1]) = crrNotRevoked);\r\n   Check(st.IsRevoked(chain[2]) = crrServerCompromised);\r\n end;\r\n+\r\n+procedure TTestCoreCrypto._Authenticode;\r\n+var\r\n+  fn: TFileName;\r\n+  {$ifdef OSWINDOWS}\r\n+  exe: TFileName;\r\n+  sig, bin: RawByteString;\r\n+  {$endif OSWINDOWS}\r\n+begin\r\n+  // cross-platform PE certificate table parsing\r\n+  fn := WorkDir + 'authenticode.dll';\r\n+  Check(FileFromString('this is not a PE executable', fn));\r\n+  try\r\n+    CheckEqual(GetExeSignature(fn), '', 'not PE');\r\n+    Check(not IsExeSigned(fn), 'not PE');\r\n+    Check(not IsExeSigned(fn + '.missing'), 'missing');\r\n+    {$ifdef OSWINDOWS}\r\n+    // genuine verification via WinVerifyTrust()\r\n+    Check(WinVerifyExeSignature('') = wvsError, 'empty');\r\n+    Check(WinVerifyExeSignature(fn + '.missing') = wvsError, 'missing');\r\n+    Check(WinVerifyExeSignature(fn) <> wvsValid, 'not PE');\r\n+    // kernel32.dll is likely to have an embedded signature (i.e. not from a\r\n+    // catalog), in the PE32 or PE32+ format matching the current bitness\r\n+    exe := GetEnvironmentVariable('SystemRoot') + '\\System32\\kernel32.dll';\r\n+    if WinVerifyExeSignature(exe) <> wvsValid then\r\n+      AddConsole('% has no embedded signature', [exe])\r\n+    else\r\n+    begin\r\n+      sig := GetExeSignature(exe);\r\n+      Check((sig <> '') and\r\n+            (sig[1] = #$30), 'kernel32 PKCS#7'); // DER ASN.1 SEQUENCE\r\n+      Check(IsExeSigned(exe), 'kernel32');\r\n+      Check(IsExeSignatureValid(exe), 'kernel32');\r\n+      // tampered content is detected, even if the signature itself is intact\r\n+      bin := StringFromFile(exe);\r\n+      PByteArray(bin)[length(bin) shr 2] := PByteArray(bin)[length(bin) shr 2] xor $ff;\r\n+      Check(FileFromString(bin, fn));\r\n+      CheckEqual(GetExeSignature(fn), sig, 'tampered');\r\n+      Check(WinVerifyExeSignature(fn) = wvsBadDigest, 'tampered');\r\n+      Check(not IsExeSignatureValid(fn), 'tampered');\r\n+    end;\r\n+    {$endif OSWINDOWS}\r\n+  finally\r\n+    DeleteFile(fn);\r\n+  end;\r\n+end;\r\n+\r\n (*\r\n var\r\n   i, v, v2, n, c, d: PtrInt;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Misc",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os.security",
+        "mormot.misc.pecoff"
+      ],
+      "pr": 699,
+      "is_merge": true
+    },
+    {
+      "sha": "7a77ce0cf36975d8e092152190cccf5963a4c33a",
+      "short_sha": "7a77ce0c",
+      "subject": "Merge pull request #702 from landrix/fix/pdf-text-in-path",
+      "body": "ui: pdf - EMF text in a GDI path is painted with the path",
+      "author": "ab",
+      "date": "2026-10-29T16:06:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7a77ce0cf36975d8e092152190cccf5963a4c33a",
+      "parents": [
+        "37fb7892021e9e12c8fce74d37758c7cc41e29d5",
+        "fb61df56ba88ac2978081f54823aaeff7648e331"
+      ],
+      "stats": {
+        "additions": 359,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 166,
+          "deletions": 7,
+          "patch": "@@ -11242,6 +11242,10 @@   TPdfEnum = class\n     fPathSaved: TPdfStream;\r\n     // the recorded path until its painting record\r\n     fPathBuf: RawByteString;\r\n+    // the text of the path apart, as PDF text cannot join a path: painted\r\n+    // after it in a text render mode\r\n+    fPathText: TPdfStream;\r\n+    fPathTextBuf: RawByteString;\r\n   public\r\n     constructor Create(ACanvas: TPdfCanvas);\r\n     procedure SaveDC;\r\n@@ -11263,13 +11267,17 @@   TPdfEnum = class\n     // write the kept path, after the clip and the pen of its painting\r\n     // - CloseFigures for EMR_STROKEANDFILLPATH, which closes each figure\r\n     procedure PathReplay(CloseFigures: boolean = false);\r\n+    // after the painting operator: the text of the path filled, stroked or both\r\n+    procedure PathTextPaint(Fill, Stroke: boolean);\r\n     // the path is painted or dropped\r\n     procedure PathDone;\r\n     procedure NeedPen;\r\n     procedure NeedBrushAndPen;\r\n     procedure FlushPenBrush;\r\n     procedure SelectObjectFromIndex(iObject: integer);\r\n     procedure TextOut(var r: TEMRExtTextOut);\r\n+    // EMR_EXTTEXTOUTA/W between EMR_BEGINPATH and EMR_ENDPATH\r\n+    procedure PathTextOut(var R: TEMRExtTextOut);\r\n     procedure ScaleMatrix(Custom: PXForm; iMode: integer);\r\n     procedure HandleComment(Kind: TPdfGdiComment; P: PAnsiChar; Len: integer);\r\n     procedure CreateFont(ALogFont: PEMRExtCreateFontIndirect);\r\n@@ -11377,7 +11385,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         Font.Align := PEMRSetTextAlign(R)^.iMode;\r\n       EMR_EXTTEXTOUTA,\r\n       EMR_EXTTEXTOUTW:\r\n-        E.TextOut(PEMRExtTextOut(R)^);\r\n+        if E.fPathRecording then\r\n+          E.PathTextOut(PEMRExtTextOut(R)^)\r\n+        else\r\n+          E.TextOut(PEMRExtTextOut(R)^);\r\n       EMR_SAVEDC:\r\n         E.SaveDC; // may reallocate E.DC: nothing of this with-scope after it\r\n       EMR_RESTOREDC:\r\n@@ -12005,6 +12016,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n             else\r\n               E.Canvas.Fill;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(not brush.Null, false);\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEPATH:\r\n@@ -12016,6 +12028,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(false, not pen.null);\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEANDFILLPATH:\r\n@@ -12044,6 +12057,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           else if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(not brush.Null, not pen.null);\r\n           E.PathDone;\r\n         end;\r\n       EMR_SETPOLYFILLMODE:\r\n@@ -12977,12 +12991,15 @@ procedure TPdfEnum.GStateRestored;\n procedure TPdfEnum.PathBegin;\r\n begin\r\n   if fPathRecording or\r\n-     (fPathBuf <> '') then\r\n+     (fPathBuf <> '') or\r\n+     (fPathTextBuf <> '') then\r\n     PathDone; // a path begun again drops the one before, as in GDI\r\n   fPathRecording := true;\r\n   Canvas.fNewPath := true; // the line records add to the path, unpainted\r\n-  if Canvas.fContents <> nil then\r\n-    fPathStream := TPdfStream.Create(Canvas.fDoc, true);\r\n+  if Canvas.fContents = nil then\r\n+    exit;\r\n+  fPathStream := TPdfStream.Create(Canvas.fDoc, true);\r\n+  fPathText := TPdfStream.Create(Canvas.fDoc, true);\r\n end;\r\n \r\n procedure TPdfEnum.PathIn;\r\n@@ -13015,6 +13032,8 @@ procedure TPdfEnum.PathClose;\n     exit;\r\n   fPathBuf := fPathStream.Writer.ToPdfString;\r\n   FreeAndNil(fPathStream);\r\n+  fPathTextBuf := fPathText.Writer.ToPdfString;\r\n+  FreeAndNil(fPathText);\r\n end;\r\n \r\n procedure TPdfEnum.PathPaint;\r\n@@ -13078,10 +13097,28 @@ procedure TPdfEnum.PathReplay(CloseFigures: boolean);\n   fPathBuf := '';\r\n end;\r\n \r\n+procedure TPdfEnum.PathTextPaint(Fill, Stroke: boolean);\r\n+begin\r\n+  PathClose;\r\n+  if (fPathTextBuf = '') or\r\n+     \n... [truncated, 6293 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 193,
+          "deletions": 0,
+          "patch": "@@ -72,6 +72,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfUnderlineClipped;\r\n     procedure EmfNullPenLines;\r\n     procedure EmfLineAfterEndedPath;\r\n+    procedure EmfTextInPath;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -2993,6 +2994,198 @@ procedure TTestUiPdf.EmfLineAfterEndedPath;\n   end;\r\n end;\r\n \r\n+// not in FPC's windows unit\r\n+function GdiAbortPath(DC: HDC): BOOL; stdcall;\r\n+  external 'gdi32.dll' name 'AbortPath';\r\n+\r\n+function Between(P, After, Before: PtrInt): boolean;\r\n+begin\r\n+  result := (P > After) and\r\n+            (P < Before);\r\n+end;\r\n+\r\n+// the operand Item of the line Index lines before the first Op line of Txt\r\n+function OperandAt(const Txt, Op: RawUtf8; Index, Item: integer): double;\r\n+var\r\n+  p, i: PtrInt;\r\n+  line: RawUtf8;\r\n+begin\r\n+  p := PosEx(Op, Txt);\r\n+  for i := 0 to Index do\r\n+  begin\r\n+    while (p > 1) and\r\n+          (Txt[p - 1] <> #10) do\r\n+      dec(p);\r\n+    dec(p); // the #10 before the line\r\n+  end;\r\n+  line := copy(Txt, p + 1, PosEx(#10, Txt, p + 1) - p - 1);\r\n+  result := GetExtended(pointer(GetCsvItem(pointer(line), Item, ' ')));\r\n+end;\r\n+\r\n+// the content of a metafile of text in a path, case Kind of EmfTextInPath\r\n+function TextInPathEmf(Kind: integer): RawUtf8;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  lf: TLogFontW;\r\n+  fnt, fnt2: HFONT;\r\n+  brush: HBRUSH;\r\n+  r: TRect;\r\n+  dc: HDC;\r\n+begin\r\n+  FillChar(lf, SizeOf(lf), 0);\r\n+  lf.lfHeight := -20;\r\n+  lf.lfUnderline := ord(Kind = 6);\r\n+  if Kind = 10 then\r\n+    lf.lfEscapement := 900;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Arial');\r\n+  fnt := CreateFontIndirectW(lf);\r\n+  lf.lfUnderline := 0;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Courier New');\r\n+  fnt2 := CreateFontIndirectW(lf);\r\n+  brush := CreateSolidBrush($0000FF); // red\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      dc := mc.Handle;\r\n+      SelectObject(dc, fnt);\r\n+      SelectObject(dc, GetStockObject(BLACK_PEN));\r\n+      if Kind = 5 then\r\n+        SelectObject(dc, GetStockObject(NULL_BRUSH))\r\n+      else\r\n+        SelectObject(dc, brush);\r\n+      SetTextColor(dc, $FF0000); // blue\r\n+      if Kind in [7, 10] then\r\n+      begin\r\n+        SetBkMode(dc, OPAQUE);\r\n+        SetTextAlign(dc, TA_BASELINE);\r\n+      end\r\n+      else\r\n+        SetBkMode(dc, TRANSPARENT);\r\n+      BeginPath(dc);\r\n+      if Kind = 9 then\r\n+      begin\r\n+        MoveToEx(dc, 100, 100, nil);\r\n+        LineTo(dc, 150, 100);\r\n+      end;\r\n+      if Kind = 4 then\r\n+      begin\r\n+        r.Left := 0;\r\n+        r.Top := 0;\r\n+        r.Right := 300;\r\n+        r.Bottom := 100;\r\n+        ExtTextOutW(dc, 20, 20, ETO_CLIPPED, @r, 'Path', 4, nil);\r\n+      end\r\n+      else\r\n+        TextOutW(dc, 20, 20, 'Path', 4);\r\n+      if Kind = 9 then\r\n+        LineTo(dc, 150, 150);\r\n+      EndPath(dc);\r\n+      if Kind = 8 then\r\n+      begin\r\n+        SelectObject(dc, fnt2); // drawn at once, before the path\r\n+        TextOutW(dc, 20, 200, 'Page', 4);\r\n+      end;\r\n+      case Kind of\r\n+        1, 6:\r\n+          StrokePath(dc);\r\n+        2:\r\n+          StrokeAndFillPath(dc);\r\n+        3:\r\n+          GdiAbortPath(dc);\r\n+      else\r\n+        FillPath(dc);\r\n+      end;\r\n+      SelectObject(dc, GetStockObject(SYSTEM_FONT));\r\n+      SelectObject(dc, GetStockObject(WHITE_BRUSH));\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    result := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+    DeleteObject(fnt);\r\n+    DeleteObject(fnt2);\r\n+    DeleteObject(brush);\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfTextInPath;\r\n+const\r\n+  MODES: array[0..10] of RawUtf8 = ('0 Tr', '1 Tr', '2 Tr', '', '', '', '1 Tr',\r\n+    '0 Tr', '0 Tr', '0 Tr', '0 Tr');\r\n+  TEXTS: array[0..10] of integer = (1, 1, 1, 0, 0, 0, 1, 1, 2, 1, 1);\r\n+  WHAT: array[0..10] of RawUtf8 = ('FillPath', 'StrokePath',\r\n+    'StrokeAndFillPath', 'AbortPath', 'ETO_CLIPPED', 'a null brush',\r\n+    'an underline', 'an opaq\n... [truncated, 2786 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 702,
+      "is_merge": true
+    },
+    {
+      "sha": "9f798fe6f3acffa3fe7b4239b1ef8809c9b6a3c7",
+      "short_sha": "9f798fe6",
+      "subject": "os: moved WinVerifyExeSignature() to mormot.core.os.security",
+      "body": "As requested in the PR review: the WinVerifyTrust() wrapper does not use any\nfeature of the PE unit, so it now belongs to the Windows-only section of\nmormot.core.os.security. mormot.misc.pecoff keeps the cross-platform\nGetExeSignature() / IsExeSigned() PE parsing.\n\nThe WINTRUST_* records use the explicit {$A8}/{$A4} alignment of this unit,\nso the FPC-specific {$PACKRECORDS DEFAULT} in mormot.misc.pecoff is not\nneeded any more.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-29T08:41:24Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9f798fe6f3acffa3fe7b4239b1ef8809c9b6a3c7",
+      "parents": [
+        "05906e36d92c1be1551144761eb8c1f8ab8be816"
+      ],
+      "stats": {
+        "additions": 188,
+        "deletions": 193,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.security.pas",
+          "status": "modified",
+          "additions": 183,
+          "deletions": 0,
+          "patch": "@@ -3252,6 +3252,47 @@ function SetSystemSecurityDescriptor(const fn: TFileName;\n // https://learn.microsoft.com/en-us/windows-server/security/authority-information-access-retrieval\r\n function IsAiaDisabledInWindowsRegistry: boolean;\r\n \r\n+type\r\n+  /// the result of WinVerifyExeSignature()\r\n+  // - wvsValid: the signature is valid and its certificates chain is trusted\r\n+  // - wvsNotSigned: the file has no (embedded) signature\r\n+  // - wvsBadDigest: the file content has been tampered after signing\r\n+  // - wvsUntrustedRoot: certificate chain ends with an untrusted root\r\n+  // - wvsExpired: a certificate of the chain has expired (and no timestamp)\r\n+  // - wvsRevoked: a certificate of the chain has been revoked\r\n+  // - wvsDistrust: a certificate is explicitly distrusted by the user/admin\r\n+  // - wvsNotTrusted: the subject is not trusted for the specified action, or\r\n+  // the local security policy forbids it\r\n+  // - wvsNoRevocationCheck: revocation could not be checked (e.g. offline)\r\n+  // - wvsError: the file can't be read, or any other WinVerifyTrust() error\r\n+  TWinVerifyStatus = (\r\n+    wvsError,\r\n+    wvsValid,\r\n+    wvsNotSigned,\r\n+    wvsBadDigest,\r\n+    wvsUntrustedRoot,\r\n+    wvsExpired,\r\n+    wvsRevoked,\r\n+    wvsDistrust,\r\n+    wvsNotTrusted,\r\n+    wvsNoRevocationCheck);\r\n+\r\n+/// verify the Authenticode digital signature of a file using the Windows API\r\n+// - calls WinVerifyTrust(WINTRUST_ACTION_GENERIC_VERIFY_V2) without any UI\r\n+// - by default, no revocation check is done, so no network access occurs: set\r\n+// CheckRevocation=true to validate the whole certificates chain (with a\r\n+// possible slow network access to the CRL/OCSP servers)\r\n+// - ErrorCode, if not nil, will contain the raw HRESULT of WinVerifyTrust()\r\n+// - only the embedded signature is checked: catalog-signed files (e.g. most\r\n+// Windows system files) will return wvsNotSigned\r\n+function WinVerifyExeSignature(const FileName: TFileName;\r\n+  CheckRevocation: boolean = false; ErrorCode: PCardinal = nil): TWinVerifyStatus;\r\n+\r\n+/// return true if WinVerifyExeSignature() returns wvsValid\r\n+// - a convenient wrapper to check the Authenticode signature of a file\r\n+function IsExeSignatureValid(const FileName: TFileName;\r\n+  CheckRevocation: boolean = false): boolean;\r\n+\r\n \r\n {$endif OSWINDOWS}\r\n \r\n@@ -9159,6 +9200,148 @@ function IsAiaDisabledInWindowsRegistry: boolean;\n     'Software\\Policies\\Microsoft\\SystemCertificates\\ChainEngine', 'Config') = 2;\r\n end;\r\n \r\n+{$ifdef CPU64}\r\n+{$A8}\r\n+{$else}\r\n+{$A4}\r\n+{$endif CPU64}\r\n+type\r\n+  // see https://learn.microsoft.com/en-us/windows/win32/api/wintrust\r\n+  TWinTrustFileInfo = record\r\n+    cbStruct: cardinal;\r\n+    pcwszFilePath: PWideChar;\r\n+    hFile: THandle;\r\n+    pgKnownSubject: PGuid;\r\n+  end;\r\n+\r\n+  TWinTrustData = record\r\n+    cbStruct: cardinal;\r\n+    pPolicyCallbackData: pointer;\r\n+    pSIPClientData: pointer;\r\n+    dwUIChoice: cardinal;\r\n+    fdwRevocationChecks: cardinal;\r\n+    dwUnionChoice: cardinal;\r\n+    pFile: ^TWinTrustFileInfo;\r\n+    dwStateAction: cardinal;\r\n+    hWVTStateData: THandle;\r\n+    pwszURLReference: PWideChar;\r\n+    dwProvFlags: cardinal;\r\n+    dwUIContext: cardinal;\r\n+    pSignatureSettings: pointer;\r\n+  end;\r\n+{$A+}\r\n+\r\n+const\r\n+  WINTRUST_ACTION_GENERIC_VERIFY_V2: TGuid =\r\n+    '{00AAC56B-CD44-11D0-8CC2-00C04FC295EE}';\r\n+  WTD_UI_NONE = 2;\r\n+  WTD_REVOKE_NONE = 0;\r\n+  WTD_REVOKE_WHOLECHAIN = 1;\r\n+  WTD_CHOICE_FILE = 1;\r\n+  WTD_STATEACTION_VERIFY = 1;\r\n+  WTD_STATEACTION_CLOSE = 2;\r\n+  WTD_REVOCATION_CHECK_NONE = $00000010;\r\n+  WTD_REVOCATION_CHECK_CHAIN = $00000040;\r\n+  WTD_CACHE_ONLY_URL_RETRIEVAL = $00001000;\r\n+\r\n+  TRUST_E_PROVIDER_UNKNOWN     = $800B0001;\r\n+  TRUST_E_SUBJECT_FORM_UNKNOWN = $800B0003;\r\n+  TRUST_E_SUBJECT_NOT_TRUSTED  = $800B0004;\r\n+  TRUST_E_NOSIGNATURE          = $800B0100;\r\n+  CERT_E_EXPIRED               = $800B0101;\r\n+  CERT_E_UNTRUSTEDROOT         = $800B0109;\r\n+  CERT_E_CHAINING              = $800B010A;\r\n+  CERT_E_REVOKED               = $800B010C;\r\n\n... [truncated, 2922 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/misc/mormot.misc.pecoff.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 193,
+          "patch": "@@ -10,7 +10,7 @@\n     - Low-Level DOS/PE/COFF Encoding Structures\r\n     - High-Level PE (.exe, .dll...) File Reader\r\n     - Windows Executable Digital Signature Stuffing\r\n-    - Windows Executable Digital Signature Check\r\n+    - Windows Executable Digital Signature Retrieval\r\n \r\n   *****************************************************************************\r\n }\r\n@@ -469,9 +469,6 @@   _VS_VERSIONINFO = record\n   PVarFileInfo = ^TVarFileInfo;\r\n \r\n   {$A+} // back to regular field alignment\r\n-  {$ifdef FPC}\r\n-  {$PACKRECORDS DEFAULT} // FPC {$A+} is 4-byte only, not enough for Win64 APIs\r\n-  {$endif FPC}\r\n \r\n \r\n /// Align an offset (from ordinal and PWideChar + ending #0) with a base address\r\n@@ -659,68 +656,23 @@ procedure StuffExeCertificate(const MainFile, NewFile: TFileName;\n function FindStuffExeCertificate(const FileName: TFileName): RawUtf8;\r\n \r\n \r\n-{ ************** Windows Executable Digital Signature Check }\r\n+{ ************** Windows Executable Digital Signature Retrieval }\r\n \r\n /// return the raw PKCS#7 signed data embedded in a Windows executable\r\n // - i.e. the Authenticode signature content of the PE certificate table\r\n // - returns '' if the file is not a PE executable or has no embedded signature\r\n // - the returned DER binary may include some trailing #0 padding bytes\r\n // - this function is cross-platform and does not verify anything: use\r\n-// WinVerifyExeSignature() on Windows for a genuine verification\r\n+// WinVerifyExeSignature() from mormot.core.os.security to actually verify it\r\n function GetExeSignature(const FileName: TFileName): RawByteString;\r\n \r\n /// check if a Windows executable has an embedded Authenticode signature\r\n // - this function is cross-platform, and only checks the signature presence:\r\n-// use WinVerifyExeSignature() on Windows for a genuine verification\r\n+// use WinVerifyExeSignature() from mormot.core.os.security for a verification\r\n // - note that Windows system files are usually signed via a catalog file,\r\n // so have no embedded signature and would return false here\r\n function IsExeSigned(const FileName: TFileName): boolean;\r\n \r\n-{$ifdef OSWINDOWS}\r\n-\r\n-type\r\n-  /// the result of WinVerifyExeSignature()\r\n-  // - wvsValid: the signature is valid and its certificates chain is trusted\r\n-  // - wvsNotSigned: the file has no (embedded) signature\r\n-  // - wvsBadDigest: the file content has been tampered after signing\r\n-  // - wvsUntrustedRoot: certificate chain ends with an untrusted root\r\n-  // - wvsExpired: a certificate of the chain has expired (and no timestamp)\r\n-  // - wvsRevoked: a certificate of the chain has been revoked\r\n-  // - wvsDistrust: a certificate is explicitly distrusted by the user/admin\r\n-  // - wvsNotTrusted: the subject is not trusted for the specified action, or\r\n-  // the local security policy forbids it\r\n-  // - wvsNoRevocationCheck: revocation could not be checked (e.g. offline)\r\n-  // - wvsError: the file can't be read, or any other WinVerifyTrust() error\r\n-  TWinVerifyStatus = (\r\n-    wvsError,\r\n-    wvsValid,\r\n-    wvsNotSigned,\r\n-    wvsBadDigest,\r\n-    wvsUntrustedRoot,\r\n-    wvsExpired,\r\n-    wvsRevoked,\r\n-    wvsDistrust,\r\n-    wvsNotTrusted,\r\n-    wvsNoRevocationCheck);\r\n-\r\n-/// verify the Authenticode digital signature of a file using the Windows API\r\n-// - calls WinVerifyTrust(WINTRUST_ACTION_GENERIC_VERIFY_V2) without any UI\r\n-// - by default, no revocation check is done, so no network access occurs: set\r\n-// CheckRevocation=true to validate the whole certificates chain (with a\r\n-// possible slow network access to the CRL/OCSP servers)\r\n-// - ErrorCode, if not nil, will contain the raw HRESULT of WinVerifyTrust()\r\n-// - only the embedded signature is checked: catalog-signed files (e.g. most\r\n-// Windows system files) will return wvsNotSigned\r\n-function WinVerifyExeSignature(const FileName: TFileName;\r\n-  CheckRevocation: boolean = false; ErrorCode: PCardinal = nil): TWinVerifyStatus;\r\n-\r\n-/// return true if WinVerifyExeSignature() returns wvsValid\r\n-//\n... [truncated, 5121 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "Core",
+        "Misc"
+      ],
+      "units": [
+        "mormot.core.os.security",
+        "mormot.misc.pecoff"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "37fb7892021e9e12c8fce74d37758c7cc41e29d5",
+      "short_sha": "37fb7892",
+      "subject": "Merge pull request #689 from bigrid/patch-1",
+      "body": "THttpServer: request without Content-Length and with Connection: close hangs until timeout",
+      "author": "ab",
+      "date": "2026-10-29T08:25:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/37fb7892021e9e12c8fce74d37758c7cc41e29d5",
+      "parents": [
+        "d82e986ce0c7960c0d23b36d8c259b173dda581f",
+        "cc485cc2588690de8438bb961745364d69dbcaa7"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -5390,6 +5390,7 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n       fKeepAliveClient := false;\r\n     if (Http.ContentLength < 0) and\r\n        (KeepAliveClient or\r\n+        not (rfHttp10 in Http.ResponseFlags) or\r\n         IsGet(Http.CommandMethod)) then\r\n       Http.ContentLength := 0; // HTTP/1.1 and no content length -> no eof\r\n     if (headerMaxTix > 0) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": 689,
+      "is_merge": true
+    },
+    {
+      "sha": "d82e986ce0c7960c0d23b36d8c259b173dda581f",
+      "short_sha": "d82e986c",
+      "subject": "Merge pull request #700 from landrix/fix/pdf-restore-695-696",
+      "body": "ui: pdf - restore #696 and #695, lost in the merge of #690",
+      "author": "ab",
+      "date": "2026-10-29T08:25:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d82e986ce0c7960c0d23b36d8c259b173dda581f",
+      "parents": [
+        "6cfbaf217820ef1405bd11c2e88b9544c92f4967",
+        "f11fac11f7865e6c3123f6bc5e9e8724aa72caab"
+      ],
+      "stats": {
+        "additions": 184,
+        "deletions": 64,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 62,
+          "patch": "@@ -10790,10 +10790,9 @@ procedure TPdfEncryptionAes256.AttachDocument(aDoc: TPdfDocument);\n   end;\r\n   // wipe the passwords and intermediate values\r\n   FillCharFast(perms, SizeOf(perms), 0);\r\n-  if usr <> '' then\r\n-    FillCharFast(pointer(usr)^, length(usr), 0);\r\n-  if own <> '' then\r\n-    FillCharFast(pointer(own)^, length(own), 0);\r\n+  // FillZero skips a constant: on FPC, StringToUtf8 returns the literal\r\n+  FillZero(RawByteString(usr));\r\n+  FillZero(RawByteString(own));\r\n   // add encryption dictionary object\r\n   if aDoc.fEncryptionObject = nil then\r\n     aDoc.fEncryptionObject := TPdfDictionary.Create(aDoc.fXRef);\r\n@@ -11470,7 +11469,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOCKWISE,\r\n               acArc, position);\r\n           if not E.Canvas.fNewPath then\r\n-            E.Canvas.Stroke;\r\n+            if not pen.null then\r\n+              E.Canvas.Stroke\r\n+            else\r\n+              E.Canvas.NewPath;\r\n         end;\r\n       EMR_ARCTO:\r\n         begin\r\n@@ -11985,16 +11987,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           end;\r\n         end;\r\n       EMR_ENDPATH:\r\n-        begin\r\n-          E.Canvas.fNewPath := false;\r\n-          E.PathClose;\r\n-        end;\r\n+        E.PathClose;\r\n       EMR_ABORTPATH,\r\n       EMR_SELECTCLIPPATH: // the clip of a path is not applied\r\n-        begin\r\n-          E.PathDone;\r\n-          E.Canvas.fNewPath := false;\r\n-        end;\r\n+        E.PathDone;\r\n       EMR_CLOSEFIGURE:\r\n         E.Canvas.ClosePath;\r\n       EMR_FILLPATH:\r\n@@ -12009,7 +12005,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n             else\r\n               E.Canvas.Fill;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEPATH:\r\n@@ -12021,7 +12016,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEANDFILLPATH:\r\n@@ -12050,7 +12044,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           else if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_SETPOLYFILLMODE:\r\n@@ -12103,8 +12096,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n       R^.iType := R^.iType; // for debug purpose (breakpoint)\r\n     end;\r\n   E.PathOut;\r\n-  if E.fPathRecording then\r\n-    E.Canvas.fNewPath := true; // text or a bitmap of the bracket reset it\r\n   case R^.iType of\r\n     EMR_RESTOREDC,\r\n     EMR_SETWINDOWEXTEX,\r\n@@ -12161,7 +12152,6 @@ procedure RenderMetaFile(C: TPdfCanvas; MF: TMetaFile; ScaleX, ScaleY,\n     finally\r\n       E.PathDone; // a path never painted\r\n       E.SelectClip(0, 0); // the q of a clip still selected\r\n-      C.fNewPath := false;\r\n       C.GRestore;\r\n     end;\r\n   finally\r\n@@ -12497,28 +12487,12 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n           end;\r\n         NULL_PEN:\r\n           begin\r\n-            if fInLined and\r\n-               not fPathRecording and // StrokePath paints a path\r\n-               ((pen.style <> PS_NULL) or not pen.null) then\r\n-            begin\r\n-              fInLined := false;\r\n-              if not pen.null then\r\n-                Canvas.Stroke;\r\n-            end;\r\n             pen.style := PS_NULL;\r\n             pen.null := true;\r\n           end;\r\n         WHITE_PEN,\r\n         BLACK_PEN:\r\n           begin\r\n-            if fInLined and\r\n-               not fPathRecording and\r\n-               ((pen.color <> STOCKPENCOLOR[iObject]) or not pen.null) then\r\n-            begin\r\n-              fInLined := false;\r\n-              if not pen.null \n... [truncated, 2867 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 172,
+          "deletions": 2,
+          "patch": "@@ -70,6 +70,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfMirroredBoxes;\r\n     procedure EmfClipRestoreDC;\r\n     procedure EmfUnderlineClipped;\r\n+    procedure EmfNullPenLines;\r\n+    procedure EmfLineAfterEndedPath;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -376,7 +378,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $456748FC); // the boxes of #686\r\n+        CheckHash(S, $439DB6C2); // no lone S after a line\r\n       end;\r\n     finally\r\n       Free;\r\n@@ -1607,6 +1609,7 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\n   doc := TPdfDocumentGdi.Create;\r\n   try\r\n     doc.Info.CreationDate := FIXED_DATE;\r\n+    doc.ScreenLogPixels := 96; // the coordinates the checks expect, any screen\r\n     doc.CompressionMethod := cmNone;\r\n     doc.EmbeddedTTF := false;\r\n     doc.StandardFontsReplace := true;\r\n@@ -2647,7 +2650,7 @@ procedure TTestUiPdf.EmfClipRestoreDC;\n       SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n       SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH)); // as FPC selects none\r\n       MoveToEx(mc.Handle, 20, 350, nil);\r\n-      LineTo(mc.Handle, 200, 350); // its geometry left open on the page\r\n+      LineTo(mc.Handle, 200, 350); // of a null pen: ended, not in the fill\r\n       FillPath(mc.Handle);\r\n     finally\r\n       mc.Free;\r\n@@ -2823,6 +2826,173 @@ procedure TTestUiPdf.EmfUnderlineClipped;\n     'the pen width after the Q of the text');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfNullPenLines;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  pen: HPEN;\r\n+  txt, two: RawUtf8;\r\n+begin\r\n+  { GDI draws no line of a null pen: its m l and the ArcTo stayed open, the\r\n+    next shape stroked them in the colour of before, and the Arc was\r\n+    stroked at once; a line of a pen is stroked at once, yet the next shape\r\n+    wrote a lone S }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n+      MoveToEx(mc.Handle, 20, 20, nil);\r\n+      LineTo(mc.Handle, 200, 20);\r\n+      ArcTo(mc.Handle, 20, 40, 120, 140, 120, 90, 20, 90);\r\n+      Arc(mc.Handle, 150, 40, 250, 140, 250, 90, 150, 90);\r\n+      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH));\r\n+      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    txt := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      pen := CreatePen(PS_SOLID, 1, 0);\r\n+      SelectObject(mc.Handle, pen);\r\n+      MoveToEx(mc.Handle, 20, 20, nil);\r\n+      LineTo(mc.Handle, 200, 20);\r\n+      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH));\r\n+      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n+      SelectObject(mc.Handle, GetStockObject(BLACK_PEN));\r\n+      DeleteObject(pen);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    two := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  CheckEqual(CountOccurrences(#10'S'#10, txt), 0, 'a null pen strokes nothing');\r\n+  Check(ValidPaths(txt), 'valid paths of a null pen');\r\n+  Check((PosBefore(txt, #10'f'#10, ' l'#10) > 0) and\r\n+        (PosBefore(txt, #10'f'#10, ' l'#10) < PosBefore(txt, #10'f'#10, #10'n'#10)),\r\n+    'the line ended before the shape');\r\n+  Check((PosBefore(txt, #10'f'#10, ' c'#10) > 0) and\r\n+        (PosBefore(txt, #10'f'#10, ' c'#10) < PosBefore(txt, #10'f'#10, #10'n'#10)),\r\n+    'the arcs ended before the shape');\r\n+  CheckEqual(CountOccurrences(#10'S'#10, two), 1, 'the line stroked once');\r\n+  Check(ValidPaths(two), 'no stroke left pending for the shape');\r\n+end;\r\n+\r\n+// the content of a metafile of the lines of LineAfterEndedPath, case Kind\r\n+function LineAfterEndedPathEmf(Kind: \n... [truncated, 3486 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 700,
+      "is_merge": true
+    },
+    {
+      "sha": "6cfbaf217820ef1405bd11c2e88b9544c92f4967",
+      "short_sha": "6cfbaf21",
+      "subject": "Merge pull request #698 from SDiestelmann/fix/soa-server-hold-instance",
+      "body": "soa: sicClientDriven instance was released while a method was still running on it",
+      "author": "ab",
+      "date": "2026-10-29T08:23:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6cfbaf217820ef1405bd11c2e88b9544c92f4967",
+      "parents": [
+        "5be65788a4f94d43e3bc4006e8a405547f6547dc",
+        "dc3195e9da4feef42e701549e1aa435d6ed97c53"
+      ],
+      "stats": {
+        "additions": 24,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 3,
+          "patch": "@@ -265,8 +265,12 @@   TServiceFactoryServer = class(TServiceFactoryServerAbstract)\n     // - returns -1 on error, or aMethodIndex for successful execution,\r\n     // e.g. 0 after {\"method\":\"_free_\".. call\r\n     // - otherwise, fill Inst.Instance with the matching implementation (or nil)\r\n+    // - if Hold is set, Hold^ will own a reference to the returned instance,\r\n+    // assigned within the fInstances lock: a concurrent \"_free_\", timeout or\r\n+    // session GC would then defer the actual release to the next DoInstanceGC\r\n     function RetrieveInstance(Ctxt: TRestServerUriContext;\r\n-      var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer): integer;\r\n+      var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer;\r\n+      Hold: PInterface = nil): integer;\r\n     /// define the the instance life time-out, in seconds\r\n     function SetTimeoutSec(value: cardinal): TServiceFactoryServerAbstract; override;\r\n     /// log method execution information to a TOrmServiceLog table\r\n@@ -1025,7 +1029,8 @@ function TServiceFactoryServer.RunOnAllInstances(\n end;\r\n \r\n function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\r\n-  var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer): integer;\r\n+  var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer;\r\n+  Hold: PInterface): integer;\r\n \r\n   procedure AddNew;\r\n   var\r\n@@ -1058,6 +1063,8 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\n         P^.LastAccessTix10 := Inst.LastAccessTix10;\r\n         Inst.Instance := P^.Instance;\r\n       end;\r\n+      if Hold <> nil then\r\n+        Hold^ := Inst.Instance; // within the lock\r\n     finally\r\n       fInstances.Safe.WriteUnLock;\r\n     end;\r\n@@ -1153,6 +1160,8 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\n       P := @fInstance[ndx];\r\n       P^.LastAccessTix10 := Inst.LastAccessTix10;\r\n       Inst.Instance := P^.Instance;\r\n+      if Hold <> nil then\r\n+        Hold^ := Inst.Instance; // within the lock\r\n       result := aMethodIndex; // notify caller\r\n     end;\r\n     fInstances.Safe.ReadUnLock;\r\n@@ -1366,6 +1375,8 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n   timeEnd: Int64;\r\n   m: PtrInt;\r\n   err: ShortString;\r\n+  hold: pointer; // IInterface owned during the method execution, released\r\n+  // manually to avoid an implicit try..finally for every call of this method\r\n \r\n   procedure HandleCleanup; // sub-function for FPC Win64-aarch64 compilation\r\n   begin\r\n@@ -1375,6 +1386,8 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n         // always release single shot instance immediately (no GC)\r\n         InstanceFree(Inst.Instance);\r\n     finally\r\n+      if hold <> nil then\r\n+        IInterface(hold) := nil; // may be the last reference to the instance\r\n       if exec <> nil then\r\n       begin\r\n         if Ctxt.ServiceExecution^.LogRest <> nil then\r\n@@ -1392,6 +1405,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n   // 1. initialize Inst.Instance and Inst.InstanceID\r\n   Inst.InstanceID := 0;\r\n   Inst.Instance := nil;\r\n+  hold := nil;\r\n   case InstanceCreation of\r\n     sicSingle:\r\n       Inst.Instance := CreateInstance(true);\r\n@@ -1428,7 +1442,12 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n           end;\r\n         end;\r\n         // O(log(n)) binary search of Inst.Instance from Inst.InstanceID\r\n-        case RetrieveInstance(Ctxt, Inst, Ctxt.ServiceMethodIndex, Ctxt.Session) of\r\n+        // - a \"_free_\" (e.g. from a client giving up after its timeout), an\r\n+        // instance timeout or a session GC may run in another thread during\r\n+        // the method execution: hold makes InstanceFreeOrGC() see RefCount > 1\r\n+        // and defer the release until hold is released in HandleCleanup\r\n+        case RetrieveInstance(Ctxt, Inst, Ctxt.ServiceMethodIndex, Ctxt.Session,\r\n+     \n... [truncated, 837 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "SOA"
+      ],
+      "units": [
+        "mormot.soa.server"
+      ],
+      "pr": 698,
+      "is_merge": true
+    },
+    {
+      "sha": "5be65788a4f94d43e3bc4006e8a405547f6547dc",
+      "short_sha": "5be65788",
+      "subject": "Merge pull request #701 from tobfel/fix/duckdb-2.0",
+      "body": "db: DuckDB 2.0 support - masked FPU exceptions and new column types",
+      "author": "ab",
+      "date": "2026-10-29T08:18:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5be65788a4f94d43e3bc4006e8a405547f6547dc",
+      "parents": [
+        "c12b33766ebb3731ddda4eaeaf221e31ec578cec",
+        "457792608ef4e27dd86c080366e10c252defb367"
+      ],
+      "stats": {
+        "additions": 126,
+        "deletions": 29,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 3,
+          "patch": "@@ -26,6 +26,7 @@ interface\n   mormot.core.unicode,\n   mormot.core.text,\n   mormot.core.datetime,\n+  mormot.lib.static,\n   mormot.db.core,\n   mormot.db.sql;\n \n@@ -171,6 +172,9 @@   TDuckDBListEntry = record\n   DUCKDB_TYPE_STRING_LITERAL  = 37;\n   DUCKDB_TYPE_INTEGER_LITERAL = 38;\n   DUCKDB_TYPE_TIME_NS         = 39;\n+  DUCKDB_TYPE_GEOMETRY        = 40;\n+  DUCKDB_TYPE_VARIANT         = 41;\n+  DUCKDB_TYPE_TIMESTAMP_TZ_NS = 42;\n \n   /// DuckDB TIMESTAMP 'infinity' / '-infinity' special values\n   DUCKDB_TIMESTAMP_INFINITY  = $7fffffffffffffff;\n@@ -552,9 +556,17 @@ procedure TDuckDBLib.RaiseResultError(res: PDuckDBResult; const ctxt: RawUtf8);\n function TDuckDBLib.Exec(conn: TDuckDBConnection; const sql: RawUtf8): Int64;\n var\n   res: TDuckDBResult;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   FillCharFast(res, SizeOf(res), 0);\n-  if query(conn, pointer(sql), @res) <> DuckDBSuccess then\n+  saved := SetFpuFlags; // the C++ engine expects masked FPU exceptions\n+  try\n+    state := query(conn, pointer(sql), @res);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n     RaiseResultError(@res, sql);\n   result := rows_changed(@res);\n   destroy_result(@res);\n@@ -1110,9 +1122,10 @@ function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType\n         result := ftDouble;\n     DUCKDB_TYPE_DATE, DUCKDB_TYPE_TIME, DUCKDB_TYPE_TIME_TZ, DUCKDB_TYPE_TIME_NS,\n     DUCKDB_TYPE_TIMESTAMP, DUCKDB_TYPE_TIMESTAMP_S, DUCKDB_TYPE_TIMESTAMP_MS,\n-    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ:\n+    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ,\n+    DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       result := ftDate;\n-    DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY: // GEOMETRY as WKB\n       result := ftBlob;\n     DUCKDB_TYPE_SQLNULL:\n       result := ftNull;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 88,
+          "deletions": 26,
+          "patch": "@@ -41,6 +41,7 @@ interface\n   mormot.core.json,\n   mormot.core.rtti,\n   mormot.core.log,\n+  mormot.lib.static,\n   mormot.db.core,\n   mormot.db.sql,\n   mormot.db.raw.duckdb;\n@@ -295,7 +296,7 @@ function TimestampMicros(typeid: TDuckDBType; v: Int64): Int64;\n       result := v * 1000000;\n     DUCKDB_TYPE_TIMESTAMP_MS:\n       result := v * 1000;\n-    DUCKDB_TYPE_TIMESTAMP_NS:\n+    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       result := v div 1000;\n   else\n     result := v;\n@@ -502,15 +503,16 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector;\n     DUCKDB_TYPE_TIMESTAMP_MS, DUCKDB_TYPE_TIMESTAMP_NS:\n       DuckTimestampToText(\n         TimestampMicros(typeid, PDuckI64Array(data)^[row]), result);\n-    DUCKDB_TYPE_TIMESTAMP_TZ:\n+    DUCKDB_TYPE_TIMESTAMP_TZ, DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       begin\n-        DuckTimestampToText(PDuckI64Array(data)^[row], result);\n+        DuckTimestampToText(\n+          TimestampMicros(typeid, PDuckI64Array(data)^[row]), result);\n         result := result + '+00'; // stored as UTC\n       end;\n     DUCKDB_TYPE_INTERVAL:\n       DuckIntervalToText(\n         PDuckDBInterval(data + row * 16)^, result);\n-    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY:\n       begin\n         p := DuckStringPtr(DuckStringAt(data, row), len);\n         FastSetString(result, p, len);\n@@ -523,9 +525,13 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector;\n     DUCKDB_TYPE_ENUM:\n       result := DuckDBEnumValue(T^,\n         ReadIntegral(T^.Internal, data, row));\n+    DUCKDB_TYPE_LIST, DUCKDB_TYPE_ARRAY, DUCKDB_TYPE_STRUCT,\n+    DUCKDB_TYPE_MAP, DUCKDB_TYPE_UNION:\n+      ComplexDuckDBVectorValueToText(vec, T, row, result); // as JSON\n   else\n-    // LIST, ARRAY, STRUCT, MAP, UNION -> JSON\n-    ComplexDuckDBVectorValueToText(vec, T, row, result);\n+    // e.g. VARIANT - would recurse with DuckDBVectorValueToJson()\n+    ESqlDBDuckDB.RaiseUtf8('Unsupported DuckDB type #% - use a SQL cast',\n+      [typeid]);\n   end;\n end;\n \n@@ -673,7 +679,7 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n         DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, tag + 1),\n           @T^.Children^[tag], row, W);\n       end;\n-    DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY:\n       begin\n         p := DuckStringPtr(DuckStringAt(data, row), len);\n         W.WrBase64(p, len, {withmagic=}true);\n@@ -797,6 +803,8 @@ function TSqlDBDuckDBConnectionProperties.Database: TDuckDBDatabase;\n   name, value, msg: RawUtf8;\n   p: PUtf8Char;\n   pair: RawUtf8;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   result := fDatabase;\n   if result <> nil then\n@@ -830,7 +838,13 @@ function TSqlDBDuckDBConnectionProperties.Database: TDuckDBDatabase;\n         else\n           path := pointer(ServerName);\n         err := nil;\n-        if DuckDB.open_ext(path, fDatabase, cfg, @err) <> DuckDBSuccess then\n+        saved := SetFpuFlags; // the worker threads inherit the FPU flags\n+        try\n+          state := DuckDB.open_ext(path, fDatabase, cfg, @err);\n+        finally\n+          ResetFpuFlags(saved);\n+        end;\n+        if state <> DuckDBSuccess then\n         begin\n           msg := RawUtf8(err);\n           if err <> nil then\n@@ -990,11 +1004,19 @@ procedure TSqlDBDuckDBStatement.ReleaseResult;\n procedure TSqlDBDuckDBStatement.Prepare(const aSql: RawUtf8; ExpectResults: boolean);\n var\n   msg: RawUtf8;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   SqlLogBegin(sllDB);\n   inherited Prepare(aSql, ExpectResults); // set fSql + Connect if necessary\n-  if DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n-       pointer(fSql), fStmt) <> DuckDBSuccess then\n+  saved := SetFpuFlags; // the optimizer may fold constants\n+  try\n+    state := DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n+      pointer(fSql), fStmt);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n   begin\n     msg := RawU\n... [truncated, 5436 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 0,
+          "patch": "@@ -180,6 +180,28 @@ procedure TTestDuckDB.BasicTypes;\n   CheckEqual(rows.ColumnInt(13), 3, 'hugeint');\n   CheckEqual(rows.ColumnUtf8(14), '8f14e45f-ceea-467a-a5f0-6e0bd3f1d2a1', 'uuid');\n   Check(not rows.Step, 'eof');\n+  rows := nil;\n+  if DuckDB.Version < 'v2' then\n+    exit; // types below were introduced in DuckDB 1.5 / 2.0\n+  rows := fProps.Execute(\n+    'select ''2001-02-03 04:05:06.123456789+00''::TIMESTAMPTZ_NS as tzns, ' +\n+    '''POINT(1 2)''::GEOMETRY as g, 42::VARIANT as v', []);\n+  Check(rows.Step, 'step2');\n+  Check(rows.ColumnType(0) = ftDate, 'timestamptz_ns type');\n+  CheckEqual(DateTimeToIso8601(rows.ColumnDateTime(0), true, 'T', true),\n+    '2001-02-03T04:05:06.123', 'timestamptz_ns');\n+  CheckEqual(rows.ColumnUtf8(0), '2001-02-03 04:05:06.123456+00',\n+    'timestamptz_ns text');\n+  Check(rows.ColumnType(1) = ftBlob, 'geometry type');\n+  CheckEqual(BinToHex(rows.ColumnBlob(1)),\n+    '0101000000000000000000F03F0000000000000040', 'geometry as wkb');\n+  try\n+    rows.ColumnUtf8(2);\n+    Check(false, 'variant');\n+  except\n+    on E: ESqlDBDuckDB do\n+      Check(Pos('#41', E.Message) > 0, 'variant error');\n+  end;\n end;\n \n procedure TTestDuckDB.ParamsAndCrud;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": 701,
+      "is_merge": true
+    },
+    {
+      "sha": "457792608ef4e27dd86c080366e10c252defb367",
+      "short_sha": "45779260",
+      "subject": "db: DuckDB 2.0 support - masked FPU exceptions and new column types",
+      "body": "- the DuckDB worker threads inherit the FPU flags of the calling thread: with\n  the default unmasked FPC exceptions, DuckDB 2.0 raised EInvalidOp - open,\n  prepare, execute, fetch, Exec and the Appender EndRow/Flush/Close now run\n  between SetFpuFlags/ResetFpuFlags\n- unknown type ids made DuckDBVectorValueToText and DuckDBVectorValueToJson\n  call each other endlessly (stack overflow): TIMESTAMPTZ_NS (new in 2.0) is\n  now a ftDate, GEOMETRY a ftBlob (WKB), and other unsupported types such as\n  VARIANT raise ESqlDBDuckDB\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-29T07:48:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/457792608ef4e27dd86c080366e10c252defb367",
+      "parents": [
+        "c12b33766ebb3731ddda4eaeaf221e31ec578cec"
+      ],
+      "stats": {
+        "additions": 126,
+        "deletions": 29,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 3,
+          "patch": "@@ -26,6 +26,7 @@ interface\n   mormot.core.unicode,\n   mormot.core.text,\n   mormot.core.datetime,\n+  mormot.lib.static,\n   mormot.db.core,\n   mormot.db.sql;\n \n@@ -171,6 +172,9 @@   TDuckDBListEntry = record\n   DUCKDB_TYPE_STRING_LITERAL  = 37;\n   DUCKDB_TYPE_INTEGER_LITERAL = 38;\n   DUCKDB_TYPE_TIME_NS         = 39;\n+  DUCKDB_TYPE_GEOMETRY        = 40;\n+  DUCKDB_TYPE_VARIANT         = 41;\n+  DUCKDB_TYPE_TIMESTAMP_TZ_NS = 42;\n \n   /// DuckDB TIMESTAMP 'infinity' / '-infinity' special values\n   DUCKDB_TIMESTAMP_INFINITY  = $7fffffffffffffff;\n@@ -552,9 +556,17 @@ procedure TDuckDBLib.RaiseResultError(res: PDuckDBResult; const ctxt: RawUtf8);\n function TDuckDBLib.Exec(conn: TDuckDBConnection; const sql: RawUtf8): Int64;\n var\n   res: TDuckDBResult;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   FillCharFast(res, SizeOf(res), 0);\n-  if query(conn, pointer(sql), @res) <> DuckDBSuccess then\n+  saved := SetFpuFlags; // the C++ engine expects masked FPU exceptions\n+  try\n+    state := query(conn, pointer(sql), @res);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n     RaiseResultError(@res, sql);\n   result := rows_changed(@res);\n   destroy_result(@res);\n@@ -1110,9 +1122,10 @@ function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType\n         result := ftDouble;\n     DUCKDB_TYPE_DATE, DUCKDB_TYPE_TIME, DUCKDB_TYPE_TIME_TZ, DUCKDB_TYPE_TIME_NS,\n     DUCKDB_TYPE_TIMESTAMP, DUCKDB_TYPE_TIMESTAMP_S, DUCKDB_TYPE_TIMESTAMP_MS,\n-    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ:\n+    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ,\n+    DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       result := ftDate;\n-    DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY: // GEOMETRY as WKB\n       result := ftBlob;\n     DUCKDB_TYPE_SQLNULL:\n       result := ftNull;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 88,
+          "deletions": 26,
+          "patch": "@@ -41,6 +41,7 @@ interface\n   mormot.core.json,\n   mormot.core.rtti,\n   mormot.core.log,\n+  mormot.lib.static,\n   mormot.db.core,\n   mormot.db.sql,\n   mormot.db.raw.duckdb;\n@@ -295,7 +296,7 @@ function TimestampMicros(typeid: TDuckDBType; v: Int64): Int64;\n       result := v * 1000000;\n     DUCKDB_TYPE_TIMESTAMP_MS:\n       result := v * 1000;\n-    DUCKDB_TYPE_TIMESTAMP_NS:\n+    DUCKDB_TYPE_TIMESTAMP_NS, DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       result := v div 1000;\n   else\n     result := v;\n@@ -502,15 +503,16 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector;\n     DUCKDB_TYPE_TIMESTAMP_MS, DUCKDB_TYPE_TIMESTAMP_NS:\n       DuckTimestampToText(\n         TimestampMicros(typeid, PDuckI64Array(data)^[row]), result);\n-    DUCKDB_TYPE_TIMESTAMP_TZ:\n+    DUCKDB_TYPE_TIMESTAMP_TZ, DUCKDB_TYPE_TIMESTAMP_TZ_NS:\n       begin\n-        DuckTimestampToText(PDuckI64Array(data)^[row], result);\n+        DuckTimestampToText(\n+          TimestampMicros(typeid, PDuckI64Array(data)^[row]), result);\n         result := result + '+00'; // stored as UTC\n       end;\n     DUCKDB_TYPE_INTERVAL:\n       DuckIntervalToText(\n         PDuckDBInterval(data + row * 16)^, result);\n-    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_VARCHAR, DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY:\n       begin\n         p := DuckStringPtr(DuckStringAt(data, row), len);\n         FastSetString(result, p, len);\n@@ -523,9 +525,13 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector;\n     DUCKDB_TYPE_ENUM:\n       result := DuckDBEnumValue(T^,\n         ReadIntegral(T^.Internal, data, row));\n+    DUCKDB_TYPE_LIST, DUCKDB_TYPE_ARRAY, DUCKDB_TYPE_STRUCT,\n+    DUCKDB_TYPE_MAP, DUCKDB_TYPE_UNION:\n+      ComplexDuckDBVectorValueToText(vec, T, row, result); // as JSON\n   else\n-    // LIST, ARRAY, STRUCT, MAP, UNION -> JSON\n-    ComplexDuckDBVectorValueToText(vec, T, row, result);\n+    // e.g. VARIANT - would recurse with DuckDBVectorValueToJson()\n+    ESqlDBDuckDB.RaiseUtf8('Unsupported DuckDB type #% - use a SQL cast',\n+      [typeid]);\n   end;\n end;\n \n@@ -673,7 +679,7 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n         DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, tag + 1),\n           @T^.Children^[tag], row, W);\n       end;\n-    DUCKDB_TYPE_BLOB:\n+    DUCKDB_TYPE_BLOB, DUCKDB_TYPE_GEOMETRY:\n       begin\n         p := DuckStringPtr(DuckStringAt(data, row), len);\n         W.WrBase64(p, len, {withmagic=}true);\n@@ -797,6 +803,8 @@ function TSqlDBDuckDBConnectionProperties.Database: TDuckDBDatabase;\n   name, value, msg: RawUtf8;\n   p: PUtf8Char;\n   pair: RawUtf8;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   result := fDatabase;\n   if result <> nil then\n@@ -830,7 +838,13 @@ function TSqlDBDuckDBConnectionProperties.Database: TDuckDBDatabase;\n         else\n           path := pointer(ServerName);\n         err := nil;\n-        if DuckDB.open_ext(path, fDatabase, cfg, @err) <> DuckDBSuccess then\n+        saved := SetFpuFlags; // the worker threads inherit the FPU flags\n+        try\n+          state := DuckDB.open_ext(path, fDatabase, cfg, @err);\n+        finally\n+          ResetFpuFlags(saved);\n+        end;\n+        if state <> DuckDBSuccess then\n         begin\n           msg := RawUtf8(err);\n           if err <> nil then\n@@ -990,11 +1004,19 @@ procedure TSqlDBDuckDBStatement.ReleaseResult;\n procedure TSqlDBDuckDBStatement.Prepare(const aSql: RawUtf8; ExpectResults: boolean);\n var\n   msg: RawUtf8;\n+  state: TDuckDBState;\n+  saved: cardinal;\n begin\n   SqlLogBegin(sllDB);\n   inherited Prepare(aSql, ExpectResults); // set fSql + Connect if necessary\n-  if DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n-       pointer(fSql), fStmt) <> DuckDBSuccess then\n+  saved := SetFpuFlags; // the optimizer may fold constants\n+  try\n+    state := DuckDB.prepare(TSqlDBDuckDBConnection(fConnection).fConn,\n+      pointer(fSql), fStmt);\n+  finally\n+    ResetFpuFlags(saved);\n+  end;\n+  if state <> DuckDBSuccess then\n   begin\n     msg := RawU\n... [truncated, 5436 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 0,
+          "patch": "@@ -180,6 +180,28 @@ procedure TTestDuckDB.BasicTypes;\n   CheckEqual(rows.ColumnInt(13), 3, 'hugeint');\n   CheckEqual(rows.ColumnUtf8(14), '8f14e45f-ceea-467a-a5f0-6e0bd3f1d2a1', 'uuid');\n   Check(not rows.Step, 'eof');\n+  rows := nil;\n+  if DuckDB.Version < 'v2' then\n+    exit; // types below were introduced in DuckDB 1.5 / 2.0\n+  rows := fProps.Execute(\n+    'select ''2001-02-03 04:05:06.123456789+00''::TIMESTAMPTZ_NS as tzns, ' +\n+    '''POINT(1 2)''::GEOMETRY as g, 42::VARIANT as v', []);\n+  Check(rows.Step, 'step2');\n+  Check(rows.ColumnType(0) = ftDate, 'timestamptz_ns type');\n+  CheckEqual(DateTimeToIso8601(rows.ColumnDateTime(0), true, 'T', true),\n+    '2001-02-03T04:05:06.123', 'timestamptz_ns');\n+  CheckEqual(rows.ColumnUtf8(0), '2001-02-03 04:05:06.123456+00',\n+    'timestamptz_ns text');\n+  Check(rows.ColumnType(1) = ftBlob, 'geometry type');\n+  CheckEqual(BinToHex(rows.ColumnBlob(1)),\n+    '0101000000000000000000F03F0000000000000040', 'geometry as wkb');\n+  try\n+    rows.ColumnUtf8(2);\n+    Check(false, 'variant');\n+  except\n+    on E: ESqlDBDuckDB do\n+      Check(Pos('#41', E.Message) > 0, 'variant error');\n+  end;\n end;\n \n procedure TTestDuckDB.ParamsAndCrud;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f11fac11f7865e6c3123f6bc5e9e8724aa72caab",
+      "short_sha": "f11fac11",
+      "subject": "ui: pdf - AES-256 on FPC: no wipe of a constant password",
+      "body": "On every FPC, EncryptionAes256 and Pdf20File raised an access\nviolation in TPdfEncryptionAes256.AttachDocument; Delphi passed. The\npasswords are wiped with FillCharFast. On FPC, string is an AnsiString,\nand StringToUtf8 returns the caller's string itself. So a literal\npassword such as 'owner' was overwritten in read-only memory.\n\nFillZero(RawByteString(...)) zeroes a string only when its reference\ncount is 1, and so skips a constant.\n\nResults, now with the AES tests on every compiler:\n- Delphi 13 Win32 and Delphi 7: 233\n- Delphi 13 Win64, FPC 3.3.1 and FPC 3.2.2 Win64: 230\n- FPC 3.2.2 Win32: the known MetafileRenderingAndOrientation #3\n\nReviewed with Codex.",
+      "author": "Sven Harazim",
+      "date": "2026-10-29T07:14:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f11fac11f7865e6c3123f6bc5e9e8724aa72caab",
+      "parents": [
+        "e95fbde4f9d33c21868cfcece9737c9ac88335ef"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -10790,10 +10790,9 @@ procedure TPdfEncryptionAes256.AttachDocument(aDoc: TPdfDocument);\n   end;\r\n   // wipe the passwords and intermediate values\r\n   FillCharFast(perms, SizeOf(perms), 0);\r\n-  if usr <> '' then\r\n-    FillCharFast(pointer(usr)^, length(usr), 0);\r\n-  if own <> '' then\r\n-    FillCharFast(pointer(own)^, length(own), 0);\r\n+  // FillZero skips a constant: on FPC, StringToUtf8 returns the literal\r\n+  FillZero(RawByteString(usr));\r\n+  FillZero(RawByteString(own));\r\n   // add encryption dictionary object\r\n   if aDoc.fEncryptionObject = nil then\r\n     aDoc.fEncryptionObject := TPdfDictionary.Create(aDoc.fXRef);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fb61df56ba88ac2978081f54823aaeff7648e331",
+      "short_sha": "fb61df56",
+      "subject": "ui: pdf - EMF text in a GDI path is painted with the path",
+      "body": "GDI adds the outlines of text drawn between BeginPath and EndPath to the\npath, which its painting record then fills, strokes or drops. The\nrenderer drew the text at once, in the text colour: an aborted path\nstill showed its text, StrokePath showed it filled, and FillPath drew it\nin the text colour instead of the brush.\n\nMeasured with GetPath on a memory DC (Windows 11):\n- the text colour is never used;\n- an OPAQUE background, an ETO_OPAQUE rectangle, an underline and a\n  strike-out each add a rectangle;\n- ETO_CLIPPED text adds nothing, and the rest of the path stays;\n- after text, the next LineTo starts a figure of its own.\n\nPDF text cannot be part of a path. While a path is recorded,\nPathTextOut writes the text to a stream of its own, in a q..Q with its\nown Tf, Tc, Tw and Tz, so other text before the painting changes\nnothing. It keeps the page's font and spacing for the text after the\npath. TextOut writes the rectangles into the path, turned with the text,\nand an m back to the current position. The painting records write the\ntext after their operator, in text render mode 0, 1 or 2 by their brush\nand pen; a dropped path drops it. The text is painted after the other\nfigures, not as one union with them, so the fill rule does not combine\nthem.\n\nTest EmfTextInPath, 74 checks over eleven cases: FillPath, StrokePath,\nStrokeAndFillPath, AbortPath, ETO_CLIPPED, a null brush, an underline,\nan opaque background, text in another font after the path, lines around\nthe text, and a turned opaque background. On master's renderer, 29 of\nthem fail.\n\nResults:\n- Delphi 13 Win32 and Delphi 7: 307\n- Delphi 13 Win64, FPC 3.3.1 and FPC 3.2.2 Win64: 304\n- FPC 3.2.2 Win32: the known MetafileRenderingAndOrientation #3\n\nThis is the same change as in our engine\n(martin-doyle/mORMot2-PDF-CrossPlatform#99).\n\nReviewed with Codex.",
+      "author": "Sven Harazim",
+      "date": "2026-10-29T07:11:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fb61df56ba88ac2978081f54823aaeff7648e331",
+      "parents": [
+        "f11fac11f7865e6c3123f6bc5e9e8724aa72caab"
+      ],
+      "stats": {
+        "additions": 359,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 166,
+          "deletions": 7,
+          "patch": "@@ -11242,6 +11242,10 @@   TPdfEnum = class\n     fPathSaved: TPdfStream;\r\n     // the recorded path until its painting record\r\n     fPathBuf: RawByteString;\r\n+    // the text of the path apart, as PDF text cannot join a path: painted\r\n+    // after it in a text render mode\r\n+    fPathText: TPdfStream;\r\n+    fPathTextBuf: RawByteString;\r\n   public\r\n     constructor Create(ACanvas: TPdfCanvas);\r\n     procedure SaveDC;\r\n@@ -11263,13 +11267,17 @@   TPdfEnum = class\n     // write the kept path, after the clip and the pen of its painting\r\n     // - CloseFigures for EMR_STROKEANDFILLPATH, which closes each figure\r\n     procedure PathReplay(CloseFigures: boolean = false);\r\n+    // after the painting operator: the text of the path filled, stroked or both\r\n+    procedure PathTextPaint(Fill, Stroke: boolean);\r\n     // the path is painted or dropped\r\n     procedure PathDone;\r\n     procedure NeedPen;\r\n     procedure NeedBrushAndPen;\r\n     procedure FlushPenBrush;\r\n     procedure SelectObjectFromIndex(iObject: integer);\r\n     procedure TextOut(var r: TEMRExtTextOut);\r\n+    // EMR_EXTTEXTOUTA/W between EMR_BEGINPATH and EMR_ENDPATH\r\n+    procedure PathTextOut(var R: TEMRExtTextOut);\r\n     procedure ScaleMatrix(Custom: PXForm; iMode: integer);\r\n     procedure HandleComment(Kind: TPdfGdiComment; P: PAnsiChar; Len: integer);\r\n     procedure CreateFont(ALogFont: PEMRExtCreateFontIndirect);\r\n@@ -11377,7 +11385,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n         Font.Align := PEMRSetTextAlign(R)^.iMode;\r\n       EMR_EXTTEXTOUTA,\r\n       EMR_EXTTEXTOUTW:\r\n-        E.TextOut(PEMRExtTextOut(R)^);\r\n+        if E.fPathRecording then\r\n+          E.PathTextOut(PEMRExtTextOut(R)^)\r\n+        else\r\n+          E.TextOut(PEMRExtTextOut(R)^);\r\n       EMR_SAVEDC:\r\n         E.SaveDC; // may reallocate E.DC: nothing of this with-scope after it\r\n       EMR_RESTOREDC:\r\n@@ -12005,6 +12016,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n             else\r\n               E.Canvas.Fill;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(not brush.Null, false);\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEPATH:\r\n@@ -12016,6 +12028,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(false, not pen.null);\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEANDFILLPATH:\r\n@@ -12044,6 +12057,7 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           else if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n+          E.PathTextPaint(not brush.Null, not pen.null);\r\n           E.PathDone;\r\n         end;\r\n       EMR_SETPOLYFILLMODE:\r\n@@ -12977,12 +12991,15 @@ procedure TPdfEnum.GStateRestored;\n procedure TPdfEnum.PathBegin;\r\n begin\r\n   if fPathRecording or\r\n-     (fPathBuf <> '') then\r\n+     (fPathBuf <> '') or\r\n+     (fPathTextBuf <> '') then\r\n     PathDone; // a path begun again drops the one before, as in GDI\r\n   fPathRecording := true;\r\n   Canvas.fNewPath := true; // the line records add to the path, unpainted\r\n-  if Canvas.fContents <> nil then\r\n-    fPathStream := TPdfStream.Create(Canvas.fDoc, true);\r\n+  if Canvas.fContents = nil then\r\n+    exit;\r\n+  fPathStream := TPdfStream.Create(Canvas.fDoc, true);\r\n+  fPathText := TPdfStream.Create(Canvas.fDoc, true);\r\n end;\r\n \r\n procedure TPdfEnum.PathIn;\r\n@@ -13015,6 +13032,8 @@ procedure TPdfEnum.PathClose;\n     exit;\r\n   fPathBuf := fPathStream.Writer.ToPdfString;\r\n   FreeAndNil(fPathStream);\r\n+  fPathTextBuf := fPathText.Writer.ToPdfString;\r\n+  FreeAndNil(fPathText);\r\n end;\r\n \r\n procedure TPdfEnum.PathPaint;\r\n@@ -13078,10 +13097,28 @@ procedure TPdfEnum.PathReplay(CloseFigures: boolean);\n   fPathBuf := '';\r\n end;\r\n \r\n+procedure TPdfEnum.PathTextPaint(Fill, Stroke: boolean);\r\n+begin\r\n+  PathClose;\r\n+  if (fPathTextBuf = '') or\r\n+     \n... [truncated, 6293 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 193,
+          "deletions": 0,
+          "patch": "@@ -72,6 +72,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfUnderlineClipped;\r\n     procedure EmfNullPenLines;\r\n     procedure EmfLineAfterEndedPath;\r\n+    procedure EmfTextInPath;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -2993,6 +2994,198 @@ procedure TTestUiPdf.EmfLineAfterEndedPath;\n   end;\r\n end;\r\n \r\n+// not in FPC's windows unit\r\n+function GdiAbortPath(DC: HDC): BOOL; stdcall;\r\n+  external 'gdi32.dll' name 'AbortPath';\r\n+\r\n+function Between(P, After, Before: PtrInt): boolean;\r\n+begin\r\n+  result := (P > After) and\r\n+            (P < Before);\r\n+end;\r\n+\r\n+// the operand Item of the line Index lines before the first Op line of Txt\r\n+function OperandAt(const Txt, Op: RawUtf8; Index, Item: integer): double;\r\n+var\r\n+  p, i: PtrInt;\r\n+  line: RawUtf8;\r\n+begin\r\n+  p := PosEx(Op, Txt);\r\n+  for i := 0 to Index do\r\n+  begin\r\n+    while (p > 1) and\r\n+          (Txt[p - 1] <> #10) do\r\n+      dec(p);\r\n+    dec(p); // the #10 before the line\r\n+  end;\r\n+  line := copy(Txt, p + 1, PosEx(#10, Txt, p + 1) - p - 1);\r\n+  result := GetExtended(pointer(GetCsvItem(pointer(line), Item, ' ')));\r\n+end;\r\n+\r\n+// the content of a metafile of text in a path, case Kind of EmfTextInPath\r\n+function TextInPathEmf(Kind: integer): RawUtf8;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  lf: TLogFontW;\r\n+  fnt, fnt2: HFONT;\r\n+  brush: HBRUSH;\r\n+  r: TRect;\r\n+  dc: HDC;\r\n+begin\r\n+  FillChar(lf, SizeOf(lf), 0);\r\n+  lf.lfHeight := -20;\r\n+  lf.lfUnderline := ord(Kind = 6);\r\n+  if Kind = 10 then\r\n+    lf.lfEscapement := 900;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Arial');\r\n+  fnt := CreateFontIndirectW(lf);\r\n+  lf.lfUnderline := 0;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Courier New');\r\n+  fnt2 := CreateFontIndirectW(lf);\r\n+  brush := CreateSolidBrush($0000FF); // red\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      dc := mc.Handle;\r\n+      SelectObject(dc, fnt);\r\n+      SelectObject(dc, GetStockObject(BLACK_PEN));\r\n+      if Kind = 5 then\r\n+        SelectObject(dc, GetStockObject(NULL_BRUSH))\r\n+      else\r\n+        SelectObject(dc, brush);\r\n+      SetTextColor(dc, $FF0000); // blue\r\n+      if Kind in [7, 10] then\r\n+      begin\r\n+        SetBkMode(dc, OPAQUE);\r\n+        SetTextAlign(dc, TA_BASELINE);\r\n+      end\r\n+      else\r\n+        SetBkMode(dc, TRANSPARENT);\r\n+      BeginPath(dc);\r\n+      if Kind = 9 then\r\n+      begin\r\n+        MoveToEx(dc, 100, 100, nil);\r\n+        LineTo(dc, 150, 100);\r\n+      end;\r\n+      if Kind = 4 then\r\n+      begin\r\n+        r.Left := 0;\r\n+        r.Top := 0;\r\n+        r.Right := 300;\r\n+        r.Bottom := 100;\r\n+        ExtTextOutW(dc, 20, 20, ETO_CLIPPED, @r, 'Path', 4, nil);\r\n+      end\r\n+      else\r\n+        TextOutW(dc, 20, 20, 'Path', 4);\r\n+      if Kind = 9 then\r\n+        LineTo(dc, 150, 150);\r\n+      EndPath(dc);\r\n+      if Kind = 8 then\r\n+      begin\r\n+        SelectObject(dc, fnt2); // drawn at once, before the path\r\n+        TextOutW(dc, 20, 200, 'Page', 4);\r\n+      end;\r\n+      case Kind of\r\n+        1, 6:\r\n+          StrokePath(dc);\r\n+        2:\r\n+          StrokeAndFillPath(dc);\r\n+        3:\r\n+          GdiAbortPath(dc);\r\n+      else\r\n+        FillPath(dc);\r\n+      end;\r\n+      SelectObject(dc, GetStockObject(SYSTEM_FONT));\r\n+      SelectObject(dc, GetStockObject(WHITE_BRUSH));\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    result := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+    DeleteObject(fnt);\r\n+    DeleteObject(fnt2);\r\n+    DeleteObject(brush);\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.EmfTextInPath;\r\n+const\r\n+  MODES: array[0..10] of RawUtf8 = ('0 Tr', '1 Tr', '2 Tr', '', '', '', '1 Tr',\r\n+    '0 Tr', '0 Tr', '0 Tr', '0 Tr');\r\n+  TEXTS: array[0..10] of integer = (1, 1, 1, 0, 0, 0, 1, 1, 2, 1, 1);\r\n+  WHAT: array[0..10] of RawUtf8 = ('FillPath', 'StrokePath',\r\n+    'StrokeAndFillPath', 'AbortPath', 'ETO_CLIPPED', 'a null brush',\r\n+    'an underline', 'an opaq\n... [truncated, 2786 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e95fbde4f9d33c21868cfcece9737c9ac88335ef",
+      "short_sha": "e95fbde4",
+      "subject": "ui: pdf - restore #696 and #695, lost in the merge of #690",
+      "body": "Since c12b33766, mormot.ui.pdf does not compile: \"Identifier not found\nfInLined\" at 11 places. #690 merged master into its branch (41b3d0c34),\nand that merge took only part of #696. The fInLined field is gone and\nTPdfCanvas.NewPath no longer sets fNewPath, but the fInLined uses came\nback, and so did the fNewPath resets, the re-force at the end of each\nrecord, and PathBegin/PathClose of before.\n\nThe merge also dropped from test/test.ui.pdf.pas:\n- the #696 tests EmfNullPenLines and EmfLineAfterEndedPath;\n- the MetafileRenderingAndOrientation hash $439DB6C2, which it set back\n  to $456748FC;\n- one ScreenLogPixels := 96 of #695, in RenderedEmf.\n\nThis puts the EMF renderer back to ea5a2bbb6, the master before #690.\nIt reverses the 15 hunks of c12b33766 from line 11000 on, all in\nTPdfEnum and EnumEMFFunc, and restores the tests above. The AES-256 and\nPDF 2.0 changes of #690 stay as merged. Against ea5a2bbb6, only those\nremain.\n\nResults:\n- Delphi 13 Win32 and Delphi 7: 233\n- Delphi 13 Win64: 230\n- FPC 3.3.1 and FPC 3.2.2 Win64: 218\n- FPC 3.2.2 Win32: the known MetafileRenderingAndOrientation #3\n\nReviewed with Codex.",
+      "author": "Sven Harazim",
+      "date": "2026-10-29T06:27:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e95fbde4f9d33c21868cfcece9737c9ac88335ef",
+      "parents": [
+        "c12b33766ebb3731ddda4eaeaf221e31ec578cec"
+      ],
+      "stats": {
+        "additions": 181,
+        "deletions": 60,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 58,
+          "patch": "@@ -11470,7 +11470,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n               ptlEnd.x, ptlEnd.y, E.dc[E.nDC].ArcDirection = AD_CLOCKWISE,\r\n               acArc, position);\r\n           if not E.Canvas.fNewPath then\r\n-            E.Canvas.Stroke;\r\n+            if not pen.null then\r\n+              E.Canvas.Stroke\r\n+            else\r\n+              E.Canvas.NewPath;\r\n         end;\r\n       EMR_ARCTO:\r\n         begin\r\n@@ -11985,16 +11988,10 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           end;\r\n         end;\r\n       EMR_ENDPATH:\r\n-        begin\r\n-          E.Canvas.fNewPath := false;\r\n-          E.PathClose;\r\n-        end;\r\n+        E.PathClose;\r\n       EMR_ABORTPATH,\r\n       EMR_SELECTCLIPPATH: // the clip of a path is not applied\r\n-        begin\r\n-          E.PathDone;\r\n-          E.Canvas.fNewPath := false;\r\n-        end;\r\n+        E.PathDone;\r\n       EMR_CLOSEFIGURE:\r\n         E.Canvas.ClosePath;\r\n       EMR_FILLPATH:\r\n@@ -12009,7 +12006,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n             else\r\n               E.Canvas.Fill;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEPATH:\r\n@@ -12021,7 +12017,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_STROKEANDFILLPATH:\r\n@@ -12050,7 +12045,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n           else if not pen.null then\r\n             E.Canvas.Stroke;\r\n           E.Canvas.NewPath;\r\n-          E.Canvas.fNewPath := false;\r\n           E.PathDone;\r\n         end;\r\n       EMR_SETPOLYFILLMODE:\r\n@@ -12103,8 +12097,6 @@ function EnumEMFFunc(DC: HDC; var Table: THandleTable; R: PEnhMetaRecord;\n       R^.iType := R^.iType; // for debug purpose (breakpoint)\r\n     end;\r\n   E.PathOut;\r\n-  if E.fPathRecording then\r\n-    E.Canvas.fNewPath := true; // text or a bitmap of the bracket reset it\r\n   case R^.iType of\r\n     EMR_RESTOREDC,\r\n     EMR_SETWINDOWEXTEX,\r\n@@ -12161,7 +12153,6 @@ procedure RenderMetaFile(C: TPdfCanvas; MF: TMetaFile; ScaleX, ScaleY,\n     finally\r\n       E.PathDone; // a path never painted\r\n       E.SelectClip(0, 0); // the q of a clip still selected\r\n-      C.fNewPath := false;\r\n       C.GRestore;\r\n     end;\r\n   finally\r\n@@ -12497,28 +12488,12 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n           end;\r\n         NULL_PEN:\r\n           begin\r\n-            if fInLined and\r\n-               not fPathRecording and // StrokePath paints a path\r\n-               ((pen.style <> PS_NULL) or not pen.null) then\r\n-            begin\r\n-              fInLined := false;\r\n-              if not pen.null then\r\n-                Canvas.Stroke;\r\n-            end;\r\n             pen.style := PS_NULL;\r\n             pen.null := true;\r\n           end;\r\n         WHITE_PEN,\r\n         BLACK_PEN:\r\n           begin\r\n-            if fInLined and\r\n-               not fPathRecording and\r\n-               ((pen.color <> STOCKPENCOLOR[iObject]) or not pen.null) then\r\n-            begin\r\n-              fInLined := false;\r\n-              if not pen.null then\r\n-                Canvas.Stroke;\r\n-            end;\r\n             pen.color := STOCKPENCOLOR[iObject];\r\n             pen.null := false;\r\n           end;\r\n@@ -12529,16 +12504,6 @@ procedure TPdfEnum.SelectObjectFromIndex(iObject: integer);\n         case Kind of // ignore any invalid reference\r\n           OBJ_PEN:\r\n             begin\r\n-              if fInLined and\r\n-                 not fPathRecording and\r\n-                 ((pen.color <> PenColor) or\r\n-                  (pen.width <> PenWidth) or\r\n-                  (pen.style <> PenStyle)) then\r\n-              begin\r\n-                fInLined := false;\r\n-             \n... [truncated, 2236 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 172,
+          "deletions": 2,
+          "patch": "@@ -70,6 +70,8 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfMirroredBoxes;\r\n     procedure EmfClipRestoreDC;\r\n     procedure EmfUnderlineClipped;\r\n+    procedure EmfNullPenLines;\r\n+    procedure EmfLineAfterEndedPath;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -376,7 +378,7 @@ procedure TTestUiPdf.MetafileRenderingAndOrientation;\n         if CheckFailed(i <> 0) then\r\n           exit;\r\n         FillCharFast(S[i], 32, 32);\r\n-        CheckHash(S, $456748FC); // the boxes of #686\r\n+        CheckHash(S, $439DB6C2); // no lone S after a line\r\n       end;\r\n     finally\r\n       Free;\r\n@@ -1607,6 +1609,7 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\n   doc := TPdfDocumentGdi.Create;\r\n   try\r\n     doc.Info.CreationDate := FIXED_DATE;\r\n+    doc.ScreenLogPixels := 96; // the coordinates the checks expect, any screen\r\n     doc.CompressionMethod := cmNone;\r\n     doc.EmbeddedTTF := false;\r\n     doc.StandardFontsReplace := true;\r\n@@ -2647,7 +2650,7 @@ procedure TTestUiPdf.EmfClipRestoreDC;\n       SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n       SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH)); // as FPC selects none\r\n       MoveToEx(mc.Handle, 20, 350, nil);\r\n-      LineTo(mc.Handle, 200, 350); // its geometry left open on the page\r\n+      LineTo(mc.Handle, 200, 350); // of a null pen: ended, not in the fill\r\n       FillPath(mc.Handle);\r\n     finally\r\n       mc.Free;\r\n@@ -2823,6 +2826,173 @@ procedure TTestUiPdf.EmfUnderlineClipped;\n     'the pen width after the Q of the text');\r\n end;\r\n \r\n+procedure TTestUiPdf.EmfNullPenLines;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  pen: HPEN;\r\n+  txt, two: RawUtf8;\r\n+begin\r\n+  { GDI draws no line of a null pen: its m l and the ArcTo stayed open, the\r\n+    next shape stroked them in the colour of before, and the Arc was\r\n+    stroked at once; a line of a pen is stroked at once, yet the next shape\r\n+    wrote a lone S }\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      SelectObject(mc.Handle, GetStockObject(NULL_PEN));\r\n+      MoveToEx(mc.Handle, 20, 20, nil);\r\n+      LineTo(mc.Handle, 200, 20);\r\n+      ArcTo(mc.Handle, 20, 40, 120, 140, 120, 90, 20, 90);\r\n+      Arc(mc.Handle, 150, 40, 250, 140, 250, 90, 150, 90);\r\n+      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH));\r\n+      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    txt := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      pen := CreatePen(PS_SOLID, 1, 0);\r\n+      SelectObject(mc.Handle, pen);\r\n+      MoveToEx(mc.Handle, 20, 20, nil);\r\n+      LineTo(mc.Handle, 200, 20);\r\n+      SelectObject(mc.Handle, GetStockObject(GRAY_BRUSH));\r\n+      Rectangle(mc.Handle, 250, 250, 300, 300);\r\n+      SelectObject(mc.Handle, GetStockObject(BLACK_PEN));\r\n+      DeleteObject(pen);\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    two := RenderedEmf(mf, 0, 0, tcNeverClip);\r\n+  finally\r\n+    mf.Free;\r\n+  end;\r\n+  CheckEqual(CountOccurrences(#10'S'#10, txt), 0, 'a null pen strokes nothing');\r\n+  Check(ValidPaths(txt), 'valid paths of a null pen');\r\n+  Check((PosBefore(txt, #10'f'#10, ' l'#10) > 0) and\r\n+        (PosBefore(txt, #10'f'#10, ' l'#10) < PosBefore(txt, #10'f'#10, #10'n'#10)),\r\n+    'the line ended before the shape');\r\n+  Check((PosBefore(txt, #10'f'#10, ' c'#10) > 0) and\r\n+        (PosBefore(txt, #10'f'#10, ' c'#10) < PosBefore(txt, #10'f'#10, #10'n'#10)),\r\n+    'the arcs ended before the shape');\r\n+  CheckEqual(CountOccurrences(#10'S'#10, two), 1, 'the line stroked once');\r\n+  Check(ValidPaths(two), 'no stroke left pending for the shape');\r\n+end;\r\n+\r\n+// the content of a metafile of the lines of LineAfterEndedPath, case Kind\r\n+function LineAfterEndedPathEmf(Kind: \n... [truncated, 3486 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 696,
+      "is_merge": false
+    },
+    {
+      "sha": "dc3195e9da4feef42e701549e1aa435d6ed97c53",
+      "short_sha": "dc3195e9",
+      "subject": "soa: release the hold reference manually in ExecuteMethod",
+      "body": "A local IInterface variable forces an implicit try..finally block for every\nexecution of the method: hold is now a plain pointer, released in the existing\nfinally of HandleCleanup, and in the two early exits where it may be set.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01HnjnbKNBTbM2GpoD2YuHCC",
+      "author": "Stefan Diestelmann",
+      "date": "2026-10-28T22:00:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dc3195e9da4feef42e701549e1aa435d6ed97c53",
+      "parents": [
+        "927c2f6d6869f349ef77d031465a290e96a69532"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "patch": "@@ -1375,7 +1375,8 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n   timeEnd: Int64;\r\n   m: PtrInt;\r\n   err: ShortString;\r\n-  hold: IInterface; // keep the instance alive during the method execution\r\n+  hold: pointer; // IInterface owned during the method execution, released\r\n+  // manually to avoid an implicit try..finally for every call of this method\r\n \r\n   procedure HandleCleanup; // sub-function for FPC Win64-aarch64 compilation\r\n   begin\r\n@@ -1385,6 +1386,8 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n         // always release single shot instance immediately (no GC)\r\n         InstanceFree(Inst.Instance);\r\n     finally\r\n+      if hold <> nil then\r\n+        IInterface(hold) := nil; // may be the last reference to the instance\r\n       if exec <> nil then\r\n       begin\r\n         if Ctxt.ServiceExecution^.LogRest <> nil then\r\n@@ -1402,6 +1405,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n   // 1. initialize Inst.Instance and Inst.InstanceID\r\n   Inst.InstanceID := 0;\r\n   Inst.Instance := nil;\r\n+  hold := nil;\r\n   case InstanceCreation of\r\n     sicSingle:\r\n       Inst.Instance := CreateInstance(true);\r\n@@ -1441,7 +1445,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n         // - a \"_free_\" (e.g. from a client giving up after its timeout), an\r\n         // instance timeout or a session GC may run in another thread during\r\n         // the method execution: hold makes InstanceFreeOrGC() see RefCount > 1\r\n-        // and defer the release until hold is finalized when we exit\r\n+        // and defer the release until hold is released in HandleCleanup\r\n         case RetrieveInstance(Ctxt, Inst, Ctxt.ServiceMethodIndex, Ctxt.Session,\r\n                @hold) of\r\n           ord(imFree):\r\n@@ -1453,6 +1457,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n           ord(imInstance):\r\n             begin\r\n               // from TServiceFactoryClient.CreateFakeInstance\r\n+              IInterface(hold) := nil; // set by AddNew, no execution to hold\r\n               Ctxt.Results([Inst.InstanceID], HTTP_SUCCESS);\r\n               exit;\r\n             end;\r\n@@ -1472,6 +1477,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n      (Ctxt.ServiceExecution = nil) or\r\n      (Ctxt.ServiceMethod = nil) then\r\n   begin\r\n+    IInterface(hold) := nil;\r\n     ExecuteError(self, Ctxt, 'ServiceExecution=nil', HTTP_SERVERERROR);\r\n     exit;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "SOA"
+      ],
+      "units": [
+        "mormot.soa.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "927c2f6d6869f349ef77d031465a290e96a69532",
+      "short_sha": "927c2f6d",
+      "subject": "soa: hold the sicClientDriven instance during ExecuteMethod",
+      "body": "A \"_free_\" call - e.g. sent by a client giving up after its receive\ntimeout - an instance timeout or a session GC running in another thread\ndid release the instance while a method was still executing on it,\nresulting in a use-after-free in the service implementation.\n\nExecuteMethod now owns an IInterface reference for the whole execution,\nassigned by RetrieveInstance() within the fInstances lock, so\nInstanceFreeOrGC() sees RefCount > 1 and defers the actual release to\nthe next DoInstanceGC() round once the method has returned.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01HnjnbKNBTbM2GpoD2YuHCC",
+      "author": "TobiasKnoke",
+      "date": "2026-10-28T18:28:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/927c2f6d6869f349ef77d031465a290e96a69532",
+      "parents": [
+        "c12b33766ebb3731ddda4eaeaf221e31ec578cec"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 3,
+          "patch": "@@ -265,8 +265,12 @@   TServiceFactoryServer = class(TServiceFactoryServerAbstract)\n     // - returns -1 on error, or aMethodIndex for successful execution,\r\n     // e.g. 0 after {\"method\":\"_free_\".. call\r\n     // - otherwise, fill Inst.Instance with the matching implementation (or nil)\r\n+    // - if Hold is set, Hold^ will own a reference to the returned instance,\r\n+    // assigned within the fInstances lock: a concurrent \"_free_\", timeout or\r\n+    // session GC would then defer the actual release to the next DoInstanceGC\r\n     function RetrieveInstance(Ctxt: TRestServerUriContext;\r\n-      var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer): integer;\r\n+      var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer;\r\n+      Hold: PInterface = nil): integer;\r\n     /// define the the instance life time-out, in seconds\r\n     function SetTimeoutSec(value: cardinal): TServiceFactoryServerAbstract; override;\r\n     /// log method execution information to a TOrmServiceLog table\r\n@@ -1025,7 +1029,8 @@ function TServiceFactoryServer.RunOnAllInstances(\n end;\r\n \r\n function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\r\n-  var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer): integer;\r\n+  var Inst: TServiceFactoryServerInstance; aMethodIndex, aSession: integer;\r\n+  Hold: PInterface): integer;\r\n \r\n   procedure AddNew;\r\n   var\r\n@@ -1058,6 +1063,8 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\n         P^.LastAccessTix10 := Inst.LastAccessTix10;\r\n         Inst.Instance := P^.Instance;\r\n       end;\r\n+      if Hold <> nil then\r\n+        Hold^ := Inst.Instance; // within the lock\r\n     finally\r\n       fInstances.Safe.WriteUnLock;\r\n     end;\r\n@@ -1153,6 +1160,8 @@ function TServiceFactoryServer.RetrieveInstance(Ctxt: TRestServerUriContext;\n       P := @fInstance[ndx];\r\n       P^.LastAccessTix10 := Inst.LastAccessTix10;\r\n       Inst.Instance := P^.Instance;\r\n+      if Hold <> nil then\r\n+        Hold^ := Inst.Instance; // within the lock\r\n       result := aMethodIndex; // notify caller\r\n     end;\r\n     fInstances.Safe.ReadUnLock;\r\n@@ -1366,6 +1375,7 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n   timeEnd: Int64;\r\n   m: PtrInt;\r\n   err: ShortString;\r\n+  hold: IInterface; // keep the instance alive during the method execution\r\n \r\n   procedure HandleCleanup; // sub-function for FPC Win64-aarch64 compilation\r\n   begin\r\n@@ -1428,7 +1438,12 @@ procedure TServiceFactoryServer.ExecuteMethod(Ctxt: TRestServerUriContext);\n           end;\r\n         end;\r\n         // O(log(n)) binary search of Inst.Instance from Inst.InstanceID\r\n-        case RetrieveInstance(Ctxt, Inst, Ctxt.ServiceMethodIndex, Ctxt.Session) of\r\n+        // - a \"_free_\" (e.g. from a client giving up after its timeout), an\r\n+        // instance timeout or a session GC may run in another thread during\r\n+        // the method execution: hold makes InstanceFreeOrGC() see RefCount > 1\r\n+        // and defer the release until hold is finalized when we exit\r\n+        case RetrieveInstance(Ctxt, Inst, Ctxt.ServiceMethodIndex, Ctxt.Session,\r\n+               @hold) of\r\n           ord(imFree):\r\n             begin\r\n               // {\"method\":\"_free_\", \"params\":[], \"id\":1234}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "SOA"
+      ],
+      "units": [
+        "mormot.soa.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cc485cc2588690de8438bb961745364d69dbcaa7",
+      "short_sha": "cc485cc2",
+      "subject": "net: keep the read-until-close body for HTTP/1.0 requests only",
+      "body": "As suggested in review: an HTTP/1.1 request without Content-Length nor\nchunked encoding has an empty body, also with Connection: close, but\nold HTTP/1.0 clients keep the previous behavior.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Joel",
+      "date": "2026-10-27T10:58:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cc485cc2588690de8438bb961745364d69dbcaa7",
+      "parents": [
+        "daa871450f764cfa4afb788dc1c2c8bb54de73e0"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -5388,7 +5388,10 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n     fServer.ParseRemoteIPConnID(Http.Headers, fRemoteIP, fRemoteConnectionID);\r\n     if hfConnectionClose in Http.HeaderFlags then\r\n       fKeepAliveClient := false;\r\n-    if Http.ContentLength < 0 then\r\n+    if (Http.ContentLength < 0) and\r\n+       (KeepAliveClient or\r\n+        not (rfHttp10 in Http.ResponseFlags) or\r\n+        IsGet(Http.CommandMethod)) then\r\n       Http.ContentLength := 0; // HTTP/1.1 and no content length -> no eof\r\n     if (headerMaxTix > 0) and\r\n        (mormot.core.os.GetTickCount64 > headerMaxTix) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "daa871450f764cfa4afb788dc1c2c8bb54de73e0",
+      "short_sha": "daa87145",
+      "subject": "net: request without Content-Length has an empty body, also with Connection: close",
+      "body": "THttpServerSocket.GetRequest only set a missing Content-Length to 0 for keep-alive or GET requests. A DELETE or an empty POST sent with Connection: close and no Content-Length (as Python urllib does) made the server read the body until EOF, so the request hung until the timeout. RFC 7230 3.3.3 / RFC 9112 6.3: such a request has no body.\r\n\r\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "big_rid",
+      "date": "2026-10-26T10:19:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/daa871450f764cfa4afb788dc1c2c8bb54de73e0",
+      "parents": [
+        "fc4c033da5520d25221025efb78fcc4ea55a55a0"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 3,
+          "patch": "@@ -5388,9 +5388,7 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n     fServer.ParseRemoteIPConnID(Http.Headers, fRemoteIP, fRemoteConnectionID);\r\n     if hfConnectionClose in Http.HeaderFlags then\r\n       fKeepAliveClient := false;\r\n-    if (Http.ContentLength < 0) and\r\n-       (KeepAliveClient or\r\n-        IsGet(Http.CommandMethod)) then\r\n+    if Http.ContentLength < 0 then\r\n       Http.ContentLength := 0; // HTTP/1.1 and no content length -> no eof\r\n     if (headerMaxTix > 0) and\r\n        (mormot.core.os.GetTickCount64 > headerMaxTix) then\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
