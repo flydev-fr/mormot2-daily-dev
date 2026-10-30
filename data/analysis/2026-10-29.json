@@ -1,0 +1,567 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-29",
+  "edition_title": {
+    "en": "Client-driven services stop racing their own release",
+    "fr": "Les services pilotés par le client ne libèrent plus leur instance en cours d'appel",
+    "zh": "客户端驱动服务不再与自身实例释放发生竞态",
+    "ru": "Клиентские сервисы больше не освобождают экземпляр во время вызова"
+  },
+  "intro": {
+    "en": "The server now keeps each sicClientDriven implementation alive until its active method returns, closing a use-after-free race with _free_, timeouts and session garbage collection. HTTP request framing, DuckDB 2.0, PDF encryption and EMF rendering also receive concrete fixes. Teams running Delphi or FPC backends should prioritize this edition when they use stateful SOA services, DuckDB 2.0 or PDF generation.",
+    "fr": "Le serveur conserve désormais chaque implémentation sicClientDriven jusqu'au retour de sa méthode active, ce qui ferme une course use-after-free avec _free_, les délais d'expiration et le ramasse-miettes de session. Le cadrage des requêtes HTTP, DuckDB 2.0, le chiffrement PDF et le rendu EMF reçoivent aussi des correctifs concrets. Les équipes exploitant des backends Delphi ou FPC doivent donner la priorité à cette édition si elles utilisent des services SOA avec état, DuckDB 2.0 ou la génération PDF.",
+    "zh": "服务器现在会让每个 sicClientDriven 实现实例存活到正在执行的方法返回，从而消除它与 _free_、超时及会话垃圾回收之间的 use-after-free 竞态。HTTP 请求分帧、DuckDB 2.0、PDF 加密和 EMF 渲染也获得了明确修复。使用有状态 SOA 服务、DuckDB 2.0 或 PDF 生成的 Delphi 与 FPC 后端应优先采用本期版本。",
+    "ru": "Сервер теперь удерживает каждый экземпляр реализации sicClientDriven до завершения активного метода, устраняя use-after-free при конкуренции с _free_, тайм-аутом или сборкой мусора сессии. Исправления также затронули разбор HTTP-запросов, DuckDB 2.0, шифрование PDF и рендеринг EMF. Командам с backend на Delphi или FPC стоит приоритетно взять этот выпуск, если они используют stateful SOA, DuckDB 2.0 или генерацию PDF."
+  },
+  "tldr": {
+    "en": [
+      "sicClientDriven instances now retain an interface reference while ExecuteMethod is running, preventing concurrent release and use-after-free.",
+      "HTTP/1.1 requests without Content-Length no longer wait for EOF when Connection: close is present; HTTP/1.0 close-delimited bodies keep their legacy handling.",
+      "DuckDB 2.0 calls run with masked FPU exceptions, new logical types are decoded safely, and VARIANT result columns are returned as JSON text.",
+      "FPC no longer writes into literal PDF passwords during AES-256 setup, and EMF text recorded inside a GDI path follows that path's paint operation.",
+      "WinVerifyExeSignature, IsExeSignatureValid and TWinVerifyStatus moved from mormot.misc.pecoff to mormot.core.os.security."
+    ],
+    "fr": [
+      "Les instances sicClientDriven conservent maintenant une référence d'interface pendant ExecuteMethod, empêchant leur libération concurrente et un use-after-free.",
+      "Les requêtes HTTP/1.1 sans Content-Length n'attendent plus EOF avec Connection: close ; les corps HTTP/1.0 délimités par fermeture gardent leur traitement historique.",
+      "Les appels DuckDB 2.0 masquent les exceptions FPU, décodent sûrement les nouveaux types logiques et renvoient les colonnes VARIANT sous forme de texte JSON.",
+      "FPC n'écrit plus dans les mots de passe PDF littéraux pendant l'initialisation AES-256, et le texte EMF enregistré dans un chemin GDI suit l'opération de peinture du chemin.",
+      "WinVerifyExeSignature, IsExeSignatureValid et TWinVerifyStatus passent de mormot.misc.pecoff à mormot.core.os.security."
+    ],
+    "zh": [
+      "sicClientDriven 实例在 ExecuteMethod 运行期间会持有接口引用，避免并发释放和 use-after-free。",
+      "带 Connection: close 且缺少 Content-Length 的 HTTP/1.1 请求不再等待 EOF；HTTP/1.0 关闭分隔的请求体仍保留旧行为。",
+      "DuckDB 2.0 调用会屏蔽 FPU 异常，安全解码新增逻辑类型，并将 VARIANT 结果列作为 JSON 文本返回。",
+      "FPC 在 AES-256 初始化时不再写入 PDF 字面量密码，GDI 路径中的 EMF 文本也会遵循该路径的绘制操作。",
+      "WinVerifyExeSignature、IsExeSignatureValid 和 TWinVerifyStatus 已从 mormot.misc.pecoff 移至 mormot.core.os.security。"
+    ],
+    "ru": [
+      "Экземпляр sicClientDriven теперь удерживает интерфейсную ссылку во время ExecuteMethod, что предотвращает конкурентное освобождение и use-after-free.",
+      "HTTP/1.1-запрос без Content-Length больше не ждёт EOF при Connection: close; тела HTTP/1.0, ограниченные закрытием, сохраняют прежнее поведение.",
+      "Вызовы DuckDB 2.0 маскируют исключения FPU, безопасно декодируют новые логические типы и возвращают VARIANT как текст JSON.",
+      "FPC больше не пишет в строковые литералы паролей PDF при настройке AES-256, а текст EMF внутри GDI-пути следует операции рисования этого пути.",
+      "WinVerifyExeSignature, IsExeSignatureValid и TWinVerifyStatus перенесены из mormot.misc.pecoff в mormot.core.os.security."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Land on merged revision 50a0c6b536826827965d8f1571c4087f1b0d82a1, build 2.4.17677. Do not stop on daa87145 because cc485cc2 restores HTTP/1.0 close-delimited bodies, or on 45779260 because 027e139e adds usable VARIANT results. Upgrade promptly for sicClientDriven services, DuckDB 2.0, or FPC AES-256 PDF output. The raw payload records no later superseding fix.",
+    "fr": "Adoptez la révision fusionnée 50a0c6b536826827965d8f1571c4087f1b0d82a1, build 2.4.17677. Ne restez pas sur daa87145, car cc485cc2 rétablit les corps HTTP/1.0 délimités par fermeture, ni sur 45779260, car 027e139e rend les résultats VARIANT utilisables. Mettez rapidement à jour les services sicClientDriven, DuckDB 2.0 ou la sortie PDF AES-256 sous FPC. Le payload brut ne signale aucun correctif successeur ultérieur.",
+    "zh": "建议采用已合并的修订 50a0c6b536826827965d8f1571c4087f1b0d82a1，即 build 2.4.17677。不要停留在 daa87145，因为 cc485cc2 恢复了 HTTP/1.0 关闭分隔请求体；也不要停留在 45779260，因为 027e139e 才让 VARIANT 结果可正常使用。使用 sicClientDriven、DuckDB 2.0 或 FPC AES-256 PDF 输出时应尽快升级。原始 payload 未记录后续替代修复。",
+    "ru": "Переходите на слитую ревизию 50a0c6b536826827965d8f1571c4087f1b0d82a1, build 2.4.17677. Не останавливайтесь на daa87145: cc485cc2 возвращает тела HTTP/1.0 до закрытия; и на 45779260: только 027e139e делает результаты VARIANT пригодными для чтения. Быстро обновитесь при использовании sicClientDriven, DuckDB 2.0 или AES-256 PDF под FPC. В raw payload нет более позднего исправления-преемника."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Stateful service lifetime",
+        "fr": "Durée de vie des services avec état",
+        "zh": "有状态服务生命周期",
+        "ru": "Жизненный цикл stateful-сервисов"
+      },
+      "summary": {
+        "en": "Two commits make RetrieveInstance acquire a reference under fInstances and release it through ExecuteMethod cleanup, so _free_, timeout and session GC cannot destroy a sicClientDriven implementation while its method is running.",
+        "fr": "Deux commits font acquérir à RetrieveInstance une référence sous fInstances puis la libèrent dans le nettoyage de ExecuteMethod ; _free_, l'expiration et le GC de session ne peuvent donc plus détruire une implémentation sicClientDriven pendant l'exécution de sa méthode.",
+        "zh": "两个提交让 RetrieveInstance 在 fInstances 锁内取得引用，并由 ExecuteMethod 的清理路径释放，因此 _free_、超时和会话 GC 无法在方法执行期间销毁 sicClientDriven 实现。",
+        "ru": "Два коммита заставляют RetrieveInstance брать ссылку под блокировкой fInstances и освобождать её при очистке ExecuteMethod, поэтому _free_, тайм-аут и GC сессии не уничтожат sicClientDriven во время выполнения метода."
+      },
+      "shas": [
+        "927c2f6d6869f349ef77d031465a290e96a69532",
+        "dc3195e9da4feef42e701549e1aa435d6ed97c53"
+      ]
+    },
+    {
+      "title": {
+        "en": "HTTP body framing",
+        "fr": "Cadrage des corps HTTP",
+        "zh": "HTTP 请求体分帧",
+        "ru": "Границы тела HTTP"
+      },
+      "summary": {
+        "en": "The first change treats a missing Content-Length as an empty request body; the follow-up limits that rule so HTTP/1.0 non-GET requests may still use connection close as their body delimiter.",
+        "fr": "Le premier changement traite l'absence de Content-Length comme un corps vide ; le suivant limite cette règle afin que les requêtes HTTP/1.0 autres que GET puissent toujours utiliser la fermeture de connexion comme délimiteur.",
+        "zh": "第一个更改把缺少 Content-Length 视为空请求体；后续更改收窄该规则，使非 GET 的 HTTP/1.0 请求仍可用连接关闭来分隔请求体。",
+        "ru": "Первое изменение считает отсутствие Content-Length пустым телом, а следующее ограничивает правило, сохраняя для HTTP/1.0 не-GET границу тела по закрытию соединения."
+      },
+      "shas": [
+        "daa871450f764cfa4afb788dc1c2c8bb54de73e0",
+        "cc485cc2588690de8438bb961745364d69dbcaa7"
+      ]
+    },
+    {
+      "title": {
+        "en": "DuckDB 2.0 compatibility",
+        "fr": "Compatibilité DuckDB 2.0",
+        "zh": "DuckDB 2.0 兼容性",
+        "ru": "Совместимость с DuckDB 2.0"
+      },
+      "summary": {
+        "en": "The driver masks FPU exceptions around DuckDB calls, maps new timestamp and geometry types, rejects unknown vector types without recursion and re-executes SELECT statements so VARIANT columns arrive as JSON.",
+        "fr": "Le pilote masque les exceptions FPU autour des appels DuckDB, mappe les nouveaux types timestamp et geometry, rejette les types vectoriels inconnus sans récursion et réexécute les SELECT afin que les colonnes VARIANT arrivent en JSON.",
+        "zh": "驱动会在 DuckDB 调用期间屏蔽 FPU 异常，映射新的 timestamp 与 geometry 类型，在不递归的情况下拒绝未知向量类型，并重新执行 SELECT 以将 VARIANT 列作为 JSON 返回。",
+        "ru": "Драйвер маскирует исключения FPU вокруг вызовов DuckDB, отображает новые timestamp и geometry, отклоняет неизвестные векторные типы без рекурсии и повторно выполняет SELECT, получая VARIANT как JSON."
+      },
+      "shas": [
+        "457792608ef4e27dd86c080366e10c252defb367",
+        "027e139e8dca31c176c7c87e46e25a8d9e2060f3"
+      ]
+    },
+    {
+      "title": {
+        "en": "PDF branch recovery and rendering",
+        "fr": "Récupération de la branche PDF et rendu",
+        "zh": "PDF 分支恢复与渲染修复",
+        "ru": "Восстановление PDF-ветки и рендеринга"
+      },
+      "summary": {
+        "en": "The PDF sequence restores lost EMF fixes and tests, prevents an FPC access violation while clearing AES-256 passwords, and makes text recorded inside a GDI path follow FillPath, StrokePath, StrokeAndFillPath or AbortPath.",
+        "fr": "La séquence PDF restaure des correctifs et tests EMF perdus, empêche une violation d'accès FPC lors de l'effacement des mots de passe AES-256 et fait suivre au texte d'un chemin GDI les opérations FillPath, StrokePath, StrokeAndFillPath ou AbortPath.",
+        "zh": "这一组 PDF 提交恢复了丢失的 EMF 修复和测试，避免 FPC 清理 AES-256 密码时发生访问冲突，并让 GDI 路径中的文本遵循 FillPath、StrokePath、StrokeAndFillPath 或 AbortPath。",
+        "ru": "Серия PDF возвращает потерянные исправления и тесты EMF, устраняет access violation в FPC при очистке паролей AES-256 и подчиняет текст внутри GDI-пути операциям FillPath, StrokePath, StrokeAndFillPath или AbortPath."
+      },
+      "shas": [
+        "e95fbde4f9d33c21868cfcece9737c9ac88335ef",
+        "f11fac11f7865e6c3123f6bc5e9e8724aa72caab",
+        "fb61df56ba88ac2978081f54823aaeff7648e331"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "927c2f6d6869f349ef77d031465a290e96a69532",
+      "headline": {
+        "en": "Active sicClientDriven calls can no longer lose their instance",
+        "fr": "Un appel sicClientDriven actif ne peut plus perdre son instance",
+        "zh": "正在执行的 sicClientDriven 调用不再丢失实例",
+        "ru": "Активный вызов sicClientDriven больше не теряет свой экземпляр"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TServiceFactoryServer.RetrieveInstance now accepts an optional Hold: PInterface and assigns the returned implementation to it while fInstances is locked. ExecuteMethod keeps that reference for the complete method call, so InstanceFreeOrGC observes RefCount greater than one and postpones destruction until a later DoInstanceGC pass.",
+        "fr": "TServiceFactoryServer.RetrieveInstance accepte désormais un paramètre facultatif Hold: PInterface et lui affecte l'implémentation retournée pendant le verrouillage de fInstances. ExecuteMethod conserve cette référence durant tout l'appel ; InstanceFreeOrGC voit donc un RefCount supérieur à un et reporte la destruction à un passage ultérieur de DoInstanceGC.",
+        "zh": "TServiceFactoryServer.RetrieveInstance 现在接受可选的 Hold: PInterface，并在锁定 fInstances 时把返回的实现赋给它。ExecuteMethod 在整个方法调用期间持有该引用，因此 InstanceFreeOrGC 会看到 RefCount 大于一，并将销毁推迟到后续 DoInstanceGC。",
+        "ru": "TServiceFactoryServer.RetrieveInstance получил необязательный Hold: PInterface и присваивает ему найденную реализацию под блокировкой fInstances. ExecuteMethod удерживает ссылку весь вызов, поэтому InstanceFreeOrGC видит RefCount больше единицы и откладывает уничтожение до следующего DoInstanceGC."
+      },
+      "impact": {
+        "en": "A concurrent _free_ request, instance timeout or session GC could previously release a sicClientDriven implementation while its method still used self, causing a use-after-free. The fix changes no service contract and applies to both Delphi and FPC servers; direct callers of RetrieveInstance remain source-compatible because Hold defaults to nil.",
+        "fr": "Une requête _free_ concurrente, l'expiration d'une instance ou le GC de session pouvait auparavant libérer une implémentation sicClientDriven alors que sa méthode utilisait encore self, provoquant un use-after-free. Le correctif ne change aucun contrat de service et concerne les serveurs Delphi comme FPC ; les appels directs à RetrieveInstance restent compatibles grâce à la valeur nil par défaut de Hold.",
+        "zh": "并发的 _free_ 请求、实例超时或会话 GC 以前可能在方法仍使用 self 时释放 sicClientDriven 实现，造成 use-after-free。该修复不改变服务契约，并同时适用于 Delphi 与 FPC 服务器；因为 Hold 默认为 nil，直接调用 RetrieveInstance 的代码仍保持源代码兼容。",
+        "ru": "Конкурентный _free_, тайм-аут экземпляра или GC сессии раньше мог освободить sicClientDriven, пока метод ещё использовал self, вызывая use-after-free. Исправление не меняет контракт сервиса и относится к серверам Delphi и FPC; прямые вызовы RetrieveInstance остаются совместимыми по исходному коду благодаря Hold = nil."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade stateful SOA servers and stress-test long sicClientDriven methods while clients time out, send _free_, and sessions expire.",
+        "fr": "Mettez à jour les serveurs SOA avec état et testez sous charge les longues méthodes sicClientDriven pendant les timeouts client, les appels _free_ et l'expiration des sessions.",
+        "zh": "升级有状态 SOA 服务器，并在客户端超时、发送 _free_ 和会话过期时对长时间运行的 sicClientDriven 方法进行压力测试。",
+        "ru": "Обновите stateful SOA-серверы и нагрузочно проверьте долгие методы sicClientDriven одновременно с тайм-аутами клиента, _free_ и завершением сессий."
+      },
+      "units": [
+        "mormot.soa.server"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TServiceFactoryServer.RetrieveInstance",
+          "change": "signature-changed",
+          "note": {
+            "en": "Adds the optional Hold: PInterface = nil parameter; existing calls remain valid.",
+            "fr": "Ajoute le paramètre facultatif Hold: PInterface = nil ; les appels existants restent valides.",
+            "zh": "新增可选参数 Hold: PInterface = nil；现有调用仍然有效。",
+            "ru": "Добавлен необязательный параметр Hold: PInterface = nil; существующие вызовы остаются корректными."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "dc3195e9da4feef42e701549e1aa435d6ed97c53",
+      "headline": {
+        "en": "The service-instance hold avoids a per-call compiler finalizer",
+        "fr": "La référence de maintien évite un finaliseur implicite à chaque appel",
+        "zh": "服务实例持有逻辑避免每次调用的编译器终结代码",
+        "ru": "Удержание экземпляра обходится без финализатора на каждый вызов"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "ExecuteMethod replaces the local managed IInterface variable with a pointer that owns the same interface reference. HandleCleanup releases it in its existing finally block, and the two early exits clear it explicitly. This preserves the lifetime fix while avoiding an extra compiler-generated try..finally on every service call.",
+        "fr": "ExecuteMethod remplace la variable locale gérée IInterface par un pointeur propriétaire de la même référence. HandleCleanup la libère dans son bloc finally existant et les deux sorties anticipées l'effacent explicitement. Le correctif de durée de vie est conservé sans ajouter un try..finally généré par le compilateur à chaque appel.",
+        "zh": "ExecuteMethod 用拥有同一接口引用的指针替换本地托管 IInterface 变量。HandleCleanup 在现有 finally 块中释放它，两个提前返回路径也会显式清除。这样保留生命周期修复，同时避免每次服务调用都生成额外的 try..finally。",
+        "ru": "ExecuteMethod заменяет локальную управляемую IInterface на указатель, владеющий той же ссылкой. HandleCleanup освобождает её в существующем finally, а два ранних выхода делают это явно. Исправление времени жизни сохраняется без дополнительного сгенерированного try..finally на каждый вызов."
+      },
+      "impact": {
+        "en": "Service behavior and the public signature are unchanged from the preceding fix. Delphi and FPC backends keep the protection against concurrent release with less managed-variable overhead in the hot ExecuteMethod path; no application change is required.",
+        "fr": "Le comportement du service et la signature publique restent ceux du correctif précédent. Les backends Delphi et FPC conservent la protection contre la libération concurrente avec moins de coût lié aux variables gérées dans le chemin chaud ExecuteMethod ; aucune modification applicative n'est requise.",
+        "zh": "服务行为和公共签名与前一个修复保持一致。Delphi 与 FPC 后端继续获得并发释放保护，同时减少 ExecuteMethod 热路径中的托管变量开销；应用代码无需修改。",
+        "ru": "Поведение сервиса и публичная сигнатура не меняются относительно предыдущего исправления. Backend на Delphi и FPC сохраняет защиту от конкурентного освобождения с меньшими накладными расходами управляемой переменной в ExecuteMethod; код приложения менять не нужно."
+      },
+      "action": "none",
+      "units": [
+        "mormot.soa.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "daa871450f764cfa4afb788dc1c2c8bb54de73e0",
+      "headline": {
+        "en": "Missing request length is first treated as an empty body",
+        "fr": "Une longueur absente est d'abord traitée comme un corps vide",
+        "zh": "缺少请求长度最初被视为空请求体",
+        "ru": "Отсутствующая длина запроса сначала считается пустым телом"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpServerSocket.GetRequest changes any negative Http.ContentLength to zero after parsing the headers. This prevents DELETE or empty POST requests sent with Connection: close and no Content-Length from entering the read-until-EOF path and waiting until the socket timeout.",
+        "fr": "THttpServerSocket.GetRequest remplace toute valeur négative de Http.ContentLength par zéro après l'analyse des en-têtes. Une requête DELETE ou POST vide avec Connection: close et sans Content-Length n'entre donc plus dans la lecture jusqu'à EOF qui attendait le timeout de la socket.",
+        "zh": "THttpServerSocket.GetRequest 在解析请求头后把所有负的 Http.ContentLength 改为零。因此，带 Connection: close 且没有 Content-Length 的 DELETE 或空 POST 不再进入读取到 EOF 的路径并等待套接字超时。",
+        "ru": "THttpServerSocket.GetRequest после разбора заголовков заменяет отрицательный Http.ContentLength на ноль. DELETE или пустой POST с Connection: close без Content-Length больше не попадает в чтение до EOF и не ждёт тайм-аута сокета."
+      },
+      "impact": {
+        "en": "The change removes the observed HTTP/1.1 hang, but on this intermediate revision it also suppresses valid HTTP/1.0 non-GET bodies delimited by connection close. The next commit in the edition corrects that scope, so production servers should not stop on this SHA.",
+        "fr": "Le changement supprime le blocage HTTP/1.1 observé, mais cette révision intermédiaire supprime aussi des corps HTTP/1.0 valides, autres que GET, délimités par la fermeture de connexion. Le commit suivant corrige cette portée ; un serveur de production ne doit pas rester sur ce SHA.",
+        "zh": "该更改消除了已观察到的 HTTP/1.1 卡死，但这个中间版本也会忽略合法的、通过连接关闭分隔的 HTTP/1.0 非 GET 请求体。本期下一个提交修正了范围，生产服务器不应停留在此 SHA。",
+        "ru": "Изменение устраняет зависание HTTP/1.1, но в этой промежуточной ревизии также отбрасывает допустимые тела HTTP/1.0 не-GET до закрытия соединения. Следующий коммит уточняет условие, поэтому production-сервер не должен останавливаться на этом SHA."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.server"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpServerSocket.GetRequest",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "A request without Content-Length is initially treated as bodyless regardless of Connection: close.",
+            "fr": "Une requête sans Content-Length est d'abord considérée sans corps, même avec Connection: close.",
+            "zh": "没有 Content-Length 的请求最初都会被视为无请求体，不受 Connection: close 影响。",
+            "ru": "Запрос без Content-Length сначала считается без тела независимо от Connection: close."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cc485cc2588690de8438bb961745364d69dbcaa7",
+      "headline": {
+        "en": "HTTP/1.1 avoids the close-body timeout without breaking HTTP/1.0",
+        "fr": "HTTP/1.1 évite le timeout sans casser les corps HTTP/1.0",
+        "zh": "HTTP/1.1 避免关闭分隔超时且不破坏 HTTP/1.0",
+        "ru": "HTTP/1.1 избегает тайм-аута, не ломая тела HTTP/1.0"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "GetRequest now sets a missing Content-Length to zero for keep-alive requests, HTTP/1.1 requests, and GET. An HTTP/1.0 non-GET request using connection close keeps ContentLength negative so the existing read-until-close path can receive its body.",
+        "fr": "GetRequest fixe désormais à zéro un Content-Length absent pour les requêtes keep-alive, HTTP/1.1 et GET. Une requête HTTP/1.0 autre que GET, utilisant la fermeture de connexion, conserve un ContentLength négatif afin que le chemin existant de lecture jusqu'à fermeture reçoive son corps.",
+        "zh": "GetRequest 现在会把 keep-alive、HTTP/1.1 和 GET 请求中缺少的 Content-Length 设为零。使用连接关闭的 HTTP/1.0 非 GET 请求仍保留负的 ContentLength，以便现有读取到关闭路径接收请求体。",
+        "ru": "GetRequest теперь устанавливает нулевой Content-Length для keep-alive, HTTP/1.1 и GET. У HTTP/1.0 не-GET до закрытия ContentLength остаётся отрицательным, чтобы прежний путь чтения до закрытия принял тело."
+      },
+      "impact": {
+        "en": "Python urllib and similar HTTP/1.1 clients can send empty POST or DELETE requests with Connection: close without stalling the mORMot server until timeout. Legacy HTTP/1.0 clients that delimit a non-GET body by closing the socket continue to work. No application API changes are required on Delphi or FPC.",
+        "fr": "Python urllib et les clients HTTP/1.1 similaires peuvent envoyer des POST ou DELETE vides avec Connection: close sans bloquer le serveur mORMot jusqu'au timeout. Les anciens clients HTTP/1.0 qui délimitent un corps non-GET par la fermeture de la socket continuent de fonctionner. Aucune API applicative Delphi ou FPC ne change.",
+        "zh": "Python urllib 等 HTTP/1.1 客户端可使用 Connection: close 发送空 POST 或 DELETE，而不会让 mORMot 服务器一直等待到超时。通过关闭套接字分隔非 GET 请求体的旧 HTTP/1.0 客户端仍可工作。Delphi 或 FPC 应用 API 无需修改。",
+        "ru": "Python urllib и похожие HTTP/1.1-клиенты могут отправлять пустые POST или DELETE с Connection: close без зависания mORMot до тайм-аута. Старые HTTP/1.0-клиенты, ограничивающие не-GET тело закрытием сокета, продолжают работать. API приложений Delphi и FPC не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade HTTP servers that accept empty POST or DELETE requests, then test both HTTP/1.1 Connection: close and an HTTP/1.0 close-delimited request body.",
+        "fr": "Mettez à jour les serveurs HTTP qui acceptent des POST ou DELETE vides, puis testez HTTP/1.1 avec Connection: close et un corps HTTP/1.0 délimité par fermeture.",
+        "zh": "升级会接收空 POST 或 DELETE 的 HTTP 服务器，并同时测试 HTTP/1.1 Connection: close 与 HTTP/1.0 关闭分隔请求体。",
+        "ru": "Обновите HTTP-серверы, принимающие пустые POST или DELETE, и проверьте HTTP/1.1 с Connection: close и тело HTTP/1.0 до закрытия."
+      },
+      "units": [
+        "mormot.net.server"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpServerSocket.GetRequest",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Missing length means an empty body for HTTP/1.1, while HTTP/1.0 non-GET may still read until close.",
+            "fr": "Une longueur absente signifie un corps vide en HTTP/1.1, tandis qu'un non-GET HTTP/1.0 peut encore lire jusqu'à fermeture.",
+            "zh": "HTTP/1.1 缺少长度时表示空请求体，而 HTTP/1.0 非 GET 仍可读取到连接关闭。",
+            "ru": "Без длины HTTP/1.1 получает пустое тело, а HTTP/1.0 не-GET всё ещё может читаться до закрытия."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "457792608ef4e27dd86c080366e10c252defb367",
+      "headline": {
+        "en": "DuckDB 2.0 no longer trips FPC exceptions or recursive decoding",
+        "fr": "DuckDB 2.0 n'entraîne plus d'exception FPC ni de décodage récursif",
+        "zh": "DuckDB 2.0 不再触发 FPC 异常或递归解码",
+        "ru": "DuckDB 2.0 больше не вызывает исключения FPC и рекурсивное декодирование"
+      },
+      "category": "compat",
+      "severity": "high",
+      "what_changed": {
+        "en": "The DuckDB wrappers surround open, query, prepare, execute, result fetching and Appender EndRow, Flush and Close with SetFpuFlags and ResetFpuFlags because DuckDB worker threads inherit the caller's FPU mask. The type map adds TIMESTAMPTZ_NS as ftDate and GEOMETRY as ftBlob/WKB. Unknown logical types now raise ESqlDBDuckDB instead of bouncing between DuckDBVectorValueToText and DuckDBVectorValueToJson until stack overflow.",
+        "fr": "Les wrappers DuckDB encadrent open, query, prepare, execute, la lecture des résultats ainsi que Appender EndRow, Flush et Close par SetFpuFlags et ResetFpuFlags, car les threads DuckDB héritent du masque FPU de l'appelant. Le mapping ajoute TIMESTAMPTZ_NS en ftDate et GEOMETRY en ftBlob/WKB. Les types logiques inconnus lèvent désormais ESqlDBDuckDB au lieu de rebondir entre DuckDBVectorValueToText et DuckDBVectorValueToJson jusqu'au débordement de pile.",
+        "zh": "DuckDB 包装层会在 open、query、prepare、execute、结果读取以及 Appender EndRow、Flush、Close 周围调用 SetFpuFlags 与 ResetFpuFlags，因为 DuckDB 工作线程会继承调用方的 FPU 掩码。类型映射新增 TIMESTAMPTZ_NS 到 ftDate、GEOMETRY 到 ftBlob/WKB。未知逻辑类型现在会抛出 ESqlDBDuckDB，而不是在 DuckDBVectorValueToText 与 DuckDBVectorValueToJson 之间递归直至栈溢出。",
+        "ru": "Обёртки DuckDB вызывают SetFpuFlags и ResetFpuFlags вокруг open, query, prepare, execute, чтения результатов и Appender EndRow, Flush, Close, потому что рабочие потоки наследуют маску FPU вызывающего кода. TIMESTAMPTZ_NS отображается в ftDate, GEOMETRY — в ftBlob/WKB. Неизвестный тип теперь вызывает ESqlDBDuckDB вместо рекурсии между DuckDBVectorValueToText и DuckDBVectorValueToJson до переполнения стека."
+      },
+      "impact": {
+        "en": "FPC configurations with the default unmasked exceptions no longer raise EInvalidOp merely by opening or using DuckDB 2.0. TIMESTAMPTZ_NS and GEOMETRY columns become readable with their expected mORMot field types, and unsupported types fail explicitly instead of crashing through stack exhaustion. Delphi also receives the new type mappings, while existing supported types keep their behavior.",
+        "fr": "Les configurations FPC avec exceptions non masquées par défaut ne lèvent plus EInvalidOp lors de l'ouverture ou de l'utilisation de DuckDB 2.0. Les colonnes TIMESTAMPTZ_NS et GEOMETRY deviennent lisibles avec les types mORMot attendus, et les types non pris en charge échouent explicitement au lieu de provoquer un débordement de pile. Delphi reçoit aussi les nouveaux mappings sans changer les types déjà pris en charge.",
+        "zh": "使用默认未屏蔽异常的 FPC 配置在打开或使用 DuckDB 2.0 时不再仅因 FPU 状态抛出 EInvalidOp。TIMESTAMPTZ_NS 与 GEOMETRY 列可按预期 mORMot 字段类型读取，不支持的类型会明确失败而不是栈耗尽崩溃。Delphi 同样获得新类型映射，既有支持类型行为不变。",
+        "ru": "FPC с исключениями FPU без маски по умолчанию больше не вызывает EInvalidOp при открытии или использовании DuckDB 2.0. TIMESTAMPTZ_NS и GEOMETRY читаются с ожидаемыми типами mORMot, а неподдерживаемый тип завершается явной ошибкой вместо переполнения стека. Delphi также получает новые отображения без изменения прежних поддерживаемых типов."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade DuckDB 2.0 backends and run open, prepare, execute, fetch and Appender tests under the same Delphi or FPC FPU settings used in production.",
+        "fr": "Mettez à jour les backends DuckDB 2.0 et testez open, prepare, execute, fetch et Appender avec les mêmes réglages FPU Delphi ou FPC qu'en production.",
+        "zh": "升级 DuckDB 2.0 后端，并在生产使用的 Delphi 或 FPC FPU 设置下测试 open、prepare、execute、fetch 和 Appender。",
+        "ru": "Обновите backend DuckDB 2.0 и проверьте open, prepare, execute, fetch и Appender с теми же настройками FPU Delphi или FPC, что и в production."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb",
+        "test.db.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DUCKDB_TYPE_GEOMETRY, DUCKDB_TYPE_VARIANT, DUCKDB_TYPE_TIMESTAMP_TZ_NS",
+          "change": "added",
+          "note": {
+            "en": "Adds the DuckDB 2.0 logical type identifiers 40, 41 and 42 to mormot.db.raw.duckdb.",
+            "fr": "Ajoute les identifiants de types logiques DuckDB 2.0 40, 41 et 42 dans mormot.db.raw.duckdb.",
+            "zh": "在 mormot.db.raw.duckdb 中新增 DuckDB 2.0 逻辑类型标识 40、41 和 42。",
+            "ru": "В mormot.db.raw.duckdb добавлены идентификаторы логических типов DuckDB 2.0: 40, 41 и 42."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "027e139e8dca31c176c7c87e46e25a8d9e2060f3",
+      "headline": {
+        "en": "DuckDB VARIANT results are reissued as JSON instead of crashing",
+        "fr": "Les résultats DuckDB VARIANT sont réémis en JSON au lieu d'échouer",
+        "zh": "DuckDB VARIANT 结果改以 JSON 返回而不再崩溃",
+        "ru": "Результаты DuckDB VARIANT повторно выдаются как JSON без сбоя"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "After ExecuteStmt, TSqlDBDuckDBStatement recursively detects VARIANT in each logical type. It then rebuilds the SELECT with positional #n references and wraps affected columns in NULLIF(#n::JSON, 'null'::JSON), releases the first result, prepares the wrapper and executes it again. Positional references preserve duplicate column names, and SQL NULL remains null rather than JSON 'null'.",
+        "fr": "Après ExecuteStmt, TSqlDBDuckDBStatement détecte récursivement VARIANT dans chaque type logique. Il reconstruit le SELECT avec des références positionnelles #n, enveloppe les colonnes concernées dans NULLIF(#n::JSON, 'null'::JSON), libère le premier résultat, prépare le wrapper puis l'exécute de nouveau. Les références positionnelles conservent les noms de colonnes dupliqués et SQL NULL reste null au lieu du JSON 'null'.",
+        "zh": "ExecuteStmt 之后，TSqlDBDuckDBStatement 会递归检测各逻辑类型中的 VARIANT。随后它使用位置引用 #n 重建 SELECT，把相关列包装为 NULLIF(#n::JSON, 'null'::JSON)，释放首次结果，再准备并执行包装查询。位置引用支持重复列名，SQL NULL 仍保持 null，而不是 JSON 'null'。",
+        "ru": "После ExecuteStmt TSqlDBDuckDBStatement рекурсивно ищет VARIANT в логическом типе. Затем SELECT перестраивается с позиционными ссылками #n, нужные столбцы оборачиваются в NULLIF(#n::JSON, 'null'::JSON), первый результат освобождается, и обёртка готовится и выполняется снова. Позиционные ссылки допускают одинаковые имена, а SQL NULL остаётся null, не JSON 'null'."
+      },
+      "impact": {
+        "en": "SELECT statements containing top-level or nested VARIANT columns now return canonical JSON through ColumnUtf8 instead of an unsupported-type error, recursion or driver crash. A VARIANT NULL is exposed as SQL NULL. Multi-statement direct SQL still rejects VARIANT and tells the caller to cast it to JSON, so such calls need an explicit SQL cast.",
+        "fr": "Les SELECT contenant des colonnes VARIANT directes ou imbriquées renvoient maintenant du JSON canonique via ColumnUtf8 au lieu d'une erreur de type non pris en charge, d'une récursion ou d'un crash du pilote. Un VARIANT NULL devient SQL NULL. Le SQL direct multi-instructions refuse toujours VARIANT et demande un cast JSON explicite.",
+        "zh": "包含顶层或嵌套 VARIANT 列的 SELECT 现在会通过 ColumnUtf8 返回规范 JSON，而不是类型不支持错误、递归或驱动崩溃。VARIANT NULL 会表现为 SQL NULL。多语句直接 SQL 仍会拒绝 VARIANT，并要求调用方显式转换为 JSON。",
+        "ru": "SELECT с верхнеуровневым или вложенным VARIANT теперь возвращает канонический JSON через ColumnUtf8 вместо ошибки типа, рекурсии или сбоя драйвера. VARIANT NULL представлен как SQL NULL. Прямой многооператорный SQL по-прежнему отклоняет VARIANT и требует явного cast в JSON."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade users of DuckDB VARIANT, verify JSON and NULL handling in cached statements, and add an explicit ::JSON cast to any multi-statement direct query that exposes VARIANT.",
+        "fr": "Mettez à jour les usages de DuckDB VARIANT, vérifiez le traitement JSON et NULL dans les requêtes préparées en cache, et ajoutez un cast ::JSON explicite aux requêtes directes multi-instructions exposant VARIANT.",
+        "zh": "升级使用 DuckDB VARIANT 的后端，验证缓存语句中的 JSON 与 NULL 处理，并为暴露 VARIANT 的多语句直接查询添加显式 ::JSON 转换。",
+        "ru": "Обновите пользователей DuckDB VARIANT, проверьте JSON и NULL в кэшированных запросах и добавьте явный ::JSON к прямому многооператорному запросу с VARIANT."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb",
+        "test.db.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckDBTypeHasVariant",
+          "change": "added",
+          "note": {
+            "en": "Reports whether TDuckDBTypeInfo is VARIANT or contains a nested VARIANT.",
+            "fr": "Indique si TDuckDBTypeInfo est un VARIANT ou contient un VARIANT imbriqué.",
+            "zh": "判断 TDuckDBTypeInfo 是否为 VARIANT 或包含嵌套 VARIANT。",
+            "ru": "Проверяет, является ли TDuckDBTypeInfo VARIANT или содержит вложенный VARIANT."
+          }
+        },
+        {
+          "symbol": "DuckDBVariantSql",
+          "change": "added",
+          "note": {
+            "en": "Builds the positional wrapper SELECT used to convert selected VARIANT columns to JSON.",
+            "fr": "Construit le SELECT positionnel qui convertit les colonnes VARIANT sélectionnées en JSON.",
+            "zh": "构建位置式包装 SELECT，将指定 VARIANT 列转换为 JSON。",
+            "ru": "Строит позиционный SELECT-обёртку для преобразования выбранных VARIANT в JSON."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBStatement VARIANT result handling",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "VARIANT result columns are now exposed as JSON text, with VARIANT NULL mapped to SQL NULL.",
+            "fr": "Les colonnes VARIANT sont maintenant exposées en texte JSON et VARIANT NULL devient SQL NULL.",
+            "zh": "VARIANT 结果列现在以 JSON 文本公开，VARIANT NULL 映射为 SQL NULL。",
+            "ru": "Столбцы VARIANT теперь выдаются как текст JSON, а VARIANT NULL отображается в SQL NULL."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e95fbde4f9d33c21868cfcece9737c9ac88335ef",
+      "headline": {
+        "en": "The PDF unit compiles again after a partial merge rollback",
+        "fr": "L'unité PDF compile de nouveau après un merge partiel",
+        "zh": "PDF 单元在不完整合并回退后重新可编译",
+        "ru": "PDF-модуль снова компилируется после неполного слияния"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The commit reverses 15 EMF renderer hunks accidentally reintroduced by the PDF feature-branch merge. It removes stale fInLined references and fNewPath resets, restores the null-pen and ended-path behavior from fixes #695 and #696, and restores EmfNullPenLines, EmfLineAfterEndedPath, the expected rendering hash and ScreenLogPixels := 96 in test.ui.pdf.",
+        "fr": "Le commit annule 15 hunks du moteur EMF réintroduits par erreur lors du merge de la branche PDF. Il supprime les références obsolètes à fInLined et les remises à zéro de fNewPath, restaure le comportement du stylo nul et des chemins terminés des correctifs #695 et #696, ainsi que EmfNullPenLines, EmfLineAfterEndedPath, le hash attendu et ScreenLogPixels := 96 dans test.ui.pdf.",
+        "zh": "该提交撤销 PDF 功能分支合并时误带回的 15 个 EMF 渲染器代码块。它移除过时的 fInLined 引用和 fNewPath 重置，恢复 #695、#696 的空画笔与已结束路径行为，并在 test.ui.pdf 中恢复 EmfNullPenLines、EmfLineAfterEndedPath、预期渲染哈希及 ScreenLogPixels := 96。",
+        "ru": "Коммит отменяет 15 фрагментов EMF-рендерера, случайно возвращённых слиянием PDF-ветки. Удалены устаревшие обращения к fInLined и сбросы fNewPath, восстановлено поведение нулевого пера и завершённых путей из #695/#696, а в test.ui.pdf возвращены EmfNullPenLines, EmfLineAfterEndedPath, ожидаемый hash и ScreenLogPixels := 96."
+      },
+      "impact": {
+        "en": "The preceding merged PDF revision failed to compile at eleven fInLined references, so any Delphi or FPC project importing mormot.ui.pdf was blocked before runtime. This commit restores compilation and the intended EMF path behavior while keeping the AES-256 and PDF 2.0 additions from the branch.",
+        "fr": "La révision PDF fusionnée précédente ne compilait pas à onze références fInLined ; tout projet Delphi ou FPC important mormot.ui.pdf était donc bloqué avant l'exécution. Ce commit restaure la compilation et le comportement EMF prévu tout en conservant AES-256 et PDF 2.0.",
+        "zh": "此前合并的 PDF 版本在 11 处 fInLined 引用上编译失败，因此任何引用 mormot.ui.pdf 的 Delphi 或 FPC 项目都会在运行前被阻塞。该提交恢复编译和预期 EMF 路径行为，同时保留 AES-256 与 PDF 2.0。",
+        "ru": "Предыдущая слитая PDF-ревизия не компилировалась в одиннадцати обращениях к fInLined, поэтому любой проект Delphi или FPC с mormot.ui.pdf останавливался до запуска. Коммит возвращает компиляцию и ожидаемое поведение EMF, сохраняя AES-256 и PDF 2.0."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "If your tree includes the PDF feature merge c12b33766, move past this restoration commit and rebuild every target that imports mormot.ui.pdf.",
+        "fr": "Si votre arbre inclut le merge PDF c12b33766, dépassez ce commit de restauration et reconstruisez toutes les cibles important mormot.ui.pdf.",
+        "zh": "如果代码树包含 PDF 功能合并 c12b33766，请升级到此恢复提交之后，并重新构建所有引用 mormot.ui.pdf 的目标。",
+        "ru": "Если дерево содержит PDF-слияние c12b33766, перейдите как минимум за этот восстановительный коммит и пересоберите все цели с mormot.ui.pdf."
+      },
+      "units": [
+        "mormot.ui.pdf",
+        "test.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f11fac11f7865e6c3123f6bc5e9e8724aa72caab",
+      "headline": {
+        "en": "FPC AES-256 PDF setup no longer writes into literal passwords",
+        "fr": "La préparation PDF AES-256 sous FPC n'écrit plus dans les mots de passe littéraux",
+        "zh": "FPC 的 AES-256 PDF 初始化不再写入字面量密码",
+        "ru": "Настройка AES-256 PDF под FPC больше не пишет в литералы паролей"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TPdfEncryptionAes256.AttachDocument replaces FillCharFast(pointer(usr)^, ...) and the equivalent owner-password wipe with FillZero(RawByteString(...)). Under FPC, StringToUtf8 may return the caller's AnsiString literal directly; FillZero clears only a uniquely referenced writable string and skips constants.",
+        "fr": "TPdfEncryptionAes256.AttachDocument remplace FillCharFast(pointer(usr)^, ...) et l'effacement équivalent du mot de passe propriétaire par FillZero(RawByteString(...)). Sous FPC, StringToUtf8 peut renvoyer directement le littéral AnsiString de l'appelant ; FillZero n'efface qu'une chaîne modifiable à référence unique et ignore les constantes.",
+        "zh": "TPdfEncryptionAes256.AttachDocument 将 FillCharFast(pointer(usr)^, ...) 以及所有者密码的同类清除改为 FillZero(RawByteString(...))。在 FPC 下，StringToUtf8 可能直接返回调用方的 AnsiString 字面量；FillZero 只清除引用计数为一的可写字符串，并跳过常量。",
+        "ru": "TPdfEncryptionAes256.AttachDocument заменяет FillCharFast(pointer(usr)^, ...) и такую же очистку пароля владельца на FillZero(RawByteString(...)). В FPC StringToUtf8 может вернуть литерал AnsiString вызывающего кода; FillZero очищает только изменяемую строку с одной ссылкой и пропускает константу."
+      },
+      "impact": {
+        "en": "Every tested FPC target previously raised an access violation when EncryptionAes256 or Pdf20File received literal passwords such as 'owner'; Delphi passed. FPC PDF producers can now use AES-256 and PDF 2.0 with constant passwords without writing into read-only memory. The change does not alter the encrypted document format.",
+        "fr": "Toutes les cibles FPC testées levaient auparavant une violation d'accès lorsque EncryptionAes256 ou Pdf20File recevait un mot de passe littéral comme 'owner' ; Delphi fonctionnait. Les producteurs PDF FPC peuvent désormais utiliser AES-256 et PDF 2.0 avec des mots de passe constants sans écrire en mémoire protégée. Le format chiffré ne change pas.",
+        "zh": "此前所有测试过的 FPC 目标在 EncryptionAes256 或 Pdf20File 接收 'owner' 等字面量密码时都会发生访问冲突，而 Delphi 正常。FPC PDF 生成器现在可使用常量密码进行 AES-256 与 PDF 2.0 输出，不会写入只读内存。加密文档格式不变。",
+        "ru": "Ранее все проверенные цели FPC получали access violation, когда EncryptionAes256 или Pdf20File принимал литерал вроде 'owner'; Delphi работал. Теперь FPC может создавать AES-256/PDF 2.0 с константными паролями без записи в read-only память. Формат зашифрованного документа не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade FPC PDF producers using AES-256 or Pdf20File and rerun encryption tests with literal, shared and dynamically built user and owner passwords.",
+        "fr": "Mettez à jour les producteurs PDF FPC utilisant AES-256 ou Pdf20File et relancez les tests avec des mots de passe utilisateur et propriétaire littéraux, partagés et construits dynamiquement.",
+        "zh": "升级使用 AES-256 或 Pdf20File 的 FPC PDF 生成器，并分别使用字面量、共享和动态构建的用户及所有者密码重新测试。",
+        "ru": "Обновите FPC-генераторы PDF с AES-256 или Pdf20File и повторите тесты с литеральными, общими и динамически созданными паролями пользователя и владельца."
+      },
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fb61df56ba88ac2978081f54823aaeff7648e331",
+      "headline": {
+        "en": "EMF text inside a GDI path now follows the path paint operation",
+        "fr": "Le texte EMF dans un chemin GDI suit maintenant sa peinture",
+        "zh": "GDI 路径内的 EMF 文本现在遵循路径绘制操作",
+        "ru": "Текст EMF внутри GDI-пути теперь следует операции рисования пути"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnum records EMR_EXTTEXTOUTA/W encountered between BeginPath and EndPath in a separate fPathText stream. FillPath, StrokePath and StrokeAndFillPath replay that text afterward with PDF text render modes 0, 1 or 2 and the selected brush or pen; AbortPath drops it. PathTextOut also adds opaque backgrounds, ETO_OPAQUE rectangles, underline and strike-out geometry to the path while ETO_CLIPPED contributes no text.",
+        "fr": "TPdfEnum enregistre les EMR_EXTTEXTOUTA/W rencontrés entre BeginPath et EndPath dans un flux fPathText distinct. FillPath, StrokePath et StrokeAndFillPath rejouent ensuite ce texte avec les modes PDF 0, 1 ou 2 et le pinceau ou stylo sélectionné ; AbortPath l'abandonne. PathTextOut ajoute aussi au chemin les fonds opaques, rectangles ETO_OPAQUE, soulignements et barrés, tandis que ETO_CLIPPED n'ajoute aucun texte.",
+        "zh": "TPdfEnum 把 BeginPath 与 EndPath 之间遇到的 EMR_EXTTEXTOUTA/W 记录到独立的 fPathText 流。FillPath、StrokePath 和 StrokeAndFillPath 随后用 PDF 文本渲染模式 0、1、2 以及所选画刷或画笔重放文本；AbortPath 会丢弃文本。PathTextOut 还会把不透明背景、ETO_OPAQUE 矩形、下划线和删除线几何加入路径，而 ETO_CLIPPED 不添加文本。",
+        "ru": "TPdfEnum записывает EMR_EXTTEXTOUTA/W между BeginPath и EndPath в отдельный поток fPathText. FillPath, StrokePath и StrokeAndFillPath затем воспроизводят текст в режимах PDF 0, 1 или 2 выбранной кистью или пером; AbortPath удаляет его. PathTextOut также добавляет в путь непрозрачный фон, ETO_OPAQUE, подчёркивание и зачёркивание, а ETO_CLIPPED не добавляет текст."
+      },
+      "impact": {
+        "en": "Converted EMF previously drew path text immediately in the text color: aborted paths still showed it, StrokePath filled it, and FillPath ignored the brush color. Generated PDFs now follow observed Windows GDI behavior for those cases. The change affects document appearance only when EMF text is recorded inside a GDI path; normal PDF text remains unchanged on Delphi and FPC.",
+        "fr": "La conversion EMF dessinait auparavant ce texte immédiatement dans sa couleur : un chemin abandonné l'affichait encore, StrokePath le remplissait et FillPath ignorait la couleur du pinceau. Les PDF suivent maintenant le comportement GDI Windows observé. Seul le texte EMF enregistré dans un chemin GDI change ; le texte PDF normal reste identique sous Delphi et FPC.",
+        "zh": "以前 EMF 转换会立即用文本颜色绘制路径中的文字：被放弃的路径仍显示文字，StrokePath 会填充文字，FillPath 则忽略画刷颜色。生成的 PDF 现在遵循实测 Windows GDI 行为。只有记录在 GDI 路径中的 EMF 文本外观会变化；Delphi 与 FPC 的普通 PDF 文本不变。",
+        "ru": "Раньше EMF-конвертер сразу рисовал текст цветом текста: AbortPath оставлял его видимым, StrokePath заполнял, а FillPath игнорировал цвет кисти. Теперь PDF следует наблюдаемому поведению Windows GDI. Меняется только текст EMF внутри GDI-пути; обычный PDF-текст одинаков на Delphi и FPC."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Regenerate representative PDFs containing EMF text in FillPath, StrokePath, StrokeAndFillPath and AbortPath, then compare the output with Windows GDI rendering.",
+        "fr": "Régénérez des PDF représentatifs contenant du texte EMF dans FillPath, StrokePath, StrokeAndFillPath et AbortPath, puis comparez-les au rendu GDI Windows.",
+        "zh": "重新生成包含 FillPath、StrokePath、StrokeAndFillPath 和 AbortPath 中 EMF 文本的代表性 PDF，并与 Windows GDI 渲染结果比较。",
+        "ru": "Пересоздайте типичные PDF с текстом EMF в FillPath, StrokePath, StrokeAndFillPath и AbortPath и сравните с рендерингом Windows GDI."
+      },
+      "units": [
+        "mormot.ui.pdf",
+        "test.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9f798fe6f3acffa3fe7b4239b1ef8809c9b6a3c7",
+      "headline": {
+        "en": "Windows Authenticode verification moves to the OS security unit",
+        "fr": "La vérification Authenticode Windows passe dans l'unité de sécurité OS",
+        "zh": "Windows Authenticode 验证移至 OS 安全单元",
+        "ru": "Проверка Windows Authenticode перенесена в модуль безопасности OS"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TWinVerifyStatus, WinVerifyExeSignature and IsExeSignatureValid move unchanged from the Windows section of mormot.misc.pecoff to mormot.core.os.security, together with the WinVerifyTrust records, constants and implementation. mormot.misc.pecoff keeps the cross-platform GetExeSignature and IsExeSigned PE parsing functions and removes its FPC PACKRECORDS workaround.",
+        "fr": "TWinVerifyStatus, WinVerifyExeSignature et IsExeSignatureValid passent sans changement de la section Windows de mormot.misc.pecoff à mormot.core.os.security, avec les enregistrements, constantes et l'implémentation WinVerifyTrust. mormot.misc.pecoff conserve GetExeSignature et IsExeSigned, utilisables sur toutes les plateformes, et retire son contournement FPC PACKRECORDS.",
+        "zh": "TWinVerifyStatus、WinVerifyExeSignature 和 IsExeSignatureValid 连同 WinVerifyTrust 记录、常量及实现，从 mormot.misc.pecoff 的 Windows 部分原样移至 mormot.core.os.security。mormot.misc.pecoff 保留跨平台的 GetExeSignature 与 IsExeSigned PE 解析函数，并移除 FPC PACKRECORDS 变通。",
+        "ru": "TWinVerifyStatus, WinVerifyExeSignature и IsExeSignatureValid без изменения перенесены из Windows-раздела mormot.misc.pecoff в mormot.core.os.security вместе с записями, константами и реализацией WinVerifyTrust. В mormot.misc.pecoff остаются кроссплатформенные GetExeSignature и IsExeSigned, а обход FPC PACKRECORDS удалён."
+      },
+      "impact": {
+        "en": "Windows code that imported only mormot.misc.pecoff to call the verification functions will no longer compile until mormot.core.os.security is added to uses. Function signatures and runtime verification behavior are unchanged. Code using GetExeSignature or IsExeSigned remains on mormot.misc.pecoff, and non-Windows builds do not gain the Windows-only API.",
+        "fr": "Le code Windows qui importait seulement mormot.misc.pecoff pour appeler les fonctions de vérification ne compile plus tant que mormot.core.os.security n'est pas ajouté aux uses. Les signatures et le comportement restent identiques. GetExeSignature et IsExeSigned restent dans mormot.misc.pecoff, et les builds non Windows n'obtiennent pas cette API réservée à Windows.",
+        "zh": "仅导入 mormot.misc.pecoff 来调用验证函数的 Windows 代码将无法编译，直到在 uses 中加入 mormot.core.os.security。函数签名和运行时验证行为不变。GetExeSignature 与 IsExeSigned 仍位于 mormot.misc.pecoff，非 Windows 构建不会获得这组 Windows 专用 API。",
+        "ru": "Windows-код, импортировавший только mormot.misc.pecoff ради проверки, перестанет компилироваться, пока в uses не будет добавлен mormot.core.os.security. Сигнатуры и поведение проверки не меняются. GetExeSignature и IsExeSigned остаются в mormot.misc.pecoff, а не-Windows сборки не получают Windows-only API."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for TWinVerifyStatus, WinVerifyExeSignature and IsExeSignatureValid. Add mormot.core.os.security to the uses clause of each Windows unit that references them; keep mormot.misc.pecoff when GetExeSignature or IsExeSigned is also used.",
+        "fr": "Recherchez TWinVerifyStatus, WinVerifyExeSignature et IsExeSignatureValid. Ajoutez mormot.core.os.security aux uses de chaque unité Windows qui les référence ; gardez mormot.misc.pecoff si GetExeSignature ou IsExeSigned est aussi utilisé.",
+        "zh": "搜索 TWinVerifyStatus、WinVerifyExeSignature 和 IsExeSignatureValid。在引用它们的每个 Windows 单元 uses 中加入 mormot.core.os.security；若还使用 GetExeSignature 或 IsExeSigned，则继续保留 mormot.misc.pecoff。",
+        "ru": "Найдите TWinVerifyStatus, WinVerifyExeSignature и IsExeSignatureValid. Добавьте mormot.core.os.security в uses каждого Windows-модуля; оставьте mormot.misc.pecoff, если также нужны GetExeSignature или IsExeSigned."
+      },
+      "units": [
+        "mormot.core.os.security",
+        "mormot.misc.pecoff"
+      ],
+      "api_changes": [
+        {
+          "symbol": "mormot.misc.pecoff.TWinVerifyStatus/WinVerifyExeSignature/IsExeSignatureValid",
+          "change": "removed",
+          "note": {
+            "en": "The Windows-only verification type and functions are no longer declared by mormot.misc.pecoff.",
+            "fr": "Le type et les fonctions de vérification réservés à Windows ne sont plus déclarés par mormot.misc.pecoff.",
+            "zh": "mormot.misc.pecoff 不再声明这些 Windows 专用验证类型和函数。",
+            "ru": "Windows-only тип и функции проверки больше не объявлены в mormot.misc.pecoff."
+          }
+        },
+        {
+          "symbol": "mormot.core.os.security.TWinVerifyStatus/WinVerifyExeSignature/IsExeSignatureValid",
+          "change": "added",
+          "note": {
+            "en": "The same Windows-only public declarations now live in mormot.core.os.security.",
+            "fr": "Les mêmes déclarations publiques réservées à Windows se trouvent désormais dans mormot.core.os.security.",
+            "zh": "相同的 Windows 专用公共声明现在位于 mormot.core.os.security。",
+            "ru": "Те же публичные Windows-only объявления теперь находятся в mormot.core.os.security."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
