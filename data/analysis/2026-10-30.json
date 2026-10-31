@@ -1,0 +1,708 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-10-30",
+  "edition_title": {
+    "en": "DuckDB gains a native Quack client and closes its merge regressions",
+    "fr": "DuckDB reçoit un client Quack natif et corrige les régressions de fusion",
+    "zh": "DuckDB 新增原生 Quack 客户端并修复合并回归",
+    "ru": "DuckDB получил нативный клиент Quack и исправления регрессий слияния"
+  },
+  "intro": {
+    "en": "A pure Pascal Quack client now lets Delphi and FPC backends query a remote DuckDB server over HTTP without shipping the DuckDB library on the client. The code was consolidated into the existing DuckDB units, then hardened around value conversion, nanosecond timestamps and VARIANT columns. The final commit is important: it removes duplicate functions left by the branch merges and restores compilation of mormot.db.raw.duckdb.",
+    "fr": "Un client Quack en Pascal pur permet maintenant aux backends Delphi et FPC d'interroger un serveur DuckDB distant par HTTP sans livrer la bibliothèque DuckDB côté client. Le code a été regroupé dans les unités DuckDB existantes, puis renforcé pour les conversions de valeurs, les timestamps en nanosecondes et les colonnes VARIANT. Le dernier commit est important : il supprime des fonctions dupliquées par les fusions de branches et rétablit la compilation de mormot.db.raw.duckdb.",
+    "zh": "纯 Pascal 的 Quack 客户端现在可让 Delphi 和 FPC 后端通过 HTTP 查询远程 DuckDB 服务器，而客户端无需携带 DuckDB 库。相关代码随后合并到现有 DuckDB 单元，并加强了数值转换、纳秒时间戳和 VARIANT 列处理。最后一个提交很重要：它删除分支合并留下的重复函数，使 mormot.db.raw.duckdb 恢复编译。",
+    "ru": "Чистый Pascal-клиент Quack теперь позволяет backend на Delphi и FPC обращаться к удалённому DuckDB по HTTP без библиотеки DuckDB на клиенте. Затем код объединили с существующими модулями DuckDB и укрепили преобразование значений, наносекундные timestamp и VARIANT. Последний коммит важен: он удаляет дубли функций после слияния веток и снова делает mormot.db.raw.duckdb компилируемым."
+  },
+  "tldr": {
+    "en": [
+      "TSqlDBQuackConnectionProperties, TSqlDBQuackConnection and TSqlDBQuackStatement provide a native HTTP client for Quack protocol versions 1 and 3 without a client-side DuckDB library.",
+      "The final public surface lives in mormot.db.raw.duckdb and mormot.db.sql.duckdb; the short-lived mormot.db.raw.quack and mormot.db.sql.quack units were removed during consolidation.",
+      "Quack array binding is rejected instead of executing one statement per row; ORM batches use MultipleValuesInsert, while direct callers should use multi-value SQL or a transaction.",
+      "QTYPE_TIMESTAMP_TZ_NS now preserves nanosecond scaling, and embedded DuckDB plus Quack reissue VARIANT result columns as JSON with duplicate names and NULL handled.",
+      "Do not stop on the intermediate merge: duplicated DuckDBTypeHasVariant and DuckDBVariantSql implementations made mormot.db.raw.duckdb fail to compile until 69900d77."
+    ],
+    "fr": [
+      "TSqlDBQuackConnectionProperties, TSqlDBQuackConnection et TSqlDBQuackStatement fournissent un client HTTP natif pour les protocoles Quack 1 et 3 sans bibliothèque DuckDB côté client.",
+      "La surface publique finale se trouve dans mormot.db.raw.duckdb et mormot.db.sql.duckdb ; les unités éphémères mormot.db.raw.quack et mormot.db.sql.quack ont été supprimées lors du regroupement.",
+      "Le binding de tableaux Quack est refusé au lieu d'exécuter une requête par ligne ; les lots ORM utilisent MultipleValuesInsert et les appels directs doivent employer un SQL multi-valeurs ou une transaction.",
+      "QTYPE_TIMESTAMP_TZ_NS conserve désormais l'échelle nanoseconde, et DuckDB embarqué comme Quack réémettent les colonnes VARIANT en JSON avec gestion des noms dupliqués et de NULL.",
+      "Ne restez pas sur la fusion intermédiaire : les implémentations dupliquées de DuckDBTypeHasVariant et DuckDBVariantSql empêchaient mormot.db.raw.duckdb de compiler avant 69900d77."
+    ],
+    "zh": [
+      "TSqlDBQuackConnectionProperties、TSqlDBQuackConnection 和 TSqlDBQuackStatement 提供原生 HTTP 客户端，支持 Quack 协议 1 与 3，客户端无需 DuckDB 库。",
+      "最终公共接口位于 mormot.db.raw.duckdb 和 mormot.db.sql.duckdb；整合时删除了短暂存在的 mormot.db.raw.quack 与 mormot.db.sql.quack。",
+      "Quack 数组绑定现在会被拒绝，不再逐行执行语句；ORM 批处理使用 MultipleValuesInsert，直接调用方应使用多值 SQL 或事务。",
+      "QTYPE_TIMESTAMP_TZ_NS 现在保留纳秒缩放，嵌入式 DuckDB 与 Quack 会把 VARIANT 结果列重新查询为 JSON，并处理重复列名和 NULL。",
+      "不要停留在中间合并版本：重复的 DuckDBTypeHasVariant 和 DuckDBVariantSql 实现会使 mormot.db.raw.duckdb 无法编译，直到 69900d77 才修复。"
+    ],
+    "ru": [
+      "TSqlDBQuackConnectionProperties, TSqlDBQuackConnection и TSqlDBQuackStatement реализуют нативный HTTP-клиент протоколов Quack 1 и 3 без библиотеки DuckDB на клиенте.",
+      "Итоговый публичный API находится в mormot.db.raw.duckdb и mormot.db.sql.duckdb; временные модули mormot.db.raw.quack и mormot.db.sql.quack удалены при объединении.",
+      "Quack теперь отклоняет array binding вместо отдельного запроса на каждую строку; ORM использует MultipleValuesInsert, а прямым вызовам нужен multi-value SQL или транзакция.",
+      "QTYPE_TIMESTAMP_TZ_NS сохраняет наносекундный масштаб, а embedded DuckDB и Quack повторно запрашивают VARIANT как JSON с поддержкой одинаковых имён и NULL.",
+      "Не останавливайтесь на промежуточном слиянии: дубли DuckDBTypeHasVariant и DuckDBVariantSql ломали компиляцию mormot.db.raw.duckdb до 69900d77."
+    ]
+  },
+  "risk_level": "worth-a-look",
+  "upgrade_advice": {
+    "en": "Land on merged revision 0186cd022309dcb6cd40b80f1b241f6bae4a0605, build 2.4.17677. Do not stop on merge 66d86995: it still contains duplicate DuckDBTypeHasVariant and DuckDBVariantSql implementations and does not compile. Quack users should also include d8ee7c1c for nanosecond timestamps and 16b6bc3b for VARIANT results. The raw payload records no later superseding fix.",
+    "fr": "Adoptez la révision fusionnée 0186cd022309dcb6cd40b80f1b241f6bae4a0605, build 2.4.17677. Ne restez pas sur la fusion 66d86995 : elle contient encore des implémentations dupliquées de DuckDBTypeHasVariant et DuckDBVariantSql et ne compile pas. Les utilisateurs de Quack doivent aussi inclure d8ee7c1c pour les timestamps en nanosecondes et 16b6bc3b pour les résultats VARIANT. Le payload brut ne signale aucun correctif successeur ultérieur.",
+    "zh": "建议采用已合并修订 0186cd022309dcb6cd40b80f1b241f6bae4a0605，即 build 2.4.17677。不要停留在合并提交 66d86995：其中仍有重复的 DuckDBTypeHasVariant 和 DuckDBVariantSql 实现，无法编译。Quack 用户还应包含修复纳秒时间戳的 d8ee7c1c 和修复 VARIANT 结果的 16b6bc3b。原始 payload 未记录后续替代修复。",
+    "ru": "Переходите на слитую ревизию 0186cd022309dcb6cd40b80f1b241f6bae4a0605, build 2.4.17677. Не останавливайтесь на merge 66d86995: там остаются дубли DuckDBTypeHasVariant и DuckDBVariantSql, поэтому модуль не компилируется. Пользователям Quack также нужны d8ee7c1c для наносекундных timestamp и 16b6bc3b для VARIANT. В raw payload нет более позднего исправления-преемника."
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Native Quack client",
+        "fr": "Client Quack natif",
+        "zh": "原生 Quack 客户端",
+        "ru": "Нативный клиент Quack"
+      },
+      "summary": {
+        "en": "The sequence introduces the HTTP wire decoder and SQL connection classes, removes inefficient array binding, merges the code into the DuckDB units, then shares conversion helpers between embedded and remote result paths.",
+        "fr": "La séquence introduit le décodeur HTTP et les classes de connexion SQL, supprime le binding de tableaux inefficace, fusionne le code dans les unités DuckDB puis partage les conversions entre résultats embarqués et distants.",
+        "zh": "这一系列提交引入 HTTP 线路解码器和 SQL 连接类，移除低效数组绑定，把代码并入 DuckDB 单元，并在嵌入式与远程结果路径之间共享转换辅助函数。",
+        "ru": "Серия добавляет HTTP-декодер и SQL-классы подключения, убирает неэффективный array binding, переносит код в модули DuckDB и разделяет преобразования между embedded и remote путями."
+      },
+      "shas": [
+        "c8a85ae4d2c5d4e16479c51445d17d4e7330a5f5",
+        "0bfb4de6c5c20342ec150706558b5ed16f5e4209",
+        "d30776f3a5eb683b7676b4a3d2e988d4c99ea129",
+        "530dc7202df44a2abfd3467c74af331572208838",
+        "f85db8fd9d495672bdae2f4d61557da8bf8d013c",
+        "23c49456aa341f892fd306cce262d7fbdb2e6cfa",
+        "35d3606b53a7037e2b84fec77c8b6a54f2d495c6",
+        "f9fc67334c082874cb37a573fc20453c8ebad945"
+      ]
+    },
+    {
+      "title": {
+        "en": "Quack result correctness",
+        "fr": "Exactitude des résultats Quack",
+        "zh": "Quack 结果正确性",
+        "ru": "Корректность результатов Quack"
+      },
+      "summary": {
+        "en": "TIMESTAMPTZ_NS is mapped to its nanosecond DuckDB type, while VARIANT columns are detected recursively and reissued as JSON for both embedded and remote statements.",
+        "fr": "TIMESTAMPTZ_NS est associé à son type DuckDB en nanosecondes, tandis que les colonnes VARIANT sont détectées récursivement et réémises en JSON pour les requêtes embarquées et distantes.",
+        "zh": "TIMESTAMPTZ_NS 映射到 DuckDB 纳秒类型，VARIANT 列则通过递归检测，并在嵌入式与远程语句中重新查询为 JSON。",
+        "ru": "TIMESTAMPTZ_NS отображается в наносекундный тип DuckDB, а VARIANT рекурсивно обнаруживается и повторно запрашивается как JSON для embedded и remote statements."
+      },
+      "shas": [
+        "d8ee7c1c249f25b6ad88ccf2d0b26308d83350da",
+        "16b6bc3bf51f77656fe6d695d455542271a2fa52"
+      ]
+    },
+    {
+      "title": {
+        "en": "Merge repair",
+        "fr": "Réparation après fusion",
+        "zh": "合并修复",
+        "ru": "Исправление после слияния"
+      },
+      "summary": {
+        "en": "Parallel DuckDB work left two implementation copies of the VARIANT helpers after merging. Removing the second copy restores compilation without changing their final behavior.",
+        "fr": "Des travaux DuckDB parallèles ont laissé deux copies des helpers VARIANT après fusion. La suppression de la seconde copie rétablit la compilation sans changer leur comportement final.",
+        "zh": "并行的 DuckDB 开发在合并后留下两份 VARIANT 辅助函数实现。删除第二份实现恢复了编译，最终行为不变。",
+        "ru": "Параллельная работа над DuckDB оставила после merge по две реализации VARIANT helper. Удаление второй копии восстанавливает компиляцию без изменения итогового поведения."
+      },
+      "shas": [
+        "69900d779312490f3b8e6b63df08c5ab7b5837b0"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "sha": "93ce8f7a119982a8bd10bea0452aa3bc6254bdf5",
+      "headline": {
+        "en": "DuckDB review rules are recorded for future contributors",
+        "fr": "Les règles de revue DuckDB sont consignées pour les futurs contributeurs",
+        "zh": "DuckDB 评审规则已记录供后续贡献者使用",
+        "ru": "Правила ревью DuckDB сохранены для будущих участников"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "CLAUDE.md and src/db/CLAUDE.md document review guidance on API ownership, allocation, endian-safe reads, Pascal portability and SQL-driver testing. No Pascal source is changed.",
+        "fr": "CLAUDE.md et src/db/CLAUDE.md documentent les règles de revue sur la propriété des API, les allocations, les lectures compatibles endian, la portabilité Pascal et les tests des pilotes SQL. Aucun source Pascal ne change.",
+        "zh": "CLAUDE.md 与 src/db/CLAUDE.md 记录 API 所有权、内存分配、端序安全读取、Pascal 可移植性和 SQL 驱动测试的评审规则。Pascal 源码没有变化。",
+        "ru": "CLAUDE.md и src/db/CLAUDE.md описывают правила владения API, выделения памяти, endian-safe чтения, переносимости Pascal и тестов SQL-драйвера. Исходники Pascal не меняются."
+      },
+      "impact": {
+        "en": "There is no runtime, build or application-code impact for Delphi or FPC backends; this is contributor documentation only.",
+        "fr": "Aucun impact d'exécution, de build ni de code applicatif pour les backends Delphi ou FPC ; il s'agit uniquement de documentation pour les contributeurs.",
+        "zh": "对 Delphi 或 FPC 后端的运行时、构建和应用代码均无影响；这只是贡献者文档。",
+        "ru": "Для backend на Delphi или FPC нет влияния на runtime, build или прикладной код; это только документация для разработчиков."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c8a85ae4d2c5d4e16479c51445d17d4e7330a5f5",
+      "headline": {
+        "en": "Remote DuckDB queries no longer require a client-side DuckDB library",
+        "fr": "Les requêtes DuckDB distantes n'exigent plus de bibliothèque côté client",
+        "zh": "远程 DuckDB 查询不再需要客户端 DuckDB 库",
+        "ru": "Удалённые запросы DuckDB больше не требуют клиентской библиотеки"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The commit adds a pure Pascal Quack wire decoder and TSqlDBQuackConnectionProperties, TSqlDBQuackConnection and TSqlDBQuackStatement for protocol versions 1 and 3. TSqlDBDuckDBConnectionProperties also gains QuackServe and QuackAttach helpers.",
+        "fr": "Le commit ajoute un décodeur Quack en Pascal pur ainsi que TSqlDBQuackConnectionProperties, TSqlDBQuackConnection et TSqlDBQuackStatement pour les protocoles 1 et 3. TSqlDBDuckDBConnectionProperties reçoit aussi QuackServe et QuackAttach.",
+        "zh": "该提交新增纯 Pascal 的 Quack 线路解码器，以及支持协议 1 和 3 的 TSqlDBQuackConnectionProperties、TSqlDBQuackConnection 与 TSqlDBQuackStatement。TSqlDBDuckDBConnectionProperties 还新增 QuackServe 和 QuackAttach。",
+        "ru": "Коммит добавляет чистый Pascal-декодер Quack и классы TSqlDBQuackConnectionProperties, TSqlDBQuackConnection и TSqlDBQuackStatement для протоколов 1 и 3. TSqlDBDuckDBConnectionProperties также получает QuackServe и QuackAttach."
+      },
+      "impact": {
+        "en": "Delphi and FPC applications can use a remote DuckDB server over HTTP or HTTPS without loading the native DuckDB library locally. The final units differ from this first landing, so consumers should use the end-of-day revision.",
+        "fr": "Les applications Delphi et FPC peuvent utiliser un serveur DuckDB distant par HTTP ou HTTPS sans charger la bibliothèque native localement. Les unités finales diffèrent de ce premier dépôt ; il faut donc prendre la révision de fin de journée.",
+        "zh": "Delphi 与 FPC 应用可通过 HTTP 或 HTTPS 使用远程 DuckDB 服务器，而无需在本地加载原生 DuckDB 库。最终单元与首次落地不同，因此应采用当日最终修订。",
+        "ru": "Приложения Delphi и FPC могут работать с удалённым DuckDB по HTTP или HTTPS без локальной native-библиотеки. Итоговые модули отличаются от первого варианта, поэтому следует брать финальную ревизию дня."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Evaluate TSqlDBQuackConnectionProperties when a backend needs remote DuckDB access; use the final mormot.db.sql.duckdb unit, not the temporary mormot.db.sql.quack unit.",
+        "fr": "Évaluez TSqlDBQuackConnectionProperties pour un accès DuckDB distant ; utilisez l'unité finale mormot.db.sql.duckdb, pas l'unité temporaire mormot.db.sql.quack.",
+        "zh": "需要远程 DuckDB 访问时评估 TSqlDBQuackConnectionProperties；应使用最终的 mormot.db.sql.duckdb，而不是临时的 mormot.db.sql.quack。",
+        "ru": "Оцените TSqlDBQuackConnectionProperties для удалённого DuckDB; используйте итоговый mormot.db.sql.duckdb, а не временный mormot.db.sql.quack."
+      },
+      "units": [
+        "mormot.db.raw.quack",
+        "mormot.db.sql.quack",
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBQuackConnectionProperties/TSqlDBQuackConnection/TSqlDBQuackStatement",
+          "change": "added",
+          "note": {
+            "en": "Adds the public native Quack SQL client classes; their final declarations move to mormot.db.sql.duckdb later in the edition.",
+            "fr": "Ajoute les classes publiques du client SQL Quack ; leurs déclarations finales passent ensuite dans mormot.db.sql.duckdb.",
+            "zh": "新增原生 Quack SQL 客户端公共类；其最终声明稍后移至 mormot.db.sql.duckdb。",
+            "ru": "Добавляет публичные классы Quack SQL; позже их итоговые объявления переходят в mormot.db.sql.duckdb."
+          }
+        },
+        {
+          "symbol": "TSqlDBDuckDBConnectionProperties.QuackServe/QuackAttach",
+          "change": "added",
+          "note": {
+            "en": "Adds helpers to start a Quack server and attach a remote Quack endpoint.",
+            "fr": "Ajoute les helpers pour démarrer un serveur Quack et attacher un endpoint Quack distant.",
+            "zh": "新增启动 Quack 服务器和附加远程 Quack 端点的辅助方法。",
+            "ru": "Добавляет helper для запуска сервера Quack и подключения удалённого endpoint."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0bfb4de6c5c20342ec150706558b5ed16f5e4209",
+      "headline": {
+        "en": "Quack batch binding stops issuing one request per row",
+        "fr": "Le binding par lot Quack cesse d'émettre une requête par ligne",
+        "zh": "Quack 批量绑定不再逐行发送请求",
+        "ru": "Quack больше не отправляет по запросу на строку при batch binding"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBQuackStatement.ExecutePrepared now raises on BindArray instead of looping over rows in an implicit transaction. ORM batches fall through MultipleValuesInsert, and timestamp scaling plus DUCKDB_POW10 move into mormot.db.raw.duckdb for shared use.",
+        "fr": "TSqlDBQuackStatement.ExecutePrepared lève maintenant une erreur sur BindArray au lieu de boucler sur les lignes dans une transaction implicite. Les lots ORM passent par MultipleValuesInsert, tandis que l'échelle des timestamps et DUCKDB_POW10 sont partagées dans mormot.db.raw.duckdb.",
+        "zh": "TSqlDBQuackStatement.ExecutePrepared 现在会拒绝 BindArray，而不是在隐式事务中逐行循环。ORM 批处理改走 MultipleValuesInsert，时间戳缩放与 DUCKDB_POW10 则移入 mormot.db.raw.duckdb 供共享。",
+        "ru": "TSqlDBQuackStatement.ExecutePrepared теперь отклоняет BindArray вместо цикла по строкам в неявной транзакции. ORM batch использует MultipleValuesInsert, а масштаб timestamp и DUCKDB_POW10 вынесены в mormot.db.raw.duckdb."
+      },
+      "impact": {
+        "en": "Direct Quack callers using BindArray receive an exception and must use a multi-values INSERT or their own transaction. ORM batch inserts keep working and avoid the previous per-row network round trips.",
+        "fr": "Les appels Quack directs utilisant BindArray reçoivent une exception et doivent employer un INSERT multi-valeurs ou leur propre transaction. Les insertions ORM par lot continuent de fonctionner et évitent les allers-retours réseau par ligne.",
+        "zh": "直接使用 BindArray 的 Quack 调用会收到异常，必须改用多值 INSERT 或自行管理事务。ORM 批量插入仍可工作，并避免原先逐行网络往返。",
+        "ru": "Прямой вызов Quack с BindArray получает исключение и должен использовать multi-values INSERT или свою транзакцию. ORM batch продолжает работать без сетевого round trip на каждую строку."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Search direct Quack statement code for BindArray; replace it with MultipleValuesInsert, multi-values SQL or an explicit transaction.",
+        "fr": "Recherchez BindArray dans le code Quack direct ; remplacez-le par MultipleValuesInsert, un SQL multi-valeurs ou une transaction explicite.",
+        "zh": "在直接 Quack 语句代码中搜索 BindArray；改用 MultipleValuesInsert、多值 SQL 或显式事务。",
+        "ru": "Найдите BindArray в прямом Quack-коде и замените на MultipleValuesInsert, multi-values SQL или явную транзакцию."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb",
+        "mormot.db.sql.quack"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBQuackStatement.ExecutePrepared BindArray handling",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "BindArray now raises ESqlDBQuack instead of executing once per array row.",
+            "fr": "BindArray lève désormais ESqlDBQuack au lieu d'exécuter une fois par ligne.",
+            "zh": "BindArray 现在抛出 ESqlDBQuack，不再按数组行逐次执行。",
+            "ru": "BindArray теперь вызывает ESqlDBQuack вместо выполнения для каждой строки."
+          }
+        },
+        {
+          "symbol": "DuckTimestampMicros/DUCKDB_POW10",
+          "change": "added",
+          "note": {
+            "en": "Publishes shared timestamp scaling and decimal powers in mormot.db.raw.duckdb.",
+            "fr": "Publie l'échelle des timestamps et les puissances décimales partagées dans mormot.db.raw.duckdb.",
+            "zh": "在 mormot.db.raw.duckdb 中公开共享的时间戳缩放和十进制幂。",
+            "ru": "Публикует общий масштаб timestamp и степени десяти в mormot.db.raw.duckdb."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d30776f3a5eb683b7676b4a3d2e988d4c99ea129",
+      "headline": {
+        "en": "Quack APIs move into the established DuckDB units",
+        "fr": "Les API Quack passent dans les unités DuckDB établies",
+        "zh": "Quack API 移入既有 DuckDB 单元",
+        "ru": "API Quack перенесён в существующие модули DuckDB"
+      },
+      "category": "refactor",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The wire protocol types move from mormot.db.raw.quack into mormot.db.raw.duckdb, and the TSqlDBQuackConnection classes move from mormot.db.sql.quack into mormot.db.sql.duckdb. The two standalone units and their Lazarus package entries are deleted.",
+        "fr": "Les types du protocole passent de mormot.db.raw.quack à mormot.db.raw.duckdb, et les classes TSqlDBQuackConnection de mormot.db.sql.quack à mormot.db.sql.duckdb. Les deux unités autonomes et leurs entrées Lazarus sont supprimées.",
+        "zh": "线路协议类型从 mormot.db.raw.quack 移至 mormot.db.raw.duckdb，TSqlDBQuackConnection 类从 mormot.db.sql.quack 移至 mormot.db.sql.duckdb。两个独立单元及其 Lazarus 包条目被删除。",
+        "ru": "Типы протокола перенесены из mormot.db.raw.quack в mormot.db.raw.duckdb, а классы TSqlDBQuackConnection — из mormot.db.sql.quack в mormot.db.sql.duckdb. Два отдельных модуля и записи Lazarus удалены."
+      },
+      "impact": {
+        "en": "Existing applications from before this edition are unaffected. Code written against the short-lived initial Quack units must update its uses clause, but class and protocol identifiers keep their names.",
+        "fr": "Les applications antérieures à cette édition ne sont pas touchées. Le code écrit contre les unités Quack éphémères doit mettre à jour sa clause uses, mais les classes et identifiants du protocole gardent leur nom.",
+        "zh": "本期之前的现有应用不受影响。针对短暂 Quack 单元编写的代码必须更新 uses 子句，但类名和协议标识符保持不变。",
+        "ru": "Приложения до этого выпуска не затронуты. Код для временных Quack-модулей должен обновить uses, но имена классов и идентификаторов протокола сохранены."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.raw.quack",
+        "mormot.db.sql.duckdb",
+        "mormot.db.sql.quack"
+      ],
+      "api_changes": [
+        {
+          "symbol": "mormot.db.raw.quack/mormot.db.sql.quack",
+          "change": "removed",
+          "note": {
+            "en": "The standalone units are removed; their declarations now live in the corresponding DuckDB units.",
+            "fr": "Les unités autonomes sont supprimées ; leurs déclarations se trouvent dans les unités DuckDB correspondantes.",
+            "zh": "独立单元被删除；其声明现位于相应的 DuckDB 单元中。",
+            "ru": "Отдельные модули удалены; их объявления теперь находятся в соответствующих модулях DuckDB."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "530dc7202df44a2abfd3467c74af331572208838",
+      "headline": {
+        "en": "Embedded and remote TIME_TZ values use one formatter",
+        "fr": "Les valeurs TIME_TZ embarquées et distantes partagent un formateur",
+        "zh": "嵌入式与远程 TIME_TZ 值共用格式化器",
+        "ru": "Embedded и remote TIME_TZ используют один formatter"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TQuackType.FieldType now delegates to DuckDBTypeToField, and DuckTimeTzToText centralizes TIME_TZ formatting for both DuckDB vectors and Quack vectors in mormot.db.raw.duckdb.",
+        "fr": "TQuackType.FieldType délègue maintenant à DuckDBTypeToField, et DuckTimeTzToText centralise le formatage TIME_TZ des vecteurs DuckDB et Quack dans mormot.db.raw.duckdb.",
+        "zh": "TQuackType.FieldType 现在委托给 DuckDBTypeToField，DuckTimeTzToText 则在 mormot.db.raw.duckdb 中统一 DuckDB 与 Quack 向量的 TIME_TZ 格式化。",
+        "ru": "TQuackType.FieldType теперь вызывает DuckDBTypeToField, а DuckTimeTzToText централизует формат TIME_TZ для векторов DuckDB и Quack в mormot.db.raw.duckdb."
+      },
+      "impact": {
+        "en": "Delphi and FPC backends keep the same TIME_TZ text and field types. The change removes duplicate conversion paths, so there is no application-code migration.",
+        "fr": "Les backends Delphi et FPC conservent les mêmes textes TIME_TZ et types de champs. Le changement supprime des conversions dupliquées sans migration applicative.",
+        "zh": "Delphi 与 FPC 后端的 TIME_TZ 文本和字段类型保持不变。该更改移除重复转换路径，无需迁移应用代码。",
+        "ru": "Backend на Delphi и FPC сохраняет прежние текст TIME_TZ и типы полей. Удалены дубли преобразований, миграция кода не нужна."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckTimeTzToText",
+          "change": "added",
+          "note": {
+            "en": "Adds a public TIME_TZ-to-text helper in mormot.db.raw.duckdb.",
+            "fr": "Ajoute un helper public de conversion TIME_TZ vers texte dans mormot.db.raw.duckdb.",
+            "zh": "在 mormot.db.raw.duckdb 中新增公共 TIME_TZ 文本转换辅助函数。",
+            "ru": "Добавляет публичный helper TIME_TZ-to-text в mormot.db.raw.duckdb."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f85db8fd9d495672bdae2f4d61557da8bf8d013c",
+      "headline": {
+        "en": "Fixed-size DuckDB values share allocation-light conversion code",
+        "fr": "Les valeurs DuckDB de taille fixe partagent des conversions légères",
+        "zh": "固定大小 DuckDB 值共用低分配转换代码",
+        "ru": "Фиксированные значения DuckDB используют общие лёгкие преобразования"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "DuckFixedSize, DuckFixedInt, DuckFixedToTextBuf, DuckFixedToText and DuckFixedToJson replace duplicated scalar conversion switches in embedded DuckDB and Quack. Quack numeric and UUID output avoids transient RawUtf8 allocations.",
+        "fr": "DuckFixedSize, DuckFixedInt, DuckFixedToTextBuf, DuckFixedToText et DuckFixedToJson remplacent les conversions scalaires dupliquées de DuckDB embarqué et Quack. Les nombres et UUID Quack évitent des allocations RawUtf8 temporaires.",
+        "zh": "DuckFixedSize、DuckFixedInt、DuckFixedToTextBuf、DuckFixedToText 和 DuckFixedToJson 替换嵌入式 DuckDB 与 Quack 中重复的标量转换分支。Quack 数值和 UUID 输出避免临时 RawUtf8 分配。",
+        "ru": "DuckFixedSize, DuckFixedInt, DuckFixedToTextBuf, DuckFixedToText и DuckFixedToJson заменяют дубли scalar conversion в embedded DuckDB и Quack. Числа и UUID Quack обходятся без временного RawUtf8."
+      },
+      "impact": {
+        "en": "Result values keep their existing text and JSON formats. Quack scalar reads allocate less temporary memory; no Delphi or FPC application changes are required.",
+        "fr": "Les valeurs gardent leurs formats texte et JSON. Les lectures scalaires Quack allouent moins de mémoire temporaire ; aucun changement applicatif Delphi ou FPC n'est requis.",
+        "zh": "结果值保持现有文本和 JSON 格式。Quack 标量读取减少临时内存分配；Delphi 或 FPC 应用无需修改。",
+        "ru": "Форматы текста и JSON не меняются. Scalar-чтение Quack выделяет меньше временной памяти; приложения Delphi и FPC менять не нужно."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckFixedSize/DuckFixedInt/DuckFixedToTextBuf/DuckFixedToText/DuckFixedToJson",
+          "change": "added",
+          "note": {
+            "en": "Adds public helpers for fixed-size DuckDB scalar conversion from possibly unaligned addresses.",
+            "fr": "Ajoute des helpers publics pour convertir les scalaires DuckDB de taille fixe depuis des adresses éventuellement non alignées.",
+            "zh": "新增公共辅助函数，用于从可能未对齐的地址转换固定大小 DuckDB 标量。",
+            "ru": "Добавляет публичные helper преобразования fixed-size scalar DuckDB по возможно невыровненному адресу."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "23c49456aa341f892fd306cce262d7fbdb2e6cfa",
+      "headline": {
+        "en": "Numeric and date columns converge on one conversion path",
+        "fr": "Les colonnes numériques et de date convergent vers une conversion unique",
+        "zh": "数值与日期列统一使用同一转换路径",
+        "ru": "Числовые и временные столбцы используют единый путь преобразования"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "DuckFixedToInt64, DuckFixedToDouble, DuckFixedToCurrency and DuckFixedToDateTime replace eight duplicated Column methods across embedded and Quack statements. TDuckDBTypeInfo caches the fixed value size.",
+        "fr": "DuckFixedToInt64, DuckFixedToDouble, DuckFixedToCurrency et DuckFixedToDateTime remplacent huit méthodes Column dupliquées entre les requêtes embarquées et Quack. TDuckDBTypeInfo met en cache la taille fixe.",
+        "zh": "DuckFixedToInt64、DuckFixedToDouble、DuckFixedToCurrency 和 DuckFixedToDateTime 替换嵌入式与 Quack 语句中八个重复 Column 方法。TDuckDBTypeInfo 缓存固定值大小。",
+        "ru": "DuckFixedToInt64, DuckFixedToDouble, DuckFixedToCurrency и DuckFixedToDateTime заменяют восемь дублированных Column-методов для embedded и Quack. TDuckDBTypeInfo кэширует размер значения."
+      },
+      "impact": {
+        "en": "ColumnInt, ColumnDouble, ColumnCurrency and ColumnDateTime keep their contracts for Delphi and FPC backends. The refactor reduces divergent behavior between local and remote DuckDB results.",
+        "fr": "ColumnInt, ColumnDouble, ColumnCurrency et ColumnDateTime gardent leur contrat pour les backends Delphi et FPC. Le refactoring réduit les divergences entre résultats locaux et distants.",
+        "zh": "ColumnInt、ColumnDouble、ColumnCurrency 和 ColumnDateTime 对 Delphi 与 FPC 后端的契约不变。重构减少本地与远程 DuckDB 结果的行为差异。",
+        "ru": "Контракты ColumnInt, ColumnDouble, ColumnCurrency и ColumnDateTime для Delphi и FPC не меняются. Рефакторинг уменьшает расхождения local и remote результатов."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDuckDBTypeInfo.Size",
+          "change": "added",
+          "note": {
+            "en": "Adds the cached byte size of a fixed-size logical value, or zero for variable-size types.",
+            "fr": "Ajoute la taille en octets mise en cache d'une valeur logique fixe, ou zéro pour les types variables.",
+            "zh": "新增固定大小逻辑值的缓存字节数；可变大小类型为零。",
+            "ru": "Добавляет кэшированный размер fixed-size значения в байтах, ноль для variable-size типов."
+          }
+        },
+        {
+          "symbol": "DuckFixedToInt64/DuckFixedToDouble/DuckFixedToCurrency/DuckFixedToDateTime",
+          "change": "added",
+          "note": {
+            "en": "Publishes shared typed conversion helpers for fixed-size DuckDB values.",
+            "fr": "Publie des helpers de conversion typée partagés pour les valeurs DuckDB de taille fixe.",
+            "zh": "公开固定大小 DuckDB 值的共享类型转换辅助函数。",
+            "ru": "Публикует общие typed helper для fixed-size значений DuckDB."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "35d3606b53a7037e2b84fec77c8b6a54f2d495c6",
+      "headline": {
+        "en": "Quack connections report the DuckDB SQL dialect",
+        "fr": "Les connexions Quack déclarent le dialecte SQL DuckDB",
+        "zh": "Quack 连接现在声明 DuckDB SQL 方言",
+        "ru": "Соединения Quack объявляют SQL-диалект DuckDB"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSqlDBQuackConnectionProperties now passes dDuckDB rather than dPostgreSQL to its inherited constructor. The two constants currently share the same SQL rendering but the provider identity is now accurate.",
+        "fr": "TSqlDBQuackConnectionProperties transmet désormais dDuckDB au lieu de dPostgreSQL à son constructeur hérité. Les deux constantes partagent actuellement le même rendu SQL, mais l'identité du provider devient exacte.",
+        "zh": "TSqlDBQuackConnectionProperties 现在向继承构造函数传递 dDuckDB，而非 dPostgreSQL。两个常量当前使用相同 SQL 渲染，但提供者身份现已准确。",
+        "ru": "TSqlDBQuackConnectionProperties теперь передаёт dDuckDB, а не dPostgreSQL, в inherited constructor. SQL-вывод у констант пока одинаков, но provider теперь определяется верно."
+      },
+      "impact": {
+        "en": "Generated SQL does not change today because dDuckDB aliases dPostgreSQL. Delphi and FPC code sees the correct dialect identity for future dialect-specific behavior.",
+        "fr": "Le SQL généré ne change pas aujourd'hui car dDuckDB est un alias de dPostgreSQL. Le code Delphi et FPC voit l'identité correcte pour les futurs comportements spécifiques.",
+        "zh": "由于 dDuckDB 当前别名为 dPostgreSQL，生成的 SQL 不变。Delphi 与 FPC 代码会获得正确方言身份，以便未来处理方言差异。",
+        "ru": "Сейчас SQL не меняется, поскольку dDuckDB — alias dPostgreSQL. Код Delphi и FPC получает верную идентичность для будущих различий диалекта."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.sql.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBQuackConnectionProperties.Dialect",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The connection properties now identify their dialect as dDuckDB rather than dPostgreSQL.",
+            "fr": "Les propriétés de connexion identifient maintenant leur dialecte comme dDuckDB et non dPostgreSQL.",
+            "zh": "连接属性现在将方言标识为 dDuckDB，而非 dPostgreSQL。",
+            "ru": "Свойства соединения теперь указывают dDuckDB вместо dPostgreSQL."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1cadd7fbfec3e3e0731a9576be1405123e7d30f4",
+      "headline": {
+        "en": "The ORM test suite exercises an external DuckDB database",
+        "fr": "La suite ORM teste une base DuckDB externe",
+        "zh": "ORM 测试套件覆盖外部 DuckDB 数据库",
+        "ru": "Тесты ORM проверяют внешнюю базу DuckDB"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.orm.extdb adds an in-memory DuckDB scenario with a 2,000-row batch, retrieval, query, update, delete and BLOB batch. It deliberately uses direct REST calls and skips the slow generic external-database and virtual-table cases.",
+        "fr": "test.orm.extdb ajoute un scénario DuckDB en mémoire avec un lot de 2 000 lignes, lecture, requête, mise à jour, suppression et lot BLOB. Il utilise volontairement des appels REST directs et évite les cas génériques lents et les tables virtuelles.",
+        "zh": "test.orm.extdb 新增内存 DuckDB 场景，覆盖 2,000 行批处理、检索、查询、更新、删除及 BLOB 批处理。它特意使用直接 REST 调用，并跳过缓慢的通用外部数据库与虚拟表用例。",
+        "ru": "test.orm.extdb добавляет in-memory DuckDB с batch на 2 000 строк, чтением, запросом, update, delete и BLOB batch. Используются прямые REST-вызовы; медленные общие external-database и virtual-table тесты пропущены."
+      },
+      "impact": {
+        "en": "There is no production API or runtime change. The test increases coverage of ORM batch and CRUD behavior for DuckDB under both Delphi and FPC builds.",
+        "fr": "Aucun changement d'API ou d'exécution en production. Le test augmente la couverture des lots ORM et du CRUD DuckDB sous Delphi et FPC.",
+        "zh": "生产 API 与运行时行为没有变化。该测试提高 Delphi 与 FPC 构建下 DuckDB ORM 批处理和 CRUD 的覆盖率。",
+        "ru": "Production API и runtime не меняются. Тест расширяет покрытие ORM batch и CRUD DuckDB для сборок Delphi и FPC."
+      },
+      "action": "none",
+      "units": [
+        "test.orm.extdb"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bc5b14909afa6ba8e4e7a485c5e41812849ddfc6",
+      "headline": {
+        "en": "A console client demonstrates all three DuckDB access paths",
+        "fr": "Un client console illustre les trois modes d'accès DuckDB",
+        "zh": "控制台客户端演示三种 DuckDB 访问路径",
+        "ru": "Консольный клиент показывает три способа доступа к DuckDB"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "ex/ThirdPartyDemos/tobfel/duckdb-cli adds a sqlite3-style console program for embedded DuckDB, mormot.db.proxy and remote Quack, plus Python and Pascal benchmark helpers and usage documentation.",
+        "fr": "ex/ThirdPartyDemos/tobfel/duckdb-cli ajoute un programme console de type sqlite3 pour DuckDB embarqué, mormot.db.proxy et Quack distant, avec des helpers de benchmark Python et Pascal et leur documentation.",
+        "zh": "ex/ThirdPartyDemos/tobfel/duckdb-cli 新增类似 sqlite3 的控制台程序，支持嵌入式 DuckDB、mormot.db.proxy 和远程 Quack，并附带 Python、Pascal 基准辅助工具和使用文档。",
+        "ru": "ex/ThirdPartyDemos/tobfel/duckdb-cli добавляет консольную программу в стиле sqlite3 для embedded DuckDB, mormot.db.proxy и remote Quack, а также benchmark helper на Python и Pascal и документацию."
+      },
+      "impact": {
+        "en": "Framework behavior and public APIs do not change. Delphi and FPC developers gain a runnable example for comparing local, proxy and Quack connections.",
+        "fr": "Le comportement du framework et les API publiques ne changent pas. Les développeurs Delphi et FPC disposent d'un exemple exécutable pour comparer les connexions locales, proxy et Quack.",
+        "zh": "框架行为和公共 API 不变。Delphi 与 FPC 开发者获得可运行示例，可比较本地、代理与 Quack 连接。",
+        "ru": "Поведение framework и публичный API не меняются. Разработчики Delphi и FPC получают запускаемый пример для сравнения local, proxy и Quack."
+      },
+      "action": "none",
+      "units": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f9fc67334c082874cb37a573fc20453c8ebad945",
+      "headline": {
+        "en": "Quack vector ownership moves to managed byte strings",
+        "fr": "Les vecteurs Quack passent à des buffers de bytes gérés",
+        "zh": "Quack 向量改用托管字节串持有缓冲区",
+        "ru": "Буферы векторов Quack переходят на управляемые byte string"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "TQuackVector owns temporary buffers as RawByteString instead of GetMem blocks, object arrays are cleared with ObjArrayClear, and type storage selection moves into TQuackType.SetStorage. Integer reads use fixed-width pointer types.",
+        "fr": "TQuackVector possède ses buffers temporaires via RawByteString plutôt que GetMem, les tableaux d'objets sont libérés avec ObjArrayClear et la sélection du stockage passe dans TQuackType.SetStorage. Les lectures entières utilisent des pointeurs de taille fixe.",
+        "zh": "TQuackVector 改用 RawByteString 持有临时缓冲区，不再使用 GetMem；对象数组通过 ObjArrayClear 清理，类型存储选择移入 TQuackType.SetStorage。整数读取使用固定宽度指针类型。",
+        "ru": "TQuackVector хранит временные буферы в RawByteString вместо GetMem, массивы объектов очищаются через ObjArrayClear, а выбор storage перенесён в TQuackType.SetStorage. Чтение целых использует fixed-width pointer."
+      },
+      "impact": {
+        "en": "Quack result decoding keeps the same values while relying on managed lifetime cleanup on Delphi and FPC. No application-code change is required.",
+        "fr": "Le décodage des résultats Quack conserve les mêmes valeurs tout en utilisant une durée de vie gérée sous Delphi et FPC. Aucun changement applicatif n'est requis.",
+        "zh": "Quack 结果解码值保持不变，同时在 Delphi 与 FPC 下依赖托管生命周期清理。应用代码无需修改。",
+        "ru": "Декодирование Quack сохраняет значения, но использует управляемую очистку lifetime в Delphi и FPC. Прикладной код менять не нужно."
+      },
+      "action": "none",
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TQuackType.SetStorage",
+          "change": "added",
+          "note": {
+            "en": "Publishes the method that derives Storage, ElemSize and DuckType from the decoded Quack type.",
+            "fr": "Publie la méthode qui déduit Storage, ElemSize et DuckType du type Quack décodé.",
+            "zh": "公开根据已解码 Quack 类型推导 Storage、ElemSize 与 DuckType 的方法。",
+            "ru": "Публикует метод определения Storage, ElemSize и DuckType по декодированному типу Quack."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d8ee7c1c249f25b6ad88ccf2d0b26308d83350da",
+      "headline": {
+        "en": "Quack no longer inflates nanosecond timestamps by 1,000",
+        "fr": "Quack ne multiplie plus les timestamps nanoseconde par 1 000",
+        "zh": "Quack 不再把纳秒时间戳放大 1,000 倍",
+        "ru": "Quack больше не увеличивает наносекундные timestamp в 1 000 раз"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The FIXED_TYPES table maps QTYPE_TIMESTAMP_TZ_NS to DUCKDB_TYPE_TIMESTAMP_TZ_NS instead of DUCKDB_TYPE_TIMESTAMP_TZ. test.db.quack compares TIMESTAMP_NS, TIMESTAMPTZ_NS and GEOMETRY values with the embedded engine.",
+        "fr": "La table FIXED_TYPES associe QTYPE_TIMESTAMP_TZ_NS à DUCKDB_TYPE_TIMESTAMP_TZ_NS au lieu de DUCKDB_TYPE_TIMESTAMP_TZ. test.db.quack compare TIMESTAMP_NS, TIMESTAMPTZ_NS et GEOMETRY au moteur embarqué.",
+        "zh": "FIXED_TYPES 表现在把 QTYPE_TIMESTAMP_TZ_NS 映射为 DUCKDB_TYPE_TIMESTAMP_TZ_NS，而不是 DUCKDB_TYPE_TIMESTAMP_TZ。test.db.quack 将 TIMESTAMP_NS、TIMESTAMPTZ_NS 和 GEOMETRY 与嵌入式引擎对比。",
+        "ru": "Таблица FIXED_TYPES сопоставляет QTYPE_TIMESTAMP_TZ_NS с DUCKDB_TYPE_TIMESTAMP_TZ_NS вместо DUCKDB_TYPE_TIMESTAMP_TZ. test.db.quack сравнивает TIMESTAMP_NS, TIMESTAMPTZ_NS и GEOMETRY с embedded engine."
+      },
+      "impact": {
+        "en": "Remote TIMESTAMPTZ_NS values were interpreted as microseconds and could be 1,000 times too large before conversion. Delphi and FPC Quack users reading this type receive the correct time after this commit.",
+        "fr": "Les valeurs TIMESTAMPTZ_NS distantes étaient interprétées comme des microsecondes et pouvaient être 1 000 fois trop grandes avant conversion. Les utilisateurs Quack Delphi et FPC reçoivent désormais l'heure correcte.",
+        "zh": "远程 TIMESTAMPTZ_NS 值此前被当作微秒读取，转换前可能放大 1,000 倍。使用该类型的 Delphi 与 FPC Quack 用户在此提交后会得到正确时间。",
+        "ru": "Remote TIMESTAMPTZ_NS читался как микросекунды и до преобразования мог быть в 1 000 раз больше. Пользователи Quack на Delphi и FPC теперь получают верное время."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade Quack clients that read TIMESTAMPTZ_NS and verify any persisted values produced from earlier decoded timestamps.",
+        "fr": "Mettez à jour les clients Quack qui lisent TIMESTAMPTZ_NS et vérifiez les valeurs persistées provenant d'anciens décodages.",
+        "zh": "升级读取 TIMESTAMPTZ_NS 的 Quack 客户端，并核查由旧版解码时间戳生成的持久化值。",
+        "ru": "Обновите клиенты Quack с TIMESTAMPTZ_NS и проверьте сохранённые значения, полученные прежним декодированием."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "test.db.quack"
+      ],
+      "api_changes": [
+        {
+          "symbol": "QTYPE_TIMESTAMP_TZ_NS decoding",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Values are scaled from nanoseconds through DUCKDB_TYPE_TIMESTAMP_TZ_NS rather than treated as microseconds.",
+            "fr": "Les valeurs sont converties depuis les nanosecondes via DUCKDB_TYPE_TIMESTAMP_TZ_NS au lieu d'être traitées comme des microsecondes.",
+            "zh": "值现在通过 DUCKDB_TYPE_TIMESTAMP_TZ_NS 按纳秒缩放，不再按微秒处理。",
+            "ru": "Значения масштабируются из наносекунд через DUCKDB_TYPE_TIMESTAMP_TZ_NS, а не считаются микросекундами."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "16b6bc3bf51f77656fe6d695d455542271a2fa52",
+      "headline": {
+        "en": "VARIANT results are reissued as JSON for embedded and remote DuckDB",
+        "fr": "Les résultats VARIANT sont réémis en JSON pour DuckDB local et distant",
+        "zh": "嵌入式与远程 DuckDB 的 VARIANT 结果改以 JSON 重新查询",
+        "ru": "VARIANT повторно запрашивается как JSON в embedded и remote DuckDB"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "DuckDBTypeHasVariant and TQuackType.HasVariant detect nested VARIANT columns. Both statement classes rerun the SELECT through DuckDBVariantSql so DuckDB casts those columns to JSON; the final merged helper uses positional references to support duplicate names and maps JSON null back to SQL NULL.",
+        "fr": "DuckDBTypeHasVariant et TQuackType.HasVariant détectent les colonnes VARIANT imbriquées. Les deux classes de requête relancent le SELECT via DuckDBVariantSql pour convertir ces colonnes en JSON ; le helper final emploie des références positionnelles pour les noms dupliqués et remappe JSON null vers SQL NULL.",
+        "zh": "DuckDBTypeHasVariant 与 TQuackType.HasVariant 会检测嵌套 VARIANT 列。两个语句类都通过 DuckDBVariantSql 重新执行 SELECT，让 DuckDB 把这些列转换为 JSON；最终合并的辅助函数用位置引用支持重复列名，并把 JSON null 映射回 SQL NULL。",
+        "ru": "DuckDBTypeHasVariant и TQuackType.HasVariant находят вложенные VARIANT. Оба statement повторяют SELECT через DuckDBVariantSql, чтобы DuckDB преобразовал столбцы в JSON; итоговый helper использует позиционные ссылки для одинаковых имён и возвращает JSON null в SQL NULL."
+      },
+      "impact": {
+        "en": "SELECT results containing VARIANT previously crashed the embedded driver or raised unsupported-type errors in Quack. They now arrive as JSON text, at the cost of re-executing the query once when a VARIANT column is detected.",
+        "fr": "Les SELECT contenant VARIANT faisaient planter le pilote embarqué ou levaient une erreur de type non supporté avec Quack. Ils arrivent maintenant en texte JSON, au prix d'une seconde exécution quand un VARIANT est détecté.",
+        "zh": "包含 VARIANT 的 SELECT 结果此前会使嵌入式驱动崩溃，或在 Quack 中触发不支持类型错误。现在会以 JSON 文本返回，但检测到 VARIANT 时查询会再执行一次。",
+        "ru": "SELECT с VARIANT раньше приводил к сбою embedded-драйвера или unsupported-type в Quack. Теперь результат приходит как JSON-текст, но запрос выполняется повторно при обнаружении VARIANT."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade before selecting VARIANT columns through either DuckDB provider, and account for one repeat execution if the SELECT has side effects or is expensive.",
+        "fr": "Mettez à jour avant de lire des colonnes VARIANT avec l'un ou l'autre provider, et tenez compte d'une seconde exécution si le SELECT est coûteux ou a des effets de bord.",
+        "zh": "通过任一 DuckDB 提供者查询 VARIANT 列前应升级；若 SELECT 成本较高或有副作用，还需考虑一次重复执行。",
+        "ru": "Обновитесь до выборки VARIANT через любой provider и учитывайте повторное выполнение, если SELECT дорогой или имеет побочные эффекты."
+      },
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb",
+        "test.db.duckdb",
+        "test.db.quack"
+      ],
+      "api_changes": [
+        {
+          "symbol": "DuckDBTypeHasVariant/DuckDBVariantSql/TQuackType.HasVariant",
+          "change": "added",
+          "note": {
+            "en": "Adds public VARIANT detection and SELECT-wrapping helpers.",
+            "fr": "Ajoute des helpers publics de détection VARIANT et d'enveloppement des SELECT.",
+            "zh": "新增公共 VARIANT 检测和 SELECT 包装辅助函数。",
+            "ru": "Добавляет публичные helper обнаружения VARIANT и обёртки SELECT."
+          }
+        },
+        {
+          "symbol": "DuckDB and Quack VARIANT result columns",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "VARIANT columns are exposed as JSON text, with VARIANT NULL returned as SQL NULL.",
+            "fr": "Les colonnes VARIANT sont exposées en texte JSON et VARIANT NULL devient SQL NULL.",
+            "zh": "VARIANT 列以 JSON 文本公开，VARIANT NULL 返回为 SQL NULL。",
+            "ru": "VARIANT выдаётся как JSON-текст, а VARIANT NULL возвращается как SQL NULL."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "69900d779312490f3b8e6b63df08c5ab7b5837b0",
+      "headline": {
+        "en": "Duplicate VARIANT helpers no longer break the DuckDB unit build",
+        "fr": "Les helpers VARIANT dupliqués ne cassent plus le build DuckDB",
+        "zh": "重复 VARIANT 辅助函数不再破坏 DuckDB 单元构建",
+        "ru": "Дубли VARIANT helper больше не ломают сборку модуля DuckDB"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The merge of the Quack branch and the separate VARIANT work left DuckDBTypeHasVariant and DuckDBVariantSql implemented twice in mormot.db.raw.duckdb. This commit deletes the second 41-line copy and keeps the final positional implementation.",
+        "fr": "La fusion de la branche Quack et du travail VARIANT séparé avait laissé deux implémentations de DuckDBTypeHasVariant et DuckDBVariantSql dans mormot.db.raw.duckdb. Ce commit supprime la seconde copie de 41 lignes et conserve l'implémentation positionnelle finale.",
+        "zh": "Quack 分支与独立 VARIANT 工作合并后，mormot.db.raw.duckdb 中留下两份 DuckDBTypeHasVariant 和 DuckDBVariantSql 实现。该提交删除第二份 41 行副本，保留最终的位置引用实现。",
+        "ru": "После слияния ветки Quack и отдельной работы VARIANT в mormot.db.raw.duckdb осталось по две реализации DuckDBTypeHasVariant и DuckDBVariantSql. Коммит удаляет вторую копию из 41 строки и сохраняет итоговую позиционную реализацию."
+      },
+      "impact": {
+        "en": "The intermediate merged tree did not compile because Pascal cannot accept duplicate routine implementations. The final tree builds again on Delphi and FPC without changing the intended VARIANT behavior.",
+        "fr": "L'arbre fusionné intermédiaire ne compilait pas car Pascal refuse les implémentations de routines dupliquées. L'arbre final compile de nouveau sous Delphi et FPC sans changer le comportement VARIANT prévu.",
+        "zh": "中间合并树无法编译，因为 Pascal 不允许重复的例程实现。最终代码树在 Delphi 与 FPC 下恢复构建，预期 VARIANT 行为不变。",
+        "ru": "Промежуточное merged-дерево не компилировалось: Pascal не допускает дубли реализаций процедур. Финальное дерево снова собирается Delphi и FPC без изменения поведения VARIANT."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "If you pulled the Quack merges, update through 69900d779312490f3b8e6b63df08c5ab7b5837b0 or the final merge 0186cd02 before building.",
+        "fr": "Si vous avez récupéré les fusions Quack, mettez à jour jusqu'à 69900d779312490f3b8e6b63df08c5ab7b5837b0 ou la fusion finale 0186cd02 avant de compiler.",
+        "zh": "如果已拉取 Quack 合并提交，请先更新到 69900d779312490f3b8e6b63df08c5ab7b5837b0 或最终合并 0186cd02 再构建。",
+        "ru": "Если вы взяли merge Quack, перед сборкой обновитесь до 69900d779312490f3b8e6b63df08c5ab7b5837b0 или финального merge 0186cd02."
+      },
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
