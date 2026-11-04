@@ -1,0 +1,1861 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-03",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-04T03:32:32Z",
+  "range": {
+    "since": "2026-11-02T23:00:00Z",
+    "until": "2026-11-03T23:00:00Z",
+    "base_sha": "c3f4abb0d5eefab919131bdcb6cb18a97729d2d7",
+    "head_sha": "cda3c7395288a4b3c50b7591174cc1c41de92833"
+  },
+  "version": {
+    "after": "2.4.17841",
+    "before": "2.4.17809"
+  },
+  "totals": {
+    "commits": 32,
+    "additions": 3863,
+    "deletions": 874
+  },
+  "commits": [
+    {
+      "sha": "cda3c7395288a4b3c50b7591174cc1c41de92833",
+      "short_sha": "cda3c739",
+      "subject": "db: fixed potential memory leak in TDuckDBTypeInfo",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T21:39:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cda3c7395288a4b3c50b7591174cc1c41de92833",
+      "parents": [
+        "d7cabac663e7dcdf82bec27174a2eb7c2d35a6ac"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -2024,6 +2024,8 @@ procedure TDuckDBTypeInfo.Done;\n   end;\n   if Handle <> nil then\n     DuckDB.destroy_logical_type(Handle);\n+  if Names <> nil then\n+    Names := nil; // needed for nested levels only\n end;\n \n procedure TDuckDBTypeInfo.EnumValue(Index: PtrInt; var Result: RawUtf8);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17840\n+17841",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17840'\r\n+'2.4.17841'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d7cabac663e7dcdf82bec27174a2eb7c2d35a6ac",
+      "short_sha": "d7cabac6",
+      "subject": "db: rewritten TDuckDBTypeInfo",
+      "body": "- to fix Delphi 7/2007 compilation\n- and to have proper access methods instead of global functions",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T21:31:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d7cabac663e7dcdf82bec27174a2eb7c2d35a6ac",
+      "parents": [
+        "1550a1c7c2803f6547a54396f99d71d3a5cbe679"
+      ],
+      "stats": {
+        "additions": 110,
+        "deletions": 98,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 103,
+          "deletions": 91,
+          "patch": "@@ -513,16 +513,26 @@ function DuckFixedToDateTime(TypeId: TDuckDBType; P: PAnsiChar;\n { ************ DuckDB Logical Type Cache }\n \n type\n+  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n+\n   /// a DuckDB logical type, parsed once with all its nested types\n   // - to avoid calling the DuckDB C API for every row of a result set\n   // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n+  {$ifdef USERECORDWITHMETHODS}\n   TDuckDBTypeInfo = record\n+  {$else}\n+  TDuckDBTypeInfo = object\n+  {$endif USERECORDWITHMETHODS}\n+  public\n     /// 32-bit ordinal number corresponding to DUCKDB_TYPE_* constants\n     TypeId: TDuckDBType;\n     /// internal storage type of a DECIMAL or an ENUM\n     Internal: TDuckDBType;\n     /// number of decimals of a DECIMAL, or fixed size of an ARRAY\n     Scale: integer;\n+    /// how many items are actually stored in Child[]\n+    ChildCount: integer;\n     /// size in bytes of a fixed-size value, 0 for variable-size types\n     Size: PtrInt;\n     /// the DuckDB logical type handle, owned by this structure\n@@ -531,22 +541,20 @@   TDuckDBTypeInfo = record\n     Names: TRawUtf8DynArray;\n     /// nested types of a LIST/ARRAY (item), MAP (key, value),\n     // STRUCT (fields) or UNION (members)\n-    Child: array of TDuckDBTypeInfo;\n+    Child: PDuckDBTypeInfoArray;\n+    /// parse a DuckDB logical type and all its nested types, once\n+    // - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n+    procedure Init(aHandle: TDuckDBLogicalType);\n+    /// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n+    procedure Done;\n+    /// allocate Child[0 .. ChildCount - 1] items\n+    function Nest(n: PtrInt = 1): PDuckDBTypeInfo;\n+    /// retrieve the text of an ENUM value, caching all the ENUM dictionary\n+    procedure EnumValue(Index: PtrInt; var Result: RawUtf8);\n+    /// return true if a type is a VARIANT, or contains a VARIANT as nested type\n+    function HasVariant: boolean;\n   end;\n-  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n-\n-/// parse a DuckDB logical type and all its nested types, once\n-// - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n-procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n-\n-/// release the DuckDB logical type handles of a DuckDBTypeInfoInit() structure\n-procedure DuckDBTypeInfoDone(var Info: TDuckDBTypeInfo);\n-\n-/// retrieve the text of an ENUM value, caching all the ENUM dictionary\n-procedure DuckDBEnumValue(var Info: TDuckDBTypeInfo; Index: PtrInt; var Result: RawUtf8);\n-\n-/// return true if a type is a VARIANT, or contains a VARIANT as nested type\n-function DuckDBTypeHasVariant(const Info: TDuckDBTypeInfo): boolean;\n+  TDuckDBTypeInfoArray = array[word] of TDuckDBTypeInfo;\n \n /// wrap a SELECT statement to retrieve its VARIANT columns as JSON\n // - the VARIANT binary layout is not decoded by our drivers: DuckDB converts\n@@ -1914,90 +1922,131 @@ function DuckFixedToDateTime(TypeId: TDuckDBType; P: PAnsiChar;\n \n { ************ DuckDB Logical Type Cache }\n \n-function DuckDBInitChild(var nfo: TDuckDBTypeInfo): PDuckDBTypeInfo;\n+{ TDuckDBTypeInfo }\n+\n+function TDuckDBTypeInfo.Nest(n: PtrInt): PDuckDBTypeInfo;\n begin\n-  SetLength(nfo.Child, 1);\n-  result := pointer(nfo.Child);\n+  ChildCount := n;\n+  Child := AllocMem(n * SizeOf(Child[0]));\n+  result := pointer(Child);\n end;\n \n-procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n+procedure TDuckDBTypeInfo.Init(aHandle: TDuckDBLogicalType);\n var\n   i: PtrInt;\n   p: PUtf8Char;\n   nfo: PDuckDBTypeInfo;\n begin\n-  FillCharFast(Info, SizeOf(Info), 0);\n-  Info.Handle := Handle;\n-  Info.TypeId := DuckDB.get_type_id(Handle);\n-  case Info.TypeId of\n+  FillCharFast(self, SizeOf(self), 0);\n+  Handle := aHandle;\n+  TypeId := DuckDB.get_type_id(Handle);\n+  case TypeId of\n     DUCKDB_TYPE_DECIMAL:\n       begin\n-        Info.Internal := DuckDB.decimal_internal_type(Handl\n... [truncated, 5718 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -576,7 +576,7 @@ procedure DuckDBVectorValueToText(vec: TDuckDBVector;\n         DuckBitToText(p, len, result);\n       end;\n     DUCKDB_TYPE_ENUM:\n-      DuckDBEnumValue(T^, ReadInteger(T^.Internal, data, row), result);\n+      T^.EnumValue(ReadInteger(T^.Internal, data, row), result);\n     DUCKDB_TYPE_LIST,\n     DUCKDB_TYPE_ARRAY,\n     DUCKDB_TYPE_STRUCT,\n@@ -694,7 +694,7 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n     DUCKDB_TYPE_STRUCT:\n       begin\n         W.AddDirect('{');\n-        for i := 0 to length(T^.Child) - 1 do\n+        for i := 0 to T^.ChildCount - 1 do\n         begin\n           W.AddProp(pointer(T^.Names[i]), length(T^.Names[i]));\n           DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, i),\n@@ -1044,7 +1044,7 @@ procedure TSqlDBDuckDBStatement.ReleaseResult;\n   nfo := pointer(fInfo);\n   for i := 1 to length(fInfo) do\n   begin\n-    DuckDBTypeInfoDone(nfo^.Info);\n+    nfo^.Info.Done;\n     inc(nfo);\n   end;\n   fInfo := nil;\n@@ -1198,11 +1198,11 @@ procedure TSqlDBDuckDBStatement.DescribeColumns;\n   nfo := pointer(fInfo);\n   for i := 0 to length(fInfo) - 1 do\n   begin\n-    DuckDBTypeInfoInit(nfo^.Info, DuckDB.column_logical_type(@fRes, i));\n+    nfo^.Info.Init(DuckDB.column_logical_type(@fRes, i));\n     col := AddColumn(RawUtf8(DuckDB.column_name(@fRes, i)));\n     col^.ColumnType := DuckDBTypeToField(nfo^.Info.TypeId, nfo^.Info.Scale);\n     col^.ColumnAttr := nfo^.Info.TypeId;\n-    if DuckDBTypeHasVariant(nfo^.Info) then\n+    if nfo^.Info.HasVariant then\n     begin\n       if fVariants = nil then\n         SetLength(fVariants, (length(fInfo) + 31) shr 3);",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17839\n+17840",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17839'\r\n+'2.4.17840'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1550a1c7c2803f6547a54396f99d71d3a5cbe679",
+      "short_sha": "1550a1c7",
+      "subject": "net: hardened TX509.HashForChannelBinding()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T21:30:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1550a1c7c2803f6547a54396f99d71d3a5cbe679",
+      "parents": [
+        "f38a16df9f6bcd79945a0983e8ab74a875229047"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 4,
+          "patch": "@@ -2958,10 +2958,9 @@ class function TX509.HashForChannelBinding(const Cert: RawByteString): RawByteSt\n   FastAssignNew(result);\r\n   der := PemToCert(Cert);\r\n   if der = '' then\r\n-    if AsnDecChunk(Cert) then // basic input validation\r\n-      der := Cert  // assume a DER was specified\r\n-    else\r\n-      exit;        // no certificate\r\n+    der := Cert;  // assume a DER was specified\r\n+  if not AsnDecChunk(Cert) then // basic input validation\r\n+    exit;\r\n   x := TX509.Create;\r\n   try\r\n     if not x.LoadFromDer(Der) or\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17838\n+17839",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17838'\r\n+'2.4.17839'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.x509"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f38a16df9f6bcd79945a0983e8ab74a875229047",
+      "short_sha": "f38a16df",
+      "subject": "db: optimized DuckDB HugeInt conversion",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T21:29:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f38a16df9f6bcd79945a0983e8ab74a875229047",
+      "parents": [
+        "7c4407efe836db3bf142bc34c88f590654dad50e"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 25,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3154,7 +3154,7 @@ function ToVarLeb64(Value: Int64; Dest: PByte): PByte;\n     Value := Value xor $7f;\r\n   end;\r\n   Dest^ := byte(Value);\r\n-  result := Dest + 1;\r\n+  result := @PByteArray(Dest)^[1];\r\n end;\r\n \r\n function ToVarUInt64(Value: QWord; Dest: PByte): PByte;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 22,
+          "patch": "@@ -1068,45 +1068,37 @@ function DuckStringAt(data: pointer; row: PtrInt): PDuckDBStringT;\n   result := pointer(PAnsiChar(data) + row * SizeOf(TDuckDBStringT));\n end;\n \n-type\n-  TU128 = TBlock128; // direct 128-bit access by little-endian 32-bit limbs\n-\n-procedure U128Negate(var v: TU128);\n+procedure U128Negate(var v: THash128Rec);\n+  {$ifdef HASINLINE} inline; {$endif}\n var\n-  i: PtrInt;\n-  c: Int64;\n+  lo: QWord;\n begin\n-  c := 1;\n-  for i := 0 to 3 do\n-  begin\n-    c := Int64(not v[i]) + c;\n-    v[i] := cardinal(c);\n-    c := c shr 32;\n-  end;\n+  lo := v.L;\n+  v.L := not lo + 1;\n+  v.H := not v.H + ord(lo = 0);\n end;\n \n-function DivU128By1B(var u: TU128): cardinal;\n-  {$ifdef HASINLINE} inline; {$endif}\n+function DivU128By1B(var u: THash128Rec): cardinal;\n var\n   r, cur: QWord;\n   i: PtrInt;\n begin // see mormot.db.nosql.bson's div128bits9digits()\n   r := 0;\n   for i := 3 downto 0 do\n   begin\n-    cur := (r shl 32) or QWord(u[i]);\n+    cur := (r shl 32) or QWord(u.c[i]);\n     if cur = 0 then\n       continue;\n-    u[i] := cardinal(cur div 1000000000);\n-    r := cur - QWord(u[i]) * 1000000000;\n+    u.c[i] := cardinal(cur div 1000000000);\n+    r := cur - QWord(u.c[i]) * 1000000000;\n   end;\n   result := cardinal(r);\n end;\n \n function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n   Signed: boolean; Scale: integer; var Buffer: TTemp47): PtrInt;\n var\n-  u: TU128;\n+  u: THash128Rec;\n   neg: boolean;\n   i, digits: PtrInt;\n   n, q: cardinal;\n@@ -1116,8 +1108,8 @@ function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n     Scale := 0\n   else if Scale > 38 then\n     ESqlDBDuckDB.RaiseUtf8('Invalid DuckDB decimal scale=%', [Scale]);\n-  PInt64(@u[0])^ := v.Lower;\n-  PInt64(@u[2])^ := v.Upper;\n+  u.L := v.Lower;\n+  u.H := v.Upper;\n   neg := Signed and (v.Upper < 0);\n   if neg then\n     U128Negate(u);\n@@ -1126,7 +1118,8 @@ function DuckHugeIntToTextBuf(const v: TDuckDBHugeInt;\n   p := last - 1;\n   repeat\n     n := DivU128By1B(u);\n-    if (u[0] or u[1] or u[2] or u[3]) = 0 then\n+    if (u.L = 0) and\n+       (u.H = 0) then\n     begin\n       repeat\n         q := n div 10;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17837\n+17838",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17837'\r\n+'2.4.17838'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.buffers",
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7c4407efe836db3bf142bc34c88f590654dad50e",
+      "short_sha": "7c4407ef",
+      "subject": "all: minor fixes after previous commits",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T18:22:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7c4407efe836db3bf142bc34c88f590654dad50e",
+      "parents": [
+        "15ebdd5a507aea509574351af4cfe2e94633d0f6"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 11,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2157,7 +2157,7 @@ function ReadLen(var R: TFastReader): PtrInt;\n begin\n   v := R.VarUInt64;\n   if (Int64(v) < 0) or\n-     (Int64(v) > R.Last - R.P) then\n+     (v > PtrUInt(R.Last - R.P)) then\n     ESqlDBQuack.RaiseUtf8('length % overflow', [Int64(v)]);\n   result := v;\n end;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17836\n+17837",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17836'\r\n+'2.4.17837'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 4,
+          "patch": "@@ -5114,10 +5114,8 @@ function KerberosServerAuthHeader(const InputHeaders: RawUtf8;\n   len := length(CbtHash);\r\n   if len <> 0 then\r\n   begin\r\n-    if (len <> 32) and\r\n-       (len <> 48) and\r\n-       (len <> 64) then\r\n-      exit;\r\n+    if len > SizeOf(THash512) then\r\n+      exit; // clearly not a common digital hash as expected by the RFC\r\n     {$ifdef OSWINDOWS}\r\n     if OSVersion < wSeven then\r\n       exit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 3,
+          "patch": "@@ -4607,9 +4607,7 @@ procedure THttpServerSocketGeneric.SetAuthorizeNegotiate(\n       [self, SECPKGNAMEAPI]);\r\n   len := length(CbtHash);\r\n   if (len <> 0) and\r\n-     (len <> 32) and\r\n-     (len <> 48) and\r\n-     (len <> 64) then\r\n+     (len > SizeOf(THash512)) then\r\n     EHttpServer.RaiseUtf8('%.SetAuthorizeNegotiate: invalid CbtHash length=%',\r\n       [self, len]);\r\n   fAuthorize := hraNegotiate;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -5100,7 +5100,7 @@ procedure TTestCoreBase.Integers;\n   CheckEqual(length(i32), 2);\r\n   CheckEqual(i32[0], 1);\r\n   CheckEqual(i32[1], 2);\r\n-  // validate signed LEB128 as used by DWARF and DuckDB/Quack\r\n+  // validate signed LEB128 as used by DWARF/DuckDB/Quack/WebAssembly\r\n   CheckLeb('00', 0);\r\n   CheckLeb('01', 1);\r\n   CheckLeb('3F', 63);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Cross-cutting",
+        "Database",
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.net.client",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "15ebdd5a507aea509574351af4cfe2e94633d0f6",
+      "short_sha": "15ebdd5a",
+      "subject": "crypt: new class function TX509.HashForChannelBinding",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T18:21:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/15ebdd5a507aea509574351af4cfe2e94633d0f6",
+      "parents": [
+        "88940b8b161897b8f0dfa48e20231296cb438b45"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -4088,6 +4088,7 @@ function SetSignatureSecurityRaw(algo: TCryptAsymAlgo;\n // - returns the size of the corresponding Hash in bytes, or 0 on error\r\n // - as defined by RFC 5929 - side note: we follow this RFC, which does not take\r\n // into account SHA-224 substitution to SHA-256 as it should\r\n+// - see also TX509.HashForChannelBinding() class method in mormot.crypt.X509\r\n function HashForChannelBinding(const CertRaw: TCertDer;\r\n   const SignatureHashAlgo: RawUtf8; out Hash: THash512Rec): integer;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 0,
+          "patch": "@@ -717,6 +717,10 @@   TX509 = class(TObjectLightLock)\n     procedure ToParsedInfo(out Info: TX509Parsed);\r\n     /// returns the raw X.509 extensions as binary OID and Value pairs\r\n     function GetExtensions: TCryptCustomExts;\r\n+    /// compute the raw certificate digest from a DER certificate or PEM chain\r\n+    // - for PEM input, selects the first CERTIFICATE block (the leaf certificate)\r\n+    // - will assume SHA-512 for Ed25519 signature, as defined by RFC 8032\r\n+    class function HashForChannelBinding(const Cert: RawByteString): RawByteString;\r\n     /// true if the Certificate Issuer is also its Subject\r\n     property IsSelfSigned: boolean\r\n       read fIsSelfSigned;\r\n@@ -2944,6 +2948,34 @@ procedure TX509.AfterModified;\n   Signed.AfterModified;\r\n end;\r\n \r\n+class function TX509.HashForChannelBinding(const Cert: RawByteString): RawByteString;\r\n+var\r\n+  der: TCertDer;\r\n+  x: TX509;\r\n+  size: PtrInt;\r\n+  dig: THash512Rec;\r\n+begin\r\n+  FastAssignNew(result);\r\n+  der := PemToCert(Cert);\r\n+  if der = '' then\r\n+    if AsnDecChunk(Cert) then // basic input validation\r\n+      der := Cert  // assume a DER was specified\r\n+    else\r\n+      exit;        // no certificate\r\n+  x := TX509.Create;\r\n+  try\r\n+    if not x.LoadFromDer(Der) or\r\n+       (x.SignatureAlgorithm = xsaNone) then\r\n+      exit;\r\n+    size := mormot.crypt.secure.HashForChannelBinding(der,\r\n+      HASH_TXT[XSA_TO_HF[x.SignatureAlgorithm]], dig);\r\n+    if size <> 0 then\r\n+      FastSetRawByteString(result, @dig, size);\r\n+  finally\r\n+    x.Free;\r\n+  end;\r\n+end;\r\n+\r\n \r\n { **************** X.509 Certificate Revocation List (CRL) }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17835\n+17836",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17835'\r\n+'2.4.17836'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.secure",
+        "mormot.crypt.x509"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "88940b8b161897b8f0dfa48e20231296cb438b45",
+      "short_sha": "88940b8b",
+      "subject": "crypt: new PemToCert() function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T18:14:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/88940b8b161897b8f0dfa48e20231296cb438b45",
+      "parents": [
+        "ff48d654d87488a3cc7dd92eaa4fbab54535fd9c"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 24,
+          "deletions": 2,
+          "patch": "@@ -3994,6 +3994,10 @@ function IsPemEncrypted(const pem: TCertPem): boolean;\n function PemToCertAndPrivKey(const MultiPartPem: RawUtf8;\r\n   out Cert, PrivKey: RawByteString): boolean;\r\n \r\n+/// extract the first pemCertificate concatenated in a PEM text file\r\n+// - used e.g. by TX509.HashForChannelBinding\r\n+function PemToCert(const MultiPartPem: RawUtf8): RawByteString;\r\n+\r\n /// low-level binary-to-DER encoder of small buf with buflen < 127\r\n function DerAppend(P: PAnsiChar; buf: PByteArray; buflen: PtrUInt): PAnsiChar;\r\n \r\n@@ -10830,7 +10834,7 @@ function IsPemEncrypted(const pem: TCertPem): boolean;\n \r\n function PemHeader(lab: PUtf8Char): TPemKind;\r\n begin\r\n-  if PEM_LEN[low(TPemKind)] = 0 then // compute once\r\n+  if PEM_LEN[high(TPemKind)] = 0 then // compute once\r\n     for result := low(result) to high(result) do\r\n       PEM_LEN[result] := PosEx('--', PEM_BEGIN[result], 14) - 12;\r\n   for result := succ(low(result)) to high(result) do\r\n@@ -10950,7 +10954,7 @@ function PemToCertAndPrivKey(const MultiPartPem: RawUtf8;\n       break;\r\n     if k = pemCertificate then // pemSynopseCertificate is out-of-scope here\r\n       if {%H-}Cert <> '' then\r\n-        exit // should contain a single Certificate\r\n+        exit                   // should contain a single Certificate\r\n       else\r\n         Cert := PemToDer(pem)\r\n     else\r\n@@ -10961,6 +10965,24 @@ function PemToCertAndPrivKey(const MultiPartPem: RawUtf8;\n             ({%H-}PrivKey <> '');\r\n end;\r\n \r\n+function PemToCert(const MultiPartPem: RawUtf8): RawByteString;\r\n+var\r\n+  P: PUtf8Char;\r\n+  pem: RawUtf8;\r\n+  k: TPemKind;\r\n+begin\r\n+  FastAssignNew(result);\r\n+  P := pointer(MultiPartPem);\r\n+  repeat\r\n+    pem := NextPem(P, @k);\r\n+    if pem = '' then\r\n+      break;\r\n+    if k = pemCertificate then // pemSynopseCertificate is out-of-scope here\r\n+      result := PemToDer(pem);\r\n+    FillZero(pem);\r\n+  until result <> ''; // stop at the first valid certificate (assume leaf)\r\n+end;\r\n+\r\n function DerAppend(P: PAnsiChar; buf: PByteArray; buflen: PtrUInt): PAnsiChar;\r\n var\r\n   pos, prefix: PtrUInt;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17834\n+17835",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17834'\r\n+'2.4.17835'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.secure"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ff48d654d87488a3cc7dd92eaa4fbab54535fd9c",
+      "short_sha": "ff48d654",
+      "subject": "core: fixed VarInt64 encoding on CPU32",
+      "body": "- cross-platform consistency issue detected with the new regression tests",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T18:13:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ff48d654d87488a3cc7dd92eaa4fbab54535fd9c",
+      "parents": [
+        "9a783e77767189c4fd95672312ed2ef2caee1313"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 2,
+          "patch": "@@ -2845,7 +2845,10 @@ function ZagZigInt64(r: Int64): QWord;\n begin\r\n   {$ifdef CPU32}\r\n   if r <= 0 then\r\n-    result := (-r) shl 1 // 0->0, -1->2, -2->4..\r\n+    if r = Low(Int64) then\r\n+      result := QWord(-1)\r\n+    else\r\n+      result := (-r) shl 1 // 0->0, -1->2, -2->4..\r\n   else\r\n     result := (r shl 1) - 1; // 1->1, 2->3..\r\n   {$else}\r\n@@ -3649,7 +3652,7 @@ function TFastReader.VarLeb64: Int64;\n   inc(P);\r\n   if b < $80 then\r\n   begin\r\n-    result := (PtrInt(b) xor $40) - $40; // single-byte SLEB128: -64..63\r\n+    result := Int64(PtrInt(b) xor $40) - $40; // single-byte SLEB128: -64..63\r\n     exit;\r\n   end;\r\n   result := b and $7f;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17833\n+17834",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17833'\r\n+'2.4.17834'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.buffers"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9a783e77767189c4fd95672312ed2ef2caee1313",
+      "short_sha": "9a783e77",
+      "subject": "net: CBT hash support for THttpServerSocketGeneric.SetAuthorizeNegotiate",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T17:34:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9a783e77767189c4fd95672312ed2ef2caee1313",
+      "parents": [
+        "909a6703efb1873d9e730f6de757e435d0533538"
+      ],
+      "stats": {
+        "additions": 22,
+        "deletions": 6,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17832\n+17833",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17832'\r\n+'2.4.17833'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 4,
+          "patch": "@@ -1076,6 +1076,7 @@   THttpServerSocketGeneric = class(THttpServerGeneric)\n     fAuthorizerDigest: IDigestAuthServer;\r\n     fAuthorizeBasic: TOnHttpServerBasicAuth;\r\n     fAuthorizeBasicRealm: RawUtf8;\r\n+    fAuthorizeNegotiateCbtHash: RawByteString;\r\n     fStats: array[THttpServerSocketGetRequestResult] of integer;\r\n     fBlackListUriReloadMin: integer;\r\n     fBlackListUriNextTix, fBlackListUriCrc: cardinal;\r\n@@ -1206,7 +1207,9 @@   THttpServerSocketGeneric = class(THttpServerGeneric)\n     /// allow optional NEGOTIATE authentication for some URIs via Kerberos\r\n     // - will use mormot.lib.sspi or mormot.lib.gssapi\r\n     // - if OnBeforeBody returns 401, Kerberos will be used to authenticate\r\n-    procedure SetAuthorizeNegotiate;\r\n+    // - optional CbtHash is the binary tls-server-end-point certificate digest;\r\n+    // if supplied, a matching client channel binding is mandatory\r\n+    procedure SetAuthorizeNegotiate(const CbtHash: RawByteString = '');\r\n     /// set after a call to SetAuthDigest/SetAuthBasic/SetAuthorizeNegotiate\r\n     property Authorize: THttpServerRequestAuthentication\r\n       read fAuthorize;\r\n@@ -4557,6 +4560,7 @@ procedure THttpServerSocketGeneric.SetAuthorizeNone;\n   fAuthorizerDigest := nil;\r\n   fAuthorizeBasic := nil;\r\n   fAuthorizeBasicRealm := '';\r\n+  fAuthorizeNegotiateCbtHash := '';\r\n end;\r\n \r\n procedure THttpServerSocketGeneric.SetAuthorizeDigest(\r\n@@ -4592,13 +4596,24 @@ procedure THttpServerSocketGeneric.SetAuthorizeBasic(const BasicRealm: RawUtf8;\n     fAuthorizeBasicRealm);\r\n end;\r\n \r\n-procedure THttpServerSocketGeneric.SetAuthorizeNegotiate;\r\n+procedure THttpServerSocketGeneric.SetAuthorizeNegotiate(\r\n+  const CbtHash: RawByteString);\r\n+var\r\n+  len: integer;\r\n begin\r\n   SetAuthorizeNone;\r\n   if not InitializeDomainAuth then\r\n     EHttpServer.RaiseUtf8('%.SetAuthorizeNegotiate: no % available',\r\n       [self, SECPKGNAMEAPI]);\r\n-   fAuthorize := hraNegotiate;\r\n+  len := length(CbtHash);\r\n+  if (len <> 0) and\r\n+     (len <> 32) and\r\n+     (len <> 48) and\r\n+     (len <> 64) then\r\n+    EHttpServer.RaiseUtf8('%.SetAuthorizeNegotiate: invalid CbtHash length=%',\r\n+      [self, len]);\r\n+  fAuthorize := hraNegotiate;\r\n+  fAuthorizeNegotiateCbtHash := CbtHash;\r\n end;\r\n \r\n function THttpServerSocketGeneric.AuthorizeServerMem: TDigestAuthServerMem;\r\n@@ -4687,7 +4702,8 @@ function THttpServerSocketGeneric.Authorization(var Http: THttpRequestContext;\n           if Assigned(fSspiKeyTab) then\r\n             fSspiKeyTab.PrepareKeyTab; // do nothing if no KeyTab changed or set\r\n           {$endif OSPOSIX}\r\n-          header := KerberosServerAuthHeader('', auth + 10, @user);\r\n+          header := KerberosServerAuthHeader('', auth + 10,\r\n+                      @user, fAuthorizeNegotiateCbtHash);\r\n           if header <> '' then\r\n           begin\r\n             Http.ResponseHeaders := header;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "909a6703efb1873d9e730f6de757e435d0533538",
+      "short_sha": "909a6703",
+      "subject": "net: extend KerberosServerAuthHeader() with an optional binary CBT hash",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T17:27:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/909a6703efb1873d9e730f6de757e435d0533538",
+      "parents": [
+        "ed9dfefacf17845bcd220ee8ed177b271435a055"
+      ],
+      "stats": {
+        "additions": 42,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.gssapi.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -136,6 +136,9 @@   gss_key_value_set_desc = record\n   GSS_C_ROUTINE_ERROR_MASK = $ff;\r\n   GSS_C_SUPPLEMENTARY_MASK = $ffff;\r\n \r\n+  // MIT Kerberos 1.19+ reports a verified channel binding in context flags\r\n+  GSS_C_CHANNEL_BOUND_FLAG = $00000800;\r\n+\r\n   GSS_S_CONTINUE_NEEDED = 1 shl (GSS_C_SUPPLEMENTARY_OFFSET + 0);\r\n   GSS_S_DUPLICATE_TOKEN = 1 shl (GSS_C_SUPPLEMENTARY_OFFSET + 1);\r\n   GSS_S_OLD_TOKEN       = 1 shl (GSS_C_SUPPLEMENTARY_OFFSET + 2);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17831\n+17832",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17831'\r\n+'2.4.17832'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 37,
+          "deletions": 3,
+          "patch": "@@ -1234,9 +1234,13 @@ procedure KerberosChannelBinding(const Tls: INetTls; var SecContext: TSecContext\n // 'WWW-Authenticate: Negotiate ...' response header without trailing CRLF\r\n // - SSPI/GSSAPI processing errors may raise ESynSspi/EGssApi\r\n // - can optionally return the authenticated user name\r\n+// - CbtHash is the raw tls-server-end-point certificate digest (32/48/64\r\n+// bytes), as returned by HashForChannelBinding(); when set, matching channel\r\n+// bindings are mandatory and authentication fails if they are absent\r\n // - defined in this unit to avoid a dependency to mormot.net.server.pas\r\n function KerberosServerAuthHeader(const InputHeaders: RawUtf8;\r\n-  InputAuth: PUtf8Char = nil; AuthUser: PRawUtf8 = nil): RawUtf8;\r\n+  InputAuth: PUtf8Char = nil; AuthUser: PRawUtf8 = nil;\r\n+  const CbtHash: RawByteString = ''): RawUtf8;\r\n {$endif NOKERBEROSCLIENT}\r\n \r\n \r\n@@ -5092,19 +5096,33 @@ procedure KerberosChannelBinding(const Tls: INetTls; var SecContext: TSecContext\n     exit;\r\n   SecContext.ChannelBindingsHashLen := HashForChannelBinding(cert, hasher, Temp);\r\n   if SecContext.ChannelBindingsHashLen <> 0 then\r\n-      SecContext.ChannelBindingsHash := @Temp;\r\n+    SecContext.ChannelBindingsHash := @Temp;\r\n end;\r\n \r\n function KerberosServerAuthHeader(const InputHeaders: RawUtf8;\r\n-  InputAuth: PUtf8Char; AuthUser: PRawUtf8): RawUtf8;\r\n+  InputAuth: PUtf8Char; AuthUser: PRawUtf8; const CbtHash: RawByteString): RawUtf8;\r\n var\r\n   authend: PUtf8Char;\r\n   bin, bout: RawByteString;\r\n   ctx: TSecContext;\r\n+  len {$ifdef OSPOSIX}, major, minor, flags {$endif OSPOSIX}: cardinal;\r\n begin\r\n   FastAssignNew(result);\r\n   if AuthUser <> nil then\r\n     AuthUser^ := '';\r\n+  // reject invalid hashes and systems on which SetBind() skips channel binding\r\n+  len := length(CbtHash);\r\n+  if len <> 0 then\r\n+  begin\r\n+    if (len <> 32) and\r\n+       (len <> 48) and\r\n+       (len <> 64) then\r\n+      exit;\r\n+    {$ifdef OSWINDOWS}\r\n+    if OSVersion < wSeven then\r\n+      exit;\r\n+    {$endif OSWINDOWS}\r\n+  end;\r\n   // locate and parse 'Authorization: Negotiate <base64>'\r\n   if InputAuth = nil then\r\n     InputAuth := FindNameValue(pointer(InputHeaders), 'AUTHORIZATION: NEGOTIATE ');\r\n@@ -5119,11 +5137,27 @@ function KerberosServerAuthHeader(const InputHeaders: RawUtf8;\n   // make the actual authentication using SSPI or GSSAPI\r\n   InvalidateSecContext(ctx);\r\n   try\r\n+    if CbtHash <> '' then\r\n+    begin\r\n+      ctx.ChannelBindingsHash    := pointer(CbtHash);\r\n+      ctx.ChannelBindingsHashLen := length(CbtHash);\r\n+    end;\r\n     if ServerSspiAuth(ctx, bin, bout) then // may raise ESynSspi/EGssApi\r\n       exit; // only a single roundtrip is supported yet\r\n     {$ifdef OSWINDOWS} // explicit NTLM rejection is needed on Windows\r\n     if not PropNameEquals(SecPackageName(ctx), 'Kerberos') then\r\n       exit;\r\n+    {$else}\r\n+    if CbtHash <> '' then\r\n+    begin\r\n+      // providing bindings to GSSAPI is not enough\r\n+      flags := 0;\r\n+      major := GssApi.gss_inquire_context(minor, ctx.CtxHandle,\r\n+                 nil, nil, nil, nil, @flags, nil, nil);\r\n+      GssCheck(major, minor, 'KerberosServerAuthHeader: channel binding');\r\n+      if (flags and GSS_C_CHANNEL_BOUND_FLAG) = 0 then\r\n+        exit; // require the verified binding flag\r\n+    end;\r\n     {$endif OSWINDOWS}\r\n     if AuthUser <> nil then\r\n       ServerSspiAuthUser(ctx, AuthUser^); // retrieve the authenticated identity\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.gssapi",
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ed9dfefacf17845bcd220ee8ed177b271435a055",
+      "short_sha": "ed9dfefa",
+      "subject": "core: minor TRttiCustomList.FindName hardening",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T17:20:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ed9dfefacf17845bcd220ee8ed177b271435a055",
+      "parents": [
+        "8e5661f78afe59a68a58e61fd6a96197562a081d"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.rtti.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -10201,9 +10201,9 @@ function TRttiCustomList.FindName(Name: PUtf8Char; NameLen: PtrInt): TRttiCustom\n   // try latest found name e.g. calling from JsonRetrieveObjectRttiCustom()\r\n   result := fLastHashName; // accessing aligned pointer is expected to be atomic\r\n   if (result <> nil) and\r\n+     (not RegisterSafe.IsLocked) and\r\n      (PStrLen(PAnsiChar(pointer(result.Name)) - _STRLEN)^ = NameLen) and\r\n-     IdemPropNameUSameLenNotNull(pointer(result.Name), Name, NameLen) and\r\n-     not RegisterSafe.IsLocked then\r\n+     IdemPropNameUSameLenNotNull(pointer(result.Name), Name, NameLen) then\r\n     exit;\r\n   // our dedicated \"hash table of the poor\" (tm) lookup\r\n   result := nil;\r\n@@ -10893,7 +10893,7 @@ class function TObjectWithRttiMethods.RttiCustom: TRttiCustom;\n   // inlined Rtti.Find(ClassType): we know it is the first slot\r\n   {$ifdef NOPATCHVMT}\r\n   result := Rtti.FindType(PPointer(PAnsiChar(self) + vmtTypeInfo)^);\r\n-  {$else} // no Rtti.RegisterSafe.IsLocked needed\r\n+  {$else} // no Rtti.RegisterSafe.IsLocked needed since Create was done\r\n   result := PPointer(PAnsiChar(self) + vmtAutoTable)^; \r\n   {$endif NOPATCHVMT}\r\n   // assert(result.InheritsFrom(TRttiCustom));\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17828\n+17831",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17828'\r\n+'2.4.17831'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.rtti"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8e5661f78afe59a68a58e61fd6a96197562a081d",
+      "short_sha": "8e5661f7",
+      "subject": "Merge pull request #710 from landrix/fix/emf-batch-100",
+      "body": "ui: pdf - EMF clipping, stock fonts, device pixels and world transforms",
+      "author": "ab",
+      "date": "2026-11-03T15:50:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8e5661f78afe59a68a58e61fd6a96197562a081d",
+      "parents": [
+        "9982b009dcb45a203328bd09c4e4bcc84978c44b",
+        "f07cc6d9355572d3585767beef0274e5e2c0b7bd"
+      ],
+      "stats": {
+        "additions": 1405,
+        "deletions": 131,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 342,
+          "deletions": 128,
+          "patch": "@@ -1927,6 +1927,8 @@   TPdfCanvas = class\n     function DevPixelY: single;\r\n     // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n     function BoxInclI(Box: TRect): TPdfBox;\r\n+    // r normalized, one device pixel added on the device's right and bottom\r\n+    procedure AddDevicePixel(var r: TPdfRect);\r\n     // exclusive GDI box (FillRect = EMR_BITBLT PATCOPY)\r\n     function BoxExclI(Box: TRect): TPdfBox;\r\n     procedure DrawXObjectPrepare(const AXObjectName: PdfString);\r\n@@ -3585,7 +3587,6 @@ function PrepareTransformation(\n const\r\n   // those constants are not defined in earlier Delphi revisions\r\n   {$ifdef USE_METAFILE}\r\n-  cPI: single = 3.141592654;\r\n   cPIdiv180: single = 0.017453292;\r\n   c180divPI: single = 57.29577951;\r\n   {$endif USE_METAFILE}\r\n@@ -9673,27 +9674,30 @@ function TPdfCanvas.ViewOffsetY(Y: single): single;\n   result := ((Y - fWinOrg.Y) * fViewSize.cy / fWinSize.cy) + fViewOrg.Y\r\n end;\r\n \r\n+// GDI maps world -> page -> device: the world scale and move first, then\r\n+// the window and viewport (they were applied the other way round)\r\n function TPdfCanvas.I2X(X: integer): single;\r\n begin\r\n-  result := fOffsetXDef + (fWorldOffsetX + ViewOffsetX(X) * fWorldFactorX) * fDevScaleX\r\n+  result := fOffsetXDef +\r\n+            ViewOffsetX(fWorldOffsetX + X * fWorldFactorX) * fDevScaleX\r\n end;\r\n \r\n function TPdfCanvas.I2Y(Y: integer): single;\r\n begin\r\n   result := fPage.GetPageHeight - fOffsetYDef -\r\n-            (fWorldOffsetY + ViewOffsetY(Y) * fWorldFactorY) * fDevScaleY\r\n+            ViewOffsetY(fWorldOffsetY + Y * fWorldFactorY) * fDevScaleY\r\n end;\r\n \r\n function TPdfCanvas.S2X(X: single): single;\r\n begin\r\n   result := fOffsetXDef +\r\n-            (fWorldOffsetX + ViewOffsetX(X) * fWorldFactorX) * fDevScaleX;\r\n+            ViewOffsetX(fWorldOffsetX + X * fWorldFactorX) * fDevScaleX;\r\n end;\r\n \r\n function TPdfCanvas.S2Y(Y: single): single;\r\n begin\r\n   result := fPage.GetPageHeight - fOffsetYDef -\r\n-            (fWorldOffsetY + ViewOffsetY(Y) * fWorldFactorY) * fDevScaleY;\r\n+            ViewOffsetY(fWorldOffsetY + Y * fWorldFactorY) * fDevScaleY;\r\n end;\r\n \r\n procedure TPdfCanvas.LineToI(x, y: integer);\r\n@@ -9727,13 +9731,12 @@ procedure TPdfCanvas.RoundRectI(x1, y1, x2, y2, cx, cy: integer);\n begin\r\n   // the corner size goes through the same window/viewport mapping as the\r\n   // coordinates (MM_ANISOTROPIC metafiles), and the GDI box is\r\n-  // inclusive-inclusive: one device pixel is added to the recorded\r\n-  // right/bottom edges, before normalizing - see BoxInclI\r\n+  // inclusive-inclusive - see BoxInclI\r\n   r.Left   := I2X(x1);\r\n-  r.Right  := S2X(x2 + DevPixelX);\r\n+  r.Right  := I2X(x2);\r\n   r.Top    := I2Y(y1);\r\n-  r.Bottom := S2Y(y2 + DevPixelY);\r\n-  NormalizeRect(r);\r\n+  r.Bottom := I2Y(y2);\r\n+  AddDevicePixel(r);\r\n   RoundRect(r.Left, r.Bottom, r.Right, r.Top,\r\n     Abs(I2X(x1 + cx) - I2X(x1)), -Abs(I2Y(y1 + cy) - I2Y(y1)));\r\n end;\r\n@@ -9819,20 +9822,33 @@ function PdfRectToBox(r: TPdfRect): TPdfBox;\n   result.Height := r.Bottom - r.Top;\r\n end;\r\n \r\n-// GDI records the Right/Bottom of Rectangle/Ellipse one DEVICE pixel inside\r\n-// the shape, i.e. several logical units with a screen reference DC: RectI()\r\n-// removed one logical unit instead, and shapes were too small\r\n-// - under a mirrored mapping the recorded Right is the smaller value (500,110\r\n-// for 100..500 at -10 units per pixel): the signed pixel is added before the\r\n-// box is normalized\r\n+// GDI paints Rectangle/Ellipse with their right and bottom edges: one DEVICE\r\n+// pixel more on the device's right and bottom, however the box was recorded\r\n+// (one device pixel inside in GM_COMPATIBLE, as called in GM_ADVANCED) and\r\n+// the map mode mirrored - a logical unit of the map mode was wrong under a\r\n+// world scale; a negative render scale puts the device's right at the left\r\n+procedure TPdfCanvas.AddDevicePixel(var r: TPdfRect);\r\n+begin\r\n+  NormalizeRect(r);\r\n+  if fDevScaleX >= 0 then\r\n+    r.Right := r.Right + fDevScaleX\r\n+  else\r\n+    r.Le\n... [truncated, 28802 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1063,
+          "deletions": 3,
+          "patch": "@@ -73,6 +73,12 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfNullPenLines;\r\n     procedure EmfLineAfterEndedPath;\r\n     procedure EmfTextInPath;\r\n+    procedure EmfStockFontMetrics;\r\n+    procedure EmfClipBoxes;\r\n+    procedure EmfWorldBoxes;\r\n+    procedure EmfBitmapBounds;\r\n+    procedure EmfWorldRotation;\r\n+    procedure EmfWorldReflection;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -1555,6 +1561,7 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   R_SAVEDC = 33;\r\n   R_RESTOREDC = 34;\r\n   R_SELECTOBJECT = 37;\r\n+  R_EXTCREATEFONTINDIRECTW = 82;\r\n   R_CREATEBRUSHINDIRECT = 39;\r\n   R_STRETCHDIBITS = 81;\r\n   R_EXTTEXTOUTA = 83;\r\n@@ -1603,7 +1610,8 @@ function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynA\n \r\n // the metafile rendered into one page of an uncompressed PDF\r\n function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\r\n-  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip): RawUtf8;\r\n+  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip;\r\n+  ScaleX: single = 1; ScaleY: single = 1): RawUtf8;\r\n var\r\n   doc: TPdfDocumentGdi;\r\n begin\r\n@@ -1617,8 +1625,8 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n     doc.AddPage;\r\n-    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0, tpSetTextJustification,\r\n-      99, 101, TextClipping);\r\n+    RenderMetaFile(doc.Canvas, Mf, ScaleX, ScaleY, 0, 0,\r\n+      tpSetTextJustification, 99, 101, TextClipping);\r\n     result := SavedPdf(doc);\r\n   finally\r\n     doc.Free;\r\n@@ -3193,6 +3201,1058 @@ procedure TTestUiPdf.EmfTextInPath;\n   TAesAccess = class(TPdfEncryptionAes256);\r\n {$endif NO_USE_PDFSECURITY}\r\n \r\n+// two boxes the same within the rounding of the content stream\r\n+function SameBox(const A, B: TPdfBox): boolean;\r\n+begin\r\n+  result := (Abs(A.Left - B.Left) < 0.02) and\r\n+            (Abs(A.Top - B.Top) < 0.02) and\r\n+            (Abs(A.Width - B.Width) < 0.02) and\r\n+            (Abs(A.Height - B.Height) < 0.02);\r\n+end;\r\n+\r\n+// text in the stock font Stock after a large Arial, or (Reference) in a font\r\n+// created from the LOGFONT of that stock font; Mapped device pixels per\r\n+// logical unit, 1 for MM_TEXT; AsStock: selected by its stock index, as some\r\n+// Windows builds record DEFAULT_GUI_FONT and others as a font of the metafile\r\n+function StockFontEmf(Stock: integer; Reference: boolean;\r\n+  Mapped: integer; AsStock: boolean = false): RawUtf8;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  lf: TLogFontW;\r\n+  f, g: HFONT;\r\n+  bytes: RawByteString;\r\n+  fonts, sel: TIntegerDynArray;\r\n+  i, j: PtrInt;\r\n+begin\r\n+  FillChar(lf, SizeOf(lf), 0);\r\n+  lf.lfHeight := -40;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Arial');\r\n+  f := CreateFontIndirectW(lf);\r\n+  GetObjectW(GetStockObject(Stock), SizeOf(lf), @lf);\r\n+  g := CreateFontIndirectW(lf);\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      if Mapped > 1 then\r\n+      begin\r\n+        SetMapMode(mc.Handle, MM_ANISOTROPIC);\r\n+        SetWindowExtEx(mc.Handle, 100, 100, nil);\r\n+        SetViewportExtEx(mc.Handle, 100 * Mapped, 100 * Mapped, nil);\r\n+      end;\r\n+      SelectObject(mc.Handle, f);\r\n+      TextOutW(mc.Handle, 10, 10, 'Arial', 5);\r\n+      if Reference then\r\n+        SelectObject(mc.Handle, g)\r\n+      else\r\n+        SelectObject(mc.Handle, GetStockObject(Stock));\r\n+      TextOutW(mc.Handle, 10, 100, 'Stock', 5);\r\n+      SelectObject(mc.Handle, GetStockObject(SYSTEM_FONT));\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    if AsStock then\r\n+    begin\r\n+      // a font of the metafile of the stock font's face: selected by index\r\n+      bytes := MetaFileBytes(mf);\r\n+      fonts := EmfRecords(bytes, R_EXTCREATEFONTINDIRECTW);\r\n+      sel := EmfRecords(bytes, R_SELECTOBJECT);\r\n+    \n... [truncated, 33956 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 710,
+      "is_merge": true
+    },
+    {
+      "sha": "9982b009dcb45a203328bd09c4e4bcc84978c44b",
+      "short_sha": "9982b009",
+      "subject": "core: enhanced TRttiCustomList thread safety",
+      "body": "- use a TMultiLightLock instead of TOSLock\n- use its counter and thread ID to ensure RTTI registration is thread-safe\n- seems a cleaner first step for #692",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T15:23:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9982b009dcb45a203328bd09c4e4bcc84978c44b",
+      "parents": [
+        "e61a438833d74cedf64b49baa5d84411610322c0"
+      ],
+      "stats": {
+        "additions": 83,
+        "deletions": 74,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.collections.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -302,9 +302,9 @@   EIList = class(ESynException);\n   TIListParent = class(TInterfacedObject)\r\n   protected\r\n     fSafe: TRWLock;\r\n-    fCount: integer;  // external fDynArray count\r\n-    fOptions: TListOptions;\r\n-    fValue: pointer; // holds the actual dynamic array of <T>\r\n+    fCount: integer;        // external fDynArray count\r\n+    fOptions: TListOptions; // 8-bit\r\n+    fValue: pointer;        // holds the actual dynamic array of <T>\r\n     fDynArray: TDynArray;\r\n     fHasher: PDynArrayHasher;\r\n     function DoPop(var dest; opt: TListPop): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.interfaces.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -5991,6 +5991,9 @@ procedure TInjectableObject.AutoResolve(aRaiseEServiceExceptionIfNotFound: boole\n   r := pointer(Rtti.FindType(PPointer(PPAnsiChar(self)^ + vmtTypeInfo)^));\r\n   {$else}\r\n   r := PPointer(PPAnsiChar(self)^ + vmtAutoTable)^;\r\n+  if (r <> nil) and\r\n+     Rtti.RegisterSafe.IsLocked then\r\n+    Rtti.RegisterSafe.WaitUnlocked;\r\n   {$endif NOPATCHVMT}\r\n   if (r = nil) or\r\n      not (rcfAutoCreateFields in r.Flags) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.json.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -11465,7 +11465,7 @@ procedure AutoCreateFields(ObjectInstance: TObject);\n begin // not inlined, since Create() are already slow and complex enough\r\n   {$ifdef NOPATCHVMT}\r\n   p := pointer(Rtti.FindType(PPointer(PPAnsiChar(ObjectInstance)^ + vmtTypeInfo)^));\r\n-  {$else}\r\n+  {$else} // Rtti.RegisterSafe.IsLocked check not needed here\r\n   p := PPointer(PPAnsiChar(ObjectInstance)^ + vmtAutoTable)^; // = FindClass()\r\n   {$endif NOPATCHVMT}\r\n   if (p = nil) or\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -5462,7 +5462,7 @@ class function TSynLog.Family: TSynLogFamily;\n   result := pointer(Self);\n   if result = nil then\n     exit;\n-  // inlined Rtti.Find(ClassType)\n+  // inlined Rtti.Find(ClassType) - no need to check Rtti.RegisterSafe.IsLocked\n   {$ifdef NOPATCHVMT}\n   result := LastFamily;\n   if (result <> nil) and\n@@ -5498,7 +5498,7 @@ class function TSynLog.Add: TSynLog;\n   result := nil;\n   if self = nil then\n     exit;\n-  {$ifdef NOPATCHVMT}\n+  {$ifdef NOPATCHVMT} // no need to check Rtti.RegisterSafe.IsLocked\n   lf := LastFamily;\n   if (lf = nil) or\n      (lf.SynLogClass <> self) then",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.rtti.pas",
+          "status": "modified",
+          "additions": 72,
+          "deletions": 66,
+          "patch": "@@ -2900,7 +2900,7 @@   TRttiCustomList = class\n     fHashInfo: array of TRttiCustomListPairs;\r\n     // store PRttiInfo/TRttiCustom pairs by Name - protected by RegisterSafe\r\n     fHashName: array of TPointerDynArray;\r\n-    fLastHashName: TRttiCustom; // speedup search by name e.g. from a loop\r\n+    fLastHashName: TRttiCustom;       // speedup search by name e.g. from a loop\r\n     fInstances: array of TRttiCustom; // of Count length - released in Destroy\r\n     fGlobalClass: TRttiCustomClass;\r\n     fOwnedRtti: array of TRttiCustom; // for SetPropsFromText(NoRegister=true)\r\n@@ -2917,7 +2917,7 @@   TRttiCustomList = class\n     /// a global lock shared for high-level RTTI registration process\r\n     // - is used e.g. to protect DoRegister() or TRttiCustom.PrivateSlot\r\n     // - should be a reentrant lock, even if seldom called\r\n-    RegisterSafe: TOSLock;\r\n+    RegisterSafe: TMultiLightLock;\r\n     /// how many TRttiCustom instances have been registered for a given type\r\n     // - we include rkUnknown for safety\r\n     Counts: array[TRttiKind] of integer;\r\n@@ -2934,13 +2934,8 @@   TRttiCustomList = class\n     // - returns nil if Info is not known\r\n     // - will use the ObjectClass vmtAutoTable slot for very fast O(1) lookup,\r\n     // or use our \"hash table of the poor\" (tm) if NOPATCHVMT conditional is set\r\n-    {$ifdef NOPATCHVMT}\r\n     function FindClass(ObjectClass: TClass): TRttiCustom;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n-    {$else}\r\n-    class function FindClass(ObjectClass: TClass): TRttiCustom;\r\n-      {$ifdef HASINLINE}static; inline;{$endif}\r\n-    {$endif NOPATCHVMT}\r\n     /// efficient search of TRttiCustom from a given type name\r\n     function FindName(Name: PUtf8Char; NameLen: PtrInt): TRttiCustom; overload;\r\n     /// efficient search of TRttiCustom from a given type name and kind\r\n@@ -5503,21 +5498,25 @@ function TRttiCustomList.RegisterClass(ObjectClass: TClass): TRttiCustom;\n begin\r\n   {$ifdef NOPATCHVMT}\r\n   result := FindType(PPointer(PAnsiChar(ObjectClass) + vmtTypeInfo)^);\r\n+  if result = nil then\r\n   {$else}\r\n   result := PPointer(PAnsiChar(ObjectClass) + vmtAutoTable)^;\r\n+  if (result = nil) or\r\n+     RegisterSafe.IsLocked then\r\n   {$endif NOPATCHVMT}\r\n-  if result = nil then\r\n     result := DoRegisterClass(ObjectClass);\r\n end;\r\n \r\n function TRttiCustomList.RegisterClass(aObject: TObject): TRttiCustom;\r\n begin\r\n   {$ifdef NOPATCHVMT}\r\n   result := FindType(PPointer(PPAnsiChar(aObject)^ + vmtTypeInfo)^);\r\n+  if result = nil then\r\n   {$else}\r\n   result := PPointer(PPAnsiChar(aObject)^ + vmtAutoTable)^;\r\n+  if (result = nil) or\r\n+     RegisterSafe.IsLocked then\r\n   {$endif NOPATCHVMT}\r\n-  if result = nil then\r\n     result := DoRegisterClass(PClass(aObject)^);\r\n end;\r\n \r\n@@ -10033,7 +10032,6 @@ constructor TRttiCustomList.Create;\n   SetLength(fHashInfo, RK_TOSLOT_MAX + 1); // per-kind hash table for PRttiInfo\r\n   SetLength(fHashName, HASHNAME_MAX + 1);  // a single hash table for names\r\n   fGlobalClass := TRttiCustom;             // eventually set by mormot.core.json\r\n-  RegisterSafe.Init;\r\n end;\r\n \r\n destructor TRttiCustomList.Destroy;\r\n@@ -10044,7 +10042,6 @@ destructor TRttiCustomList.Destroy;\n     fInstances[i].Free;\r\n   ObjArrayClear(fOwnedRtti);\r\n   inherited Destroy;\r\n-  RegisterSafe.Done;\r\n end;\r\n \r\n function LockedFind(Pairs, PEnd: PPointerArray; Info: PRttiInfo): TRttiCustom;\r\n@@ -10090,49 +10087,53 @@ function TRttiCustomList.FindType(Info: PRttiInfo): TRttiCustom;\n     k := @fHashInfo[RK_TOSLOT[Info^.Kind]];\r\n     // try latest found RTTI for this slot of type definition (very effective)\r\n     result := k^.LastInfo;\r\n-    if (result <> nil) and\r\n-       (result.Info = Info) then // happens 99.6% (96% NOPATCH) during tests\r\n-      exit;\r\n-    // O(1) hash of the PRttiInfo pointer using RTTI-specific hashing\r\n-    h := RttiPointerMix(PtrUInt(Info));\r\n-    // try latest found RTTI for this hash slot\r\n-    result := k^.LastHash[h];\r\n-    if (result <> nil) and\r\n-       (result.Info = Info) then // h\n... [truncated, 6456 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17827\n+17828",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17827'\r\n+'2.4.17828'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.collections",
+        "mormot.core.interfaces",
+        "mormot.core.json",
+        "mormot.core.log",
+        "mormot.core.rtti"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e61a438833d74cedf64b49baa5d84411610322c0",
+      "short_sha": "e61a4388",
+      "subject": "core: enhanced TMultiLightLock",
+      "body": "- new TMultiLightLock.WaitUnlocked method\n- fixed TMultiLightLock.IsLocked on ARM\n- renamed misleading internal TMultiLightLock.ThreadID field",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T15:19:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e61a438833d74cedf64b49baa5d84411610322c0",
+      "parents": [
+        "86e4bb5cbdf46b3dd4ccf2d07c7f5a6c4f54f80a"
+      ],
+      "stats": {
+        "additions": 30,
+        "deletions": 11,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 9,
+          "patch": "@@ -4579,9 +4579,9 @@   TMultiLightLock = record\n   TMultiLightLock = object\r\n   {$endif USERECORDWITHMETHODS}\r\n   private\r\n-    Flags: cardinal;     // is also the reentrant > 0 counter\r\n-    ThreadID: TThreadID; // PtrUInt on POSIX, DWord on Windows\r\n-    procedure LockSpin;  // called by the Lock method when inlined\r\n+    Flags: cardinal;           // is also the reentrant > 0 counter\r\n+    LockedThreadID: TThreadID; // PtrUInt on POSIX, DWord on Windows\r\n+    procedure LockSpin;\r\n   public\r\n     /// to be called if the instance has not been filled with 0\r\n     // - e.g. not needed if TMultiLightLock is defined as a class field\r\n@@ -4610,6 +4610,9 @@   TMultiLightLock = record\n     /// leave an exclusive reentrant lock\r\n     procedure UnLock;\r\n       {$ifdef HASINLINE} inline; {$endif}\r\n+    /// wait until any Lock in another thread is released\r\n+    // - don't wait when called from a the main re-entrant Lock thread\r\n+    procedure WaitUnlocked;\r\n   end;\r\n   PMultiLightLock = ^TMultiLightLock;\r\n \r\n@@ -11614,13 +11617,13 @@ procedure TCachedValue.Cache(Call: TCachedValueCall; CallParam: pointer;\n procedure TMultiLightLock.Init;\r\n begin\r\n   Flags := 0;\r\n-  ThreadID := TThreadID(0);\r\n+  LockedThreadID := TThreadID(0);\r\n end;\r\n \r\n procedure TMultiLightLock.Done;\r\n begin\r\n   Flags := MaxInt;\r\n-  ThreadID := TThreadID(0); // invalid combination to let TryLock fail\r\n+  LockedThreadID := TThreadID(0); // invalid combination to let TryLock fail\r\n end;\r\n \r\n procedure TMultiLightLock.Lock;\r\n@@ -11632,7 +11635,7 @@ procedure TMultiLightLock.Lock;\n procedure TMultiLightLock.UnLock;\r\n begin\r\n   if Flags = 1 then\r\n-    ThreadID := TThreadID(0); // paranoid\r\n+    LockedThreadID := TThreadID(0); // paranoid\r\n   LockedDec32(@Flags);\r\n end;\r\n \r\n@@ -11644,12 +11647,12 @@ function TMultiLightLock.TryLock: boolean;\n   if Flags = 0 then    // is not locked\r\n     if LockedExc32(Flags, {to=}1, {from=}0) then // try atomic acquisition\r\n     begin\r\n-      ThreadID := tid;\r\n+      LockedThreadID := tid;\r\n       result := true;  // acquired the lock\r\n     end\r\n     else\r\n       result := false  // impossible to acquire this lock\r\n-  else if ThreadID <> tid then\r\n+  else if LockedThreadID <> tid then\r\n     result := false // locked by another thread\r\n   else\r\n   begin\r\n@@ -11661,12 +11664,16 @@ function TMultiLightLock.TryLock: boolean;\n procedure TMultiLightLock.ForceLock;\r\n begin\r\n   Flags := MaxInt; // forced acquisition, whatever the current state is\r\n-  ThreadID := GetCurrentThreadId;\r\n+  LockedThreadID := GetCurrentThreadId;\r\n end;\r\n \r\n function TMultiLightLock.IsLocked: boolean;\r\n begin\r\n+  {$ifdef CPUINTEL}\r\n   result := Flags <> 0;\r\n+  {$else}\r\n+  result := not LockedExc32(Flags, {to=}0, {from=}0); // atomic compare\r\n+  {$endif CPUINTEL}\r\n end;\r\n \r\n procedure TMultiLightLock.LockSpin;\r\n@@ -11679,6 +11686,18 @@ procedure TMultiLightLock.LockSpin;\n   until TryLock;\r\n end;\r\n \r\n+procedure TMultiLightLock.WaitUnlocked;\r\n+var\r\n+  spin: PtrUInt;\r\n+begin\r\n+  if (Flags = 0) or\r\n+     (GetCurrentThreadId = LockedThreadID) then // from re-entrant Lock thread\r\n+    exit;\r\n+  spin := SPIN_COUNT;\r\n+  while IsLocked do // don't acquire the lock, just ensure is unlocked\r\n+    spin := SpinAndWait(spin);\r\n+end;\r\n+\r\n \r\n { TRWLightLock }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17826\n+17827",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17826'\r\n+'2.4.17827'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "86e4bb5cbdf46b3dd4ccf2d07c7f5a6c4f54f80a",
+      "short_sha": "86e4bb5c",
+      "subject": "core: ensure T*LightLock.IsLocked is thread safe on ARM",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T15:18:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/86e4bb5cbdf46b3dd4ccf2d07c7f5a6c4f54f80a",
+      "parents": [
+        "13e0ec2cd0d07c6b287392f8040337b5cad598ca"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 2,
+          "patch": "@@ -11559,7 +11559,11 @@ function TLightLock.TryLock: boolean;\n \r\n function TLightLock.IsLocked: boolean;\r\n begin\r\n+  {$ifdef CPUINTEL}\r\n   result := Flags <> 0;\r\n+  {$else}\r\n+  result := not LockedExc32(Flags, {to=}0, {from=}0); // atomic compare\r\n+  {$endif CPUINTEL}\r\n end;\r\n \r\n procedure TLightLock.LockSpin;\r\n@@ -11758,7 +11762,11 @@ procedure TRWLightLock.WriteLockSpin;\n \r\n function TRWLightLock.IsLocked: boolean;\r\n begin\r\n-  result := (Flags <> 0);\r\n+  {$ifdef CPUINTEL}\r\n+  result := Flags <> 0;\r\n+  {$else}\r\n+  result := not LockedExc32(Flags, {to=}0, {from=}0); // atomic compare\r\n+  {$endif CPUINTEL}\r\n end;\r\n \r\n \r\n@@ -11908,7 +11916,11 @@ procedure TRWLock.UnLock(context: TRWLockContext);\n \r\n function TRWLock.IsLocked: boolean;\r\n begin\r\n-  result := (Flags <> 0);\r\n+  {$ifdef CPUINTEL}\r\n+  result := Flags <> 0;\r\n+  {$else}\r\n+  result := not LockedExc(Flags, {to=}0, {from=}0); // atomic compare\r\n+  {$endif CPUINTEL}\r\n end;\r\n \r\n \r\n@@ -12185,7 +12197,11 @@ procedure TOSRWLightLock.WriteUnLock;\n \r\n function TOSRWLightLock.IsLocked: boolean;\r\n begin\r\n+  {$ifdef CPUINTEL}\r\n   result := Flags <> 0;\r\n+  {$else}\r\n+  result := not LockedExc32(Flags, {to=}0, {from=}0); // atomic compare\r\n+  {$endif CPUINTEL}\r\n end;\r\n \r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17825\n+17826",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17825'\r\n+'2.4.17826'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f07cc6d9355572d3585767beef0274e5e2c0b7bd",
+      "short_sha": "f07cc6d9",
+      "subject": "ui: pdf - EMF clipping, stock fonts, device pixels and world transforms",
+      "body": "The EMF renderer (TPdfEnum) fixes of mORMot2-PDF-CrossPlatform PR #100:\n- EMR_INTERSECTCLIPRECT is a clip region of its own: it clipped nothing\n  without a region, and text after SelectClipRgn was clipped to an empty\n  box; its rectangle and the ETO_CLIPPED one are exclusive (BoxExclI)\n- the rectangles of EMR_EXTSELECTCLIPRGN are device units, mapped as\n  logical ones before (ten times too small at 10 units per pixel)\n- the bounds of EMR_HEADER and of an ExtTextOut are device pixels with the\n  last one included: a bitmap at the edge lost two pixel columns and rows\n- a stock font is measured from its own LOGFONT: it kept the size and\n  metrics of the font before, and text before any selection had size 0\n  (EMR_HEADER selects SYSTEM_FONT); a raster face stays in device pixels\n  under any map mode, a TrueType or vector face (DEFAULT_GUI_FONT) in\n  logical units; TFontSpec holds single values, which rounded to 0 at 32\n  pixels per unit\n- a shape under a world scale covers one device pixel more, not one\n  logical unit of the map mode (AddDevicePixel)\n- a world rotation or shear no longer keeps the scale and move of the\n  transform before it; text under a rotation is turned the way GDI turns\n  it; a mirroring world scale is applied, the world before the window and\n  viewport, line widths positive, glyphs upright, both factors negative\n  turning the text by 180 degrees\n\nSix regression tests in test.ui.pdf (TTestUiPdf.EmfStockFontMetrics,\nEmfClipBoxes, EmfWorldBoxes, EmfBitmapBounds, EmfWorldRotation,\nEmfWorldReflection): 111 of their assertions fail before this change.\nDelphi 7, Delphi 13 Win32/Win64, FPC 3.3.1 aarch64 and FPC 3.2.2 Win64\npass all; FPC 3.2.2 Win32 fails MetafileRenderingAndOrientation #3 with\nor without this change.",
+      "author": "Sven Harazim",
+      "date": "2026-11-03T11:51:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f07cc6d9355572d3585767beef0274e5e2c0b7bd",
+      "parents": [
+        "c3f4abb0d5eefab919131bdcb6cb18a97729d2d7"
+      ],
+      "stats": {
+        "additions": 1405,
+        "deletions": 131,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 342,
+          "deletions": 128,
+          "patch": "@@ -1927,6 +1927,8 @@   TPdfCanvas = class\n     function DevPixelY: single;\r\n     // inclusive-inclusive GDI box (EMR_RECTANGLE, EMR_ELLIPSE)\r\n     function BoxInclI(Box: TRect): TPdfBox;\r\n+    // r normalized, one device pixel added on the device's right and bottom\r\n+    procedure AddDevicePixel(var r: TPdfRect);\r\n     // exclusive GDI box (FillRect = EMR_BITBLT PATCOPY)\r\n     function BoxExclI(Box: TRect): TPdfBox;\r\n     procedure DrawXObjectPrepare(const AXObjectName: PdfString);\r\n@@ -3585,7 +3587,6 @@ function PrepareTransformation(\n const\r\n   // those constants are not defined in earlier Delphi revisions\r\n   {$ifdef USE_METAFILE}\r\n-  cPI: single = 3.141592654;\r\n   cPIdiv180: single = 0.017453292;\r\n   c180divPI: single = 57.29577951;\r\n   {$endif USE_METAFILE}\r\n@@ -9673,27 +9674,30 @@ function TPdfCanvas.ViewOffsetY(Y: single): single;\n   result := ((Y - fWinOrg.Y) * fViewSize.cy / fWinSize.cy) + fViewOrg.Y\r\n end;\r\n \r\n+// GDI maps world -> page -> device: the world scale and move first, then\r\n+// the window and viewport (they were applied the other way round)\r\n function TPdfCanvas.I2X(X: integer): single;\r\n begin\r\n-  result := fOffsetXDef + (fWorldOffsetX + ViewOffsetX(X) * fWorldFactorX) * fDevScaleX\r\n+  result := fOffsetXDef +\r\n+            ViewOffsetX(fWorldOffsetX + X * fWorldFactorX) * fDevScaleX\r\n end;\r\n \r\n function TPdfCanvas.I2Y(Y: integer): single;\r\n begin\r\n   result := fPage.GetPageHeight - fOffsetYDef -\r\n-            (fWorldOffsetY + ViewOffsetY(Y) * fWorldFactorY) * fDevScaleY\r\n+            ViewOffsetY(fWorldOffsetY + Y * fWorldFactorY) * fDevScaleY\r\n end;\r\n \r\n function TPdfCanvas.S2X(X: single): single;\r\n begin\r\n   result := fOffsetXDef +\r\n-            (fWorldOffsetX + ViewOffsetX(X) * fWorldFactorX) * fDevScaleX;\r\n+            ViewOffsetX(fWorldOffsetX + X * fWorldFactorX) * fDevScaleX;\r\n end;\r\n \r\n function TPdfCanvas.S2Y(Y: single): single;\r\n begin\r\n   result := fPage.GetPageHeight - fOffsetYDef -\r\n-            (fWorldOffsetY + ViewOffsetY(Y) * fWorldFactorY) * fDevScaleY;\r\n+            ViewOffsetY(fWorldOffsetY + Y * fWorldFactorY) * fDevScaleY;\r\n end;\r\n \r\n procedure TPdfCanvas.LineToI(x, y: integer);\r\n@@ -9727,13 +9731,12 @@ procedure TPdfCanvas.RoundRectI(x1, y1, x2, y2, cx, cy: integer);\n begin\r\n   // the corner size goes through the same window/viewport mapping as the\r\n   // coordinates (MM_ANISOTROPIC metafiles), and the GDI box is\r\n-  // inclusive-inclusive: one device pixel is added to the recorded\r\n-  // right/bottom edges, before normalizing - see BoxInclI\r\n+  // inclusive-inclusive - see BoxInclI\r\n   r.Left   := I2X(x1);\r\n-  r.Right  := S2X(x2 + DevPixelX);\r\n+  r.Right  := I2X(x2);\r\n   r.Top    := I2Y(y1);\r\n-  r.Bottom := S2Y(y2 + DevPixelY);\r\n-  NormalizeRect(r);\r\n+  r.Bottom := I2Y(y2);\r\n+  AddDevicePixel(r);\r\n   RoundRect(r.Left, r.Bottom, r.Right, r.Top,\r\n     Abs(I2X(x1 + cx) - I2X(x1)), -Abs(I2Y(y1 + cy) - I2Y(y1)));\r\n end;\r\n@@ -9819,20 +9822,33 @@ function PdfRectToBox(r: TPdfRect): TPdfBox;\n   result.Height := r.Bottom - r.Top;\r\n end;\r\n \r\n-// GDI records the Right/Bottom of Rectangle/Ellipse one DEVICE pixel inside\r\n-// the shape, i.e. several logical units with a screen reference DC: RectI()\r\n-// removed one logical unit instead, and shapes were too small\r\n-// - under a mirrored mapping the recorded Right is the smaller value (500,110\r\n-// for 100..500 at -10 units per pixel): the signed pixel is added before the\r\n-// box is normalized\r\n+// GDI paints Rectangle/Ellipse with their right and bottom edges: one DEVICE\r\n+// pixel more on the device's right and bottom, however the box was recorded\r\n+// (one device pixel inside in GM_COMPATIBLE, as called in GM_ADVANCED) and\r\n+// the map mode mirrored - a logical unit of the map mode was wrong under a\r\n+// world scale; a negative render scale puts the device's right at the left\r\n+procedure TPdfCanvas.AddDevicePixel(var r: TPdfRect);\r\n+begin\r\n+  NormalizeRect(r);\r\n+  if fDevScaleX >= 0 then\r\n+    r.Right := r.Right + fDevScaleX\r\n+  else\r\n+    r.Le\n... [truncated, 28802 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 1063,
+          "deletions": 3,
+          "patch": "@@ -73,6 +73,12 @@   TTestUiPdf = class(TSynTestCase)\n     procedure EmfNullPenLines;\r\n     procedure EmfLineAfterEndedPath;\r\n     procedure EmfTextInPath;\r\n+    procedure EmfStockFontMetrics;\r\n+    procedure EmfClipBoxes;\r\n+    procedure EmfWorldBoxes;\r\n+    procedure EmfBitmapBounds;\r\n+    procedure EmfWorldRotation;\r\n+    procedure EmfWorldReflection;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n   end;\r\n@@ -1555,6 +1561,7 @@ procedure TTestUiPdf.EmfPlusRecordLayout;\n   R_SAVEDC = 33;\r\n   R_RESTOREDC = 34;\r\n   R_SELECTOBJECT = 37;\r\n+  R_EXTCREATEFONTINDIRECTW = 82;\r\n   R_CREATEBRUSHINDIRECT = 39;\r\n   R_STRETCHDIBITS = 81;\r\n   R_EXTTEXTOUTA = 83;\r\n@@ -1603,7 +1610,8 @@ function EmfRecords(const Bytes: RawByteString; RecType: cardinal): TIntegerDynA\n \r\n // the metafile rendered into one page of an uncompressed PDF\r\n function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\r\n-  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip): RawUtf8;\r\n+  TextClipping: TPdfCanvasRenderMetaFileTextClipping = tcAlwaysClip;\r\n+  ScaleX: single = 1; ScaleY: single = 1): RawUtf8;\r\n var\r\n   doc: TPdfDocumentGdi;\r\n begin\r\n@@ -1617,8 +1625,8 @@ function RenderedEmf(Mf: TMetaFile; PxX: integer = 0; PxY: integer = 0;\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.X := PxX;\r\n     TPdfDocumentAccess(TPdfDocument(doc)).fPrinterPxPerInch.Y := PxY;\r\n     doc.AddPage;\r\n-    RenderMetaFile(doc.Canvas, Mf, 1, 1, 0, 0, tpSetTextJustification,\r\n-      99, 101, TextClipping);\r\n+    RenderMetaFile(doc.Canvas, Mf, ScaleX, ScaleY, 0, 0,\r\n+      tpSetTextJustification, 99, 101, TextClipping);\r\n     result := SavedPdf(doc);\r\n   finally\r\n     doc.Free;\r\n@@ -3193,6 +3201,1058 @@ procedure TTestUiPdf.EmfTextInPath;\n   TAesAccess = class(TPdfEncryptionAes256);\r\n {$endif NO_USE_PDFSECURITY}\r\n \r\n+// two boxes the same within the rounding of the content stream\r\n+function SameBox(const A, B: TPdfBox): boolean;\r\n+begin\r\n+  result := (Abs(A.Left - B.Left) < 0.02) and\r\n+            (Abs(A.Top - B.Top) < 0.02) and\r\n+            (Abs(A.Width - B.Width) < 0.02) and\r\n+            (Abs(A.Height - B.Height) < 0.02);\r\n+end;\r\n+\r\n+// text in the stock font Stock after a large Arial, or (Reference) in a font\r\n+// created from the LOGFONT of that stock font; Mapped device pixels per\r\n+// logical unit, 1 for MM_TEXT; AsStock: selected by its stock index, as some\r\n+// Windows builds record DEFAULT_GUI_FONT and others as a font of the metafile\r\n+function StockFontEmf(Stock: integer; Reference: boolean;\r\n+  Mapped: integer; AsStock: boolean = false): RawUtf8;\r\n+var\r\n+  mf: TMetaFile;\r\n+  mc: TMetaFileCanvas;\r\n+  lf: TLogFontW;\r\n+  f, g: HFONT;\r\n+  bytes: RawByteString;\r\n+  fonts, sel: TIntegerDynArray;\r\n+  i, j: PtrInt;\r\n+begin\r\n+  FillChar(lf, SizeOf(lf), 0);\r\n+  lf.lfHeight := -40;\r\n+  Utf8ToWideChar(@lf.lfFaceName, 'Arial');\r\n+  f := CreateFontIndirectW(lf);\r\n+  GetObjectW(GetStockObject(Stock), SizeOf(lf), @lf);\r\n+  g := CreateFontIndirectW(lf);\r\n+  mf := TMetaFile.Create;\r\n+  try\r\n+    mf.Width := 400;\r\n+    mf.Height := 400;\r\n+    mc := TMetaFileCanvas.Create(mf, 0);\r\n+    try\r\n+      if Mapped > 1 then\r\n+      begin\r\n+        SetMapMode(mc.Handle, MM_ANISOTROPIC);\r\n+        SetWindowExtEx(mc.Handle, 100, 100, nil);\r\n+        SetViewportExtEx(mc.Handle, 100 * Mapped, 100 * Mapped, nil);\r\n+      end;\r\n+      SelectObject(mc.Handle, f);\r\n+      TextOutW(mc.Handle, 10, 10, 'Arial', 5);\r\n+      if Reference then\r\n+        SelectObject(mc.Handle, g)\r\n+      else\r\n+        SelectObject(mc.Handle, GetStockObject(Stock));\r\n+      TextOutW(mc.Handle, 10, 100, 'Stock', 5);\r\n+      SelectObject(mc.Handle, GetStockObject(SYSTEM_FONT));\r\n+    finally\r\n+      mc.Free;\r\n+    end;\r\n+    if AsStock then\r\n+    begin\r\n+      // a font of the metafile of the stock font's face: selected by index\r\n+      bytes := MetaFileBytes(mf);\r\n+      fonts := EmfRecords(bytes, R_EXTCREATEFONTINDIRECTW);\r\n+      sel := EmfRecords(bytes, R_SELECTOBJECT);\r\n+    \n... [truncated, 33956 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "high"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "13e0ec2cd0d07c6b287392f8040337b5cad598ca",
+      "short_sha": "13e0ec2c",
+      "subject": "rest: documentation that Services registration is not thread-safe and should be done at startup",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T11:02:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/13e0ec2cd0d07c6b287392f8040337b5cad598ca",
+      "parents": [
+        "2c404822b293d3dea0f9d590b64a22eacae2a3b4"
+      ],
+      "stats": {
+        "additions": 24,
+        "deletions": 4,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17824\n+17825",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17824'\r\n+'2.4.17825'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.client.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -738,6 +738,7 @@   TRestClientUri = class(TRest)\n     // remote services, and more generaly any Services.Resolve() call\r\n     // - create and initialize the internal TServiceContainerClient if no\r\n     // service interface has been registered yet\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     // - may be used to inject some dependencies, which are not interface-based\r\n     // remote services, but internal IoC, without the ServiceRegister()\r\n     // or ServiceDefine() methods - e.g.\r\n@@ -752,6 +753,7 @@   TRestClientUri = class(TRest)\n     // - that is, server side will be called to check for the availability of\r\n     // each interface\r\n     // - you can specify an optional custom contract for the first interface\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegister(const aInterfaces: array of PRttiInfo;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = ''): boolean; overload; virtual;\r\n@@ -765,6 +767,7 @@   TRestClientUri = class(TRest)\n     // - that is, server side will be called to check for the availability of\r\n     // each interface\r\n     // - you can specify an optional custom contract for the first interface\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegister(aInterface: PRttiInfo;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = '';\r\n@@ -773,29 +776,34 @@   TRestClientUri = class(TRest)\n     // - will return TRUE on success, filling Obj output variable with the\r\n     // corresponding interface instance\r\n     // - will return FALSE on error\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegisterClientDriven(aInterface: PRttiInfo; out Obj;\r\n       const aContractExpected: RawUtf8 = ''): boolean; overload;\r\n     /// register one or several Services on the client side via their interfaces\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     // - this method expects the interface(s) to have been registered previously:\r\n     // ! TInterfaceFactory.RegisterInterfaces([TypeInfo(IMyInterface),...]);\r\n     function ServiceDefine(const aInterfaces: array of TGuid;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = ''): boolean; overload;\r\n     /// register a Service on the client side via its interface\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     // - this method expects the interface to have been registered previously:\r\n     // ! TInterfaceFactory.RegisterInterfaces([TypeInfo(IMyInterface),...]);\r\n     function ServiceDefine(const aInterface: TGuid;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = '';\r\n       aIgnoreAnyException: boolean = true): TServiceFactoryClient; overload;\r\n     /// register and retrieve the sicClientDriven Service instance\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     // - this method expects the interface to have been registered previously:\r\n     // ! TInterfaceFactory.RegisterInterfaces([TypeInfo(IMyInterface),...]);\r\n     function ServiceDefineClientDriven(const aInterface: TGuid; out Obj;\r\n       const aContractExpected: RawUtf8 = ''): boolean;\r\n     /// register a sicShared Service instance communicating via JSON objects\r\n     // - will force SERVICE_CONTRACT_NONE_EXPECTED, ParamsAsJsonObject=true and\r\n     // ResultAsJsonObjectWithoutResult=true\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     // - may be used e.g. for accessing a sessionless public REST/JSON API, i.e.\r\n     // ! TRestServer.ServiceDefine(...).ResultAsJsonObjectWithoutResult := true\r\n     // - this method ex\n... [truncated, 56 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/rest/mormot.rest.core.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 2,
+          "patch": "@@ -581,6 +581,7 @@   TRest = class(TInterfaceResolver)\n     // or, using generics:\r\n     // ! if fServer.Services.Resolve<ICalculator>(Calc) then\r\n     // !   ...\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     property Services: TServiceContainer\r\n       read fServices;\r\n     /// access or initialize the internal IoC resolver, used for interface-based\r\n@@ -593,6 +594,7 @@   TRest = class(TInterfaceResolver)\n     // ! aRest.ServiceContainer.InjectResolver([TInfraRepoUserFactory.Create(aRest)], true);\r\n     // - overriden methods will return TServiceContainerClient or\r\n     // TServiceContainerServer instances, on TRestClient or TRestServer\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceContainer: TServiceContainer; virtual; abstract;\r\n     /// internal procedure called to implement TServiceContainer.Release\r\n     procedure ServicesRelease(Caller: TServiceContainer);\r\n@@ -2117,8 +2119,11 @@ function TRest.TryResolve(aInterface: PRttiInfo; out Obj): boolean;\n function TRest.ServicesInfo: variant;\r\n begin\r\n   fStatSafe.Lock;\r\n-  result := fServices.AsSoa;\r\n-  fStatSafe.UnLock;\r\n+  try\r\n+    result := fServices.AsSoa;\r\n+  finally\r\n+    fStatSafe.UnLock;\r\n+  end;\r\n end;\r\n \r\n procedure TRest.SetLogClass(aClass: TSynLogClass);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -2199,6 +2199,7 @@   TRestServer = class(TRest)\n     /// access or initialize the internal IoC resolver\r\n     // - overriden to create and initialize the internal TServiceContainerServer\r\n     // if no service interface has been registered yet\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceContainer: TServiceContainer; override;\r\n     /// register a Service class on the server side\r\n     // - this methods expects a class to be supplied, and the exact list of\r\n@@ -2217,6 +2218,7 @@   TRestServer = class(TRest)\n     // on success (i.e. corresponding to aInterfaces[0] - not to the others),\r\n     // or nil if registration failed (e.g. if any of the supplied interfaces\r\n     // is not implemented by the given class)\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegister(aImplementationClass: TInterfacedClass;\r\n       const aInterfaces: array of PRttiInfo;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n@@ -2236,6 +2238,7 @@   TRestServer = class(TRest)\n     // on success (i.e. corresponding to aInterfaces[0] - not to the others),\r\n     // or nil if registration failed (e.g. if any of the supplied interfaces\r\n     // is not implemented by the given class)\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegister(aSharedImplementation: TInterfacedObject;\r\n       const aInterfaces: array of PRttiInfo;\r\n       const aContractExpected: RawUtf8 = ''): TServiceFactoryServerAbstract; overload; virtual;\r\n@@ -2253,6 +2256,7 @@   TRestServer = class(TRest)\n     // - that is, server side will be called to check for the availability of\r\n     // each interface\r\n     // - you can specify an optional custom contract for the first interface\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceRegister(aClient: TRest; const aInterfaces: array of PRttiInfo;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = ''): boolean; overload; virtual;\r\n@@ -2263,6 +2267,7 @@   TRestServer = class(TRest)\n     // on success (i.e. corresponding to aInterfaces[0] - not to the others),\r\n     // or nil if registration failed (e.g. if any of the supplied interfaces\r\n     // is not implemented by the given class)\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceDefine(aImplementationClass: TInterfacedClass;\r\n       const aInterfaces: array of TGuid;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n@@ -2275,12 +2280,14 @@   TRestServer = class(TRest)\n     // on success (i.e. corresponding to aInterfaces[0] - not to the others),\r\n     // or nil if registration failed (e.g. if any of the supplied interfaces\r\n     // is not implemented by the given class)\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceDefine(aSharedImplementation: TInterfacedObject;\r\n       const aInterfaces: array of TGuid;\r\n       const aContractExpected: RawUtf8 = ''): TServiceFactoryServerAbstract; overload;\r\n     /// register a remote Service via its interface\r\n     // - this method expects the interface(s) to have been registered previously:\r\n     // ! TInterfaceFactory.RegisterInterfaces([TypeInfo(IMyInterface),...]);\r\n+    // - Services registration is not thread-safe and should be done at startup\r\n     function ServiceDefine(aClient: TRest; const aInterfaces: array of TGuid;\r\n       aInstanceCreation: TServiceInstanceImplementation = sicSingle;\r\n       const aContractExpected: RawUtf8 = ''): boolean; overload;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "docs",
+        "severity": "low"
+      },
+      "areas": [
+        "REST"
+      ],
+      "units": [
+        "mormot.rest.client",
+        "mormot.rest.core",
+        "mormot.rest.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2c404822b293d3dea0f9d590b64a22eacae2a3b4",
+      "short_sha": "2c404822",
+      "subject": "rest: new TRest.ServicesInfo method",
+      "body": "- to fix #691 without assuming the whole class is thread-safe",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T10:56:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2c404822b293d3dea0f9d590b64a22eacae2a3b4",
+      "parents": [
+        "0570baebbf69796d1a929cbbdc04ff58eee018d8"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 11,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4523,7 +4523,7 @@ procedure PatchCodeProtectBack;\n { **************** TSynLocker/TSynLocked and Low-Level Threading Features }\r\n \r\n type\r\n-  /// a lightweight exclusive non-reentrant lock, stored in a PtrUInt value\r\n+  /// a lightweight exclusive non-reentrant lock, stored in a 32-bit slot\r\n   // - calls SwitchToThread after some spinning, but don't use any R/W OS API\r\n   // - warning: methods are non reentrant, i.e. calling Lock twice in a raw would\r\n   // deadlock: see reentrant TMultiLightLock or TRWLock or TSynLocker/TOSLock\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17815\n+17824",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17815'\r\n+'2.4.17824'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.core.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 5,
+          "patch": "@@ -440,9 +440,9 @@   TRest = class(TInterfaceResolver)\n     fRun: TRestRunThreads;\r\n     fLogClass: TSynLogClass;\r\n     fLogFamily: TSynLogFamily;\r\n-    fServerTimestampCacheSafe: TLightLock;\r\n-    fServerTimestampCacheTix: cardinal;\r\n+    fStatSafe: TLightLock;    // 32-bit\r\n     fLogLevel: TSynLogLevels; // 32-bit\r\n+    fServerTimestampCacheTix: cardinal;\r\n     fLogResponseMaxBytes: integer;\r\n     fAcquireExecution: TRestAcquireExecutions;\r\n     fPrivateGarbageCollector: TSynObjectListLocked;\r\n@@ -596,6 +596,8 @@   TRest = class(TInterfaceResolver)\n     function ServiceContainer: TServiceContainer; virtual; abstract;\r\n     /// internal procedure called to implement TServiceContainer.Release\r\n     procedure ServicesRelease(Caller: TServiceContainer);\r\n+    /// thread-safe wrapper around Services.AsSoa\r\n+    function ServicesInfo: variant;\r\n     /// access to the Multi-Threading process of this instance\r\n     property Run: TRestRunThreads\r\n       read fRun;\r\n@@ -2112,6 +2114,13 @@ function TRest.TryResolve(aInterface: PRttiInfo; out Obj): boolean;\n     result := fServices.Resolve(aInterface, Obj);\r\n end;\r\n \r\n+function TRest.ServicesInfo: variant;\r\n+begin\r\n+  fStatSafe.Lock;\r\n+  result := fServices.AsSoa;\r\n+  fStatSafe.UnLock;\r\n+end;\r\n+\r\n procedure TRest.SetLogClass(aClass: TSynLogClass);\r\n begin\r\n   fLogClass := aClass;\r\n@@ -2185,13 +2194,13 @@ function TRest.GetServerTimestamp(tix64: Int64): TTimeLog;\n      LockedExc32(fServerTimestampCacheTix, tix32, c32) then\r\n   begin\r\n     tmp.From(NowUtc + fServerTimestampOffset);\r\n-    fServerTimestampCacheSafe.Lock;\r\n+    fStatSafe.Lock;\r\n     fServerTimestampCacheValue.Value := tmp.Value; // fast 64-bit copy\r\n   end\r\n   else\r\n-    fServerTimestampCacheSafe.Lock;\r\n+    fStatSafe.Lock;\r\n   result := fServerTimestampCacheValue.Value;\r\n-  fServerTimestampCacheSafe.UnLock;\r\n+  fStatSafe.UnLock;\r\n end;\r\n \r\n procedure TRest.SetServerTimestamp(const Value: TTimeLog);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.server.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -5299,7 +5299,7 @@ procedure TRestServerAuthentication.SessionCreateReturns(\n   end;\r\n   if Assigned(fServer.Services) and\r\n      not (soaNoSoaContract in fOptions) then\r\n-    body.AddValue('soa', fServer.Services.AsSoa);\r\n+    body.AddValue('soa', fServer.ServicesInfo);\r\n   include(Ctxt.fServiceExecutionOptions, optNoLogOutput); // hide sensitive info\r\n   Ctxt.ReturnsJson(variant(body), HTTP_SUCCESS, false, twJsonEscape, false, header);\r\n end;\r\n@@ -8136,7 +8136,7 @@ procedure TRestServer.Stat(Ctxt: TRestServerUriContext);\n   begin\r\n     case Ctxt.Method of\r\n       mGET:\r\n-        Ctxt.ReturnsJson(fServices.AsSoa);  // GET /stat/soa from ParseSoa()\r\n+        Ctxt.ReturnsJson(ServicesInfo);     // GET /stat/soa from ParseSoa()\r\n       mPOST:\r\n         if (Ctxt.Call^.InBody <> '') and\r\n            (Ctxt.Call^.InBody <> '[]') then // POST /stat/soa from SetUser()\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/soa/mormot.soa.core.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -696,15 +696,16 @@   TServiceContainerInterfaceMethod = record\n   // - used to maintain a list of interfaces implementation\r\n   // - inherits from TInterfaceResolverInjected and its Resolve() methods,\r\n   // compatible with TInjectableObject\r\n+  // - this class is NOT thread-safe: the caller should protect each instance\r\n   TServiceContainer = class(TInterfaceResolverInjected)\r\n   protected\r\n     fOwner: TInterfaceResolver; // is a TRest instance\r\n     fInterface: TServiceContainerInterfaces; // array of InterfaceName/Service\r\n     fInterfaces: TDynArrayHashed;\r\n     // list of service.method ['Calculator.Add','Calculator.Multiply',...]\r\n     fInterfaceMethod: TServiceContainerInterfaceMethods; // dynamic array\r\n-    fInterfaceMethods: TDynArrayHashed;\r\n     fExpectMangledUri: boolean;\r\n+    fInterfaceMethods: TDynArrayHashed;\r\n     fAsSoa: TDocVariantData;\r\n     procedure SetExpectMangledUri(Mangled: boolean);\r\n     procedure SetInterfaceMethodBits(MethodNamesCsv: PUtf8Char;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "REST",
+        "Core",
+        "SOA"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.rest.core",
+        "mormot.rest.server",
+        "mormot.soa.core"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0570baebbf69796d1a929cbbdc04ff58eee018d8",
+      "short_sha": "0570baeb",
+      "subject": "Merge pull request #706 from tobfel/fixes-zip",
+      "body": "core: fix zip empty folder crc and AddDeflatedStream level 0",
+      "author": "ab",
+      "date": "2026-11-03T10:36:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0570baebbf69796d1a929cbbdc04ff58eee018d8",
+      "parents": [
+        "79761c33d53161408a92b7e362abf3f4a07cc591",
+        "bf1d78252071555b3037afde7bb87124f7a6bbcb"
+      ],
+      "stats": {
+        "additions": 63,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -715,6 +715,8 @@   TZipWrite = class(TZipAbstract)\n     // - limited to 4GB of data, unless ForceZip64 is set to true\r\n     // - currently do not support any OnProgressStep notification, because\r\n     // we don't know the input size ahead of time\r\n+    // - CompressLevel <= 0 still uses the Z_DEFLATED method, with zlib\r\n+    // uncompressed (stored) blocks\r\n     function AddDeflatedStream(const aZipName: TFileName;\r\n       FileAge: integer = 0; CompressLevel: integer = Z_USUAL_COMPRESSION): TStream;\r\n     /// add a (huge) file to the zip file, without compression\r\n@@ -2056,7 +2058,7 @@ procedure TZipWrite.AddStored(const aFileName: TFileName;\n \r\n procedure TZipWrite.AddEmptyFolder(const aZipName: TFileName; FileAge: integer);\r\n begin\r\n-  NewEntry(Z_STORED, cardinal(-1), FileAge);\r\n+  NewEntry(Z_STORED, {crc32=}0, FileAge); // crc32 of no data is 0\r\n   WriteHeader(aZipName); // no data to write nor any fInfo progress to notify\r\n   inc(fCount);\r\n end;\r\n@@ -2223,10 +2225,8 @@ function TZipWrite.AddDeflatedStream(const aZipName: TFileName;\n   result := TZipWriteCompressor.Create(fDest, CompressLevel, szcfRaw);\r\n   TZipWriteCompressor(result).fHeaderPos := fDest.Position;\r\n   TZipWriteCompressor(result).fOwner := self;\r\n-  // create the new entry\r\n-  if CompressLevel <> 0 then\r\n-    CompressLevel := Z_DEFLATED; // method (if not Z_STORED=0)\r\n-  NewEntry(CompressLevel, 0, FileAge);\r\n+  // create the new entry - level 0 still emits raw deflate (stored) blocks\r\n+  NewEntry(Z_DEFLATED, 0, FileAge);\r\n   WriteHeader(aZipName);\r\n   // caller now makes TZipWriteCompressor.Write then TZipWriteCompressor.Free\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 0,
+          "patch": "@@ -11487,6 +11487,41 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n+  procedure StreamLevel0;\r\n+  // AddDeflatedStream(..., CompressLevel=0) should create a valid entry\r\n+  var\r\n+    w: TRawByteStringStream;\r\n+    s: TStream;\r\n+    z: TZipWrite;\r\n+  begin\r\n+    w := TRawByteStringStream.Create;\r\n+    try\r\n+      z := TZipWrite.Create(w);\r\n+      try\r\n+        s := z.AddDeflatedStream('lvl0.txt', 0, 0);\r\n+        try\r\n+          s.WriteBuffer(pointer(Data)^, length(Data));\r\n+        finally\r\n+          s.Free;\r\n+        end;\r\n+      finally\r\n+        z.Free;\r\n+      end;\r\n+      with TZipRead.Create(pointer(w.DataString), length(w.DataString)) do\r\n+      try\r\n+        if CheckEqual(Count, 1, 'lvl0 count') then\r\n+        begin\r\n+          Check(TestAll, 'lvl0 testall');\r\n+          Check(UnZip(0) = Data, 'lvl0 unzip');\r\n+        end;\r\n+      finally\r\n+        Free;\r\n+      end;\r\n+    finally\r\n+      w.Free;\r\n+    end;\r\n+  end;\r\n+\r\n   procedure DataDescriptorLastEntry;\r\n   // some tools (e.g. LibreOffice for .xlsx) set FLAG_DATADESCRIPTOR on all\r\n   // entries: retrieving the last one from a memory buffer should not need fSource\r\n@@ -11596,6 +11631,29 @@ procedure TTestCoreCompression.ZipFormat;\n   CheckEqual(FileSize(FN), SizeOf(minim), 'TZipWrite void .zip');\r\n   Check(DeleteFile(FN));\r\n   DataDescriptorLastEntry;\r\n+  // AddEmptyFolder() should store crc32=0 for a folder entry (no data)\r\n+  S := TRawByteStringStream.Create;\r\n+  try\r\n+    with TZipWrite.Create(S) do\r\n+    try\r\n+      AddEmptyFolder('emptydir\\');\r\n+      CheckEqual(Count, 1, 'emptydir1');\r\n+    finally\r\n+      Free;\r\n+    end;\r\n+    with TZipRead.Create(pointer(S.DataString), length(S.DataString)) do\r\n+    try\r\n+      CheckEqual(Count, 1, 'emptydir2');\r\n+      Check(Entry[0].dir^.fileInfo.zcrc32 = 0, 'emptydir crc');\r\n+      Check(Entry[0].local^.fileInfo.zcrc32 = 0, 'emptydir local crc');\r\n+      Check(TestAll, 'emptydir testall');\r\n+    finally\r\n+      Free;\r\n+    end;\r\n+  finally\r\n+    S.Free;\r\n+  end;\r\n+  StreamLevel0;\r\n   // onprog := TStreamRedirect.ProgressInfoToConsole;\r\n   onprog := TSynLog.ProgressInfo;\r\n   for m := 1 to 2 do\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": 706,
+      "is_merge": true
+    },
+    {
+      "sha": "79761c33d53161408a92b7e362abf3f4a07cc591",
+      "short_sha": "79761c33",
+      "subject": "Merge pull request #709 from stefan-nolte/nolte/odbc-macos-lib",
+      "body": "db: load unixODBC on macOS",
+      "author": "ab",
+      "date": "2026-11-03T10:33:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/79761c33d53161408a92b7e362abf3f4a07cc591",
+      "parents": [
+        "d8941e054cf7c620c7528ee66b617f6fe3b88824",
+        "3b37a2627abb81b192e0b8eb4757db5ba31d145a"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 1,
+          "patch": "@@ -898,7 +898,16 @@ function SQL_TIMESTAMP_STRUCT.ToIso8601(Dest: PUtf8Char; DataType: SqlSmallint;\n   {$ifdef OSWINDOWS}\r\n   ODBC_LIB = 'odbc32.dll';\r\n   {$else}\r\n+  {$ifdef OSDARWIN}\r\n+  // unixODBC from Homebrew or MacPorts: none of their lib folders is in the\r\n+  // default dyld search path, so they are tried explicitly\r\n+  ODBC_LIB = 'libodbc.2.dylib';\r\n+  ODBC_LIB_BREWARM = '/opt/homebrew/lib/libodbc.2.dylib';\r\n+  ODBC_LIB_BREWX64 = '/usr/local/lib/libodbc.2.dylib';\r\n+  ODBC_LIB_MACPORTS = '/opt/local/lib/libodbc.2.dylib';\r\n+  {$else}\r\n   ODBC_LIB = 'libodbc.so.1';\r\n+  {$endif OSDARWIN}\r\n   {$endif OSWINDOWS}\r\n \r\n   ODBC_ENTRIES: array[0..67] of PAnsiChar = (\r\n@@ -1041,7 +1050,9 @@ constructor TOdbcLib.Create;\n begin\r\n   inherited Create;\r\n   try\r\n-    TryLoadResolve([ODBC_LIB], 'SQL', @ODBC_ENTRIES, @@AllocEnv, EOdbcException);\r\n+    TryLoadResolve([ODBC_LIB\r\n+      {$ifdef OSDARWIN}, ODBC_LIB_BREWARM, ODBC_LIB_BREWX64, ODBC_LIB_MACPORTS{$endif}],\r\n+      'SQL', @ODBC_ENTRIES, @@AllocEnv, EOdbcException);\r\n   except\r\n     on E: Exception do\r\n     begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.odbc"
+      ],
+      "pr": 709,
+      "is_merge": true
+    },
+    {
+      "sha": "d8941e054cf7c620c7528ee66b617f6fe3b88824",
+      "short_sha": "d8941e05",
+      "subject": "Merge pull request #708 from stefan-nolte/nolte/fpc33-aarch64-published-methods",
+      "body": "core: fixed GetPublishedMethods on FPC 3.3+ aarch64",
+      "author": "ab",
+      "date": "2026-11-03T10:32:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d8941e054cf7c620c7528ee66b617f6fe3b88824",
+      "parents": [
+        "0f16f62678db371eae376f531d81c4cd414df651",
+        "f8f23b92444357e60c1728e615ec15ca2e53cbb1"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.rtti.fpc.inc",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 3,
+          "patch": "@@ -560,8 +560,17 @@ function GetPublishedMethods(Instance: TObject;\n   out Methods: TPublishedMethodInfoDynArray; aClass: TClass): integer;\r\n \r\n   procedure AddParentsFirst(C: TClass);\r\n+  const\r\n+    // FPC <= 3.2 emits a packed table even if FPC_REQUIRES_PROPER_ALIGNMENT, but\r\n+    // FPC 3.3+ follows TVmtMethodTable, e.g. with entries at offset 8 on aarch64\r\n+    ENTRIES_OFFSET =\r\n+      {$if defined(VER3_0) or defined(VER3_2) or defined(VER2)}\r\n+      SizeOf(cardinal);\r\n+      {$else}\r\n+      SizeOf(TVmtMethodTable) - SizeOf(TVmtMethodEntry);\r\n+      {$ifend}\r\n   var\r\n-    info: PIntegerArray; // PVmtMethodTable is wrong (GPF on aarch64-linux) :(\r\n+    info: PCardinal; // PVmtMethodTable is wrong on FPC <= 3.2 (GPF on aarch64)\r\n     m: PVmtMethodEntry;\r\n     r: ^TPublishedMethodInfo;\r\n     n: integer;\r\n@@ -572,13 +581,13 @@ function GetPublishedMethods(Instance: TObject;\n     info := PPointer(PtrUInt(C) + PtrUInt(vmtMethodTable))^;\r\n     if info = nil then\r\n       exit; // no published method for this class level\r\n-    n := info[0];\r\n+    n := info^;\r\n     if n = 0 then\r\n       exit; // paranoid\r\n     SetLength(Methods, result + n);\r\n     r := @Methods[result];\r\n     inc(result, n);\r\n-    m := @info[1];\r\n+    m := pointer(PAnsiChar(info) + ENTRIES_OFFSET);\r\n     repeat\r\n       ShortStringToAnsi7String(m^.Name^, r^.Name);\r\n       r^.Method.Data := Instance;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.rtti.fpc"
+      ],
+      "pr": 708,
+      "is_merge": true
+    },
+    {
+      "sha": "0f16f62678db371eae376f531d81c4cd414df651",
+      "short_sha": "0f16f626",
+      "subject": "Merge pull request #707 from osvegn/master",
+      "body": "crypt - Ensure log exist before logging",
+      "author": "ab",
+      "date": "2026-11-03T10:29:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0f16f62678db371eae376f531d81c4cd414df651",
+      "parents": [
+        "60dfac79e2475036d8fe4ef359dfb13fe3b56aa1",
+        "31279f42eefb83791328db5f562848f1fc3c585c"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 3,
+          "patch": "@@ -580,11 +580,13 @@ function TCryptPrivateKeyCng.SignDigest(const Dig: THash512Rec;\n          (result <> '') then\r\n         // CNG returns fixed-width r || s whereas ICryptCert expects DER\r\n         result := SetSignatureSecurityRaw(DigAlgo, RawUtf8(result));\r\n-      log.Log(sllTrace,\r\n-        'SignDigest: returns len=%', [length(result)], self);\r\n+      if Assigned(log) then\r\n+        log.Log(sllTrace,\r\n+         'SignDigest: returns len=%', [length(result)], self);\r\n     except\r\n       on E: Exception do\r\n-        log.Log(sllTrace, 'SignDigest failed due to %', [E], self);\r\n+        if Assigned(log) then\r\n+          log.Log(sllTrace, 'SignDigest failed due to %', [E], self);\r\n     end;\r\n   finally\r\n     key.Done; // release the private key handle ASAP for safety\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": 707,
+      "is_merge": true
+    },
+    {
+      "sha": "60dfac79e2475036d8fe4ef359dfb13fe3b56aa1",
+      "short_sha": "60dfac79",
+      "subject": "db: rewritten TDuckDBTypeInfo structure",
+      "body": "- to use a dynamic array",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T10:28:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/60dfac79e2475036d8fe4ef359dfb13fe3b56aa1",
+      "parents": [
+        "ac8ccd1744222da5cc44a0d2b70d1d990f10ddad"
+      ],
+      "stats": {
+        "additions": 49,
+        "deletions": 61,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 51,
+          "patch": "@@ -513,9 +513,6 @@ function DuckFixedToDateTime(TypeId: TDuckDBType; P: PAnsiChar;\n { ************ DuckDB Logical Type Cache }\n \n type\n-  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n-  PDuckDBTypeInfoArray = ^TDuckDBTypeInfoArray;\n-\n   /// a DuckDB logical type, parsed once with all its nested types\n   // - to avoid calling the DuckDB C API for every row of a result set\n   // - initialized by DuckDBTypeInfoInit() and released by DuckDBTypeInfoDone()\n@@ -528,19 +525,15 @@   TDuckDBTypeInfo = record\n     Scale: integer;\n     /// size in bytes of a fixed-size value, 0 for variable-size types\n     Size: PtrInt;\n-    /// number of nested types in Children[]\n-    ChildCount: integer;\n     /// the DuckDB logical type handle, owned by this structure\n     Handle: TDuckDBLogicalType;\n     /// STRUCT field names, or ENUM values (cached on first use)\n     Names: TRawUtf8DynArray;\n     /// nested types of a LIST/ARRAY (item), MAP (key, value),\n     // STRUCT (fields) or UNION (members)\n-    Children: PDuckDBTypeInfoArray;\n+    Child: array of TDuckDBTypeInfo;\n   end;\n-\n-  /// pointer-based array of TDuckDBTypeInfo nested types\n-  TDuckDBTypeInfoArray = array[0..1023] of TDuckDBTypeInfo;\n+  PDuckDBTypeInfo = ^TDuckDBTypeInfo;\n \n /// parse a DuckDB logical type and all its nested types, once\n // - the supplied Handle is owned by Info, and released by DuckDBTypeInfoDone()\n@@ -1928,12 +1921,10 @@ function DuckFixedToDateTime(TypeId: TDuckDBType; P: PAnsiChar;\n \n { ************ DuckDB Logical Type Cache }\n \n-function DuckDBInitChildren(var nfo: TDuckDBTypeInfo; n: PtrInt): PDuckDBTypeInfo;\n+function DuckDBInitChild(var nfo: TDuckDBTypeInfo): PDuckDBTypeInfo;\n begin\n-  nfo.ChildCount := n;\n-  if n > 0 then\n-    nfo.Children := AllocMem(n * SizeOf(TDuckDBTypeInfo));\n-  result := pointer(nfo.Children);\n+  SetLength(nfo.Child, 1);\n+  result := pointer(nfo.Child);\n end;\n \n procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalType);\n@@ -1954,23 +1945,24 @@ procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalTy\n     DUCKDB_TYPE_ENUM:\n       Info.Internal := DuckDB.enum_internal_type(Handle);\n     DUCKDB_TYPE_LIST:\n-      DuckDBTypeInfoInit(DuckDBInitChildren(Info, 1)^, DuckDB.list_type_child_type(Handle));\n+      DuckDBTypeInfoInit(DuckDBInitChild(Info)^, DuckDB.list_type_child_type(Handle));\n     DUCKDB_TYPE_ARRAY:\n       begin\n         Info.Scale := DuckDB.array_type_array_size(Handle);\n-        DuckDBTypeInfoInit(DuckDBInitChildren(Info, 1)^, DuckDB.array_type_child_type(Handle));\n+        DuckDBTypeInfoInit(DuckDBInitChild(Info)^, DuckDB.array_type_child_type(Handle));\n       end;\n     DUCKDB_TYPE_MAP:\n       begin\n-        DuckDBInitChildren(Info, 2);\n-        DuckDBTypeInfoInit(Info.Children^[0], DuckDB.map_type_key_type(Handle));\n-        DuckDBTypeInfoInit(Info.Children^[1], DuckDB.map_type_value_type(Handle));\n+        SetLength(Info.Child, 2);\n+        DuckDBTypeInfoInit(Info.Child[0], DuckDB.map_type_key_type(Handle));\n+        DuckDBTypeInfoInit(Info.Child[1], DuckDB.map_type_value_type(Handle));\n       end;\n     DUCKDB_TYPE_STRUCT:\n       begin\n-        nfo := DuckDBInitChildren(Info, DuckDB.struct_type_child_count(Handle));\n-        SetLength(Info.Names, Info.ChildCount);\n-        for i := 0 to Info.ChildCount - 1 do\n+        SetLength(Info.Child, DuckDB.struct_type_child_count(Handle));\n+        nfo := pointer(Info.Child);\n+        SetLength(Info.Names, length(Info.Child));\n+        for i := 0 to length(Info.Names) - 1 do\n         begin\n           p := DuckDB.struct_type_child_name(Handle, i);\n           FastSetString(Info.Names[i], p, StrLen(p));\n@@ -1981,8 +1973,9 @@ procedure DuckDBTypeInfoInit(var Info: TDuckDBTypeInfo; Handle: TDuckDBLogicalTy\n       end;\n     DUCKDB_TYPE_UNION:\n       begin\n-        nfo := DuckDBInitChildren(Info, DuckDB.union_type_member_count(Handle));\n-        for i := 0 to Info.ChildCount - 1 do\n+        SetLength(Info.Child, DuckDB.union_type_member_count(Handle));\n\n... [truncated, 2679 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 8,
+          "patch": "@@ -616,7 +616,7 @@ procedure ComplexDuckDBVectorValueToJson(vec: TDuckDBVector; data: PAnsiChar;\n     W.AddDirect('[');\n     for i := PtrInt(e^.Offset) to PtrInt(e^.Offset + e^.Length) - 1 do\n     begin\n-      DuckDBVectorValueToJson(child, @T^.Children^[0], i, W);\n+      DuckDBVectorValueToJson(child, pointer(T^.Child), i, W);\n       W.AddComma;\n     end;\n     W.CancelLastComma(']');\n@@ -629,15 +629,15 @@ procedure ComplexDuckDBVectorValueToJson(vec: TDuckDBVector; data: PAnsiChar;\n     W.AddDirect('{');\n     for i := PtrInt(e^.Offset) to PtrInt(e^.Offset + e^.Length) - 1 do\n     begin\n-      n := DuckDBVectorValueToTextBuf(kvec, @T^.Children^[0], i, buf);\n+      n := DuckDBVectorValueToTextBuf(kvec, pointer(T^.Child), i, buf);\n       if n >= 0 then\n         W.AddProp(@buf[0], n)\n       else\n       begin\n-        DuckDBVectorValueToText(kvec, @T^.Children^[0], i, txt);\n+        DuckDBVectorValueToText(kvec, pointer(T^.Child), i, txt);\n         W.AddProp(pointer(txt), length(txt));\n       end;\n-      DuckDBVectorValueToJson(vvec, @T^.Children^[1], i, W);\n+      DuckDBVectorValueToJson(vvec, @T^.Child[1], i, W);\n       W.AddComma;\n     end;\n     W.CancelLastComma('}');\n@@ -686,19 +686,19 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n         W.AddDirect('[');\n         for i := row * size to row * size + size - 1 do\n         begin\n-          DuckDBVectorValueToJson(child, @T^.Children^[0], i, W);\n+          DuckDBVectorValueToJson(child, pointer(T^.Child), i, W);\n           W.AddComma;\n         end;\n         W.CancelLastComma(']');\n       end;\n     DUCKDB_TYPE_STRUCT:\n       begin\n         W.AddDirect('{');\n-        for i := 0 to T^.ChildCount - 1 do\n+        for i := 0 to length(T^.Child) - 1 do\n         begin\n           W.AddProp(pointer(T^.Names[i]), length(T^.Names[i]));\n           DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, i),\n-            @T^.Children^[i], row, W);\n+            @T^.Child[i], row, W);\n           W.AddComma;\n         end;\n         W.CancelLastComma('}');\n@@ -709,7 +709,7 @@ procedure DuckDBVectorValueToJson(vec: TDuckDBVector; T: PDuckDBTypeInfo;\n         tag := PDuckU8Array(DuckDB.vector_get_data(\n           DuckDB.struct_vector_get_child(vec, 0)))^[row];\n         DuckDBVectorValueToJson(DuckDB.struct_vector_get_child(vec, tag + 1),\n-          @T^.Children^[tag], row, W);\n+          @T^.Child[tag], row, W);\n       end;\n     DUCKDB_TYPE_ENUM,\n     DUCKDB_TYPE_BIT:",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17814\n+17815",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17814'\r\n+'2.4.17815'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ac8ccd1744222da5cc44a0d2b70d1d990f10ddad",
+      "short_sha": "ac8ccd17",
+      "subject": "db: some more DuckDB refactoring",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T10:03:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ac8ccd1744222da5cc44a0d2b70d1d990f10ddad",
+      "parents": [
+        "7a50e3a60062b4fec114df0eccbc96442e69b203"
+      ],
+      "stats": {
+        "additions": 86,
+        "deletions": 114,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 84,
+          "deletions": 112,
+          "patch": "@@ -787,6 +787,10 @@   TQuackChunk = class\n function QuackDouble(P: pointer): double;\n   {$ifdef HASSAFEINLINE} inline; {$endif}\n \n+/// read a 32-bit floating-point value which may be unaligned in the response\n+function QuackSingle(P: pointer): double;\n+  {$ifdef HASSAFEINLINE} inline; {$endif}\n+\n \n { ************ TQuackResponse Messages Decoding }\n \n@@ -1562,7 +1566,6 @@ function DuckFixedToTextBuf(TypeId, Internal: TDuckDBType; Scale: integer;\n var\n   b, num: PAnsiChar;\n   h: TDuckDBHugeInt;\n-  s: single;\n   d: double;\n   tmp: ShortString;\n begin\n@@ -1621,10 +1624,7 @@ function DuckFixedToTextBuf(TypeId, Internal: TDuckDBType; Scale: integer;\n     DUCKDB_TYPE_DOUBLE:\n       begin\n         if TypeId = DUCKDB_TYPE_FLOAT then\n-        begin\n-          MoveFast(P^, s, SizeOf(s));\n-          d := s;\n-        end\n+          d := QuackSingle(P)\n         else\n           d := QuackDouble(P);\n         if PInt64(@d)^ = 0 then\n@@ -1667,8 +1667,6 @@ procedure DuckFixedToText(TypeId, Internal: TDuckDBType; Scale: integer;\n var\n   len: PtrInt;\n   iv: TDuckDBInterval;\n-  s: single;\n-  d: double;\n   buf: TTemp47;\n begin\n   len := DuckFixedToTextBuf(TypeId, Internal, Scale, P, buf);\n@@ -1679,18 +1677,10 @@ procedure DuckFixedToText(TypeId, Internal: TDuckDBType; Scale: integer;\n   end;\n   FastAssignNew(result);\n   case TypeId of\n-    DUCKDB_TYPE_FLOAT,\n+    DUCKDB_TYPE_FLOAT:\n+      DoubleToStr(QuackSingle(P), result);\n     DUCKDB_TYPE_DOUBLE:\n-      begin\n-        if TypeId = DUCKDB_TYPE_FLOAT then\n-        begin\n-          MoveFast(P^, s, SizeOf(s));\n-          d := s;\n-        end\n-        else\n-          d := QuackDouble(P);\n-        DoubleToStr(d, result); // very long text\n-      end;\n+      DoubleToStr(QuackDouble(P), result);\n     DUCKDB_TYPE_DATE:\n       DuckDateToText(PInteger(P)^, result);\n     DUCKDB_TYPE_TIME:\n@@ -1741,7 +1731,7 @@ procedure DuckFixedToJson(TypeId, Internal: TDuckDBType; Scale: integer;\n       W.Add(DuckFixedInt(TypeId, P));\n     DUCKDB_TYPE_FLOAT:\n       begin\n-        MoveFast(P^, s, SizeOf(s));\n+        PInteger(@s)^ := PInteger(P)^;\n         W.AddSingle(s);\n       end;\n     DUCKDB_TYPE_DOUBLE:\n@@ -1840,16 +1830,11 @@ function DuckFixedToInt64(TypeId, Internal: TDuckDBType; Scale: integer;\n \n function DuckFixedToDouble(TypeId, Internal: TDuckDBType; Scale: integer;\n   P: PAnsiChar; out Value: double): boolean;\n-var\n-  s: single;\n begin\n   result := true;\n   case TypeId of\n     DUCKDB_TYPE_FLOAT:\n-      begin\n-        MoveFast(P^, s, SizeOf(s));\n-        Value := s;\n-      end;\n+      Value := QuackSingle(P);\n     DUCKDB_TYPE_DOUBLE:\n       Value := QuackDouble(P);\n     DUCKDB_TYPE_DECIMAL:\n@@ -2161,18 +2146,13 @@ function DuckDBTypeToField(TypeId: TDuckDBType; Scale: integer): TSqlDBFieldType\n \n { Low-Level Reading Functions }\n \n-procedure RaiseQuack(const Msg: RawUtf8; const Args: array of const);\n-begin\n-  raise ESqlDBQuack.CreateUtf8(Msg, Args);\n-end;\n-\n procedure ExpectField(var R: TFastReader; Id: cardinal);\n var\n   f: cardinal;\n begin\n   f := R.Next2;\n   if f <> Id then\n-    RaiseQuack('unexpected field % instead of %', [f, Id]);\n+    ESqlDBQuack.RaiseUtf8('unexpected field % instead of %', [f, Id]);\n end;\n \n procedure ExpectEnd(var R: TFastReader);\n@@ -2189,7 +2169,7 @@ function ReadLen(var R: TFastReader): PtrInt;\n   v := R.VarUInt64;\n   if (Int64(v) < 0) or\n      (Int64(v) > R.Last - R.P) then\n-    RaiseQuack('length % overflow', [Int64(v)]);\n+    ESqlDBQuack.RaiseUtf8('length % overflow', [Int64(v)]);\n   result := v;\n end;\n \n@@ -2202,16 +2182,21 @@ function ReadCount(var R: TFastReader; MinBytesPerItem: PtrInt): PtrInt;\n   v := R.VarUInt64;\n   if (Int64(v) < 0) or\n      (Int64(v) > (R.Last - R.P) div MinBytesPerItem) then\n-    RaiseQuack('list count % overflow', [Int64(v)]);\n+    ESqlDBQuack.RaiseUtf8('list count % overflow', [Int64(v)]);\n   result := v;\n end;\n \n-function ReadStr(var R: TFastReader): RawUtf8;\n+procedure ReadStr(var R: TFastReader; var Str: RawUtf8);\n var\n   len: PtrInt;\n begin\n   len\n... [truncated, 16939 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17813\n+17814",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17813'\r\n+'2.4.17814'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7a50e3a60062b4fec114df0eccbc96442e69b203",
+      "short_sha": "7a50e3a6",
+      "subject": "core: new SLEB128 encoding",
+      "body": "- new TBufferWriter.WriteVarLeb64 and ToVarLeb64 functions",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T10:02:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7a50e3a60062b4fec114df0eccbc96442e69b203",
+      "parents": [
+        "4820957c9ee6da57ddea0852c8cda563b4ecadee"
+      ],
+      "stats": {
+        "additions": 91,
+        "deletions": 13,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 9,
+          "patch": "@@ -128,10 +128,13 @@ function FromVarUInt64(var Source: PByte; SourceMax: PByte;\n   out Value: Qword): boolean; overload;\r\n   {$ifdef HASINLINE}inline;{$endif}\r\n \r\n-/// store a 64-bit integer with zigzag encoing 0=0,1=1,2=-1,3=2,4=-2,...\r\n+/// store a 64-bit signed integer with zigzag encoding 0=0,1=1,2=-1,3=2,4=-2,...\r\n function ToVarInt64(Value: Int64; Dest: PByte): PByte;\r\n   {$ifdef HASINLINE}inline;{$endif}\r\n \r\n+/// store a 64-bit signed integer with signed LEB128 standard encoding\r\n+function ToVarLeb64(Value: Int64; Dest: PByte): PByte;\r\n+\r\n /// get a 64-bit integer from zigzag encoded buffer 0=0,1=1,2=-1,3=2,4=-2,...\r\n function FromVarInt64(var Source: PByte): Int64;\r\n   {$ifdef CPU64}inline;{$endif}\r\n@@ -745,9 +748,9 @@   TFastReader = record\n       {$ifdef FPC}inline;{$endif}\r\n     /// read the next 64-bit unsigned value from the buffer\r\n     function VarUInt64: QWord;\r\n-    /// read the next LEB-128 signed value from the buffer as a 64-bit integer\r\n+    /// read the next signed LEB-128 value from the buffer as a 64-bit integer\r\n     // - not the same zigzag encoding as VarInt64, but the one used e.g. for\r\n-    // DWARF debugging information or DuckDB numbers1\r\n+    // DWARF debugging information or DuckDB / WebAssembly numbers\r\n     function VarLeb64: Int64;\r\n     /// read the next RawUtf8 value from the buffer\r\n     function VarUtf8: RawUtf8; overload;\r\n@@ -1002,6 +1005,9 @@   TBufferWriter = class(TSynPersistent)\n     /// append an unsigned integer value using 64-bit variable-length encoding\r\n     procedure WriteVarUInt64(Value: QWord);\r\n       {$ifdef HASSAFEINLINE}inline;{$endif}\r\n+    /// append a 64-bit value with signed LEB128 encoding (as in DWARF or DuckDB)\r\n+    // - not zigzag: the matching reader is TFastReader.VarLeb64\r\n+    procedure WriteVarLeb64(Value: Int64);\r\n     /// append cardinal values (NONE must be negative!) using 32-bit\r\n     // variable-length integer encoding or other specialized algorithm,\r\n     // depending on the data layout\r\n@@ -3122,6 +3128,32 @@ function ToVarInt64(Value: Int64; Dest: PByte): PByte;\n   result := ToVarUInt64(ZagZigInt64(Value), Dest);\r\n end;\r\n \r\n+function ToVarLeb64(Value: Int64; Dest: PByte): PByte;\r\n+begin\r\n+  if Value >= 0 then\r\n+  begin\r\n+    if Value > $3f then\r\n+      repeat\r\n+        Dest^ := byte(Value and $7f) or $80;\r\n+        inc(Dest);\r\n+        Value := Value shr 7;\r\n+      until Value <= $3f;\r\n+  end\r\n+  else\r\n+  begin\r\n+    Value := not Value;  // now nonnegative, even for Low(Int64)\r\n+    if Value > $3f then  // $40 is the sign bit for SLEB128\r\n+      repeat\r\n+        Dest^ := not byte(Value and $7f);\r\n+        inc(Dest);\r\n+        Value := Value shr 7;\r\n+      until Value <= $3f;\r\n+    Value := Value xor $7f;\r\n+  end;\r\n+  Dest^ := byte(Value);\r\n+  result := Dest + 1;\r\n+end;\r\n+\r\n function ToVarUInt64(Value: QWord; Dest: PByte): PByte;\r\n var\r\n   c: cardinal;\r\n@@ -3608,17 +3640,25 @@ function TFastReader.VarLeb64: Int64;\n var\r\n   b: PtrUInt;\r\n   shift: integer;\r\n+label\r\n+  e;\r\n begin\r\n-  b := NextByte;\r\n+  if P >= Last then\r\n+e:  ErrorOverflow;\r\n+  b := ord(P^);\r\n+  inc(P);\r\n   if b < $80 then\r\n   begin\r\n-    result := (PtrInt(b) xor $40) - $40; // single-byte signed LEB128: -64..63\r\n+    result := (PtrInt(b) xor $40) - $40; // single-byte SLEB128: -64..63\r\n     exit;\r\n   end;\r\n   result := b and $7f;\r\n   shift := 7;\r\n   repeat\r\n-    b := NextByte;\r\n+    if P >= Last then\r\n+      goto e;\r\n+    b := ord(P^);\r\n+    inc(P);\r\n     if shift = 63 then // the tenth byte can only be $00 or $7f\r\n     begin\r\n       if (b <> 0) and (b <> $7f) then\r\n@@ -3862,10 +3902,10 @@ function TFastReader.VarUInt32Safe(out Value: cardinal): boolean;\n end;\r\n \r\n function TFastReader.VarUInt64: QWord;\r\n-label\r\n-  e;\r\n var\r\n   c, n: PtrUInt;\r\n+label\r\n+  e;\r\n begin\r\n   if P >= Last then\r\n e:  ErrorOverflow;\r\n@@ -4775,11 +4815,18 @@ procedure TBufferWriter.WriteVarInt64(Value: Int64);\n \r\n procedure TBufferWriter.WriteVarUInt64(Value: QWord);\r\n begin\r\n-  if fPos > fBufLen16 then\r\n+  \n... [truncated, 572 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3129,7 +3129,7 @@ function TDwarfReader.ParseCompilationUnit(file_offset, file_size: QWord): QWord\n       DW_LNS_ADVANCE_PC:\n         inc(state.address, Read.VarUInt32 * header64.minimum_instruction_length);\n       DW_LNS_ADVANCE_LINE:\n-        // LEB128 values < 0 would decrease state.line when needed\n+        // LEB128 negative values would decrease state.line when needed\n         state.line := Int64(state.line) + Read.VarLeb64;\n       DW_LNS_SET_FILE:\n         state.fileid := Read.VarUInt32;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17812\n+17813",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17812'\r\n+'2.4.17813'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 1,
+          "patch": "@@ -4770,14 +4770,43 @@ procedure TTestCoreBase.Integers;\n \r\n   procedure CheckLeb(const hex: RawUtf8; expected: Int64);\r\n   var\r\n-    bin: RawByteString;\r\n+    bin, encoded: RawByteString;\r\n+    p: PByte;\r\n+    n: PtrInt;\r\n     r: TFastReader;\r\n+    w: TBufferWriter;\r\n+    tmp, buf: TTemp16;\r\n   begin\r\n     bin := HexToBin(hex);\r\n     CheckEqual(length(bin), length(hex) shr 1, 'HexToBin');\r\n+    // standard signed LEB128: compare with known encoding\r\n+    p := ToVarLeb64(expected, @tmp[0]);\r\n+    n := PtrUInt(p) - PtrUInt(@tmp[0]);\r\n+    CheckEqual(n, length(bin), 'ToVarLeb64 length');\r\n+    Check(CompareMem(@tmp[0], pointer(bin), length(bin)),\r\n+      'ToVarLeb64 content');\r\n     r.Init(bin);\r\n     CheckEqual(r.VarLeb64, expected, hex);\r\n     Check(r.EOF, 'VarLeb64 EOF');\r\n+    w := TBufferWriter.Create(TRawByteStringStream, @buf, SizeOf(buf));\r\n+    try\r\n+      w.WriteVarLeb64(expected);\r\n+      Check(w.FlushTo = bin, 'WriteVarLeb64');\r\n+      // regular mORMot ZigZag encoding\r\n+      w.CancelAll;\r\n+      w.WriteVarInt64(expected);\r\n+      encoded := w.FlushTo;\r\n+    finally\r\n+      w.Free;\r\n+    end;\r\n+    p := ToVarInt64(expected, @tmp[0]);\r\n+    n := PtrUInt(p) - PtrUInt(@tmp[0]);\r\n+    CheckEqual(n, length(encoded), 'ToVarInt64 length');\r\n+    Check(CompareMem(@tmp[0], pointer(encoded), n),\r\n+      'ToVarInt64 content');\r\n+    r.Init(encoded);\r\n+    CheckEqual(r.VarInt64, expected, 'VarInt64');\r\n+    Check(r.EOF, 'VarInt64 EOF');\r\n   end;\r\n \r\n   procedure CheckLebError(const hex: RawUtf8);\r\n@@ -5081,6 +5110,8 @@ procedure TTestCoreBase.Integers;\n   CheckLeb('BF7F', -65);\r\n   CheckLeb('807F', -128);\r\n   CheckLeb('8001', 128);\r\n+  CheckLeb('FF00', 127);\r\n+  CheckLeb('FF7E', -129);\r\n   CheckLeb('9BF159', -624485);\r\n   CheckLeb('E58E26', 624485);\r\n   CheckLeb('8080808080808080807F', Low(Int64));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.buffers",
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "31279f42eefb83791328db5f562848f1fc3c585c",
+      "short_sha": "31279f42",
+      "subject": "crypt - Ensure log exist before logging",
+      "body": "",
+      "author": "tprudhomme",
+      "date": "2026-11-03T08:44:08Z",
+      "url": "https://github.com/synopse/mORMot2/commit/31279f42eefb83791328db5f562848f1fc3c585c",
+      "parents": [
+        "caf708c0da29ee3985b0ed189a92a3feafde4b43"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 3,
+          "patch": "@@ -580,11 +580,13 @@ function TCryptPrivateKeyCng.SignDigest(const Dig: THash512Rec;\n          (result <> '') then\r\n         // CNG returns fixed-width r || s whereas ICryptCert expects DER\r\n         result := SetSignatureSecurityRaw(DigAlgo, RawUtf8(result));\r\n-      log.Log(sllTrace,\r\n-        'SignDigest: returns len=%', [length(result)], self);\r\n+      if Assigned(log) then\r\n+        log.Log(sllTrace,\r\n+         'SignDigest: returns len=%', [length(result)], self);\r\n     except\r\n       on E: Exception do\r\n-        log.Log(sllTrace, 'SignDigest failed due to %', [E], self);\r\n+        if Assigned(log) then\r\n+          log.Log(sllTrace, 'SignDigest failed due to %', [E], self);\r\n     end;\r\n   finally\r\n     key.Done; // release the private key handle ASAP for safety\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4820957c9ee6da57ddea0852c8cda563b4ecadee",
+      "short_sha": "4820957c",
+      "subject": "db: some DuckDB/Quack enhancements",
+      "body": "- use the new TFastReader.VarLeb64\n- rewritten the whole type conversion routine to use O(1) lookup",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T08:05:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4820957c9ee6da57ddea0852c8cda563b4ecadee",
+      "parents": [
+        "055df2b4da11dc6287d5cc99d17f189aa3a7a03a"
+      ],
+      "stats": {
+        "additions": 94,
+        "deletions": 97,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 91,
+          "deletions": 94,
+          "patch": "@@ -1712,8 +1712,8 @@ procedure DuckFixedToText(TypeId, Internal: TDuckDBType; Scale: integer;\n       end;\n     DUCKDB_TYPE_INTERVAL:\n       begin\n-        iv.Months := PCardinal(P)^;\n-        iv.Days   := PCardinal(P + 4)^;\n+        iv.Months := PInteger(P)^;\n+        iv.Days   := PInteger(P + 4)^;\n         iv.Micros := PInt64(P + 8)^;\n         DuckIntervalToText(iv, result);\n       end;\n@@ -2220,28 +2220,9 @@ function ReadIdx(var R: TFastReader): Int64;\n   result := Int64(R.VarUInt64); // optional_idx: stored as idx_t\n end;\n \n-// signed LEB128, which differs from the zigzag TFastReader.VarInt64\n-function ReadSVarInt64(var R: TFastReader): Int64;\n-var\n-  shift: integer;\n-  b: cardinal;\n-begin\n-  result := 0;\n-  shift := 0;\n-  repeat\n-    b := R.NextByte;\n-    if shift < 64 then\n-      result := result or (Int64(b and $7f) shl shift);\n-    inc(shift, 7);\n-  until b < $80;\n-  if (shift < 64) and\n-     (b and $40 <> 0) then\n-    result := result or (Int64(-1) shl shift); // sign extension\n-end;\n-\n procedure ReadHugeInt(var R: TFastReader; out V: TDuckDBHugeInt);\n begin\n-  V.Upper := ReadSVarInt64(R);\n+  V.Upper := R.VarLeb64;\n   V.Lower := Int64(R.VarUInt64);\n end;\n \n@@ -2260,44 +2241,6 @@ function TQuackType.FieldType: TSqlDBFieldType;\n   result := DuckDBTypeToField(DuckType, Scale); // same mapping as the C API\n end;\n \n-type\n-  TQuackFixedType = record\n-    Id: byte;\n-    DuckType: byte;\n-  end;\n-  PQuackFixedType = ^TQuackFixedType;\n-\n-const\n-  // the fixed-size types, with their DUCKDB_TYPE_* equivalent\n-  FIXED_TYPES: array[0..26] of TQuackFixedType = (\n-    (Id: QTYPE_SQLNULL;          DuckType: DUCKDB_TYPE_SQLNULL),\n-    (Id: QTYPE_BOOLEAN;          DuckType: DUCKDB_TYPE_BOOLEAN),\n-    (Id: QTYPE_TINYINT;          DuckType: DUCKDB_TYPE_TINYINT),\n-    (Id: QTYPE_UTINYINT;         DuckType: DUCKDB_TYPE_UTINYINT),\n-    (Id: QTYPE_SMALLINT;         DuckType: DUCKDB_TYPE_SMALLINT),\n-    (Id: QTYPE_USMALLINT;        DuckType: DUCKDB_TYPE_USMALLINT),\n-    (Id: QTYPE_INTEGER;          DuckType: DUCKDB_TYPE_INTEGER),\n-    (Id: QTYPE_UINTEGER;         DuckType: DUCKDB_TYPE_UINTEGER),\n-    (Id: QTYPE_DATE;             DuckType: DUCKDB_TYPE_DATE),\n-    (Id: QTYPE_FLOAT;            DuckType: DUCKDB_TYPE_FLOAT),\n-    (Id: QTYPE_BIGINT;           DuckType: DUCKDB_TYPE_BIGINT),\n-    (Id: QTYPE_UBIGINT;          DuckType: DUCKDB_TYPE_UBIGINT),\n-    (Id: QTYPE_POINTER;          DuckType: DUCKDB_TYPE_UBIGINT),\n-    (Id: QTYPE_DOUBLE;           DuckType: DUCKDB_TYPE_DOUBLE),\n-    (Id: QTYPE_TIME;             DuckType: DUCKDB_TYPE_TIME),\n-    (Id: QTYPE_TIME_NS;          DuckType: DUCKDB_TYPE_TIME_NS),\n-    (Id: QTYPE_TIME_TZ;          DuckType: DUCKDB_TYPE_TIME_TZ),\n-    (Id: QTYPE_TIMESTAMP;        DuckType: DUCKDB_TYPE_TIMESTAMP),\n-    (Id: QTYPE_TIMESTAMP_SEC;    DuckType: DUCKDB_TYPE_TIMESTAMP_S),\n-    (Id: QTYPE_TIMESTAMP_MS;     DuckType: DUCKDB_TYPE_TIMESTAMP_MS),\n-    (Id: QTYPE_TIMESTAMP_NS;     DuckType: DUCKDB_TYPE_TIMESTAMP_NS),\n-    (Id: QTYPE_TIMESTAMP_TZ;     DuckType: DUCKDB_TYPE_TIMESTAMP_TZ),\n-    (Id: QTYPE_TIMESTAMP_TZ_NS;  DuckType: DUCKDB_TYPE_TIMESTAMP_TZ_NS),\n-    (Id: QTYPE_INTERVAL;         DuckType: DUCKDB_TYPE_INTERVAL),\n-    (Id: QTYPE_HUGEINT;          DuckType: DUCKDB_TYPE_HUGEINT),\n-    (Id: QTYPE_UHUGEINT;         DuckType: DUCKDB_TYPE_UHUGEINT),\n-    (Id: QTYPE_UUID;             DuckType: DUCKDB_TYPE_UUID));\n-\n function TQuackType.HasVariant: boolean;\n var\n   i: PtrInt;\n@@ -2341,12 +2284,66 @@ function TQuackType.ElemSizeInternal: TDuckDBType;\n \n procedure TQuackType.SetStorage;\n var\n-  i, n: PtrInt;\n-  f: PQuackFixedType;\n+  n: PtrInt;\n begin\n   Storage := qsFixed;\n   case Id of\n-    QTYPE_DECIMAL: // the storage depends on the width\n+    // fixed-size types\n+    QTYPE_SQLNULL:\n+      DuckType := DUCKDB_TYPE_SQLNULL;\n+    QTYPE_BOOLEAN:\n+      DuckType := DUCKDB_TYPE_BOOLEAN;\n+    QTYPE_TINYINT:\n+      DuckType := DUCKDB_TYPE_TINYINT;\n+    QTYPE_UTINYINT:\n+      DuckType := DUCKDB_TYPE_UTINYINT;\n+    QTYPE_\n... [truncated, 4758 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1367,7 +1367,7 @@ function ColumnTemp(c: PDuckDBColumnInfo; d: pointer; row: PtrInt;\n   if c^.Info.TypeID = DUCKDB_TYPE_VARCHAR then // short strings as #0-ended buffer\n   begin\n     d := DuckStringPtr(DuckStringAt(c^.Data, Row), len);\n-    if len < high(tmp) then\n+    if len <= high(tmp) then\n     begin\n       MoveFast(d^, tmp, len);\n       tmp[len] := #0;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17811\n+17812",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17811'\r\n+'2.4.17812'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.duckdb",
+        "mormot.db.sql.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "055df2b4da11dc6287d5cc99d17f189aa3a7a03a",
+      "short_sha": "055df2b4",
+      "subject": "core: let DWARF decoding use the new TFastReader.VarLeb64 method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T08:04:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/055df2b4da11dc6287d5cc99d17f189aa3a7a03a",
+      "parents": [
+        "a2e88d9eb8a67d52b5c28a27d85a9c9d1705635d"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 29,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 27,
+          "patch": "@@ -2683,7 +2683,6 @@   TDwarfReader = record\n     numoptable: array[1..255] of byte; // start at index 1 -> no THash2048\n     function LoadSections: boolean;\n     procedure ReadInit(aBase, aLimit: Int64);\n-    function ReadLeb128: Int64;\n     function ReadAddress(addr_size: PtrInt; ctx: PUtf8Char): cardinal;\n     procedure SkipAttr(form: PtrUInt; const header64: TDwarfDebugInfoHeader64);\n     procedure ReadAbbrevTable(file_offset, file_size: QWord);\n@@ -2791,30 +2790,6 @@ procedure TDwarfReader.ReadInit(aBase, aLimit: Int64);\n   Read.Init(Map.Buffer + aBase, aLimit);\n end;\n \n-function TDwarfReader.ReadLeb128: Int64;\n-var\n-  shift: byte;\n-  data: PtrInt;\n-  val: Int64;\n-begin // LEB-128 encoding does not match our FromVarInt64 sign extension\n-  data := Read.NextByte;\n-  if data <= 127 then\n-    // optimize the most common case of -64..+63 range\n-    exit((not ((data and (Int64(1) shl 6)) - 1)) or data);\n-  result := 0;\n-  shift := 0;\n-  repeat\n-    val := data and $7f;\n-    result := result or (val shl shift);\n-    inc(shift, 7);\n-    if data <= 127 then\n-      break;\n-    data := Read.NextByte;\n-  until false;\n-  // extend sign from current shifted bits\n-  result := (not ((result and (Int64(1) shl (shift - 1))) - 1)) or result;\n-end;\n-\n function TDwarfReader.ReadAddress(addr_size: PtrInt; ctx: PUtf8Char): cardinal;\n var\n   tmp: QWord; // temporary 64-bit variable on stack\n@@ -3154,8 +3129,8 @@ function TDwarfReader.ParseCompilationUnit(file_offset, file_size: QWord): QWord\n       DW_LNS_ADVANCE_PC:\n         inc(state.address, Read.VarUInt32 * header64.minimum_instruction_length);\n       DW_LNS_ADVANCE_LINE:\n-        // use ReadLeb128 < 0 to decrease state.line when needed\n-        state.line := Int64(state.line) + ReadLeb128;\n+        // LEB128 values < 0 would decrease state.line when needed\n+        state.line := Int64(state.line) + Read.VarLeb64;\n       DW_LNS_SET_FILE:\n         state.fileid := Read.VarUInt32;\n       DW_LNS_NEGATE_STMT:",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17810\n+17811",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17810'\r\n+'2.4.17811'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.log"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a2e88d9eb8a67d52b5c28a27d85a9c9d1705635d",
+      "short_sha": "a2e88d9e",
+      "subject": "core: new TFastReader.VarLeb64 method for LEB128 decoding",
+      "body": "- with corresponding regression tests",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-03T08:03:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a2e88d9eb8a67d52b5c28a27d85a9c9d1705635d",
+      "parents": [
+        "c3f4abb0d5eefab919131bdcb6cb18a97729d2d7"
+      ],
+      "stats": {
+        "additions": 86,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 0,
+          "patch": "@@ -745,6 +745,10 @@   TFastReader = record\n       {$ifdef FPC}inline;{$endif}\r\n     /// read the next 64-bit unsigned value from the buffer\r\n     function VarUInt64: QWord;\r\n+    /// read the next LEB-128 signed value from the buffer as a 64-bit integer\r\n+    // - not the same zigzag encoding as VarInt64, but the one used e.g. for\r\n+    // DWARF debugging information or DuckDB numbers1\r\n+    function VarLeb64: Int64;\r\n     /// read the next RawUtf8 value from the buffer\r\n     function VarUtf8: RawUtf8; overload;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n@@ -3600,6 +3604,35 @@ function TFastReader.VarInt64: Int64;\n   result := ZigZagInt64(VarUInt64);\r\n end;\r\n \r\n+function TFastReader.VarLeb64: Int64;\r\n+var\r\n+  b: PtrUInt;\r\n+  shift: integer;\r\n+begin\r\n+  b := NextByte;\r\n+  if b < $80 then\r\n+  begin\r\n+    result := (PtrInt(b) xor $40) - $40; // single-byte signed LEB128: -64..63\r\n+    exit;\r\n+  end;\r\n+  result := b and $7f;\r\n+  shift := 7;\r\n+  repeat\r\n+    b := NextByte;\r\n+    if shift = 63 then // the tenth byte can only be $00 or $7f\r\n+    begin\r\n+      if (b <> 0) and (b <> $7f) then\r\n+        ErrorData('Invalid signed LEB128');\r\n+      result := result or (Int64(b and 1) shl 63);\r\n+      exit;\r\n+    end;\r\n+    result := result or (Int64(b and $7f) shl shift);\r\n+    inc(shift, 7);\r\n+  until b <= $7f;\r\n+  if b and $40 <> 0 then // extend sign from current shifted bits\r\n+    result := result or (Int64(-1) shl shift);\r\n+end;\r\n+\r\n {$ifdef CPUX86} // not enough CPU registers\r\n \r\n function TFastReader.VarUInt32: cardinal;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17809\n+17810",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17809'\r\n+'2.4.17810'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 51,
+          "deletions": 0,
+          "patch": "@@ -4768,6 +4768,38 @@ procedure TTestCoreBase.Integers;\n     Includes64;\r\n   end;\r\n \r\n+  procedure CheckLeb(const hex: RawUtf8; expected: Int64);\r\n+  var\r\n+    bin: RawByteString;\r\n+    r: TFastReader;\r\n+  begin\r\n+    bin := HexToBin(hex);\r\n+    CheckEqual(length(bin), length(hex) shr 1, 'HexToBin');\r\n+    r.Init(bin);\r\n+    CheckEqual(r.VarLeb64, expected, hex);\r\n+    Check(r.EOF, 'VarLeb64 EOF');\r\n+  end;\r\n+\r\n+  procedure CheckLebError(const hex: RawUtf8);\r\n+  var\r\n+    bin: RawByteString;\r\n+    r: TFastReader;\r\n+    failed: boolean;\r\n+  begin\r\n+    if IsDebuggerPresent then\r\n+      exit;\r\n+    bin := HexToBin(hex);\r\n+    r.Init(bin);\r\n+    failed := false;\r\n+    try\r\n+      r.VarLeb64;\r\n+    except\r\n+      on E: EFastReader do\r\n+        failed := true;\r\n+    end;\r\n+    Check(failed, 'VarLeb64 invalid input');\r\n+  end;\r\n+\r\n var\r\n   i8: TByteDynArray;\r\n   i16: TWordDynArray;\r\n@@ -5039,6 +5071,25 @@ procedure TTestCoreBase.Integers;\n   CheckEqual(length(i32), 2);\r\n   CheckEqual(i32[0], 1);\r\n   CheckEqual(i32[1], 2);\r\n+  // validate signed LEB128 as used by DWARF and DuckDB/Quack\r\n+  CheckLeb('00', 0);\r\n+  CheckLeb('01', 1);\r\n+  CheckLeb('3F', 63);\r\n+  CheckLeb('40', -64);\r\n+  CheckLeb('7F', -1);\r\n+  CheckLeb('C000', 64);\r\n+  CheckLeb('BF7F', -65);\r\n+  CheckLeb('807F', -128);\r\n+  CheckLeb('8001', 128);\r\n+  CheckLeb('9BF159', -624485);\r\n+  CheckLeb('E58E26', 624485);\r\n+  CheckLeb('8080808080808080807F', Low(Int64));\r\n+  CheckLeb('8180808080808080807F', Low(Int64) + 1);\r\n+  CheckLeb('FEFFFFFFFFFFFFFFFF00', High(Int64) - 1);\r\n+  CheckLeb('FFFFFFFFFFFFFFFFFF00', High(Int64));\r\n+  CheckLebError('80');\r\n+  CheckLebError('80808080808080808001');\r\n+  CheckLebError('80808080808080808080');\r\n end;\r\n \r\n function TestAddFloatStr(const str: RawUtf8): RawUtf8;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.buffers"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bf1d78252071555b3037afde7bb87124f7a6bbcb",
+      "short_sha": "bf1d7825",
+      "subject": "mormot.core.zip: fix empty folder crc and AddDeflatedStream level 0",
+      "body": "- TZipWrite.AddEmptyFolder stores crc32=0 (crc32 of no data) instead of -1\n- TZipWrite.AddDeflatedStream with CompressLevel<=0 now creates a valid\n  Z_DEFLATED entry with stored blocks, instead of a Z_STORED entry which\n  contained raw deflate data\n- add regression tests in test.core.data\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-31T21:08:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bf1d78252071555b3037afde7bb87124f7a6bbcb",
+      "parents": [
+        "0186cd022309dcb6cd40b80f1b241f6bae4a0605"
+      ],
+      "stats": {
+        "additions": 63,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -715,6 +715,8 @@   TZipWrite = class(TZipAbstract)\n     // - limited to 4GB of data, unless ForceZip64 is set to true\r\n     // - currently do not support any OnProgressStep notification, because\r\n     // we don't know the input size ahead of time\r\n+    // - CompressLevel <= 0 still uses the Z_DEFLATED method, with zlib\r\n+    // uncompressed (stored) blocks\r\n     function AddDeflatedStream(const aZipName: TFileName;\r\n       FileAge: integer = 0; CompressLevel: integer = Z_USUAL_COMPRESSION): TStream;\r\n     /// add a (huge) file to the zip file, without compression\r\n@@ -2056,7 +2058,7 @@ procedure TZipWrite.AddStored(const aFileName: TFileName;\n \r\n procedure TZipWrite.AddEmptyFolder(const aZipName: TFileName; FileAge: integer);\r\n begin\r\n-  NewEntry(Z_STORED, cardinal(-1), FileAge);\r\n+  NewEntry(Z_STORED, {crc32=}0, FileAge); // crc32 of no data is 0\r\n   WriteHeader(aZipName); // no data to write nor any fInfo progress to notify\r\n   inc(fCount);\r\n end;\r\n@@ -2223,10 +2225,8 @@ function TZipWrite.AddDeflatedStream(const aZipName: TFileName;\n   result := TZipWriteCompressor.Create(fDest, CompressLevel, szcfRaw);\r\n   TZipWriteCompressor(result).fHeaderPos := fDest.Position;\r\n   TZipWriteCompressor(result).fOwner := self;\r\n-  // create the new entry\r\n-  if CompressLevel <> 0 then\r\n-    CompressLevel := Z_DEFLATED; // method (if not Z_STORED=0)\r\n-  NewEntry(CompressLevel, 0, FileAge);\r\n+  // create the new entry - level 0 still emits raw deflate (stored) blocks\r\n+  NewEntry(Z_DEFLATED, 0, FileAge);\r\n   WriteHeader(aZipName);\r\n   // caller now makes TZipWriteCompressor.Write then TZipWriteCompressor.Free\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 0,
+          "patch": "@@ -11487,6 +11487,41 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n+  procedure StreamLevel0;\r\n+  // AddDeflatedStream(..., CompressLevel=0) should create a valid entry\r\n+  var\r\n+    w: TRawByteStringStream;\r\n+    s: TStream;\r\n+    z: TZipWrite;\r\n+  begin\r\n+    w := TRawByteStringStream.Create;\r\n+    try\r\n+      z := TZipWrite.Create(w);\r\n+      try\r\n+        s := z.AddDeflatedStream('lvl0.txt', 0, 0);\r\n+        try\r\n+          s.WriteBuffer(pointer(Data)^, length(Data));\r\n+        finally\r\n+          s.Free;\r\n+        end;\r\n+      finally\r\n+        z.Free;\r\n+      end;\r\n+      with TZipRead.Create(pointer(w.DataString), length(w.DataString)) do\r\n+      try\r\n+        if CheckEqual(Count, 1, 'lvl0 count') then\r\n+        begin\r\n+          Check(TestAll, 'lvl0 testall');\r\n+          Check(UnZip(0) = Data, 'lvl0 unzip');\r\n+        end;\r\n+      finally\r\n+        Free;\r\n+      end;\r\n+    finally\r\n+      w.Free;\r\n+    end;\r\n+  end;\r\n+\r\n   procedure DataDescriptorLastEntry;\r\n   // some tools (e.g. LibreOffice for .xlsx) set FLAG_DATADESCRIPTOR on all\r\n   // entries: retrieving the last one from a memory buffer should not need fSource\r\n@@ -11596,6 +11631,29 @@ procedure TTestCoreCompression.ZipFormat;\n   CheckEqual(FileSize(FN), SizeOf(minim), 'TZipWrite void .zip');\r\n   Check(DeleteFile(FN));\r\n   DataDescriptorLastEntry;\r\n+  // AddEmptyFolder() should store crc32=0 for a folder entry (no data)\r\n+  S := TRawByteStringStream.Create;\r\n+  try\r\n+    with TZipWrite.Create(S) do\r\n+    try\r\n+      AddEmptyFolder('emptydir\\');\r\n+      CheckEqual(Count, 1, 'emptydir1');\r\n+    finally\r\n+      Free;\r\n+    end;\r\n+    with TZipRead.Create(pointer(S.DataString), length(S.DataString)) do\r\n+    try\r\n+      CheckEqual(Count, 1, 'emptydir2');\r\n+      Check(Entry[0].dir^.fileInfo.zcrc32 = 0, 'emptydir crc');\r\n+      Check(Entry[0].local^.fileInfo.zcrc32 = 0, 'emptydir local crc');\r\n+      Check(TestAll, 'emptydir testall');\r\n+    finally\r\n+      Free;\r\n+    end;\r\n+  finally\r\n+    S.Free;\r\n+  end;\r\n+  StreamLevel0;\r\n   // onprog := TStreamRedirect.ProgressInfoToConsole;\r\n   onprog := TSynLog.ProgressInfo;\r\n   for m := 1 to 2 do\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3b37a2627abb81b192e0b8eb4757db5ba31d145a",
+      "short_sha": "3b37a262",
+      "subject": "db: load unixODBC on macOS",
+      "body": "- libodbc.so.1 does not exist on macOS: unixODBC installs libodbc.2.dylib\n- Homebrew (/opt/homebrew/lib on Apple Silicon, /usr/local/lib on Intel) and\n  MacPorts (/opt/local/lib) are not in the default dyld search path, so\n  those locations are tried after the bare name\n- checked on aarch64-darwin with Homebrew unixODBC: TOdbcLib.Create failed\n  before and loads now, with FPC 3.3.1 and 3.2.2",
+      "author": "stefan-nolte",
+      "date": "2026-10-31T11:57:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3b37a2627abb81b192e0b8eb4757db5ba31d145a",
+      "parents": [
+        "211d224303893675d7ab1e88071300a07728223b"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 1,
+          "patch": "@@ -898,7 +898,16 @@ function SQL_TIMESTAMP_STRUCT.ToIso8601(Dest: PUtf8Char; DataType: SqlSmallint;\n   {$ifdef OSWINDOWS}\r\n   ODBC_LIB = 'odbc32.dll';\r\n   {$else}\r\n+  {$ifdef OSDARWIN}\r\n+  // unixODBC from Homebrew or MacPorts: none of their lib folders is in the\r\n+  // default dyld search path, so they are tried explicitly\r\n+  ODBC_LIB = 'libodbc.2.dylib';\r\n+  ODBC_LIB_BREWARM = '/opt/homebrew/lib/libodbc.2.dylib';\r\n+  ODBC_LIB_BREWX64 = '/usr/local/lib/libodbc.2.dylib';\r\n+  ODBC_LIB_MACPORTS = '/opt/local/lib/libodbc.2.dylib';\r\n+  {$else}\r\n   ODBC_LIB = 'libodbc.so.1';\r\n+  {$endif OSDARWIN}\r\n   {$endif OSWINDOWS}\r\n \r\n   ODBC_ENTRIES: array[0..67] of PAnsiChar = (\r\n@@ -1041,7 +1050,9 @@ constructor TOdbcLib.Create;\n begin\r\n   inherited Create;\r\n   try\r\n-    TryLoadResolve([ODBC_LIB], 'SQL', @ODBC_ENTRIES, @@AllocEnv, EOdbcException);\r\n+    TryLoadResolve([ODBC_LIB\r\n+      {$ifdef OSDARWIN}, ODBC_LIB_BREWARM, ODBC_LIB_BREWX64, ODBC_LIB_MACPORTS{$endif}],\r\n+      'SQL', @ODBC_ENTRIES, @@AllocEnv, EOdbcException);\r\n   except\r\n     on E: Exception do\r\n     begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.odbc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f8f23b92444357e60c1728e615ec15ca2e53cbb1",
+      "short_sha": "f8f23b92",
+      "subject": "core: fixed GetPublishedMethods on FPC 3.3+ aarch64",
+      "body": "- FPC 3.2 and older emit a packed VMT method table even on targets with\n  FPC_REQUIRES_PROPER_ALIGNMENT, so the entries were read at the hardcoded\n  offset 4\n- since FPC 3.3 the emitted table follows the TVmtMethodTable declaration,\n  which puts the entries at offset 8 on aarch64: reading them at offset 4\n  gave a shifted pointer and an access violation, e.g. when a TSynTestCase\n  enumerates its published methods\n- the offset now comes from TVmtMethodTable on FPC 3.3+, and stays 4 for\n  FPC 3.2 and older\n- checked on aarch64-darwin: FPC 3.3.1 raised EAccessViolation before and\n  lists all methods now, FPC 3.2.2 is unchanged",
+      "author": "stefan-nolte",
+      "date": "2026-10-31T10:21:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f8f23b92444357e60c1728e615ec15ca2e53cbb1",
+      "parents": [
+        "211d224303893675d7ab1e88071300a07728223b"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.rtti.fpc.inc",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 3,
+          "patch": "@@ -560,8 +560,17 @@ function GetPublishedMethods(Instance: TObject;\n   out Methods: TPublishedMethodInfoDynArray; aClass: TClass): integer;\r\n \r\n   procedure AddParentsFirst(C: TClass);\r\n+  const\r\n+    // FPC <= 3.2 emits a packed table even if FPC_REQUIRES_PROPER_ALIGNMENT, but\r\n+    // FPC 3.3+ follows TVmtMethodTable, e.g. with entries at offset 8 on aarch64\r\n+    ENTRIES_OFFSET =\r\n+      {$if defined(VER3_0) or defined(VER3_2) or defined(VER2)}\r\n+      SizeOf(cardinal);\r\n+      {$else}\r\n+      SizeOf(TVmtMethodTable) - SizeOf(TVmtMethodEntry);\r\n+      {$ifend}\r\n   var\r\n-    info: PIntegerArray; // PVmtMethodTable is wrong (GPF on aarch64-linux) :(\r\n+    info: PCardinal; // PVmtMethodTable is wrong on FPC <= 3.2 (GPF on aarch64)\r\n     m: PVmtMethodEntry;\r\n     r: ^TPublishedMethodInfo;\r\n     n: integer;\r\n@@ -572,13 +581,13 @@ function GetPublishedMethods(Instance: TObject;\n     info := PPointer(PtrUInt(C) + PtrUInt(vmtMethodTable))^;\r\n     if info = nil then\r\n       exit; // no published method for this class level\r\n-    n := info[0];\r\n+    n := info^;\r\n     if n = 0 then\r\n       exit; // paranoid\r\n     SetLength(Methods, result + n);\r\n     r := @Methods[result];\r\n     inc(result, n);\r\n-    m := @info[1];\r\n+    m := pointer(PAnsiChar(info) + ENTRIES_OFFSET);\r\n     repeat\r\n       ShortStringToAnsi7String(m^.Name^, r^.Name);\r\n       r^.Method.Data := Instance;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.rtti.fpc"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
