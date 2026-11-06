@@ -1,0 +1,1729 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-05",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-06T03:32:56Z",
+  "range": {
+    "since": "2026-11-04T23:00:00Z",
+    "until": "2026-11-05T23:00:00Z",
+    "base_sha": "3d613744132451978d296997aea3907dbc2c66e3",
+    "head_sha": "5df7dc803073b59d037470aa29dc3b8adca9e65f"
+  },
+  "version": {
+    "after": "2.4.17888",
+    "before": "2.4.17856"
+  },
+  "totals": {
+    "commits": 32,
+    "additions": 2318,
+    "deletions": 1570
+  },
+  "commits": [
+    {
+      "sha": "5df7dc803073b59d037470aa29dc3b8adca9e65f",
+      "short_sha": "5df7dc80",
+      "subject": "test: fixed random GPF in TTestExternalDatabase.BatchFromOtherThread",
+      "body": "- please tell your LLM that the properties should be released once all transient statement interfaces are released! :)",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T20:09:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5df7dc803073b59d037470aa29dc3b8adca9e65f",
+      "parents": [
+        "e15e6c13d9d0c51e24a9021b6cb674fd703dc423"
+      ],
+      "stats": {
+        "additions": 54,
+        "deletions": 46,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17887\n+17888",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17887'\r\n+'2.4.17888'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 52,
+          "deletions": 44,
+          "patch": "@@ -1447,11 +1447,56 @@ procedure TTestExternalDatabase.BatchFromOtherThread;\n   model: TOrmModel;\r\n   server: TRestServerFullMemory;\r\n   props: TSqlDBConnectionProperties;\r\n-  ext: TRestStorageExternalHook;\r\n-  ndx: PtrInt;\r\n-  th: TBatchOtherThreadUpdate;\r\n-  rows: ISqlDBRows;\r\n-  i: integer;\r\n+\r\n+  procedure DoTests;\r\n+  var\r\n+    ext: TRestStorageExternalHook;\r\n+    ndx: PtrInt;\r\n+    th: TBatchOtherThreadUpdate;\r\n+    rows: ISqlDBRows;\r\n+    i: integer;\r\n+  begin\r\n+    OrmMapExternal(model, TOrmPeopleExt, props, 'BatchThread');\r\n+    ext := TRestStorageExternalHook.Create(\r\n+      TOrmPeopleExt, server.OrmInstance as TRestOrmServer);\r\n+    try\r\n+      ndx := model.GetTableIndexExisting(TOrmPeopleExt);\r\n+      props.ExecuteNoResult(\r\n+        'insert into BatchThread (ID,FirstName) values (?,?)', [10, 'before']);\r\n+      th := nil;\r\n+      Check(ext.InternalBatchStart(encPost, []), 'batch');\r\n+      try\r\n+        // the BATCH thread itself still appends its own rows\r\n+        CheckEqual(ext.EngineAdd(ndx, '{\"ID\":20,\"FirstName\":\"batch\"}'), 20, 'add');\r\n+        th := TBatchOtherThreadUpdate.Create(ext, ndx);\r\n+        try\r\n+          for i := 1 to 20 do\r\n+            if th.Done then\r\n+              break\r\n+            else\r\n+              SleepHiRes(10);\r\n+          // the other thread waits for the storage lock, as a regular update\r\n+          Check(not th.Done, 'other thread waits for the batch');\r\n+        finally\r\n+          ext.InternalBatchStop;\r\n+        end;\r\n+        th.WaitFor;\r\n+        Check(th.Updated, 'update from other thread after the batch');\r\n+      finally\r\n+        th.Free;\r\n+      end;\r\n+      rows := props.Execute('select FirstName from BatchThread where ID=?', [10]);\r\n+      Check(rows.Step, 'row 10');\r\n+      CheckEqual(rows.ColumnUtf8(0), 'after', 'updated');\r\n+      rows := props.Execute('select count(*) from BatchThread', []);\r\n+      Check(rows.Step, 'count');\r\n+      CheckEqual(rows.ColumnInt(0), 2, 'batch row');\r\n+      rows := nil; // to avoid GPF when exiting this method\r\n+    finally\r\n+      ext.Free;\r\n+    end;\r\n+  end;\r\n+\r\n begin\r\n   // EngineAdd/Update/Delete/DeleteWhere did check fBatchMethod BEFORE the\r\n   // storage lock: during a BATCH POST of one thread, a regular Update from\r\n@@ -1464,45 +1509,8 @@ procedure TTestExternalDatabase.BatchFromOtherThread;\n       props := TSqlDBSQLite3ConnectionProperties.Create(\r\n         'batchthread.db3', '', '', '');\r\n       try\r\n-        OrmMapExternal(model, TOrmPeopleExt, props, 'BatchThread');\r\n-        ext := TRestStorageExternalHook.Create(\r\n-          TOrmPeopleExt, server.OrmInstance as TRestOrmServer);\r\n-        try\r\n-          ndx := model.GetTableIndexExisting(TOrmPeopleExt);\r\n-          props.ExecuteNoResult(\r\n-            'insert into BatchThread (ID,FirstName) values (?,?)', [10, 'before']);\r\n-          th := nil;\r\n-          Check(ext.InternalBatchStart(encPost, []), 'batch');\r\n-          try\r\n-            // the BATCH thread itself still appends its own rows\r\n-            CheckEqual(ext.EngineAdd(ndx, '{\"ID\":20,\"FirstName\":\"batch\"}'), 20, 'add');\r\n-            th := TBatchOtherThreadUpdate.Create(ext, ndx);\r\n-            try\r\n-              for i := 1 to 20 do\r\n-                if th.Done then\r\n-                  break\r\n-                else\r\n-                  SleepHiRes(10);\r\n-              // the other thread waits for the storage lock, as a regular update\r\n-              Check(not th.Done, 'other thread waits for the batch');\r\n-            finally\r\n-              ext.InternalBatchStop;\r\n-            end;\r\n-            th.WaitFor;\r\n-            Check(th.Updated, 'update from other thread after the batch');\r\n-          finally\r\n-            th.Free;\r\n-          end;\r\n-          rows := props.Execute('select FirstName from BatchThread where ID=?', [10]);\r\n-          Check(rows.Step, 'row 10');\r\n-          CheckEqual(rows.ColumnUtf8(0), 'after', 'updated');\r\n-          rows := props.Execute('select count(*) from BatchThread', []);\r\n- \n... [truncated, 390 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e15e6c13d9d0c51e24a9021b6cb674fd703dc423",
+      "short_sha": "e15e6c13",
+      "subject": "tests: fixed random GPF in TTestQuack.Client",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T20:02:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e15e6c13d9d0c51e24a9021b6cb674fd703dc423",
+      "parents": [
+        "633c6f541136ada5589082444a36fae5e31d1e2e"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 25,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17886\n+17887",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17886'\r\n+'2.4.17887'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 23,
+          "patch": "@@ -78,9 +78,9 @@   TTestQuack = class(TSynTestCase)\n     /// the vectors decoding, including the compressed ones\n     procedure Vectors;\n     /// the TSqlDB* classes using a mock Quack server of the protocol version 1\n-    procedure ClientV1;\n+    procedure ClientVersion1;\n     /// the TSqlDB* classes using a mock Quack server of the protocol version 3\n-    procedure ClientV3;\n+    procedure ClientVersion3;\n     {$ifdef CPU64}\n     /// the TSqlDB* classes using a real DuckDB Quack server\n     procedure DuckDBServer;\n@@ -1376,41 +1376,36 @@ procedure TTestQuack.Vectors;\n   end;\n end;\n \n-procedure TTestQuack.ClientV1;\n+procedure TTestQuack.ClientVersion1;\n begin\n   ClientTest(1);\n end;\n \n-procedure TTestQuack.ClientV3;\n+procedure TTestQuack.ClientVersion3;\n begin\n   ClientTest(3);\n end;\n \n procedure TTestQuack.ClientTest(MockVersion: cardinal);\n var\n+  port: integer;\n   props: TSqlDBQuackConnectionProperties;\n-  conn: TSqlDBConnection;\n-  rows: ISqlDBRows;\n-  u: RawUtf8;\n-  st: ISqlDBStatement;\n-  i: integer;\n-  bad: TSqlDBQuackConnectionProperties;\n-begin\n-  fMockVersion := MockVersion;\n-  FreeAndNil(fMock);\n-  fMock := THttpServer.Create(UInt32ToUtf8(8890 + MockVersion), nil, nil,\n-    'quack', 2);\n-  fMock.OnRequest := OnMockRequest;\n-  fMock.WaitStarted;\n-  props := TSqlDBQuackConnectionProperties.Create(\n-    FormatUtf8('quack:127.0.0.1:%', [8890 + MockVersion]), '', '', 'secret');\n-  try\n+\n+  procedure DoTests;\n+  var\n+    conn: TSqlDBConnection;\n+    rows: ISqlDBRows;\n+    st: ISqlDBStatement;\n+    u: RawUtf8;\n+    i: integer;\n+    bad: TSqlDBQuackConnectionProperties;\n+  begin\n     CheckEqual(props.Host, '127.0.0.1');\n     CheckEqual(props.Port, 8890 + integer(MockVersion));\n     Check(not props.UseTls);\n     // wrong token\n     bad := TSqlDBQuackConnectionProperties.Create(\n-      FormatUtf8('quack:127.0.0.1:%', [8890 + MockVersion]), '', '', 'wrong');\n+      FormatUtf8('quack:127.0.0.1:%', [port]), '', '', 'wrong');\n     try\n       try\n         bad.ThreadSafeConnection.Connect;\n@@ -1553,9 +1548,24 @@ procedure TTestQuack.ClientTest(MockVersion: cardinal);\n     conn.StartTransaction;\n     conn.Rollback;\n     CheckEqual(fQueries[high(fQueries)], 'ROLLBACK');\n-    // the server is notified when disconnecting\n+  end;\n+\n+begin\n+  fMockVersion := MockVersion;\n+  FreeAndNil(fMock);\n+  port := 8890 + MockVersion;\n+  fMock := THttpServer.Create(UInt32ToUtf8(port), nil, nil,\n+    'quack', 2);\n+  fMock.OnRequest := OnMockRequest;\n+  fMock.WaitStarted;\n+  props := TSqlDBQuackConnectionProperties.Create(\n+    FormatUtf8('quack:127.0.0.1:%', [port]), '', '', 'secret');\n+  try\n+    // local sub-procedure to ensure all interfaces are cleared\n+    DoTests;\n+    // validates that the server is notified when disconnecting\n     fDisconnects := 0;\n-    props.ClearConnectionPool;\n+    props.ClearConnectionPool; // no dandling interface should remain now\n     CheckEqual(fDisconnects, 1, 'disconnect');\n   finally\n     props.Free;",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "633c6f541136ada5589082444a36fae5e31d1e2e",
+      "short_sha": "633c6f54",
+      "subject": "core: fixed some Delphi compiler hints",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T19:45:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/633c6f541136ada5589082444a36fae5e31d1e2e",
+      "parents": [
+        "94de0eef7608166294cc6430162c51b5f4a530ad"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -2392,9 +2392,11 @@ function RawStackTrace(skip: PtrInt; use: TSynLogStackTraceUse;\n   threadflags: ^TSynLogThreadInfoFlags;\n {$endif NOEXCEPTIONINTERCEPT}\n begin\n+  {$ifndef DELPHIPOSIX}\n   if skip < 0 then\n     skip := 0;\n   inc(skip); // ignore this very function\n+  {$endif DELPHIPOSIX}\n   {$ifndef NOEXCEPTIONINTERCEPT}\n   // the manual stack walk makes speculative reads: intercepted exceptions\n   // should not reach the logs during the process",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1083,7 +1083,7 @@ procedure U128Negate(var v: THash128Rec);\n begin\n   lo := v.L;\n   v.L := not lo + 1;\n-  v.H := not v.H + ord(lo = 0);\n+  v.H := not v.H + byte(lo = 0);\n end;\n \n function DivU128By1B(var u: THash128Rec): cardinal;",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17883\n+17886",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17883'\r\n+'2.4.17886'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Database"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.db.raw.duckdb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "94de0eef7608166294cc6430162c51b5f4a530ad",
+      "short_sha": "94de0eef",
+      "subject": "Merge pull request #728 from landrix/fix/schannel-client-cert-type",
+      "body": "net: fixed Delphi compilation of TSChannelClient.fClientCertificate",
+      "author": "ab",
+      "date": "2026-11-05T19:40:51Z",
+      "url": "https://github.com/synopse/mORMot2/commit/94de0eef7608166294cc6430162c51b5f4a530ad",
+      "parents": [
+        "74b7cde0f5c7699b8ab6d3d7463f78f2a0471271",
+        "810d843bb84171385189fbad0d7731b5f3f2d22b"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2256,7 +2256,7 @@ type\n     fAccept: boolean;\r\n     fAcceptFirst: boolean;\r\n     fCredAcquired: boolean; // an outbound SSPI credential is owned by this client\r\n-    fClientCertificate: PCCERT_CONTEXT; // owned duplicate for outbound mTLS\r\n+    fClientCertificate: mormot.core.os.security.PCCERT_CONTEXT; // owned duplicate for outbound mTLS\r\n     fServerContext: TSChannelServerContext;\r\n     fServerContextRef: IInterface; // thread-safe shared sever-side credentials\r\n     fAcceptContext: TNetTlsContext; // private mTLS policy for SEC_I_RENEGOTIATE\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": 728,
+      "is_merge": true
+    },
+    {
+      "sha": "74b7cde0f5c7699b8ab6d3d7463f78f2a0471271",
+      "short_sha": "74b7cde0",
+      "subject": "tests: fixed main project compilation after #218a1da",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T18:54:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/74b7cde0f5c7699b8ab6d3d7463f78f2a0471271",
+      "parents": [
+        "8f3f217121075c9b0f2047b0531fe73f66592467"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17876\n+17883",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17876'\r\n+'2.4.17883'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/mormot2tests.dpr",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -80,6 +80,7 @@ uses\n   test.orm.sqlite3         in '.\\test.orm.sqlite3.pas',\r\n   test.orm.extdb           in '.\\test.orm.extdb.pas',\r\n   test.db.duckdb           in '.\\test.db.duckdb.pas',\r\n+  test.orm.threads         in '.\\test.orm.threads.pas',\r\n   test.orm.network         in '.\\test.orm.network.pas',\r\n   test.soa.core            in '.\\test.soa.core.pas',\r\n   test.soa.network         in '.\\test.soa.network.pas';\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 218,
+      "is_merge": false
+    },
+    {
+      "sha": "810d843bb84171385189fbad0d7731b5f3f2d22b",
+      "short_sha": "810d843b",
+      "subject": "net: fixed Delphi compilation of TSChannelClient.fClientCertificate",
+      "body": "The field type resolved to Winapi.Windows.PCCERT_CONTEXT, since the private\nuses clause of mormot.net.sock.windows.inc comes later in scope, whereas\nCertDuplicateCertificateContext() returns mormot.core.os.security.PCCERT_CONTEXT:\nDelphi 13 failed with E2010 at line 2940, then F2084 internal error D12814.\nQualified as the peer variable already is a few lines above.",
+      "author": "Sven Harazim",
+      "date": "2026-11-05T18:52:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/810d843bb84171385189fbad0d7731b5f3f2d22b",
+      "parents": [
+        "74b7cde0f5c7699b8ab6d3d7463f78f2a0471271"
+      ],
+      "stats": {
+        "additions": 1,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2256,7 +2256,7 @@ type\n     fAccept: boolean;\r\n     fAcceptFirst: boolean;\r\n     fCredAcquired: boolean; // an outbound SSPI credential is owned by this client\r\n-    fClientCertificate: PCCERT_CONTEXT; // owned duplicate for outbound mTLS\r\n+    fClientCertificate: mormot.core.os.security.PCCERT_CONTEXT; // owned duplicate for outbound mTLS\r\n     fServerContext: TSChannelServerContext;\r\n     fServerContextRef: IInterface; // thread-safe shared sever-side credentials\r\n     fAcceptContext: TNetTlsContext; // private mTLS policy for SEC_I_RENEGOTIATE\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "8f3f217121075c9b0f2047b0531fe73f66592467",
+      "short_sha": "8f3f2171",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T18:51:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8f3f217121075c9b0f2047b0531fe73f66592467",
+      "parents": [
+        "a7935d838a51e6ed56ddc12f3fc4fe934ad65b46",
+        "1b8bdad5ba409fbf880fb74f9ad3b1a64b7cec22"
+      ],
+      "stats": {
+        "additions": 78,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 3,
+          "patch": "@@ -4195,7 +4195,14 @@ function THttpRequestContext.ProcessParseLine(var st: TProcessParseLine): boolea\n   if PtrUInt(Len) < PtrUInt(st.Len) then  // detect st.Len=0 and/or Len=-1\r\n     result := DoProcessParseLine(st, Len) // enough input: sub-function\r\n   else\r\n+  begin\r\n+    // no #13 yet: this line can only grow, so reject it as soon as it is too\r\n+    // long, as DoProcessParseLine() would do - instead of buffering it until\r\n+    // its #13 arrives, i.e. maybe never\r\n+    if st.Len > MaxHttpHeaderLineSize then\r\n+      State := hrsErrorRejected;\r\n     result := false;\r\n+  end;\r\n end;\r\n \r\n function THttpRequestContext.DoProcessReadBody(var st: TProcessParseLine): boolean;\r\n@@ -4255,8 +4262,10 @@ function THttpRequestContext.ProcessRead(\n             FastSetString(CommandUri, st.Line, st.LineLen); // never interned\r\n             State := hrsGetHeaders;\r\n           end\r\n+          else if State = hrsErrorRejected then\r\n+            break // notify the rejection now, not on the next input\r\n           else\r\n-            exit // not enough input or hrsErrorRejected\r\n+            exit // not enough input\r\n         else\r\n           State := hrsErrorRejected; // reject e.g. TLS handshake = #22\r\n       hrsGetHeaders:\r\n@@ -4280,8 +4289,10 @@ function THttpRequestContext.ProcessRead(\n             else\r\n               // ContentLength<=0 and not chunked = no body\r\n               State := hrsWaitProcessing\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedHexFirst,\r\n       hrsGetBodyChunkedHexNext:\r\n         if ProcessParseLine(st) then\r\n@@ -4317,8 +4328,10 @@ function THttpRequestContext.ProcessRead(\n           else\r\n             State := hrsGetBodyChunkedDataLastLine; // ends with last void chunk\r\n         end\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedData:\r\n         begin\r\n           if not DoProcessReadBody(st) then\r\n@@ -4331,11 +4344,15 @@ function THttpRequestContext.ProcessRead(\n       hrsGetBodyChunkedDataVoidLine:\r\n         if ProcessParseLine(st) then // chunks end with a void line\r\n           State := hrsGetBodyChunkedHexNext\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyChunkedDataLastLine:\r\n         if ProcessParseLine(st) then // last chunk void line\r\n           State := hrsWaitProcessing // notice: st.Len<>0 if pipelining\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyContentLengthFirst,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 0,
+          "patch": "@@ -172,6 +172,8 @@   TNetworkProtocols = class(TSynTestCase)\n     /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n     procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n     function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    /// validate that THttpAsyncServer rejects an endless header or chunk line\r\n+    procedure DoHttpLongLine(Sender: TObject);\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n@@ -502,6 +504,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n   Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n+  Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n@@ -7030,6 +7033,61 @@ procedure TNetworkProtocols.DoHttpKeepAliveOptions(Sender: TObject);\n   end;\r\n end;\r\n \r\n+procedure TNetworkProtocols.DoHttpLongLine(Sender: TObject);\r\n+var\r\n+  srv: THttpAsyncServer;\r\n+  raw: TCrtSocket;\r\n+  hosthead, cmd: RawUtf8;\r\n+  chunked: boolean;\r\n+begin\r\n+  TSynLog.Family.ExceptionIgnore.Add(ENetSock);\r\n+  srv := THttpAsyncServer.Create('8887', nil, nil, 'longline', 2);\r\n+  try\r\n+    srv.OnRequest := DoExpectRequest; // never reached\r\n+    srv.WaitStarted(10);\r\n+    Join(['Host: 127.0.0.1:', srv.SockPort], hosthead);\r\n+    for chunked := false to true do\r\n+    begin\r\n+      // a line with no #13 yet should be rejected once over\r\n+      // MaxHttpHeaderLineSize - not buffered until its #13 arrives, if ever:\r\n+      // the server would wait with no response, until our 5 seconds timeout\r\n+      raw := TCrtSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 5000);\r\n+      try\r\n+        raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n+        raw.SockSend('POST /mem HTTP/1.1');\r\n+        raw.SockSend(hosthead);\r\n+        if chunked then\r\n+        begin\r\n+          // an endless chunk size line, e.g. with a chunk extension\r\n+          raw.SockSend('Transfer-Encoding: chunked'#13#10);\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('1;x=');\r\n+        end\r\n+        else\r\n+        begin\r\n+          // an endless header line\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('X-Long: ');\r\n+        end;\r\n+        raw.SndLow(RawUtf8OfChar('a', MaxHttpHeaderLineSize * 2));\r\n+        cmd := '';\r\n+        try\r\n+          raw.SockRecvLn(cmd);\r\n+        except\r\n+          on ENetSock do\r\n+            cmd := ''; // timeout: no response at all\r\n+        end;\r\n+        CheckUtf8(PosEx(' 400 ', cmd) > 0, 'longline chunked=% %',\r\n+          [ord(chunked), cmd]);\r\n+      finally\r\n+        raw.Free;\r\n+      end;\r\n+    end;\r\n+  finally\r\n+    srv.Free;\r\n+  end;\r\n+end;\r\n+\r\n procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\r\n var\r\n   srv: THttpServerSocketGeneric;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "1b8bdad5ba409fbf880fb74f9ad3b1a64b7cec22",
+      "short_sha": "1b8bdad5",
+      "subject": "Merge pull request #726 from landrix/fix/unbounded-http-line",
+      "body": "net: THttpAsyncServer rejects an endless header or chunk size line at once",
+      "author": "ab",
+      "date": "2026-11-05T18:49:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1b8bdad5ba409fbf880fb74f9ad3b1a64b7cec22",
+      "parents": [
+        "3365e3895d83f61e3196d875eacd600e86b91f34",
+        "53c7258f1c72fe6b1f8991dcd94c557ac3bc2294"
+      ],
+      "stats": {
+        "additions": 78,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 3,
+          "patch": "@@ -4195,7 +4195,14 @@ function THttpRequestContext.ProcessParseLine(var st: TProcessParseLine): boolea\n   if PtrUInt(Len) < PtrUInt(st.Len) then  // detect st.Len=0 and/or Len=-1\r\n     result := DoProcessParseLine(st, Len) // enough input: sub-function\r\n   else\r\n+  begin\r\n+    // no #13 yet: this line can only grow, so reject it as soon as it is too\r\n+    // long, as DoProcessParseLine() would do - instead of buffering it until\r\n+    // its #13 arrives, i.e. maybe never\r\n+    if st.Len > MaxHttpHeaderLineSize then\r\n+      State := hrsErrorRejected;\r\n     result := false;\r\n+  end;\r\n end;\r\n \r\n function THttpRequestContext.DoProcessReadBody(var st: TProcessParseLine): boolean;\r\n@@ -4255,8 +4262,10 @@ function THttpRequestContext.ProcessRead(\n             FastSetString(CommandUri, st.Line, st.LineLen); // never interned\r\n             State := hrsGetHeaders;\r\n           end\r\n+          else if State = hrsErrorRejected then\r\n+            break // notify the rejection now, not on the next input\r\n           else\r\n-            exit // not enough input or hrsErrorRejected\r\n+            exit // not enough input\r\n         else\r\n           State := hrsErrorRejected; // reject e.g. TLS handshake = #22\r\n       hrsGetHeaders:\r\n@@ -4280,8 +4289,10 @@ function THttpRequestContext.ProcessRead(\n             else\r\n               // ContentLength<=0 and not chunked = no body\r\n               State := hrsWaitProcessing\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedHexFirst,\r\n       hrsGetBodyChunkedHexNext:\r\n         if ProcessParseLine(st) then\r\n@@ -4317,8 +4328,10 @@ function THttpRequestContext.ProcessRead(\n           else\r\n             State := hrsGetBodyChunkedDataLastLine; // ends with last void chunk\r\n         end\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedData:\r\n         begin\r\n           if not DoProcessReadBody(st) then\r\n@@ -4331,11 +4344,15 @@ function THttpRequestContext.ProcessRead(\n       hrsGetBodyChunkedDataVoidLine:\r\n         if ProcessParseLine(st) then // chunks end with a void line\r\n           State := hrsGetBodyChunkedHexNext\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyChunkedDataLastLine:\r\n         if ProcessParseLine(st) then // last chunk void line\r\n           State := hrsWaitProcessing // notice: st.Len<>0 if pipelining\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyContentLengthFirst,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 0,
+          "patch": "@@ -172,6 +172,8 @@   TNetworkProtocols = class(TSynTestCase)\n     /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n     procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n     function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    /// validate that THttpAsyncServer rejects an endless header or chunk line\r\n+    procedure DoHttpLongLine(Sender: TObject);\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n@@ -502,6 +504,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n   Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n+  Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n@@ -7030,6 +7033,61 @@ procedure TNetworkProtocols.DoHttpKeepAliveOptions(Sender: TObject);\n   end;\r\n end;\r\n \r\n+procedure TNetworkProtocols.DoHttpLongLine(Sender: TObject);\r\n+var\r\n+  srv: THttpAsyncServer;\r\n+  raw: TCrtSocket;\r\n+  hosthead, cmd: RawUtf8;\r\n+  chunked: boolean;\r\n+begin\r\n+  TSynLog.Family.ExceptionIgnore.Add(ENetSock);\r\n+  srv := THttpAsyncServer.Create('8887', nil, nil, 'longline', 2);\r\n+  try\r\n+    srv.OnRequest := DoExpectRequest; // never reached\r\n+    srv.WaitStarted(10);\r\n+    Join(['Host: 127.0.0.1:', srv.SockPort], hosthead);\r\n+    for chunked := false to true do\r\n+    begin\r\n+      // a line with no #13 yet should be rejected once over\r\n+      // MaxHttpHeaderLineSize - not buffered until its #13 arrives, if ever:\r\n+      // the server would wait with no response, until our 5 seconds timeout\r\n+      raw := TCrtSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 5000);\r\n+      try\r\n+        raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n+        raw.SockSend('POST /mem HTTP/1.1');\r\n+        raw.SockSend(hosthead);\r\n+        if chunked then\r\n+        begin\r\n+          // an endless chunk size line, e.g. with a chunk extension\r\n+          raw.SockSend('Transfer-Encoding: chunked'#13#10);\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('1;x=');\r\n+        end\r\n+        else\r\n+        begin\r\n+          // an endless header line\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('X-Long: ');\r\n+        end;\r\n+        raw.SndLow(RawUtf8OfChar('a', MaxHttpHeaderLineSize * 2));\r\n+        cmd := '';\r\n+        try\r\n+          raw.SockRecvLn(cmd);\r\n+        except\r\n+          on ENetSock do\r\n+            cmd := ''; // timeout: no response at all\r\n+        end;\r\n+        CheckUtf8(PosEx(' 400 ', cmd) > 0, 'longline chunked=% %',\r\n+          [ord(chunked), cmd]);\r\n+      finally\r\n+        raw.Free;\r\n+      end;\r\n+    end;\r\n+  finally\r\n+    srv.Free;\r\n+  end;\r\n+end;\r\n+\r\n procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\r\n var\r\n   srv: THttpServerSocketGeneric;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": 726,
+      "is_merge": true
+    },
+    {
+      "sha": "a7935d838a51e6ed56ddc12f3fc4fe934ad65b46",
+      "short_sha": "a7935d83",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T18:47:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a7935d838a51e6ed56ddc12f3fc4fe934ad65b46",
+      "parents": [
+        "867b1b9a19bb13f1fd7e2c1c2b8fc71e266843fb",
+        "3365e3895d83f61e3196d875eacd600e86b91f34"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 4,
+          "patch": "@@ -1684,7 +1684,6 @@   TDhcpServerThread = class(TUdpServerThread)\n   protected\r\n     fOwner: TDhcpServer;\r\n     fState: TDhcpState;\r\n-    fClientBroadcast: TNetIP4;\r\n     fClientPort, fServerPort: TNetPort;\r\n     function DoBind: TNetResult; override;\r\n     procedure OnFrameReceived(len: integer; var remote: TNetAddr); override;\r\n@@ -6507,7 +6506,6 @@ constructor TDhcpServerThread.Create(aOwner: TDhcpServer;\n   fOwner := aOwner;\r\n   fFrameLen := SizeOf(fState); // directly fill our DHCP state machine buffer\r\n   fFrame := @fState.Recv;\r\n-  fClientBroadcast := aScope.Broadcast;\r\n   fClientPort := aScope.ClientPort;\r\n   fServerPort := aScope.ServerPort;\r\n   inherited Create(aOwner.Log, aInterface.IP, UInt32ToUtf8(aScope.ServerPort),\r\n@@ -6564,8 +6562,8 @@ procedure TDhcpServerThread.OnFrameReceived(len: integer; var remote: TNetAddr);\n     // unicast to known client IP\r\n     remote.SetIP4Port(fState.Recv.ciaddr, fClientPort)\r\n   else\r\n-    // broadcast back the response\r\n-    remote.SetIP4Port(fClientBroadcast, fClientPort);\r\n+    // RFC 2131 4.1: broadcast back the response to 0xffffffff\r\n+    remote.SetIP4Port(cAnyHost32, fClientPort);\r\n   // actual send back the response frame over UDP\r\n   nr := fSock.SendTo(@fState.Send, len, remote);\r\n   if (nr <> nrOk) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "867b1b9a19bb13f1fd7e2c1c2b8fc71e266843fb",
+      "short_sha": "867b1b9a",
+      "subject": "orm: fixed TOrmModel.SqlFromSelectWhere as reported by #727",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T18:47:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/867b1b9a19bb13f1fd7e2c1c2b8fc71e266843fb",
+      "parents": [
+        "18cd8fe6d31616d801b2fd2e4448b7debd8720d1"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17871\n+17876",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17871'\r\n+'2.4.17876'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -5201,7 +5201,7 @@ procedure THttpServerSocket.DownloadBody; // properly inlined\n   if Http.ContentStream = nil then\r\n     GetBodyInMemory // default in-memory download into Http.Content\r\n   else\r\n-    GetBodyStream; // use Http.ContentStream from OnBodyDownload event\r\n+    GetBodyStream;  // use Http.ContentStream from OnBodyDownload event\r\n end;\r\n \r\n procedure THttpServerSocket.TaskProcess(aCaller: TSynThreadPoolWorkThread);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -10132,7 +10132,7 @@ procedure TOrmModel.SqlFromSelectWhere(const Tables: array of TOrmClass;\n           Append(Sql, ',', p[i].Sql.TableSimpleFields[true, true]);\r\n       end\r\n     else\r\n-      Join(['SELECT ', SqlSelect]);\r\n+      Join(['SELECT ', SqlSelect], Sql);\r\n     Append(Sql, ' FROM ', p[0].Props.SqlTableName);\r\n     for i := 1 to high(Tables) do\r\n       Append(Sql, ',', p[i].Props.SqlTableName);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "ORM",
+        "Network"
+      ],
+      "units": [
+        "mormot.net.server",
+        "mormot.orm.core"
+      ],
+      "pr": 727,
+      "is_merge": false
+    },
+    {
+      "sha": "3365e3895d83f61e3196d875eacd600e86b91f34",
+      "short_sha": "3365e389",
+      "subject": "Merge pull request #718 from zen010101/fix-dhcp-reply-broadcast",
+      "body": "net: fixed TDhcpServer broadcast response address",
+      "author": "ab",
+      "date": "2026-11-05T18:40:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3365e3895d83f61e3196d875eacd600e86b91f34",
+      "parents": [
+        "18cd8fe6d31616d801b2fd2e4448b7debd8720d1",
+        "4ac1b5d05f05973081ada4083b3ff31e6f3cd4a8"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 4,
+          "patch": "@@ -1684,7 +1684,6 @@   TDhcpServerThread = class(TUdpServerThread)\n   protected\r\n     fOwner: TDhcpServer;\r\n     fState: TDhcpState;\r\n-    fClientBroadcast: TNetIP4;\r\n     fClientPort, fServerPort: TNetPort;\r\n     function DoBind: TNetResult; override;\r\n     procedure OnFrameReceived(len: integer; var remote: TNetAddr); override;\r\n@@ -6507,7 +6506,6 @@ constructor TDhcpServerThread.Create(aOwner: TDhcpServer;\n   fOwner := aOwner;\r\n   fFrameLen := SizeOf(fState); // directly fill our DHCP state machine buffer\r\n   fFrame := @fState.Recv;\r\n-  fClientBroadcast := aScope.Broadcast;\r\n   fClientPort := aScope.ClientPort;\r\n   fServerPort := aScope.ServerPort;\r\n   inherited Create(aOwner.Log, aInterface.IP, UInt32ToUtf8(aScope.ServerPort),\r\n@@ -6564,8 +6562,8 @@ procedure TDhcpServerThread.OnFrameReceived(len: integer; var remote: TNetAddr);\n     // unicast to known client IP\r\n     remote.SetIP4Port(fState.Recv.ciaddr, fClientPort)\r\n   else\r\n-    // broadcast back the response\r\n-    remote.SetIP4Port(fClientBroadcast, fClientPort);\r\n+    // RFC 2131 4.1: broadcast back the response to 0xffffffff\r\n+    remote.SetIP4Port(cAnyHost32, fClientPort);\r\n   // actual send back the response frame over UDP\r\n   nr := fSock.SendTo(@fState.Send, len, remote);\r\n   if (nr <> nrOk) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": 718,
+      "is_merge": true
+    },
+    {
+      "sha": "18cd8fe6d31616d801b2fd2e4448b7debd8720d1",
+      "short_sha": "18cd8fe6",
+      "subject": "Merge pull request #725 from landrix/fix/async-keepalive-request-options",
+      "body": "net: THttpAsyncServer request options now apply to every kept-alive request",
+      "author": "ab",
+      "date": "2026-11-05T17:47:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/18cd8fe6d31616d801b2fd2e4448b7debd8720d1",
+      "parents": [
+        "9e2dde64c9c62b395787ca00795d27608cbe96e9",
+        "f72cca69d57ff7df2011a2f85ece5886731ddb36"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -4907,6 +4907,9 @@ procedure THttpAsyncClientConnections.Shutdown;\n procedure THttpAsyncServerConnection.HttpInit;\r\n begin\r\n   fHttp.ProcessInit; // ready to process a new HTTP request\r\n+  // fHttp.Reset did clear the options of the previous request on this\r\n+  // kept-alive connection, e.g. hroHeadersUnfiltered from hsoHeadersUnfiltered\r\n+  fHttp.Options := fServer.fDefaultRequestOptions;\r\n   fHeadersSec := 0;\r\n   fBytesRecv := 0; // reset stats\r\n   fBytesSend := 0;\r\n@@ -4918,7 +4921,6 @@ procedure THttpAsyncServerConnection.AfterCreate;\n   fHttp.Interning := fServer.fInterning;\r\n   if fServer.fCompressList.Algo <> nil then\r\n     fHttp.CompressList := @fServer.fCompressList;\r\n-  fHttp.Options := fServer.fDefaultRequestOptions;\r\n   if fServer.fServerKeepAliveTimeOutSec <> 0 then // 0 = no keep alive\r\n     fKeepAliveMaxSec := fServer.Async.fLastOperationSec +\r\n                         fServer.fServerKeepAliveTimeOutSec;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 0,
+          "patch": "@@ -169,6 +169,9 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoTWebSocketAsyncServer(Sender: TObject);\r\n     /// validate that THttpAsyncServer shutdown does close all its connections\r\n     procedure DoHttpAsyncShutdown(Sender: TObject);\r\n+    /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n+    procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n+    function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n@@ -498,6 +501,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n+  Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n@@ -6971,6 +6975,61 @@ procedure TNetworkProtocols.DoHttpExpect100(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoKeepAliveOptionsRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  // Content-Length: is only kept in InHeaders with hsoHeadersUnfiltered\r\n+  // - the connection ID tells whether the requests did share a connection\r\n+  if FindNameValue(pointer(Ctxt.InHeaders), 'CONTENT-LENGTH:') <> nil then\r\n+    Ctxt.OutContent := Make(['unfiltered ', Ctxt.ConnectionID])\r\n+  else\r\n+    Ctxt.OutContent := Make(['filtered ', Ctxt.ConnectionID]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpKeepAliveOptions(Sender: TObject);\r\n+var\r\n+  srv: THttpServerSocketGeneric;\r\n+  clt: THttpClientSocket;\r\n+  fam, i: integer;\r\n+  first: RawUtf8;\r\n+begin\r\n+  for fam := 0 to 1 do\r\n+  begin\r\n+    // the request options computed from the server options should apply to\r\n+    // every request of a connection, not only to its first one\r\n+    if fam = 0 then\r\n+      srv := THttpServer.Create('8885', nil, nil, 'keepopt', 2, 30000,\r\n+        [hsoHeadersUnfiltered])\r\n+    else\r\n+      srv := THttpAsyncServer.Create('8886', nil, nil, 'keepopt', 2, 30000,\r\n+        [hsoHeadersUnfiltered]);\r\n+    try\r\n+      srv.OnRequest := DoKeepAliveOptionsRequest;\r\n+      srv.WaitStarted(10);\r\n+      clt := THttpClientSocket.Open('127.0.0.1', srv.SockPort);\r\n+      try\r\n+        for i := 1 to 3 do // three requests on the same kept-alive connection\r\n+        begin\r\n+          CheckEqual(clt.Post('/opt', 'body', TEXT_CONTENT_TYPE, 30000), HTTP_SUCCESS,\r\n+            'keepopt status');\r\n+          CheckUtf8(IdemPChar(pointer(clt.Content), 'UNFILTERED '),\r\n+            'keepopt fam=% #%: %', [fam, i, clt.Content]);\r\n+          if i = 1 then\r\n+            first := clt.Content\r\n+          else\r\n+            CheckEqual(clt.Content, first, 'keepopt same connection');\r\n+        end;\r\n+      finally\r\n+        clt.Free;\r\n+      end;\r\n+    finally\r\n+      srv.Free;\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\r\n var\r\n   srv: THttpServerSocketGeneric;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 725,
+      "is_merge": true
+    },
+    {
+      "sha": "9e2dde64c9c62b395787ca00795d27608cbe96e9",
+      "short_sha": "9e2dde64",
+      "subject": "Merge pull request #724 from landrix/fix/chunked-in-memory-max-size",
+      "body": "net: MaximumAllowedContentLength now bounds a chunked body buffered in memory",
+      "author": "ab",
+      "date": "2026-11-05T17:47:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9e2dde64c9c62b395787ca00795d27608cbe96e9",
+      "parents": [
+        "218a1dab79730fd8be45dc370d7fee5a996d181c",
+        "432fea6b42e61fa78ba6fdd639f59cf00e7d0ffe"
+      ],
+      "stats": {
+        "additions": 72,
+        "deletions": 5,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -5314,8 +5314,6 @@ function THttpAsyncServerConnection.DoBodyDownload: TPollAsyncSocketOnReadWrite;\n     include(fHttp.ResponseFlags, rfContentStreamNeedFree);\r\n     if strm.InheritsFrom(TFileStreamEx) then\r\n       fHttp.SetContentInputName(TFileStreamEx(strm));\r\n-    // needed to track and limit the cumulated chunked body size\r\n-    fHttp.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n   end;\r\n end;\r\n \r\n@@ -5372,6 +5370,10 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n       exit;\r\n     end;\r\n   end;\r\n+  // track and limit the cumulated size of a chunked body - whatever the method\r\n+  // and whether OnBodyDownload supplies a stream for it or not: the header\r\n+  // check above only applies to an explicit Content-Length\r\n+  fHttp.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n   // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n   if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n      Assigned(fServer.fOnBodyDownload) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 3,
+          "patch": "@@ -921,6 +921,7 @@   THttpServerSocket = class(THttpSocket)\n     function TaskProcessBody(aCaller: TSynThreadPoolWorkThread;\r\n       aHeaderResult: THttpServerSocketGetRequestResult): boolean;\r\n     procedure DownloadBody; {$ifdef HASINLINE} inline; {$endif}\r\n+    procedure GetBodyInMemory;\r\n     procedure GetBodyStream;\r\n     // implement fServer.OnBodyDownload in GetRequest - false if rejected as 415\r\n     function DoOnBodyDownload: boolean; virtual;\r\n@@ -5198,7 +5199,7 @@ function THttpServerSocket.GetAborted: boolean;\n procedure THttpServerSocket.DownloadBody; // properly inlined\r\n begin\r\n   if Http.ContentStream = nil then\r\n-    GetBody // default in-memory download into Http.Content\r\n+    GetBodyInMemory // default in-memory download into Http.Content\r\n   else\r\n     GetBodyStream; // use Http.ContentStream from OnBodyDownload event\r\n end;\r\n@@ -5494,6 +5495,10 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n           exit;\r\n         end;\r\n       end;\r\n+      // track and limit the cumulated size of a chunked body - whether\r\n+      // OnBodyDownload supplies a stream for it or not: the check above only\r\n+      // applies to an explicit Content-Length\r\n+      Http.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n       // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n       if Assigned(fServer.OnBodyDownload) and\r\n          not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n@@ -5567,8 +5572,22 @@ function THttpServerSocket.DoOnBodyDownload: boolean;\n     include(Http.ResponseFlags, rfContentStreamNeedFree);\r\n     if strm.InheritsFrom(TFileStreamEx) then\r\n       Http.SetContentInputName(TFileStreamEx(strm));\r\n-    // needed to track and limit the cumulated chunked body size\r\n-    Http.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n+  end;\r\n+end;\r\n+\r\n+procedure THttpServerSocket.GetBodyInMemory;\r\n+begin\r\n+  try\r\n+    GetBody; // default in-memory download into Http.Content\r\n+  except\r\n+    on EHttpSocketOverflow do\r\n+    begin\r\n+      // e.g. a chunked body over ContentMaxSize: report 413 before closing,\r\n+      // as GetBodyStream does\r\n+      fServer.ComputeRejectBody(Http.Content, 0, HTTP_PAYLOADTOOLARGE);\r\n+      SockSendFlush(Http.Content);\r\n+      raise; // the caller will close the connection\r\n+    end;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -7282,6 +7282,52 @@ procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\n           if status <> 0 then\r\n             WaitDeleted(bodyfile, 'chunked limit');\r\n         end;\r\n+        // the same limit should apply to a chunked body buffered in memory,\r\n+        // i.e. when OnBodyDownload returns nil (/mem) or is not set at all:\r\n+        // ContentMaxSize was only set for a stream, so the body grew up to\r\n+        // MaxHttpInMemSize whatever MaximumAllowedContentLength said\r\n+        bodytype := 'application/dummy';\r\n+        for n := 0 to 3 do\r\n+        begin\r\n+          if n = 2 then\r\n+            srv.OnBodyDownload := nil; // no event at all\r\n+          status := n and 1; // 0 = 39999 = over the limit, 1 = 40000 = within\r\n+          srv.MaximumAllowedContentLength := 39999 + status;\r\n+          raw := TCrtSocket.Open('127.0.0.1', srv.SockPort);\r\n+          try\r\n+            raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n+            raw.SockSend('POST /mem HTTP/1.1');\r\n+            raw.SockSend(hosthead);\r\n+            raw.SockSend('Transfer-Encoding: chunked');\r\n+            raw.SockSend('Content-Type: application/dummy'#13#10); // last header\r\n+            raw.SockSend('4e20');\r\n+            raw.SockSend(mptext);\r\n+            raw.SockSend('4e20');\r\n+            raw.SockSend(mptext);\r\n+            raw.SockSend('0');\r\n+            raw.SockSendCRLF; // final void line\r\n+            cmd := '';\r\n+            try\r\n+              raw.SockSendFlush;\r\n+              raw.SockRecvLn(cmd);\r\n+            except\r\n+              on ENetSock do\r\n+                cmd := ''; // rejected and closed before we did send it all\r\n+            end;\r\n+            if status = 0 then\r\n+            begin\r\n+              // without the limit, the body was accepted and answered 200\r\n+              CheckUtf8(PosEx(' 200 ', cmd) = 0, 'mem chunked limit % %', [n, cmd]);\r\n+              if cmd <> '' then\r\n+                CheckUtf8(PosEx(' 413 ', cmd) > 0, 'mem chunked 413 % %', [n, cmd]);\r\n+            end\r\n+            else\r\n+              CheckUtf8(PosEx(' 200 ', cmd) > 0, 'mem chunked in limit % %', [n, cmd]);\r\n+          finally\r\n+            raw.Free;\r\n+          end;\r\n+        end;\r\n+        srv.OnBodyDownload := DoBodyDownload;\r\n         srv.MaximumAllowedContentLength := 100000;\r\n         raw := TCrtSocket.Open('127.0.0.1', srv.SockPort);\r\n         try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.server"
+      ],
+      "pr": 724,
+      "is_merge": true
+    },
+    {
+      "sha": "218a1dab79730fd8be45dc370d7fee5a996d181c",
+      "short_sha": "218a1dab",
+      "subject": "test: huge set of fixes of Quack protocol coverage",
+      "body": "- included into test.db.duckdb.pas\n- fixed Delphi Unicode constant strings support\n- removed logged exceptions when expected",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T17:45:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/218a1dab79730fd8be45dc370d7fee5a996d181c",
+      "parents": [
+        "174c10a56cbb9badfbef6ee64449ec7a91fcdf46"
+      ],
+      "stats": {
+        "additions": 1156,
+        "deletions": 1183,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17870\n+17871",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17870'\r\n+'2.4.17871'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/mormot2tests.dpr",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 2,
+          "patch": "@@ -80,8 +80,6 @@ uses\n   test.orm.sqlite3         in '.\\test.orm.sqlite3.pas',\r\n   test.orm.extdb           in '.\\test.orm.extdb.pas',\r\n   test.db.duckdb           in '.\\test.db.duckdb.pas',\r\n-  test.db.quack            in '.\\test.db.quack.pas',\r\n-  test.orm.threads         in '.\\test.orm.threads.pas',\r\n   test.orm.network         in '.\\test.orm.network.pas',\r\n   test.soa.core            in '.\\test.soa.core.pas',\r\n   test.soa.network         in '.\\test.soa.network.pas';\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 1154,
+          "deletions": 2,
+          "patch": "@@ -19,6 +19,7 @@ interface\n   mormot.core.text,\n   mormot.core.datetime,\n   mormot.core.rtti,\n+  mormot.core.buffers,\n   mormot.core.json,\n   mormot.core.variants,\n   mormot.core.log,\n@@ -27,10 +28,12 @@ interface\n   mormot.db.core,\n   mormot.db.sql,\n   mormot.db.raw.duckdb,\n-  mormot.db.sql.duckdb;\n+  mormot.db.sql.duckdb,\n+  mormot.net.http,\n+  mormot.net.server;\n \n type\n-  /// regression tests for mormot.db.sql.duckdb.pas\n+  /// regression tests for mormot.db.raw.duckdb.pas and mormot.db.sql.duckdb.pas\n   TTestDuckDB = class(TSynTestCase)\n   protected\n     fProps: TSqlDBDuckDBConnectionProperties;\n@@ -50,6 +53,41 @@   TTestDuckDB = class(TSynTestCase)\n     procedure Appender;\n   end;\n \n+  /// regression tests for the Quack client of mormot.db.raw.duckdb.pas and\n+  // mormot.db.sql.duckdb.pas\n+  TTestQuack = class(TSynTestCase)\n+  protected\n+    fMock: THttpServer;\n+    fQueries: TRawUtf8DynArray;\n+    fFetches: integer;\n+    fCancels: integer;\n+    fDisconnects: integer;\n+    fMockError: RawUtf8;\n+    fMockVersion: cardinal;\n+    procedure ClientTest(MockVersion: cardinal);\n+    procedure CompareToEmbedded(Embedded, Quack: TSqlDBConnectionProperties;\n+      const Sql: RawUtf8);\n+    function OnMockRequest(Ctxt: THttpServerRequestAbstract): cardinal;\n+    function MockRequest(Ctxt: THttpServerRequestAbstract): cardinal;\n+    function MockQuery(const Sql: RawUtf8): RawByteString;\n+  public\n+    procedure CleanUp; override;\n+  published\n+    /// the URI parsing and the requests encoding\n+    procedure Codec;\n+    /// the vectors decoding, including the compressed ones\n+    procedure Vectors;\n+    /// the TSqlDB* classes using a mock Quack server of the protocol version 1\n+    procedure ClientV1;\n+    /// the TSqlDB* classes using a mock Quack server of the protocol version 3\n+    procedure ClientV3;\n+    {$ifdef CPU64}\n+    /// the TSqlDB* classes using a real DuckDB Quack server\n+    procedure DuckDBServer;\n+    {$endif CPU64}\n+  end;\n+\n+\n \n implementation\n \n@@ -602,4 +640,1118 @@ procedure TTestDuckDB.Appender;\n   CheckEqual(rows.ColumnUtf8(1), '200012469.5000', 'appender sum');\n end;\n \n+\n+{ ************ Mock Quack Server Messages Encoding }\n+\n+var\n+  MAGIC_, END_: RawUtf8;\n+\n+function Fld(Id: cardinal): RawByteString;\n+begin\n+  FastSetString(RawUtf8(result), @Id, 2); // 16-bit little endian\n+end;\n+\n+function VU(Value: QWord): RawByteString;\n+var\n+  tmp: array[0..15] of byte;\n+  n: integer;\n+begin\n+  n := 0;\n+  repeat\n+    tmp[n] := Value and $7f;\n+    Value := Value shr 7;\n+    if Value <> 0 then\n+      tmp[n] := tmp[n] or $80;\n+    inc(n);\n+  until Value = 0;\n+  FastSetString(RawUtf8(result), @tmp, n);\n+end;\n+\n+function VS(Value: Int64): RawByteString;\n+var\n+  tmp: array[0..15] of byte;\n+  n: integer;\n+  b: byte;\n+  done: boolean;\n+begin\n+  n := 0;\n+  repeat\n+    b := Value and $7f;\n+    if Value < 0 then\n+      Value := not (not Value shr 7)\n+    else\n+      Value := Value shr 7;\n+    done := ((Value = 0) and (b and $40 = 0)) or\n+            ((Value = -1) and (b and $40 <> 0));\n+    if not done then\n+      b := b or $80;\n+    tmp[n] := b;\n+    inc(n);\n+  until done;\n+  FastSetString(RawUtf8(result), @tmp, n);\n+end;\n+\n+function Blb(const Value: RawByteString): RawByteString;\n+begin\n+  result := VU(length(Value)) + Value;\n+end;\n+\n+function Txt(const Value: RawUtf8): RawByteString;\n+begin\n+  result := Blb(Value);\n+end;\n+\n+function Bytes(const Values: array of byte): RawByteString;\n+begin\n+  FastSetString(RawUtf8(result), @Values[0], length(Values));\n+end;\n+\n+function Int32s(const Values: array of integer): RawByteString;\n+begin\n+  FastSetString(RawUtf8(result), @Values[0], length(Values) * 4);\n+end;\n+\n+function Int64s(const Values: array of Int64): RawByteString;\n+begin\n+  FastSetString(RawUtf8(result), @Values[0], length(Values) * 8);\n+end;\n+\n+function Doubles(const Values: array of double): RawByteString;\n+begin\n+  FastSetString(RawUtf8(result), @Values[0], length(Values) * 8);\n+end;\n+\n+// bit mask of the valid rows, as 6\n... [truncated, 37833 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.quack.pas",
+          "status": "removed",
+          "additions": 0,
+          "deletions": 1177,
+          "patch": "@@ -1,1177 +0,0 @@\n-/// regression tests for the DuckDB Quack client\n-// - this unit is a part of the Open Source Synopse mORMot framework 2,\n-// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\n-// - the Quack wire protocol is validated with messages captured from a real\n-// DuckDB 1.5.6 server, and with a mock HTTP server for both protocol versions\n-// - the real DuckDB server test compares all types with the embedded engine,\n-// and is skipped if the DuckDB library (or its quack extension) is not\n-// available on this system\n-unit test.db.quack;\n-\n-interface\n-\n-{$I ..\\src\\mormot.defines.inc}\n-\n-uses\n-  sysutils,\n-  classes,\n-  mormot.core.base,\n-  mormot.core.os,\n-  mormot.core.unicode,\n-  mormot.core.text,\n-  mormot.core.buffers,\n-  mormot.core.datetime,\n-  mormot.core.json,\n-  mormot.core.log,\n-  mormot.core.test,\n-  mormot.net.http,\n-  mormot.net.server,\n-  mormot.db.core,\n-  mormot.db.sql,\n-  mormot.db.raw.duckdb,\n-  mormot.db.sql.duckdb;\n-\n-type\n-  /// regression tests for the Quack client of mormot.db.raw.duckdb.pas and mormot.db.sql.duckdb.pas\n-  TTestQuack = class(TSynTestCase)\n-  protected\n-    fMock: THttpServer;\n-    fQueries: TRawUtf8DynArray;\n-    fFetches: integer;\n-    fCancels: integer;\n-    fDisconnects: integer;\n-    fMockError: RawUtf8;\n-    fMockVersion: cardinal;\n-    procedure ClientTest(MockVersion: cardinal);\n-    procedure CompareToEmbedded(Embedded, Quack: TSqlDBConnectionProperties;\n-      const Sql: RawUtf8);\n-    function OnMockRequest(Ctxt: THttpServerRequestAbstract): cardinal;\n-    function MockRequest(Ctxt: THttpServerRequestAbstract): cardinal;\n-    function MockQuery(const Sql: RawUtf8): RawByteString;\n-  public\n-    procedure CleanUp; override;\n-  published\n-    /// the URI parsing and the requests encoding\n-    procedure Codec;\n-    /// the vectors decoding, including the compressed ones\n-    procedure Vectors;\n-    /// the TSqlDB* classes using a mock Quack server of the protocol version 1\n-    procedure ClientV1;\n-    /// the TSqlDB* classes using a mock Quack server of the protocol version 3\n-    procedure ClientV3;\n-    /// the TSqlDB* classes using a real DuckDB Quack server\n-    procedure DuckDBServer;\n-  end;\n-\n-\n-implementation\n-\n-\n-{ ************ Mock Quack Server Messages Encoding }\n-\n-const\n-  END_: RawByteString = #$ff#$ff;\n-\n-function Fld(Id: cardinal): RawByteString;\n-begin\n-  FastSetString(RawUtf8(result), @Id, 2); // 16-bit little endian\n-end;\n-\n-function VU(Value: QWord): RawByteString;\n-var\n-  tmp: array[0..15] of byte;\n-  n: integer;\n-begin\n-  n := 0;\n-  repeat\n-    tmp[n] := Value and $7f;\n-    Value := Value shr 7;\n-    if Value <> 0 then\n-      tmp[n] := tmp[n] or $80;\n-    inc(n);\n-  until Value = 0;\n-  FastSetString(RawUtf8(result), @tmp, n);\n-end;\n-\n-function VS(Value: Int64): RawByteString;\n-var\n-  tmp: array[0..15] of byte;\n-  n: integer;\n-  b: byte;\n-  done: boolean;\n-begin\n-  n := 0;\n-  repeat\n-    b := Value and $7f;\n-    if Value < 0 then\n-      Value := not (not Value shr 7)\n-    else\n-      Value := Value shr 7;\n-    done := ((Value = 0) and (b and $40 = 0)) or\n-            ((Value = -1) and (b and $40 <> 0));\n-    if not done then\n-      b := b or $80;\n-    tmp[n] := b;\n-    inc(n);\n-  until done;\n-  FastSetString(RawUtf8(result), @tmp, n);\n-end;\n-\n-function Blb(const Value: RawByteString): RawByteString;\n-begin\n-  result := VU(length(Value)) + Value;\n-end;\n-\n-function Txt(const Value: RawUtf8): RawByteString;\n-begin\n-  result := Blb(Value);\n-end;\n-\n-function Bytes(const Values: array of byte): RawByteString;\n-begin\n-  FastSetString(RawUtf8(result), @Values[0], length(Values));\n-end;\n-\n-function Int32s(const Values: array of integer): RawByteString;\n-begin\n-  FastSetString(RawUtf8(result), @Values[0], length(Values) * 4);\n-end;\n-\n-function Int64s(const Values: array of Int64): RawByteString;\n-begin\n-  FastSetString(RawUtf8(result), @Values[0], length(Values) * 8);\n-end;\n-\n-function Doubles(const Values: array of double): RawByteString;\n-begin\n... [truncated, 37494 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "174c10a56cbb9badfbef6ee64449ec7a91fcdf46",
+      "short_sha": "174c10a5",
+      "subject": "net: fixed TDhcpServer.GetThread loop",
+      "body": "- prerequisite to any pending PR resolution",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T16:50:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/174c10a56cbb9badfbef6ee64449ec7a91fcdf46",
+      "parents": [
+        "98fa646d4c5d2eec8807795344eb1283c33bf958"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17869\n+17870",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17869'\r\n+'2.4.17870'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -6605,7 +6605,7 @@ function TDhcpServer.GetThread(s: PDhcpScope): TDhcpServerThread;\n         exit;\r\n       end\r\n       else\r\n-        inc(s);\r\n+        inc(t);\r\n   finally\r\n     fThreads.Safe.UnLock;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "98fa646d4c5d2eec8807795344eb1283c33bf958",
+      "short_sha": "98fa646d",
+      "subject": "rest: fixed TRest.OneFieldValue as reported by #722",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T16:33:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/98fa646d4c5d2eec8807795344eb1283c33bf958",
+      "parents": [
+        "91d7b0af2a191ad98eb93c8a3cabf76ed8ea1a99"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17868\n+17869",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17868'\r\n+'2.4.17869'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2491,7 +2491,7 @@ function TRest.OneFieldValue(Table: TOrmClass; const FieldName: RawUtf8;\n function TRest.OneFieldValue(Table: TOrmClass; const FieldName: RawUtf8;\r\n   const WhereClauseFmt: RawUtf8; const Args, Bounds: array of const): RawUtf8;\r\n begin\r\n-  result := fOrm.OneFieldValue(Table, FieldName, WhereClauseFmt);\r\n+  result := fOrm.OneFieldValue(Table, FieldName, WhereClauseFmt, Args, Bounds);\r\n end;\r\n \r\n function TRest.OneFieldValue(Table: TOrmClass; const FieldName: RawUtf8;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "REST"
+      ],
+      "units": [
+        "mormot.rest.core"
+      ],
+      "pr": 722,
+      "is_merge": false
+    },
+    {
+      "sha": "91d7b0af2a191ad98eb93c8a3cabf76ed8ea1a99",
+      "short_sha": "91d7b0af",
+      "subject": "db: fixed ToClientDataSet() as reported by #723",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T16:31:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/91d7b0af2a191ad98eb93c8a3cabf76ed8ea1a99",
+      "parents": [
+        "cfb55c923e2ff24b6a9b1740ed389b5458a95d81"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.rad.ui.cds.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 3,
+          "patch": "@@ -431,18 +431,17 @@ function ToClientDataSet(aDataSet: TClientDataSet; aTable: TOrmTable;\n       aDataSet.AfterScroll := prev.AfterScroll;\r\n       if Assigned(prev.AfterScroll) then\r\n         prev.AfterScroll(aDataSet);\r\n-      aDataSet.EnableControls;\r\n     end;\r\n     if aMode <> cdsNew then\r\n-    begin\r\n       for f := 0 to high(col) do\r\n         with col[f] do\r\n           if Field <> nil then\r\n           begin\r\n             Field.ReadOnly := WasReadOnly;\r\n             Field.OnChange := OnChange;\r\n           end;\r\n-    end;\r\n+    if prev.Active then\r\n+      aDataSet.EnableControls; // eventually re-enable\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17867\n+17868",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17867'\r\n+'2.4.17868'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.rad.ui.cds"
+      ],
+      "pr": 723,
+      "is_merge": false
+    },
+    {
+      "sha": "53c7258f1c72fe6b1f8991dcd94c557ac3bc2294",
+      "short_sha": "53c7258f",
+      "subject": "net: THttpAsyncServer rejects an endless header or chunk size line at once",
+      "body": "THttpRequestContext.ProcessParseLine() only checked MaxHttpHeaderLineSize once\nthe #13 of a line had arrived: a header or chunk size line which never ends was\nbuffered without any bound by THttpAsyncServer, whatever HeadersMaximumSize or\nMaximumAllowedContentLength said (THttpServer is not affected: SockRecvLn()\nrejects any line over 16KB).\n- ProcessParseLine() now rejects a line with no #13 yet as soon as it is longer\n  than MaxHttpHeaderLineSize\n- ProcessRead() now returns true on hrsErrorRejected, so that the rejection is\n  answered at once: it was only noticed with the next input, i.e. never when\n  the client just waits - this also applies to the existing rejections, e.g. a\n  too long line with its #13, or a missing #10\n- test: an endless header line and an endless chunk size line get a 400",
+      "author": "Sven Harazim",
+      "date": "2026-11-05T16:28:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/53c7258f1c72fe6b1f8991dcd94c557ac3bc2294",
+      "parents": [
+        "18cd8fe6d31616d801b2fd2e4448b7debd8720d1"
+      ],
+      "stats": {
+        "additions": 78,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 3,
+          "patch": "@@ -4195,7 +4195,14 @@ function THttpRequestContext.ProcessParseLine(var st: TProcessParseLine): boolea\n   if PtrUInt(Len) < PtrUInt(st.Len) then  // detect st.Len=0 and/or Len=-1\r\n     result := DoProcessParseLine(st, Len) // enough input: sub-function\r\n   else\r\n+  begin\r\n+    // no #13 yet: this line can only grow, so reject it as soon as it is too\r\n+    // long, as DoProcessParseLine() would do - instead of buffering it until\r\n+    // its #13 arrives, i.e. maybe never\r\n+    if st.Len > MaxHttpHeaderLineSize then\r\n+      State := hrsErrorRejected;\r\n     result := false;\r\n+  end;\r\n end;\r\n \r\n function THttpRequestContext.DoProcessReadBody(var st: TProcessParseLine): boolean;\r\n@@ -4255,8 +4262,10 @@ function THttpRequestContext.ProcessRead(\n             FastSetString(CommandUri, st.Line, st.LineLen); // never interned\r\n             State := hrsGetHeaders;\r\n           end\r\n+          else if State = hrsErrorRejected then\r\n+            break // notify the rejection now, not on the next input\r\n           else\r\n-            exit // not enough input or hrsErrorRejected\r\n+            exit // not enough input\r\n         else\r\n           State := hrsErrorRejected; // reject e.g. TLS handshake = #22\r\n       hrsGetHeaders:\r\n@@ -4280,8 +4289,10 @@ function THttpRequestContext.ProcessRead(\n             else\r\n               // ContentLength<=0 and not chunked = no body\r\n               State := hrsWaitProcessing\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedHexFirst,\r\n       hrsGetBodyChunkedHexNext:\r\n         if ProcessParseLine(st) then\r\n@@ -4317,8 +4328,10 @@ function THttpRequestContext.ProcessRead(\n           else\r\n             State := hrsGetBodyChunkedDataLastLine; // ends with last void chunk\r\n         end\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n-          exit; // not enough input or hrsErrorRejected\r\n+          exit; // not enough input\r\n       hrsGetBodyChunkedData:\r\n         begin\r\n           if not DoProcessReadBody(st) then\r\n@@ -4331,11 +4344,15 @@ function THttpRequestContext.ProcessRead(\n       hrsGetBodyChunkedDataVoidLine:\r\n         if ProcessParseLine(st) then // chunks end with a void line\r\n           State := hrsGetBodyChunkedHexNext\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyChunkedDataLastLine:\r\n         if ProcessParseLine(st) then // last chunk void line\r\n           State := hrsWaitProcessing // notice: st.Len<>0 if pipelining\r\n+        else if State = hrsErrorRejected then\r\n+          break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyContentLengthFirst,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 58,
+          "deletions": 0,
+          "patch": "@@ -172,6 +172,8 @@   TNetworkProtocols = class(TSynTestCase)\n     /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n     procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n     function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    /// validate that THttpAsyncServer rejects an endless header or chunk line\r\n+    procedure DoHttpLongLine(Sender: TObject);\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n@@ -502,6 +504,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n   Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n+  Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n@@ -7030,6 +7033,61 @@ procedure TNetworkProtocols.DoHttpKeepAliveOptions(Sender: TObject);\n   end;\r\n end;\r\n \r\n+procedure TNetworkProtocols.DoHttpLongLine(Sender: TObject);\r\n+var\r\n+  srv: THttpAsyncServer;\r\n+  raw: TCrtSocket;\r\n+  hosthead, cmd: RawUtf8;\r\n+  chunked: boolean;\r\n+begin\r\n+  TSynLog.Family.ExceptionIgnore.Add(ENetSock);\r\n+  srv := THttpAsyncServer.Create('8887', nil, nil, 'longline', 2);\r\n+  try\r\n+    srv.OnRequest := DoExpectRequest; // never reached\r\n+    srv.WaitStarted(10);\r\n+    Join(['Host: 127.0.0.1:', srv.SockPort], hosthead);\r\n+    for chunked := false to true do\r\n+    begin\r\n+      // a line with no #13 yet should be rejected once over\r\n+      // MaxHttpHeaderLineSize - not buffered until its #13 arrives, if ever:\r\n+      // the server would wait with no response, until our 5 seconds timeout\r\n+      raw := TCrtSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 5000);\r\n+      try\r\n+        raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n+        raw.SockSend('POST /mem HTTP/1.1');\r\n+        raw.SockSend(hosthead);\r\n+        if chunked then\r\n+        begin\r\n+          // an endless chunk size line, e.g. with a chunk extension\r\n+          raw.SockSend('Transfer-Encoding: chunked'#13#10);\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('1;x=');\r\n+        end\r\n+        else\r\n+        begin\r\n+          // an endless header line\r\n+          raw.SockSendFlush;\r\n+          raw.SndLow('X-Long: ');\r\n+        end;\r\n+        raw.SndLow(RawUtf8OfChar('a', MaxHttpHeaderLineSize * 2));\r\n+        cmd := '';\r\n+        try\r\n+          raw.SockRecvLn(cmd);\r\n+        except\r\n+          on ENetSock do\r\n+            cmd := ''; // timeout: no response at all\r\n+        end;\r\n+        CheckUtf8(PosEx(' 400 ', cmd) > 0, 'longline chunked=% %',\r\n+          [ord(chunked), cmd]);\r\n+      finally\r\n+        raw.Free;\r\n+      end;\r\n+    end;\r\n+  finally\r\n+    srv.Free;\r\n+  end;\r\n+end;\r\n+\r\n procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\r\n var\r\n   srv: THttpServerSocketGeneric;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "cfb55c923e2ff24b6a9b1740ed389b5458a95d81",
+      "short_sha": "cfb55c92",
+      "subject": "crypt: slightly enhanced TCryptCertCng logging",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T16:25:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cfb55c923e2ff24b6a9b1740ed389b5458a95d81",
+      "parents": [
+        "f5f77294b88b26056e2adc359cd9a5ff199ab550"
+      ],
+      "stats": {
+        "additions": 12,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 8,
+          "patch": "@@ -711,8 +711,8 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n         except\r\n           on E: Exception do\r\n             if Assigned(log) then\r\n-              log.Log(sllTrace,\r\n-                'LoadStore: ignored certificate due to %', [E], self);\r\n+              log.Log(sllTrace, 'LoadStore: ignored % at % certificate due to %',\r\n+                [info.Container, info.Provider, E], self);\r\n         end;\r\n       end\r\n     else if Assigned(log) then\r\n@@ -854,11 +854,12 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n     aLog := TSynLog;\r\n   aLog.EnterLocal(log, '%.LoadPkcs12 len=% SChannel=%',\r\n     [self, length(Pfx), ord(ForSChannel)], nil);\r\n-  if (Pfx = '') or\r\n-     not NCrypt.Exists then\r\n+  if Pfx = '' then\r\n+    exit;\r\n+  if not NCrypt.Exists then\r\n   begin\r\n-    if Assigned(log) then\r\n-      log.Log(sllTrace, '%.LoadPkcs12: aborted', [self]);\r\n+    aLog.Add.Log(sllWarning, '%.LoadPkcs12: Windows CNG is not available on %',\r\n+      [OSVersionShort]);\r\n     exit;\r\n   end;\r\n   store := nil;\r\n@@ -872,7 +873,7 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n     exit;\r\n   end;\r\n   try\r\n-    // search for the first key in store\r\n+    // search for the first key in this PFX\r\n     opt := PKCS12_WCK[ForSChannel];\r\n     repeat\r\n       ctxt := CertEnumCertificatesInStore(store, {prevcert=}ctxt);\r\n@@ -885,7 +886,7 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n       begin\r\n         if Assigned(log) then\r\n           log.Log(sllLastError,\r\n-            '%.LoadPkcs12: WinCertCtxtKeyProvider failed %', [self], nil);\r\n+            '%.LoadPkcs12: WinCertCtxtKeyProvider failed', [self], nil);\r\n         exit; // Schannel cannot reopen this key in its own process\r\n       end;\r\n     if ForSChannel then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1220,7 +1220,7 @@   TCryptCertX509Abstract = class(TCryptCert)\n   protected\r\n     fX509: TX509;\r\n     // may be nil or a TCryptPrivateKeyRsa, TCryptPrivateKeyEcc,\r\n-    // TCryptPrivateKeyOpenSsl or a TCryptPrivateKeyPkcs11\r\n+    // TCryptPrivateKeyOpenSsl, TCryptPrivateKeyPkcs11 or TCryptPrivateKeyCng\r\n     fPrivateKey: ICryptPrivateKey;\r\n     // overriden to use a faster search with no temporary memory allocation\r\n     class procedure InternalFind(Cert: PICryptCert; const Value: RawByteString;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17866\n+17867",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17866'\r\n+'2.4.17867'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win",
+        "mormot.crypt.x509"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f72cca69d57ff7df2011a2f85ece5886731ddb36",
+      "short_sha": "f72cca69",
+      "subject": "net: THttpAsyncServer request options now apply to every kept-alive request",
+      "body": "THttpRequestContext.Reset clears Options, and HttpInit did not restore them:\non a kept-alive THttpAsyncServer connection, hsoHeadersUnfiltered and\nhsoHeadersSanitize only applied to the first request.\n- HttpInit now sets fHttp.Options from fDefaultRequestOptions, so AfterCreate\n  and AfterWrite both get them\n- test: three kept-alive requests with hsoHeadersUnfiltered on both server\n  families, checking that they share one connection",
+      "author": "Sven Harazim",
+      "date": "2026-11-05T16:23:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f72cca69d57ff7df2011a2f85ece5886731ddb36",
+      "parents": [
+        "f5f77294b88b26056e2adc359cd9a5ff199ab550"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -4907,6 +4907,9 @@ procedure THttpAsyncClientConnections.Shutdown;\n procedure THttpAsyncServerConnection.HttpInit;\r\n begin\r\n   fHttp.ProcessInit; // ready to process a new HTTP request\r\n+  // fHttp.Reset did clear the options of the previous request on this\r\n+  // kept-alive connection, e.g. hroHeadersUnfiltered from hsoHeadersUnfiltered\r\n+  fHttp.Options := fServer.fDefaultRequestOptions;\r\n   fHeadersSec := 0;\r\n   fBytesRecv := 0; // reset stats\r\n   fBytesSend := 0;\r\n@@ -4918,7 +4921,6 @@ procedure THttpAsyncServerConnection.AfterCreate;\n   fHttp.Interning := fServer.fInterning;\r\n   if fServer.fCompressList.Algo <> nil then\r\n     fHttp.CompressList := @fServer.fCompressList;\r\n-  fHttp.Options := fServer.fDefaultRequestOptions;\r\n   if fServer.fServerKeepAliveTimeOutSec <> 0 then // 0 = no keep alive\r\n     fKeepAliveMaxSec := fServer.Async.fLastOperationSec +\r\n                         fServer.fServerKeepAliveTimeOutSec;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 0,
+          "patch": "@@ -169,6 +169,9 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoTWebSocketAsyncServer(Sender: TObject);\r\n     /// validate that THttpAsyncServer shutdown does close all its connections\r\n     procedure DoHttpAsyncShutdown(Sender: TObject);\r\n+    /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n+    procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n+    function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n   published\r\n     {$ifdef USEWININET}\r\n     /// validate lazy initialization of the http.sys WebSocket API\r\n@@ -498,6 +501,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n+  Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n@@ -6971,6 +6975,61 @@ procedure TNetworkProtocols.DoHttpExpect100(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoKeepAliveOptionsRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  // Content-Length: is only kept in InHeaders with hsoHeadersUnfiltered\r\n+  // - the connection ID tells whether the requests did share a connection\r\n+  if FindNameValue(pointer(Ctxt.InHeaders), 'CONTENT-LENGTH:') <> nil then\r\n+    Ctxt.OutContent := Make(['unfiltered ', Ctxt.ConnectionID])\r\n+  else\r\n+    Ctxt.OutContent := Make(['filtered ', Ctxt.ConnectionID]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpKeepAliveOptions(Sender: TObject);\r\n+var\r\n+  srv: THttpServerSocketGeneric;\r\n+  clt: THttpClientSocket;\r\n+  fam, i: integer;\r\n+  first: RawUtf8;\r\n+begin\r\n+  for fam := 0 to 1 do\r\n+  begin\r\n+    // the request options computed from the server options should apply to\r\n+    // every request of a connection, not only to its first one\r\n+    if fam = 0 then\r\n+      srv := THttpServer.Create('8885', nil, nil, 'keepopt', 2, 30000,\r\n+        [hsoHeadersUnfiltered])\r\n+    else\r\n+      srv := THttpAsyncServer.Create('8886', nil, nil, 'keepopt', 2, 30000,\r\n+        [hsoHeadersUnfiltered]);\r\n+    try\r\n+      srv.OnRequest := DoKeepAliveOptionsRequest;\r\n+      srv.WaitStarted(10);\r\n+      clt := THttpClientSocket.Open('127.0.0.1', srv.SockPort);\r\n+      try\r\n+        for i := 1 to 3 do // three requests on the same kept-alive connection\r\n+        begin\r\n+          CheckEqual(clt.Post('/opt', 'body', TEXT_CONTENT_TYPE, 30000), HTTP_SUCCESS,\r\n+            'keepopt status');\r\n+          CheckUtf8(IdemPChar(pointer(clt.Content), 'UNFILTERED '),\r\n+            'keepopt fam=% #%: %', [fam, i, clt.Content]);\r\n+          if i = 1 then\r\n+            first := clt.Content\r\n+          else\r\n+            CheckEqual(clt.Content, first, 'keepopt same connection');\r\n+        end;\r\n+      finally\r\n+        clt.Free;\r\n+      end;\r\n+    finally\r\n+      srv.Free;\r\n+    end;\r\n+  end;\r\n+end;\r\n+\r\n procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\r\n var\r\n   srv: THttpServerSocketGeneric;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "432fea6b42e61fa78ba6fdd639f59cf00e7d0ffe",
+      "short_sha": "432fea6b",
+      "subject": "net: MaximumAllowedContentLength now bounds a chunked body buffered in memory",
+      "body": "ContentMaxSize - the running total which bounds a chunked body - was only set\nwhen OnBodyDownload supplied a stream. Buffered as plain Content, i.e. with no\nOnBodyDownload event or when it returned nil, a chunked body could grow up to\nMaxHttpInMemSize (1GB) whatever MaximumAllowedContentLength said, since the\nheader check only applies to an explicit Content-Length.\n- THttpAsyncServer and THttpServer now set ContentMaxSize for every request,\n  before OnBodyDownload is called\n- THttpServer reports the in-memory overflow as 413, as GetBodyStream does\n- tests: in-memory chunked body at the 39999/40000 boundary, with OnBodyDownload\n  returning nil and with no event at all, on both server families",
+      "author": "Sven Harazim",
+      "date": "2026-11-05T16:20:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/432fea6b42e61fa78ba6fdd639f59cf00e7d0ffe",
+      "parents": [
+        "f5f77294b88b26056e2adc359cd9a5ff199ab550"
+      ],
+      "stats": {
+        "additions": 72,
+        "deletions": 5,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -5314,8 +5314,6 @@ function THttpAsyncServerConnection.DoBodyDownload: TPollAsyncSocketOnReadWrite;\n     include(fHttp.ResponseFlags, rfContentStreamNeedFree);\r\n     if strm.InheritsFrom(TFileStreamEx) then\r\n       fHttp.SetContentInputName(TFileStreamEx(strm));\r\n-    // needed to track and limit the cumulated chunked body size\r\n-    fHttp.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n   end;\r\n end;\r\n \r\n@@ -5372,6 +5370,10 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n       exit;\r\n     end;\r\n   end;\r\n+  // track and limit the cumulated size of a chunked body - whatever the method\r\n+  // and whether OnBodyDownload supplies a stream for it or not: the header\r\n+  // check above only applies to an explicit Content-Length\r\n+  fHttp.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n   // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n   if not (hfConnectionUpgrade in fHttp.HeaderFlags) and\r\n      Assigned(fServer.fOnBodyDownload) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 3,
+          "patch": "@@ -921,6 +921,7 @@   THttpServerSocket = class(THttpSocket)\n     function TaskProcessBody(aCaller: TSynThreadPoolWorkThread;\r\n       aHeaderResult: THttpServerSocketGetRequestResult): boolean;\r\n     procedure DownloadBody; {$ifdef HASINLINE} inline; {$endif}\r\n+    procedure GetBodyInMemory;\r\n     procedure GetBodyStream;\r\n     // implement fServer.OnBodyDownload in GetRequest - false if rejected as 415\r\n     function DoOnBodyDownload: boolean; virtual;\r\n@@ -5198,7 +5199,7 @@ function THttpServerSocket.GetAborted: boolean;\n procedure THttpServerSocket.DownloadBody; // properly inlined\r\n begin\r\n   if Http.ContentStream = nil then\r\n-    GetBody // default in-memory download into Http.Content\r\n+    GetBodyInMemory // default in-memory download into Http.Content\r\n   else\r\n     GetBodyStream; // use Http.ContentStream from OnBodyDownload event\r\n end;\r\n@@ -5494,6 +5495,10 @@ function THttpServerSocket.GetRequest(withBody: boolean;\n           exit;\r\n         end;\r\n       end;\r\n+      // track and limit the cumulated size of a chunked body - whether\r\n+      // OnBodyDownload supplies a stream for it or not: the check above only\r\n+      // applies to an explicit Content-Length\r\n+      Http.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n       // OnBodyDownload callback can supply a stream for the body - even for HEAD\r\n       if Assigned(fServer.OnBodyDownload) and\r\n          not (hfConnectionUpgrade in Http.HeaderFlags) and\r\n@@ -5567,8 +5572,22 @@ function THttpServerSocket.DoOnBodyDownload: boolean;\n     include(Http.ResponseFlags, rfContentStreamNeedFree);\r\n     if strm.InheritsFrom(TFileStreamEx) then\r\n       Http.SetContentInputName(TFileStreamEx(strm));\r\n-    // needed to track and limit the cumulated chunked body size\r\n-    Http.ContentMaxSize := fServer.MaximumAllowedContentLength;\r\n+  end;\r\n+end;\r\n+\r\n+procedure THttpServerSocket.GetBodyInMemory;\r\n+begin\r\n+  try\r\n+    GetBody; // default in-memory download into Http.Content\r\n+  except\r\n+    on EHttpSocketOverflow do\r\n+    begin\r\n+      // e.g. a chunked body over ContentMaxSize: report 413 before closing,\r\n+      // as GetBodyStream does\r\n+      fServer.ComputeRejectBody(Http.Content, 0, HTTP_PAYLOADTOOLARGE);\r\n+      SockSendFlush(Http.Content);\r\n+      raise; // the caller will close the connection\r\n+    end;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -7282,6 +7282,52 @@ procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\n           if status <> 0 then\r\n             WaitDeleted(bodyfile, 'chunked limit');\r\n         end;\r\n+        // the same limit should apply to a chunked body buffered in memory,\r\n+        // i.e. when OnBodyDownload returns nil (/mem) or is not set at all:\r\n+        // ContentMaxSize was only set for a stream, so the body grew up to\r\n+        // MaxHttpInMemSize whatever MaximumAllowedContentLength said\r\n+        bodytype := 'application/dummy';\r\n+        for n := 0 to 3 do\r\n+        begin\r\n+          if n = 2 then\r\n+            srv.OnBodyDownload := nil; // no event at all\r\n+          status := n and 1; // 0 = 39999 = over the limit, 1 = 40000 = within\r\n+          srv.MaximumAllowedContentLength := 39999 + status;\r\n+          raw := TCrtSocket.Open('127.0.0.1', srv.SockPort);\r\n+          try\r\n+            raw.CreateSockIn; // needed for proper SockRecvLn() below\r\n+            raw.SockSend('POST /mem HTTP/1.1');\r\n+            raw.SockSend(hosthead);\r\n+            raw.SockSend('Transfer-Encoding: chunked');\r\n+            raw.SockSend('Content-Type: application/dummy'#13#10); // last header\r\n+            raw.SockSend('4e20');\r\n+            raw.SockSend(mptext);\r\n+            raw.SockSend('4e20');\r\n+            raw.SockSend(mptext);\r\n+            raw.SockSend('0');\r\n+            raw.SockSendCRLF; // final void line\r\n+            cmd := '';\r\n+            try\r\n+              raw.SockSendFlush;\r\n+              raw.SockRecvLn(cmd);\r\n+            except\r\n+              on ENetSock do\r\n+                cmd := ''; // rejected and closed before we did send it all\r\n+            end;\r\n+            if status = 0 then\r\n+            begin\r\n+              // without the limit, the body was accepted and answered 200\r\n+              CheckUtf8(PosEx(' 200 ', cmd) = 0, 'mem chunked limit % %', [n, cmd]);\r\n+              if cmd <> '' then\r\n+                CheckUtf8(PosEx(' 413 ', cmd) > 0, 'mem chunked 413 % %', [n, cmd]);\r\n+            end\r\n+            else\r\n+              CheckUtf8(PosEx(' 200 ', cmd) > 0, 'mem chunked in limit % %', [n, cmd]);\r\n+          finally\r\n+            raw.Free;\r\n+          end;\r\n+        end;\r\n+        srv.OnBodyDownload := DoBodyDownload;\r\n         srv.MaximumAllowedContentLength := 100000;\r\n         raw := TCrtSocket.Open('127.0.0.1', srv.SockPort);\r\n         try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.server"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f5f77294b88b26056e2adc359cd9a5ff199ab550",
+      "short_sha": "f5f77294",
+      "subject": "crypt: TCryptCertCng.LoadPkcs12() fix",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:59:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f5f77294b88b26056e2adc359cd9a5ff199ab550",
+      "parents": [
+        "e488b7ed3a98a6c797d16d497759e4e3bcdd71e9"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 14,
+          "patch": "@@ -700,9 +700,8 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n     if store.Handle <> nil then\r\n       while store.Next do\r\n       begin\r\n-        if not WinCertCtxtKeyProvider(store.Context, info) or\r\n-           (info.ProviderType <> 0) then\r\n-          continue; // no private key or a legacy CryptoAPI CSP\r\n+        if WinCertCtxtKeyProvider(store.Context, info) and\r\n+           (info.ProviderType = 0) then // no private key or legacy CryptoAPI CSP\r\n         try\r\n           cert := TCryptCertCng.Create(self, fLog, store.Context,\r\n             Location, [wckCompareKey], @info);\r\n@@ -789,7 +788,7 @@ constructor TCryptCertCng.Create(aOwner: TCryptCertAlgoCng;\n   inherited Create;\r\n   fKeyOptions := aKeyOptions;\r\n   fLogClass := aLogClass;\r\n-  if aOwner <> nil then\r\n+  if aOwner <> nil then // nil from LoadPkcs12()\r\n   begin\r\n     fCryptAlgo := aOwner;\r\n     fCertStore := aOwner.fCertStore;\r\n@@ -882,11 +881,13 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n     until key.Init(ctxt, opt) = NO_ERROR;\r\n     key.Done;\r\n     if not WinCertCtxtKeyProvider(ctxt, info) then\r\n-    begin\r\n-      log.Log(sllLastError,\r\n-        '%.LoadPkcs12: WinCertCtxtKeyProvider failed %', [self], nil);\r\n-      exit; // Schannel cannot reopen this key in its own process\r\n-    end;\r\n+      if ForSChannel then // CNG signing/decryption succeed without any provider\r\n+      begin\r\n+        if Assigned(log) then\r\n+          log.Log(sllLastError,\r\n+            '%.LoadPkcs12: WinCertCtxtKeyProvider failed %', [self], nil);\r\n+        exit; // Schannel cannot reopen this key in its own process\r\n+      end;\r\n     if ForSChannel then\r\n       if (info.ProviderType <> 0) or\r\n          (info.Provider = '') or\r\n@@ -898,20 +899,21 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n             [self, info.ProviderType, info.Provider, info.Container], nil);\r\n         exit; // Schannel cannot reopen this key in its own process\r\n       end;\r\n-    cert := TCryptCertCng.Create(nil, aLog, ctxt, wcslCurrentUser, opt);\r\n+    cert := TCryptCertCng.Create({owner=}nil, aLog, ctxt, wcslCurrentUser, opt);\r\n     result := cert; // interface must own the instance even if a later step raises\r\n     if ForSChannel then\r\n     begin\r\n       // setup internal hidden parameters for proper ownership\r\n       cert.fKeyProvider := info.Provider;\r\n       cert.fKeyContainer := info.Container;\r\n       cert.fImportedStore := store; // transfer key cleanup ownership\r\n-      store := nil;\r\n+      store := nil; // no WinCertStoreDeleteImportedCngKeys() release below\r\n     end;\r\n     if Assigned(log) then\r\n-      log.Log(sllDebug, '%.LoadPkcs12: loaded prov=% cont=% sn=% cn=% skid=%',\r\n-        [self, info.Provider, info.Container,\r\n-         result.GetSerial, result.GetSubject, result.GetSubjectKey]);\r\n+      log.Log(sllDebug,\r\n+        '%.LoadPkcs12: loaded prov=% cont=% sn=% cn=% skid=% sha1=%',\r\n+        [self, info.Provider, info.Container, result.GetSerial,\r\n+         result.GetSubject, result.GetSubjectKey, info.Hash]);\r\n   finally\r\n     if ctxt <> nil then\r\n       CertFreeCertificateContext(ctxt);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17865\n+17866",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17865'\r\n+'2.4.17866'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e488b7ed3a98a6c797d16d497759e4e3bcdd71e9",
+      "short_sha": "e488b7ed",
+      "subject": "lib: fixed WinCertStoreDeleteImportedCngKeys()",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:42:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e488b7ed3a98a6c797d16d497759e4e3bcdd71e9",
+      "parents": [
+        "121dffa6440b61e2839d93b32b96e744ea74a48a"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.sqlite3.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -969,7 +969,7 @@ interface\n   // SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION\r\n   // - By default, our TSqlDataBase.DBOpen disables the collection\r\n   // - Collection costs two RDTSC per VDBE opcode, making read queries 2-5 times\r\n-  // slower: TSqlDataBase.DBOpen disables it, so call the followin to prepare\r\n+  // slower - TSqlDataBase.DBOpen disables it, so call the following to trigger\r\n   // statements profiling:\r\n   // ! db_config(DB, SQLITE_DBCONFIG_STMT_SCANSTATUS, 1, nil)\r\n   SQLITE_DBCONFIG_STMT_SCANSTATUS = 1018;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/lib/mormot.lib.sspi.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -2257,10 +2257,11 @@ procedure WinCertStoreDeleteImportedCngKeys(Store: HCERTSTORE; const Log: TSynLo\n          (info.ProviderType <> 0) or\r\n          (info.Container = '') or\r\n          (info.Provider = '') then\r\n-        exit;\r\n+        continue;\r\n       // a chain may contain several certificates referencing the same key\r\n       Join([info.Provider, #0, Info.Container], id);\r\n-      if FindNonVoidRawUtf8(pointer(ids), pointer(id), length(id), length(ids)) >= 0 then\r\n+      if (ids <> nil) and\r\n+         (FindNonVoidRawUtf8(pointer(ids), pointer(id), length(id), length(ids)) >= 0) then\r\n         continue;\r\n       _addutf8(ids, id);\r\n       prov := nil;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17864\n+17865",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17864'\r\n+'2.4.17865'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs",
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.sqlite3",
+        "mormot.lib.sspi"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "121dffa6440b61e2839d93b32b96e744ea74a48a",
+      "short_sha": "121dffa6",
+      "subject": "crypt: new TCryptCertCng.LoadPkcs12 \"ForSChannel\" optional parameter",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:34:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/121dffa6440b61e2839d93b32b96e744ea74a48a",
+      "parents": [
+        "93925cd63bdb7a24fbb1d0be7743e2efdff169a1"
+      ],
+      "stats": {
+        "additions": 81,
+        "deletions": 145,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 141,
+          "patch": "@@ -148,6 +148,8 @@   ECryptCertCng = class(ECryptCert);\n   // smart card/hardware KSP, or a transient PKCS#12/PFX identity\r\n   // - the certificate is represented internally by TX509 whereas all private\r\n   // key operations remain inside the Windows CNG Key Storage Provider\r\n+  // - instances could be returned from a Windows store via TCryptCertAlgoCng,\r\n+  // or from a PKCS#12/PFX identity from TCryptCertCng.LoadPkcs12()\r\n   ICryptCertCng = interface(ICryptCert)\r\n     /// change the asymmetric signing algorithm used with this certificate\r\n     // - regular RSA keys may use RSxxx or PSxxx\r\n@@ -176,6 +178,9 @@   ECryptCertCng = class(ECryptCert);\n     /// access the retained Windows certificate context\r\n     // - caller should never free this context\r\n     // - it remains valid while this ICryptCertCng instance is alive\r\n+    // - warning: could be assigned e.g. to TNetTlsContext.CertificateRaw from\r\n+    // any local TCryptCertAlgoCng store instances, but TCryptCertCng.LoadPkcs12\r\n+    // instances require an explicit ForSChannel = true parameter\r\n     function WinContext: PCCERT_CONTEXT;\r\n   end;\r\n \r\n@@ -283,16 +288,15 @@   TCryptCertCng = class(TCryptCertX509Abstract, ICryptCertCng)\n     function KeyProvider: RawUtf8;\r\n     function KeyContainer: RawUtf8;\r\n     function WinContext: PCCERT_CONTEXT;\r\n-    /// load a certificate and private key from a PKCS#12/PFX buffer\r\n-    // - by default, the private key is never persisted on disk\r\n-    // - ForSchannel=true imports to a temporary persisted CNG key container\r\n-    // because Windows Schannel may perform credential operations in LSASS\r\n-    // - the returned certificate owns and deletes imported keys on release;\r\n-    // keep it alive until all TLS connections using WinContext are closed\r\n+    /// load a certificate and private key from a PKCS#12/PFX buffer as CNG key\r\n+    // - private key is imported into an ephemeral KSP with PKCS12_NO_PERSIST_KEY\r\n+    // unless ForSChannel is true and a named CNG key container is used so that\r\n+    // it could be assigned on client side for mTLS connection as such:\r\n+    // ! Http.TLS.CertificateRaw := Cert.WinContext;\r\n     // - returns the first certificate having an accessible CNG private key\r\n     class function LoadPkcs12(const Pfx: RawByteString;\r\n       const Password: SpiUtf8 = ''; aLog: TSynLogClass = nil;\r\n-      ForSchannel: boolean = false): ICryptCertCng;\r\n+      ForSChannel: boolean = false): ICryptCertCng;\r\n   end;\r\n \r\n const\r\n@@ -693,12 +697,7 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n   fLog.EnterLocal(log, 'LoadStore %', [WINCNG_LOCATION_TEXT[Location]], self);\r\n   store := TWinCertStore.Create(fCertStore, Location);\r\n   try\r\n-    if store.Handle = nil then\r\n-    begin\r\n-      if Assigned(log) then\r\n-        log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n-    end\r\n-    else\r\n+    if store.Handle <> nil then\r\n       while store.Next do\r\n       begin\r\n         if not WinCertCtxtKeyProvider(store.Context, info) or\r\n@@ -716,7 +715,9 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n               log.Log(sllTrace,\r\n                 'LoadStore: ignored certificate due to %', [E], self);\r\n         end;\r\n-      end;\r\n+      end\r\n+    else if Assigned(log) then\r\n+      log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n   finally\r\n     store.Free;\r\n   end;\r\n@@ -819,127 +820,51 @@ constructor TCryptCertCng.Create(aOwner: TCryptCertAlgoCng;\n end;\r\n \r\n const\r\n-  // non-persistent key handle for in-process CNG signing/decryption\r\n-  PKCS12_FLAGS = PKCS12_INCLUDE_EXTENDED_PROPERTIES or\r\n-                 PKCS12_ALWAYS_CNG_KSP or\r\n-                 PKCS12_NO_PERSIST_KEY;\r\n-  PKCS12_WCK = [wckCache, wckSilent];\r\n-  // Schannel needs a KSP name it can reopen, not a process-local key handle.\r\n-  // Force current-user keys and ignore saved certificate extended properties.\r\n-  PKCS12_SCHANNEL_FLAGS = PKCS12_ALWAYS_CNG_KSP or CRYPT_USER_KEYSET;\r\n-  P\n... [truncated, 8717 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17863\n+17864",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17863'\r\n+'2.4.17864'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1068,8 +1068,8 @@   TNetTlsContext = record\n     // accessible CAPI/CNG private key, e.g. ICryptCertCng.WinContext\r\n     // - Schannel duplicates the context reference during AfterConnection or\r\n     // AfterBind; the caller retains ownership of this borrowed input and\r\n-    // must keep it valid until the respective call returns\r\n-    // - if an ICryptCertCng owns a temporary persisted PFX key (created by\r\n+    // must keep it valid until the respective call returns - especially\r\n+    // if an ICryptCertCng owns a temporary persisted PFX key (created by\r\n     // LoadPkcs12(ForSchannel=true)), keep that interface alive for the entire\r\n     // TLS session: a duplicated certificate context does not own its key file\r\n     CertificateRaw: pointer;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "Network"
+      ],
+      "units": [
+        "mormot.crypt.win",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "93925cd63bdb7a24fbb1d0be7743e2efdff169a1",
+      "short_sha": "93925cd6",
+      "subject": "lib: new WinCertStoreDeleteImportedCngKeys() function",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:32:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/93925cd63bdb7a24fbb1d0be7743e2efdff169a1",
+      "parents": [
+        "928a3395cd986fc54154642a848fbb2240e11752"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/lib/mormot.lib.sspi.pas",
+          "status": "modified",
+          "additions": 67,
+          "deletions": 0,
+          "patch": "@@ -926,6 +926,14 @@ function WinCertStoreImportPfx(const Pfx: RawByteString;\n   const Password: SpiUtf8; out Store: HCERTSTORE;\r\n   Flags: cardinal = PKCS12_INCLUDE_EXTENDED_PROPERTIES): cardinal;\r\n \r\n+/// cleanup of a certificate temporary imported into the Windows certificate store\r\n+// - PFXImportCertStore() persists private keys separately from its temporary\r\n+// certificate store: this deletes every imported CNG key, not just the selected leaf\r\n+// - call only for a store freshly imported by PKCS12_SCHANNEL_FLAGS: no key from\r\n+// TCryptCertAlgoCng's system-store catalog is ever passed to this routine\r\n+procedure WinCertStoreDeleteImportedCngKeys(Store: HCERTSTORE;\r\n+  const Log: TSynLogProc = nil);\r\n+\r\n /// could be used to extract CERT_X500_NAME_STR values\r\n // - for instance, in TWinCertInfo Name := ExtractX500('CN=', SubjectName);\r\n function ExtractX500(const Pattern, Text: RawUtf8): RawUtf8;\r\n@@ -2226,6 +2234,65 @@ function WinCertStoreImportPfx(const Pfx: RawByteString; const Password: SpiUtf8\n   end;\r\n end;\r\n \r\n+procedure WinCertStoreDeleteImportedCngKeys(Store: HCERTSTORE; const Log: TSynLogProc);\r\n+var\r\n+  ctxt: PCCERT_CONTEXT;\r\n+  info: TWinCertKeyProviderInfo;\r\n+  prov: NCRYPT_PROV_HANDLE;\r\n+  key: NCRYPT_KEY_HANDLE;\r\n+  providerName, containerName: SynUnicode;\r\n+  id: RawUtf8;\r\n+  ids: TRawUtf8DynArray;\r\n+  err: cardinal;\r\n+begin\r\n+  if Store = nil then\r\n+    exit;\r\n+  ctxt := nil;\r\n+  try\r\n+    repeat\r\n+      ctxt := CertEnumCertificatesInStore(Store, ctxt);\r\n+      if ctxt = nil then\r\n+        break;\r\n+      if not WinCertCtxtKeyProvider(ctxt, info) or\r\n+         (info.ProviderType <> 0) or\r\n+         (info.Container = '') or\r\n+         (info.Provider = '') then\r\n+        exit;\r\n+      // a chain may contain several certificates referencing the same key\r\n+      Join([info.Provider, #0, Info.Container], id);\r\n+      if FindNonVoidRawUtf8(pointer(ids), pointer(id), length(id), length(ids)) >= 0 then\r\n+        continue;\r\n+      _addutf8(ids, id);\r\n+      prov := nil;\r\n+      providerName := SynUnicode(info.Provider);\r\n+      err := NCrypt.OpenStorageProvider(prov, pointer(providerName), 0);\r\n+      if err = NO_ERROR then\r\n+        try\r\n+          key := nil;\r\n+          containerName := SynUnicode(info.Container);\r\n+          err := NCrypt.OpenKey(prov, key, pointer(containerName), 0,\r\n+            info.Flags and NCRYPT_MACHINE_KEY_FLAG);\r\n+          if err = NO_ERROR then\r\n+          begin\r\n+            err := NCrypt.DeleteKey(key, 0); // also frees the key on success\r\n+            if err <> NO_ERROR then\r\n+              NCrypt.FreeObject(NCRYPT_HANDLE(key));\r\n+          end;\r\n+        finally\r\n+          NCrypt.FreeObject(NCRYPT_HANDLE(prov));\r\n+        end;\r\n+      if (err <> NO_ERROR) and\r\n+         Assigned(Log) then\r\n+        Log(sllWarning,\r\n+          'LoadPkcs12: unable to delete imported CNG key % via % [%]',\r\n+          [info.Container, info.Provider, OsErrorShort(err)], nil);\r\n+    until false;\r\n+  finally\r\n+    if ctxt <> nil then\r\n+      CertFreeCertificateContext(ctxt);\r\n+  end;\r\n+end;\r\n+\r\n \r\n { ****************** High-Level Client and Server Authentication using SSPI }\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17859\n+17863",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17859'\r\n+'2.4.17863'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "External libs"
+      ],
+      "units": [
+        "mormot.lib.sspi"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "928a3395cd986fc54154642a848fbb2240e11752",
+      "short_sha": "928a3395",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:32:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/928a3395cd986fc54154642a848fbb2240e11752",
+      "parents": [
+        "f0811cafb25d7378ce992f088db5384a1321bccc",
+        "f6182666dfe405bc9cfad5f1d6a5bc5220c5914f"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -694,8 +694,10 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n   store := TWinCertStore.Create(fCertStore, Location);\r\n   try\r\n     if store.Handle = nil then\r\n+    begin\r\n       if Assigned(log) then\r\n         log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n+    end\r\n     else\r\n       while store.Next do\r\n       begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "f0811cafb25d7378ce992f088db5384a1321bccc",
+      "short_sha": "f0811caf",
+      "subject": "crypt: new TWinCertKeyProviderInfo.Hash field",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T14:31:49Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f0811cafb25d7378ce992f088db5384a1321bccc",
+      "parents": [
+        "df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a"
+      ],
+      "stats": {
+        "additions": 274,
+        "deletions": 47,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 165,
+          "deletions": 24,
+          "patch": "@@ -246,6 +246,7 @@   TCryptCertCng = class(TCryptCertX509Abstract, ICryptCertCng)\n     fLogClass: TSynLogClass;\r\n     fKeyProvider: RawUtf8;\r\n     fKeyContainer: RawUtf8;\r\n+    fImportedStore: HCERTSTORE; // temporary store holding Schannel PFX keys\r\n     procedure RaiseError(const Msg: ShortString); overload; override;\r\n   public\r\n     /// create a certificate from a context currently enumerated in a store\r\n@@ -283,10 +284,15 @@   TCryptCertCng = class(TCryptCertX509Abstract, ICryptCertCng)\n     function KeyContainer: RawUtf8;\r\n     function WinContext: PCCERT_CONTEXT;\r\n     /// load a certificate and private key from a PKCS#12/PFX buffer\r\n-    // - private key is imported into an ephemeral CNG KSP and is never persisted\r\n+    // - by default, the private key is never persisted on disk\r\n+    // - ForSchannel=true imports to a temporary persisted CNG key container\r\n+    // because Windows Schannel may perform credential operations in LSASS\r\n+    // - the returned certificate owns and deletes imported keys on release;\r\n+    // keep it alive until all TLS connections using WinContext are closed\r\n     // - returns the first certificate having an accessible CNG private key\r\n     class function LoadPkcs12(const Pfx: RawByteString;\r\n-      const Password: SpiUtf8 = ''; aLog: TSynLogClass = nil): ICryptCertCng;\r\n+      const Password: SpiUtf8 = ''; aLog: TSynLogClass = nil;\r\n+      ForSchannel: boolean = false): ICryptCertCng;\r\n   end;\r\n \r\n const\r\n@@ -811,53 +817,170 @@ constructor TCryptCertCng.Create(aOwner: TCryptCertAlgoCng;\n end;\r\n \r\n const\r\n-  // PKCS12_NO_PERSIST_KEY attached the ephemeral key to TCryptCertCng context\r\n+  // non-persistent key handle for in-process CNG signing/decryption\r\n   PKCS12_FLAGS = PKCS12_INCLUDE_EXTENDED_PROPERTIES or\r\n                  PKCS12_ALWAYS_CNG_KSP or\r\n                  PKCS12_NO_PERSIST_KEY;\r\n-  PKCS12_WCK = [wckCache, wckSilent]; // wckCompareKey not needed here\r\n+  PKCS12_WCK = [wckCache, wckSilent];\r\n+  // Schannel needs a KSP name it can reopen, not a process-local key handle.\r\n+  // Force current-user keys and ignore saved certificate extended properties.\r\n+  PKCS12_SCHANNEL_FLAGS = PKCS12_ALWAYS_CNG_KSP or CRYPT_USER_KEYSET;\r\n+  PKCS12_SCHANNEL_WCK = [wckCompareKey, wckSilent];\r\n+\r\n+// PFXImportCertStore() persists private keys separately from its temporary\r\n+// certificate store. Delete every imported CNG key, not just the selected leaf.\r\n+// Call only for a store freshly imported by PKCS12_SCHANNEL_FLAGS. No key from\r\n+// TCryptCertAlgoCng's system-store catalog is ever passed to this routine.\r\n+procedure DeleteImportedCngKeys(Store: HCERTSTORE; Log: TSynLogClass);\r\n+var\r\n+  ctxt: PCCERT_CONTEXT;\r\n+  info: TWinCertKeyProviderInfo;\r\n+  prov: NCRYPT_PROV_HANDLE;\r\n+  key: NCRYPT_KEY_HANDLE;\r\n+  providerName, containerName: SynUnicode;\r\n+  identities: TRawUtf8DynArray;\r\n+  identity: RawUtf8;\r\n+  i, n, err: integer;\r\n+  already: boolean;\r\n+begin\r\n+  if Store = nil then\r\n+    exit;\r\n+  ctxt := nil;\r\n+  try\r\n+    repeat\r\n+      ctxt := CertEnumCertificatesInStore(Store, ctxt);\r\n+      if ctxt = nil then\r\n+        break;\r\n+      if not WinCertCtxtKeyProvider(ctxt, info) or\r\n+         (info.ProviderType <> 0) or\r\n+         (info.Container = '') or\r\n+         (info.Provider = '') then\r\n+        continue;\r\n+      // A chain may contain several certificates referencing the same key.\r\n+      identity := info.Provider + #0 + info.Container;\r\n+      already := false;\r\n+      for i := 0 to high(identities) do\r\n+        if identities[i] = identity then\r\n+        begin\r\n+          already := true;\r\n+          break;\r\n+        end;\r\n+      if already then\r\n+        continue;\r\n+      n := length(identities);\r\n+      SetLength(identities, n + 1);\r\n+      identities[n] := identity;\r\n+      providerName := Utf8ToSynUnicode(info.Provider);\r\n+      containerName := Utf8ToSynUnicode(info.Container);\r\n+      prov := nil;\r\n+      err := NCrypt.OpenStorageProvider(prov, pointer(providerName), 0);\r\n+      if er\n... [truncated, 5156 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/lib/mormot.lib.sspi.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -601,6 +601,8 @@   CERT_CHAIN_ENGINE_CONFIG = record\n   PKCS12_INCLUDE_EXTENDED_PROPERTIES = $10;\r\n   PKCS12_NO_PERSIST_KEY = $00008000;\r\n \r\n+  CRYPT_USER_KEYSET = $00001000; // force PFX-imported keys into CurrentUser\r\n+\r\n   CRYPT_ACQUIRE_COMPARE_KEY_FLAG     = $00000004;\r\n   CRYPT_ACQUIRE_SILENT_FLAG          = $00000040;\r\n   CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG = $00040000;\r\n@@ -833,7 +835,7 @@   TWinCertInfo = record\n     /// the certificate algorithm name, as converted by WinCertAlgoName()\r\n     // - typical values are 'md5RSA','sha1RSA','sha256RSA','sha384RSA','sha1ECC'\r\n     AlgorithmName: RawUtf8;\r\n-    /// the certificate binary SHA1 fingerprint of 20 bytes\r\n+    /// the certificate binary SHA1 fingerprint as 40 hexadecimal chars\r\n     Hash: RawUtf8;\r\n     /// the certificate public key algorithm, as OID text\r\n     // - e.g. ' 1.2.840.113549.1.1.1' for 'RSA' PublicKeyAlgorithmName\r\n@@ -871,6 +873,8 @@   TWinCertKeyProviderInfo = record\n     Container: RawUtf8;\r\n     /// CSP or CNG Key Storage Provider name\r\n     Provider: RawUtf8;\r\n+    /// binary SHA1 fingerprint as 40 hexadecimal chars\r\n+    Hash: RawUtf8;\r\n     /// provider type\r\n     // - 0 identifies a CNG Key Storage Provider\r\n     // - high(cardinal) means no provider information was available\r\n@@ -2012,7 +2016,6 @@ function WinCertCtxtDecode(Ctxt: PCCERT_CONTEXT; out Cert: TWinCertInfo;\n   ku: byte;\r\n   len: cardinal;\r\n   sub: RawUtf8;\r\n-  h: THash160;\r\n   e: PCERT_EXTENSION;\r\n   c: PWinCertExtension;\r\n   key: TWinCertKeyProviderInfo;\r\n@@ -2083,10 +2086,8 @@ function WinCertCtxtDecode(Ctxt: PCCERT_CONTEXT; out Cert: TWinCertInfo;\n     Cert.KeyProviderType  := key.ProviderType;\r\n     Cert.KeyProviderFlags := key.Flags;\r\n     Cert.KeySpec          := key.KeySpec;\r\n+    Cert.Hash             := key.Hash;\r\n   end;\r\n-  len := SizeOf(h); // 20 bytes of a SHA-1 hash\r\n-  if CertGetCertificateContextProperty(Ctxt, CERT_HASH_PROP_ID, @h, len) then\r\n-    ToHumanHex(Cert.Hash, @h, len);\r\n   SetLength(Cert.Extension, nfo^.cExtension);\r\n   c := pointer(Cert.Extension);\r\n   e := nfo^.rgExtension;\r\n@@ -2161,6 +2162,7 @@ function WinCertCtxtKeyProvider(Ctxt: PCCERT_CONTEXT;\n   len: cardinal;\r\n   p: PCRYPT_KEY_PROV_INFO;\r\n   tmp: TSynTempBuffer;\r\n+  h: THash160 absolute tmp;\r\n begin\r\n   result := false;\r\n   Finalize(Info);\r\n@@ -2188,6 +2190,9 @@ function WinCertCtxtKeyProvider(Ctxt: PCCERT_CONTEXT;\n   finally\r\n     tmp.Done;\r\n   end;\r\n+  len := SizeOf(h); // 20 bytes of a SHA-1 hash\r\n+  if CertGetCertificateContextProperty(Ctxt, CERT_HASH_PROP_ID, @h, len) then\r\n+    ToHumanHex(Info.Hash, @h, len);\r\n end;\r\n \r\n function WinCertStoreImportPfx(const Pfx: RawByteString; const Password: SpiUtf8;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17858\n+17859",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17858'\r\n+'2.4.17859'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -1069,6 +1069,9 @@   TNetTlsContext = record\n     // - Schannel duplicates the context reference during AfterConnection or\r\n     // AfterBind; the caller retains ownership of this borrowed input and\r\n     // must keep it valid until the respective call returns\r\n+    // - if an ICryptCertCng owns a temporary persisted PFX key (created by\r\n+    // LoadPkcs12(ForSchannel=true)), keep that interface alive for the entire\r\n+    // TLS session: a duplicated certificate context does not own its key file\r\n     CertificateRaw: pointer;\r\n     /// input: PEM file name containing a private key to be loaded\r\n     // - (Delphi) warning: encoded as UTF-8 not UnicodeString/TFileName\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 94,
+          "deletions": 16,
+          "patch": "@@ -52,6 +52,7 @@ interface\n   mormot.lib.sspi,\r\n   mormot.lib.openssl11,\r\n   mormot.crypt.openssl,\r\n+  mormot.crypt.win,\r\n   {$endif SCHANNEL_VERIFY}\r\n   mormot.net.client,\r\n   mormot.net.server,\r\n@@ -7613,7 +7614,8 @@ procedure TNetworkProtocols.DoTFTPServer(Sender: TObject);\n \r\n   TSChannelTestFlags = set of (\r\n    stfExpected, stfCallbacks, stfRejectEach, stfDisableTls13, stfOneWayTls,\r\n-   stfOpenSslServer, stfEachInvalid, stfHugeContent, stfKeyUpdate);\r\n+   stfOpenSslServer, stfEachInvalid, stfHugeContent, stfKeyUpdate,\r\n+   stfSchannelClient);\r\n \r\n   TRunCase = class\r\n   public\r\n@@ -7630,6 +7632,7 @@   TRunCase = class\n     fHugeHash: cardinal;\r\n     fHugeLength: integer;\r\n     fClientError: RawUtf8;\r\n+    fClientKeyReady: boolean;\r\n     Body: RawByteString;\r\n     ExpectedHash: cardinal;\r\n     class procedure DoRunCase(Sender: TObject);\r\n@@ -7639,7 +7642,7 @@   TRunCase = class\n     procedure OnAfterCertificate(Socket: TNetSocket;\r\n       Context: PNetTlsContext; TLS, Peer: pointer);\r\n     function DoHugeRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n-    function OpenSslClient(const Port: RawUtf8;\r\n+    function TlsClient(const Port: RawUtf8;\r\n       const Certificate: ICryptCert): boolean;\r\n   end;\r\n \r\n@@ -7690,12 +7693,17 @@ function TRunCase.DoHugeRequest(Ctxt: THttpServerRequestAbstract): cardinal;\n   Ctxt.OutContent := Make(['ok ', fHugeLength, ' ', CardinalToHexShort(fHugeHash)]);\r\n end;\r\n \r\n-function TRunCase.OpenSslClient(const Port: RawUtf8;\r\n+function TRunCase.TlsClient(const Port: RawUtf8;\r\n   const Certificate: ICryptCert): boolean;\r\n var\r\n   socket: TNetSocket;\r\n   secure: INetTls;\r\n   tls: TNetTlsContext;\r\n+  clientCng: ICryptCertCng;\r\n+  provider: TWinCertKeyProviderInfo;\r\n+  providerHandle: NCRYPT_PROV_HANDLE;\r\n+  importedKey: NCRYPT_KEY_HANDLE;\r\n+  providerName, keyName: SynUnicode;\r\n   keyfile: TFileName;\r\n   request, reply: RawByteString;\r\n   len, pos: integer;\r\n@@ -7704,9 +7712,10 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n   net: TNetResult;\r\n   log: ISynLog;\r\n begin\r\n-  TSynLog.EnterLocal(log, 'OpenSslClient %', [Port], self);\r\n+  TSynLog.EnterLocal(log, 'TlsClient %', [Port], self);\r\n   result := false;\r\n   fClientError := '';\r\n+  fClientKeyReady := false;\r\n   socket := nil;\r\n   keyfile := '';\r\n   try\r\n@@ -7715,16 +7724,39 @@ function TRunCase.OpenSslClient(const Port: RawUtf8;\n     InitNetTlsContext(tls);\r\n     tls.IgnoreCertificateErrors := true; // the test server identity is private\r\n     tls.DisableTls13 := stfDisableTls13 in Flags;\r\n-    if Certificate <> nil then\r\n+    if stfSchannelClient in Flags then\r\n     begin\r\n-      tls.CertificateBin := Certificate.Save(cccCertOnly, '', ccfPem);\r\n-      keyfile := MakeString([Test.WorkDir, 'schannel-mtls-client-', Port, '.pem']);\r\n-      if not FileFromString(\r\n-          Certificate.Save(cccPrivateKeyOnly, '', ccfPem), keyfile) then\r\n-        raise ESynException.Create('unable to save the focused mTLS client key');\r\n-      tls.PrivateKeyFile := StringToUtf8(keyfile);\r\n+      if Certificate <> nil then\r\n+      begin\r\n+        // Use the production ICryptCertCng factory, not a test-only KSP owner.\r\n+        clientCng := TCryptCertCng.LoadPkcs12(\r\n+          Certificate.Save(cccCertWithPrivateKey, '3des=mtls-test', ccfBinary),\r\n+          'mtls-test', TSynLog, {ForSchannel=}true);\r\n+        if clientCng = nil then\r\n+          raise ESynException.Create('Schannel client CNG PFX import failed');\r\n+        if not WinCertCtxtKeyProvider(clientCng.WinContext, provider) or\r\n+           (provider.ProviderType <> 0) or\r\n+           (provider.Provider = '') or\r\n+           (provider.Container = '') then\r\n+          raise ESynException.Create('Schannel client needs a persisted CNG key');\r\n+        fClientKeyReady := true;\r\n+        tls.CertificateRaw := clientCng.WinContext;\r\n+      end;\r\n+      secure := NewSChannelNetTls;\r\n+    end\r\n+    else\r\n+    begin\r\n+      if Certificate <> nil then\r\n+      begin\r\n+        tls.CertificateBin := Cert\n... [truncated, 5121 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Crypto",
+        "External libs",
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.crypt.win",
+        "mormot.lib.sspi",
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "f6182666dfe405bc9cfad5f1d6a5bc5220c5914f",
+      "short_sha": "f6182666",
+      "subject": "Merge pull request #719 from osvegn/patch-2",
+      "body": "crypt: fixed error logic",
+      "author": "ab",
+      "date": "2026-11-05T13:17:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/f6182666dfe405bc9cfad5f1d6a5bc5220c5914f",
+      "parents": [
+        "df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a",
+        "a9b4d77f1962881c851614f8e791c7dd42e64b8b"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -688,8 +688,10 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n   store := TWinCertStore.Create(fCertStore, Location);\r\n   try\r\n     if store.Handle = nil then\r\n+    begin\r\n       if Assigned(log) then\r\n         log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n+    end\r\n     else\r\n       while store.Next do\r\n       begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": 719,
+      "is_merge": true
+    },
+    {
+      "sha": "a9b4d77f1962881c851614f8e791c7dd42e64b8b",
+      "short_sha": "a9b4d77f",
+      "subject": "Update mormot.crypt.win.pas",
+      "body": "",
+      "author": "Thomas Prud'homme",
+      "date": "2026-11-05T13:08:38Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a9b4d77f1962881c851614f8e791c7dd42e64b8b",
+      "parents": [
+        "df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -688,8 +688,10 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n   store := TWinCertStore.Create(fCertStore, Location);\r\n   try\r\n     if store.Handle = nil then\r\n+    begin\r\n       if Assigned(log) then\r\n         log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n+    end\r\n     else\r\n       while store.Next do\r\n       begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4ac1b5d05f05973081ada4083b3ff31e6f3cd4a8",
+      "short_sha": "4ac1b5d0",
+      "subject": "net: fixed TDhcpServer broadcast response address",
+      "body": "- with no relay, OFFER/ACK were broadcasted to the scope broadcast address,\n  which is not received by a client with no IPv4 address yet reading from a\n  regular UDP socket: RFC 2131 4.1 expects 0xffffffff, as already done for NAK\n- removed the now unused TDhcpServerThread.fClientBroadcast field",
+      "author": "zen010101",
+      "date": "2026-11-05T11:05:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4ac1b5d05f05973081ada4083b3ff31e6f3cd4a8",
+      "parents": [
+        "df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 4,
+          "patch": "@@ -1684,7 +1684,6 @@   TDhcpServerThread = class(TUdpServerThread)\n   protected\r\n     fOwner: TDhcpServer;\r\n     fState: TDhcpState;\r\n-    fClientBroadcast: TNetIP4;\r\n     fClientPort, fServerPort: TNetPort;\r\n     function DoBind: TNetResult; override;\r\n     procedure OnFrameReceived(len: integer; var remote: TNetAddr); override;\r\n@@ -6507,7 +6506,6 @@ constructor TDhcpServerThread.Create(aOwner: TDhcpServer;\n   fOwner := aOwner;\r\n   fFrameLen := SizeOf(fState); // directly fill our DHCP state machine buffer\r\n   fFrame := @fState.Recv;\r\n-  fClientBroadcast := aScope.Broadcast;\r\n   fClientPort := aScope.ClientPort;\r\n   fServerPort := aScope.ServerPort;\r\n   inherited Create(aOwner.Log, aInterface.IP, UInt32ToUtf8(aScope.ServerPort),\r\n@@ -6564,8 +6562,8 @@ procedure TDhcpServerThread.OnFrameReceived(len: integer; var remote: TNetAddr);\n     // unicast to known client IP\r\n     remote.SetIP4Port(fState.Recv.ciaddr, fClientPort)\r\n   else\r\n-    // broadcast back the response\r\n-    remote.SetIP4Port(fClientBroadcast, fClientPort);\r\n+    // RFC 2131 4.1: broadcast back the response to 0xffffffff\r\n+    remote.SetIP4Port(cAnyHost32, fClientPort);\r\n   // actual send back the response frame over UDP\r\n   nr := fSock.SendTo(@fState.Send, len, remote);\r\n   if (nr <> nrOk) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.dhcp"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a",
+      "short_sha": "df6b3d8f",
+      "subject": "net: implement SChannel client/server CertificateRaw support",
+      "body": "- should work directly as `Http.TLS.CertificateRaw := Cert.WinContext;`\nfrom the Windows store e.g. from Catalog.FindOne(CertificateId)\n- not yet working with TCryptCertCng.LoadPkcs12()",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T07:40:26Z",
+      "url": "https://github.com/synopse/mORMot2/commit/df6b3d8f68ad065c5c3d1cb218d6b2a0dd4d482a",
+      "parents": [
+        "4c033a8d112912b516b328bc65b413a78b2caa6f"
+      ],
+      "stats": {
+        "additions": 40,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17857\n+17858",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17857'\r\n+'2.4.17858'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 3,
+          "patch": "@@ -1064,9 +1064,11 @@   TNetTlsContext = record\n     /// input: opaque pointer containing a certificate to be used\r\n     // - on OpenSSL client or server, calls SSL_CTX_use_certificate() API\r\n     // expecting the pointer to be of PX509 type\r\n-    // - on SChannel server, expects a PCCERT_CONTEXT with an accessible\r\n-    // CAPI/CNG private key; AfterBind duplicates the certificate context\r\n-    // - not used on SChannel client\r\n+    // - on SChannel client or server, expects a PCCERT_CONTEXT with an\r\n+    // accessible CAPI/CNG private key, e.g. ICryptCertCng.WinContext\r\n+    // - Schannel duplicates the context reference during AfterConnection or\r\n+    // AfterBind; the caller retains ownership of this borrowed input and\r\n+    // must keep it valid until the respective call returns\r\n     CertificateRaw: pointer;\r\n     /// input: PEM file name containing a private key to be loaded\r\n     // - (Delphi) warning: encoded as UTF-8 not UnicodeString/TFileName\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 4,
+          "patch": "@@ -2255,6 +2255,8 @@ type\n     fSessionClosed: boolean;\r\n     fAccept: boolean;\r\n     fAcceptFirst: boolean;\r\n+    fCredAcquired: boolean; // an outbound SSPI credential is owned by this client\r\n+    fClientCertificate: PCCERT_CONTEXT; // owned duplicate for outbound mTLS\r\n     fServerContext: TSChannelServerContext;\r\n     fServerContextRef: IInterface; // thread-safe shared sever-side credentials\r\n     fAcceptContext: TNetTlsContext; // private mTLS policy for SEC_I_RENEGOTIATE\r\n@@ -2822,8 +2824,18 @@ end;\n procedure TSChannelNetTls.FinalizeCredCtxt;\r\n begin\r\n   DeleteSecurityContext(@fCtxt); // should be called first\r\n-  if not fAccept then // clients own their per-connection credential instance\r\n+  if fCredAcquired then // clients own their per-connection credential instance\r\n+  begin\r\n     FreeCredentialsHandle(@fCred);\r\n+    fCredAcquired := false;\r\n+  end;\r\n+  // Keep the certificate alive until after the credential is released\r\n+  // and also release it if AcquireCredentialsHandleW/handshake failed\r\n+  if fClientCertificate <> nil then\r\n+  begin\r\n+    CertFreeCertificateContext(fClientCertificate);\r\n+    fClientCertificate := nil;\r\n+  end;\r\n   fServerContext := nil;\r\n   fServerContextRef := nil;      // thread-safe shared sever-side credentials\r\n   FillCharFast(fCtxt, SizeOf(fCtxt), 0);\r\n@@ -2921,17 +2933,30 @@ begin\n   ResetState(Socket);\r\n   fServerAddressW := SynUnicode(ServerAddress);\r\n   fAccept := false;\r\n+  // CertificateRaw is a borrowed PCCERT_CONTEXT (e.g. ICryptCertCng.WinContext):\r\n+  // we retain an independent reference for the entire SSPI credential lifetime\r\n+  if Context.CertificateRaw <> nil then\r\n+  begin\r\n+    fClientCertificate := CertDuplicateCertificateContext(Context.CertificateRaw);\r\n+    if fClientCertificate = nil then\r\n+      RaiseLastError('AfterConnection: CertDuplicateCertificateContext', ESChannel);\r\n+  end;\r\n   // prepare execution context\r\n   f := SCH_CRED_NO_DEFAULT_CREDS;\r\n   if Context.IgnoreCertificateErrors then\r\n     f := f or SCH_CRED_MANUAL_CRED_VALIDATION\r\n   else\r\n     f := f or SCH_CRED_REVOCATION_CHECK_CHAIN or\r\n               SCH_CRED_IGNORE_REVOCATION_OFFLINE;\r\n-  CredInit(cred, Context, f, nil, nil);\r\n+  // paCred is an array of PCCERT_CONTEXT, not the context itself\r\n+  if fClientCertificate = nil then\r\n+    CredInit(cred, Context, f, nil, nil)\r\n+  else\r\n+    CredInit(cred, Context, f, @fClientCertificate, nil);\r\n   CheckOK('AfterConnection AcquireCredentialsHandleW',\r\n     AcquireCredentialsHandleW(nil, UNISP_NAME, SECPKG_CRED_OUTBOUND,\r\n       nil, @cred, nil, nil, @fCred, nil));\r\n+  fCredAcquired := true;\r\n   fFlags := ISC_REQ_FLAGS;\r\n   // initiate a ClientHello TLS message and a new fCtxt\r\n   HandshakeBufInit(b);\r\n@@ -3117,8 +3142,12 @@ begin\n        (not fAccept) and\r\n        ((fFlags and ISC_REQ_USE_SUPPLIED_CREDS) = 0) then\r\n     begin\r\n-      // Server requested a client certificate: since we don't supply one here,\r\n-      // tell SChannel to continue without automatically selected credentials\r\n+      // an explicit certificate was not acceptable (e.g. wrong issuer):\r\n+      // do not retry anonymously when the caller selected an identity\r\n+      if fClientCertificate <> nil then\r\n+        ESChannelRaiseError(\r\n+          'HandshakeLoop: explicit client certificate not accepted', res);\r\n+      // preserve the old behavior when no client certificate was supplied\r\n       fFlags := fFlags or ISC_REQ_USE_SUPPLIED_CREDS;\r\n       res := HandshakeStep(pointer(fInput), fInputCount);\r\n     end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4c033a8d112912b516b328bc65b413a78b2caa6f",
+      "short_sha": "4c033a8d",
+      "subject": "crypt: fixed GPF in TCryptCertCng when no logging is enabled",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-05T07:39:23Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4c033a8d112912b516b328bc65b413a78b2caa6f",
+      "parents": [
+        "3d613744132451978d296997aea3907dbc2c66e3"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 26,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 24,
+          "patch": "@@ -608,10 +608,12 @@ function TCryptPrivateKeyCng.DecryptPkcs1(Input: pointer): RawByteString;\n     try\r\n       result := NCrypt.KeyDecryptPkcs1(key.Handle, Input, modlen,\r\n         wckSilent in fCert.fKeyOptions);\r\n-      log.Log(sllTrace, 'DecryptPkcs1: returns len=%', [length(result)], self);\r\n+      if Assigned(log) then\r\n+        log.Log(sllTrace, 'DecryptPkcs1: returns len=%', [length(result)], self);\r\n     except\r\n       on E: Exception do\r\n-        log.Log(sllTrace, 'DecryptPkcs1 failed due to %', [E], self);\r\n+        if Assigned(log) then\r\n+          log.Log(sllTrace, 'DecryptPkcs1 failed due to %', [E], self);\r\n     end;\r\n   finally\r\n     key.Done;\r\n@@ -686,7 +688,8 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n   store := TWinCertStore.Create(fCertStore, Location);\r\n   try\r\n     if store.Handle = nil then\r\n-      log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n+      if Assigned(log) then\r\n+        log.Log(sllLastError, 'LoadStore: CertOpenStore failed', self)\r\n     else\r\n       while store.Next do\r\n       begin\r\n@@ -701,8 +704,9 @@ procedure TCryptCertAlgoCng.LoadStore(Location: TWinCertStoreLocation);\n           fCert[n] := cert;\r\n         except\r\n           on E: Exception do\r\n-            log.Log(sllTrace,\r\n-              'LoadStore: ignored certificate due to %', [E], self);\r\n+            if Assigned(log) then\r\n+              log.Log(sllTrace,\r\n+                'LoadStore: ignored certificate due to %', [E], self);\r\n         end;\r\n       end;\r\n   finally\r\n@@ -823,32 +827,37 @@ class function TCryptCertCng.LoadPkcs12(const Pfx: RawByteString;\n   log: ISynLog;\r\n begin\r\n   result := nil;\r\n-  if (Pfx = '') or\r\n-     not NCrypt.Exists then\r\n-    exit;\r\n   if aLog = nil then\r\n     aLog := TSynLog;\r\n   aLog.EnterLocal(log, '%.LoadPkcs12 len=%', [self, length(Pfx)], nil);\r\n+  if (Pfx = '') or\r\n+     not NCrypt.Exists then\r\n+  begin\r\n+    if Assigned(log) then\r\n+      log.Log(sllTrace, '%.LoadPkcs12: aborted', [self]);\r\n+    exit;\r\n+  end;\r\n   ctxt := nil;\r\n   err := WinCertStoreImportPfx(Pfx, Password, store, PKCS12_FLAGS);\r\n-  if err <> NO_ERROR then\r\n+  if err = NO_ERROR then\r\n+    try\r\n+      repeat\r\n+        ctxt := CertEnumCertificatesInStore(store, {prevcert=}ctxt);\r\n+        if ctxt = nil then\r\n+          exit;\r\n+      until key.Init(ctxt, PKCS12_WCK) = NO_ERROR; // valid private key\r\n+      key.Done;\r\n+      result := TCryptCertCng.Create(nil, aLog, ctxt, wcslCurrentUser, PKCS12_WCK);\r\n+      if Assigned(log) then\r\n+        log.Log(sllDebug, '%.LoadPkcs12: loaded %', [self, result.Instance]);\r\n+    finally\r\n+      if ctxt <> nil then\r\n+        CertFreeCertificateContext(ctxt); // decrement refcount is needed\r\n+      CertCloseStore(store, CERT_CLOSE_STORE_DEFAULT);\r\n+    end\r\n+  else if Assigned(log) then\r\n     log.Log(sllTrace, '%.LoadPkcs12: PFXImportCertStore failed %',\r\n       [self, OsErrorShort(err)], nil)\r\n-  else\r\n-  try\r\n-    repeat\r\n-      ctxt := CertEnumCertificatesInStore(store, {prevcert=}ctxt);\r\n-      if ctxt = nil then\r\n-        exit;\r\n-    until key.Init(ctxt, PKCS12_WCK) = NO_ERROR; // valid private key\r\n-    key.Done;\r\n-    result := TCryptCertCng.Create(nil, aLog, ctxt, wcslCurrentUser, PKCS12_WCK);\r\n-    log.Log(sllDebug, '%.LoadPkcs12: loaded %', [self, result.Instance]);\r\n-  finally\r\n-    if ctxt <> nil then\r\n-      CertFreeCertificateContext(ctxt); // decrement refcount is needed\r\n-    CertCloseStore(store, CERT_CLOSE_STORE_DEFAULT);\r\n-  end;\r\n end;\r\n \r\n procedure TCryptCertCng.Clear;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17856\n+17857",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17856'\r\n+'2.4.17857'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.win"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
