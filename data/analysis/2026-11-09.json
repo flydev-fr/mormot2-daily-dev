@@ -1,0 +1,943 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-09",
+  "edition_title": {
+    "en": "Async uploads stop growing without bound",
+    "fr": "Les uploads asynchrones cessent de croître sans limite",
+    "zh": "异步上传不再无界增长",
+    "ru": "Асинхронные загрузки больше не растут без границ"
+  },
+  "intro": {
+    "en": "This is a dense networking and concurrency edition. Async HTTP reads are now bounded before request processing, Digest authentication accepts valid empty parameters, and Date, delayed-response and thread-completion paths receive targeted fixes. Two network extractions also require uses-clause changes for peer-cache and Windows http.sys applications, while Delphi POSIX locking gains its non-recursive pthread implementation and an alignment follow-up.",
+    "fr": "Cette édition est dense en changements réseau et concurrence. Les lectures HTTP asynchrones sont maintenant bornées avant le traitement, Digest accepte les paramètres vides valides, et les chemins Date, réponse différée et fin de thread reçoivent des correctifs ciblés. Deux extractions réseau imposent aussi des changements de clauses uses pour le peer cache et Windows http.sys, tandis que le verrouillage Delphi POSIX reçoit son implémentation pthread non récursive et un correctif d'alignement.",
+    "zh": "本期集中于网络与并发。异步 HTTP 读取在请求处理前获得上限，Digest 认证接受有效空参数，Date、延迟 response 与 thread 完成路径得到针对性修复。两次网络单元迁移还要求 peer cache 与 Windows http.sys 应用修改 uses 子句；Delphi POSIX 锁则获得不可递归 pthread 实现及后续对齐修复。",
+    "ru": "Выпуск насыщен сетевыми изменениями и исправлениями конкуренции. Асинхронное HTTP-чтение теперь ограничено до обработки запроса, Digest принимает допустимые пустые параметры, а пути Date, отложенного ответа и завершения потока получили точечные исправления. Два сетевых переноса требуют изменения uses для peer cache и Windows http.sys; блокировка Delphi POSIX получила нерекурсивную pthread-реализацию и исправление выравнивания."
+  },
+  "tldr": {
+    "en": [
+      "TPollAsyncSockets.ReadMaxBytes defaults to 1 MB, preventing fast or endless uploads from filling process memory before OnRead runs.",
+      "THttpPeerCache moves to mormot.net.peercache, while THttpApiServer and THttpApiWebSocketServer move to mormot.net.server.win; direct users must update uses clauses.",
+      "Digest challenges with an empty optional value such as opaque=\"\" now produce an Authorization header instead of remaining in a 401 loop.",
+      "Delphi POSIX TOSLightLock now uses a non-recursive pthread mutex and should be taken with the pointer-alignment follow-up.",
+      "Async Date generation, delayed AsyncResponse handling and TLoggedThread.WaitFinished each receive focused correctness fixes."
+    ],
+    "fr": [
+      "TPollAsyncSockets.ReadMaxBytes vaut 1 Mo par défaut et empêche les uploads rapides ou sans fin de remplir la mémoire avant l'appel à OnRead.",
+      "THttpPeerCache passe dans mormot.net.peercache ; THttpApiServer et THttpApiWebSocketServer passent dans mormot.net.server.win. Les usages directs doivent adapter leurs clauses uses.",
+      "Les challenges Digest avec une valeur optionnelle vide comme opaque=\"\" produisent maintenant un header Authorization au lieu de rester dans une boucle 401.",
+      "Sous Delphi POSIX, TOSLightLock utilise désormais un mutex pthread non récursif et doit être pris avec le correctif d'alignement.",
+      "La génération de Date asynchrone, AsyncResponse différé et TLoggedThread.WaitFinished reçoivent chacun un correctif de sûreté ciblé."
+    ],
+    "zh": [
+      "TPollAsyncSockets.ReadMaxBytes 默认 1 MB，避免快速或无尽上传在 OnRead 执行前填满进程内存。",
+      "THttpPeerCache 迁移到 mormot.net.peercache；THttpApiServer 与 THttpApiWebSocketServer 迁移到 mormot.net.server.win，直接用户必须更新 uses 子句。",
+      "含 opaque=\"\" 等空可选值的 Digest challenge 现在会生成 Authorization header，不再停留在 401 循环。",
+      "Delphi POSIX TOSLightLock 现在使用不可递归 pthread mutex，并应与指针对齐后续修复一起采用。",
+      "异步 Date 生成、延迟 AsyncResponse 处理以及 TLoggedThread.WaitFinished 都获得了针对性正确性修复。"
+    ],
+    "ru": [
+      "TPollAsyncSockets.ReadMaxBytes по умолчанию равен 1 МБ и не позволяет быстрым или бесконечным загрузкам заполнить память до вызова OnRead.",
+      "THttpPeerCache перенесён в mormot.net.peercache, а THttpApiServer и THttpApiWebSocketServer — в mormot.net.server.win; прямым пользователям нужно обновить uses.",
+      "Digest challenge с пустым необязательным значением вроде opaque=\"\" теперь создаёт заголовок Authorization вместо цикла ответов 401.",
+      "В Delphi POSIX TOSLightLock теперь использует нерекурсивный pthread mutex; изменение следует брать вместе с исправлением выравнивания.",
+      "Генерация Date в async-сервере, отложенный AsyncResponse и TLoggedThread.WaitFinished получили отдельные исправления корректности."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "For this batch, land on merged head 751c1a03af59f7b3d9a2430f18f9e93d766592f5 at 2.4.17963. Do not take the mormot.net.server.win extraction without the later 9f810c80 conditional fix, and take the Delphi POSIX lock change together with c280a10c alignment. Update affected uses clauses, rebuild every Delphi/FPC target, and stress async uploads, Date headers and delayed responses.",
+    "fr": "Pour ce lot, prenez la tête fusionnée 751c1a03af59f7b3d9a2430f18f9e93d766592f5 en 2.4.17963. Ne prenez pas l'extraction mormot.net.server.win sans le correctif conditionnel 9f810c80, et associez le verrou Delphi POSIX au correctif d'alignement c280a10c. Adaptez les clauses uses, recompilez chaque cible Delphi/FPC et stressez uploads async, headers Date et réponses différées.",
+    "zh": "本批次应落在已合并头部 751c1a03af59f7b3d9a2430f18f9e93d766592f5（2.4.17963）。不要在缺少后续 9f810c80 条件修复时采用 mormot.net.server.win 迁移；Delphi POSIX 锁变更应与 c280a10c 对齐修复一起采用。更新受影响 uses 子句，重新构建所有 Delphi/FPC target，并压力测试异步上传、Date header 与延迟 response。",
+    "ru": "Для этого набора выбирайте слитую вершину 751c1a03af59f7b3d9a2430f18f9e93d766592f5 версии 2.4.17963. Не берите перенос mormot.net.server.win без последующего исправления условий 9f810c80, а изменение блокировки Delphi POSIX применяйте вместе с выравниванием c280a10c. Обновите uses, пересоберите все цели Delphi/FPC и нагрузочно проверьте async-загрузки, Date и отложенные ответы."
+  },
+  "upgrade": {
+    "avoid": [],
+    "order": [],
+    "still_moving": []
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Async HTTP correctness",
+        "fr": "Fiabilité HTTP asynchrone",
+        "zh": "异步 HTTP 正确性",
+        "ru": "Корректность async HTTP"
+      },
+      "summary": {
+        "en": "Five commits bound per-connection reads, serialize cached Date headers, initialize the global Date cache, repair delayed responses and align suffix-range fallback behavior.",
+        "fr": "Cinq commits bornent les lectures par connexion, sérialisent le header Date en cache, initialisent le cache Date global, réparent les réponses différées et alignent le fallback des ranges suffixes.",
+        "zh": "五个提交限制每连接读取、串行化缓存 Date header、初始化全局 Date 缓存、修复延迟 response，并统一 suffix range 回退行为。",
+        "ru": "Пять коммитов ограничивают чтение на соединение, сериализуют кэш Date, инициализируют глобальный Date, исправляют отложенные ответы и согласуют fallback suffix range."
+      },
+      "shas": [
+        "57ff422af27736f3260cda713a74bd587bfaf54e",
+        "4624eda3901a2d45f49e090ecc7d3bd4711f7530",
+        "7ba6029d41e5282d9db281f1e81ccdfa052fd3af",
+        "18fb44d12634e18ac7213b27ba6d55d5444e1ee8",
+        "544119934f532e730c91dfe554b2d779b3690e79"
+      ]
+    },
+    {
+      "title": {
+        "en": "Network units split by responsibility",
+        "fr": "Les unités réseau se séparent par responsabilité",
+        "zh": "网络单元按职责拆分",
+        "ru": "Сетевые модули разделены по назначению"
+      },
+      "summary": {
+        "en": "Peer-cache and Windows http.sys declarations leave mormot.net.server for dedicated units. A same-day follow-up corrects the USEHTTPSYS boundary for the new Windows unit.",
+        "fr": "Les déclarations peer cache et Windows http.sys quittent mormot.net.server pour des unités dédiées. Un correctif du même jour rétablit la frontière USEHTTPSYS de la nouvelle unité Windows.",
+        "zh": "Peer cache 与 Windows http.sys 声明从 mormot.net.server 迁移到专用单元；同日后续修复纠正新 Windows 单元的 USEHTTPSYS 边界。",
+        "ru": "Объявления peer cache и Windows http.sys вынесены из mormot.net.server в отдельные модули. Исправление того же дня корректирует границу USEHTTPSYS нового Windows-модуля."
+      },
+      "shas": [
+        "506dd5c2ea93faa110da8c231b98966152499cf1",
+        "653e2fd872d9a721328af1d5f91014b7ef19018b",
+        "9f810c80e2c6e17a165423a5c57e5ad96090fdeb"
+      ]
+    },
+    {
+      "title": {
+        "en": "Direct tunnels share the encrypted path",
+        "fr": "Les tunnels directs partagent le chemin chiffré",
+        "zh": "Direct tunnel 共用加密路径",
+        "ru": "Direct tunnel использует общий шифрованный путь"
+      },
+      "summary": {
+        "en": "OpenDirect and SendData add a portless in-process endpoint while retaining the authenticated AES-GCM tunnel. A dedicated regression test covers binary traffic in both directions.",
+        "fr": "OpenDirect et SendData ajoutent un endpoint en mémoire sans port tout en conservant le tunnel AES-GCM authentifié. Un test dédié couvre le trafic binaire dans les deux sens.",
+        "zh": "OpenDirect 与 SendData 新增无端口进程内 endpoint，同时保留已认证 AES-GCM tunnel；专用回归测试覆盖双向二进制流量。",
+        "ru": "OpenDirect и SendData добавляют внутрипроцессный endpoint без порта, сохраняя аутентифицированный AES-GCM tunnel. Отдельный тест проверяет двунаправленный binary-трафик."
+      },
+      "shas": [
+        "a2b3264ba074a4a87c675e8b372ebad87b469e48",
+        "05fed0b17f3da997ccc7b7c92bf1180fa8085953",
+        "fd983d13fe8346f38fd651fb988de042363f64a0"
+      ]
+    }
+  ],
+  "notes": {
+    "en": "All 21 non-merge commits are covered; eight merge commits need no separate entries. The raw payload contains no superseded_by data, so upgrade.still_moving is empty and no later successor outside this edition is claimed. Version include bookkeeping was ignored. The full mormot.net.tunnel source was inspected at a2b3264ba074a4a87c675e8b372ebad87b469e48 to confirm the OpenDirect and SendData contracts.",
+    "fr": "Les 21 commits non-merge sont couverts ; les huit commits de merge ne nécessitent pas d'entrée séparée. Le payload brut ne contient aucune donnée superseded_by ; upgrade.still_moving reste donc vide et aucun successeur extérieur à l'édition n'est affirmé. Les includes de version ont été ignorés. La source complète de mormot.net.tunnel a été lue au commit a2b3264ba074a4a87c675e8b372ebad87b469e48 pour confirmer les contrats OpenDirect et SendData.",
+    "zh": "已覆盖全部 21 个非 merge 提交；8 个 merge 提交无需单独条目。原始 payload 不含 superseded_by 数据，因此 upgrade.still_moving 为空，也不声称本期之外存在后续替代提交。版本 include 记账已忽略。为确认 OpenDirect 与 SendData 契约，已检查提交 a2b3264ba074a4a87c675e8b372ebad87b469e48 的完整 mormot.net.tunnel 源码。",
+    "ru": "Покрыты все 21 non-merge коммита; восемь merge-коммитов не требуют отдельных записей. В raw payload нет superseded_by, поэтому upgrade.still_moving пуст и не заявляется преемник за пределами выпуска. Служебные version include проигнорированы. Полный исходник mormot.net.tunnel проверен на a2b3264ba074a4a87c675e8b372ebad87b469e48 для подтверждения контрактов OpenDirect и SendData."
+  },
+  "entries": [
+    {
+      "sha": "57ff422af27736f3260cda713a74bd587bfaf54e",
+      "headline": {
+        "en": "Async reads are capped before request processing",
+        "fr": "Les lectures asynchrones sont plafonnées avant le traitement",
+        "zh": "异步读取在请求处理前受到上限控制",
+        "ru": "Асинхронное чтение ограничено до обработки запроса"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TPollAsyncSockets gains the public ReadMaxBytes property, initialized to 1 MB. ProcessRead now stops its recv loop when the next 32 KB block would cross that limit, calls OnRead, and leaves remaining input in the socket buffer for the next notification. A regression test streams a 16 MB HTTP body and checks the largest block delivered to the download stream.",
+        "fr": "TPollAsyncSockets reçoit la propriété publique ReadMaxBytes, initialisée à 1 Mo. ProcessRead arrête maintenant sa boucle recv lorsque le prochain bloc de 32 Ko dépasserait cette limite, appelle OnRead et laisse le reste dans le buffer socket pour la notification suivante. Un test de régression transmet un corps HTTP de 16 Mo et contrôle le plus gros bloc livré au stream de téléchargement.",
+        "zh": "TPollAsyncSockets 新增公共属性 ReadMaxBytes，默认值为 1 MB。ProcessRead 会在下一个 32 KB 块将超过该限制时停止 recv 循环，调用 OnRead，并将剩余输入留在 socket 缓冲区等待下一次通知。回归测试传输 16 MB HTTP body，并检查写入下载 stream 的最大块。",
+        "ru": "В TPollAsyncSockets добавлено публичное свойство ReadMaxBytes со значением 1 МБ по умолчанию. ProcessRead останавливает цикл recv, если следующий блок 32 КБ превысит предел, вызывает OnRead и оставляет остаток во входном буфере сокета до следующего уведомления. Регрессионный тест передаёт HTTP body размером 16 МБ и проверяет максимальный блок записи в stream."
+      },
+      "impact": {
+        "en": "Fast clients can no longer make an async HTTP connection accumulate an entire large or endless body before OnBodyDownload and MaximumAllowedContentLength run. The upstream measurements drop a 300 MB upload from 562 MB peak RSS to about 8 MB. Delphi and FPC servers inherit the 1 MB default; applications can tune ReadMaxBytes if their latency and throughput profile needs another block size.",
+        "fr": "Un client rapide ne peut plus faire accumuler à une connexion HTTP asynchrone un corps volumineux ou sans fin avant l'exécution de OnBodyDownload et MaximumAllowedContentLength. Les mesures upstream font passer un upload de 300 Mo de 562 Mo de RSS maximal à environ 8 Mo. Les serveurs Delphi et FPC héritent de la valeur par défaut de 1 Mo ; ReadMaxBytes reste configurable.",
+        "zh": "快速客户端不再能让异步 HTTP 连接在执行 OnBodyDownload 和 MaximumAllowedContentLength 前缓存整个大型或无尽 body。上游测量中，300 MB 上传的峰值 RSS 从 562 MB 降到约 8 MB。Delphi/FPC server 默认使用 1 MB；应用可按延迟和吞吐需求调整 ReadMaxBytes。",
+        "ru": "Быстрый клиент больше не заставит асинхронное HTTP-соединение накопить большое или бесконечное body целиком до вызова OnBodyDownload и проверки MaximumAllowedContentLength. По измерениям upstream пик RSS для загрузки 300 МБ снизился с 562 МБ примерно до 8 МБ. Серверы Delphi и FPC получают предел 1 МБ по умолчанию; ReadMaxBytes можно настроить."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this fix for THttpAsyncServer deployments that accept large or untrusted request bodies. Exercise streaming uploads and any custom TPollAsyncSockets.ReadMaxBytes value under both socket polling and IOCP targets.",
+        "fr": "Prenez ce correctif pour les déploiements THttpAsyncServer acceptant des corps volumineux ou non fiables. Testez les uploads en streaming et toute valeur personnalisée de TPollAsyncSockets.ReadMaxBytes avec les cibles socket polling et IOCP.",
+        "zh": "接受大型或不可信 request body 的 THttpAsyncServer 部署应采用此修复。请在 socket polling 和 IOCP target 上测试流式上传及自定义 TPollAsyncSockets.ReadMaxBytes。",
+        "ru": "Установите исправление в развёртываниях THttpAsyncServer, принимающих большие или недоверенные request body. Проверьте потоковые загрузки и пользовательское значение TPollAsyncSockets.ReadMaxBytes на socket polling и IOCP."
+      },
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TPollAsyncSockets.ReadMaxBytes",
+          "change": "added",
+          "note": {
+            "en": "Sets the maximum bytes buffered by ProcessRead between OnRead calls; the default is 1 MB.",
+            "fr": "Définit le maximum d'octets mis en buffer par ProcessRead entre deux appels à OnRead ; la valeur par défaut est 1 Mo.",
+            "zh": "设置 ProcessRead 在两次 OnRead 调用之间可缓存的最大字节数；默认值为 1 MB。",
+            "ru": "Задаёт максимум байтов, буферизуемых ProcessRead между вызовами OnRead; по умолчанию 1 МБ."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "506dd5c2ea93faa110da8c231b98966152499cf1",
+      "headline": {
+        "en": "Peer-cache types move out of mormot.net.server",
+        "fr": "Les types de peer cache quittent mormot.net.server",
+        "zh": "Peer cache 类型移出 mormot.net.server",
+        "ru": "Типы peer cache вынесены из mormot.net.server"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "The complete THttpPeerCache section, including THttpPeerCrypt and its initialization assertion, moves unchanged from mormot.net.server to the new mormot.net.peercache unit. Lazarus package metadata, the mormot2 umbrella unit, mget, tests and documentation now import or list the new unit.",
+        "fr": "La section THttpPeerCache complète, dont THttpPeerCrypt et son assertion d'initialisation, passe sans modification de mormot.net.server à la nouvelle unité mormot.net.peercache. Le package Lazarus, l'unité parapluie mormot2, mget, les tests et la documentation importent ou listent maintenant la nouvelle unité.",
+        "zh": "完整的 THttpPeerCache 部分（包括 THttpPeerCrypt 及其初始化断言）从 mormot.net.server 原样迁移到新的 mormot.net.peercache 单元。Lazarus package、mormot2 总入口单元、mget、测试和文档现已导入或列出新单元。",
+        "ru": "Весь раздел THttpPeerCache, включая THttpPeerCrypt и проверку инициализации, без изменений перенесён из mormot.net.server в новый модуль mormot.net.peercache. Пакет Lazarus, агрегирующий модуль mormot2, mget, тесты и документация теперь подключают или перечисляют новый модуль."
+      },
+      "impact": {
+        "en": "Delphi and FPC application units that list only mormot.net.server and directly reference peer-cache declarations will stop compiling until mormot.net.peercache is added to uses. Code that imports the mormot2 umbrella unit receives it automatically. The move is described and shown as structural, with no peer protocol or cache behavior change.",
+        "fr": "Les unités applicatives Delphi et FPC qui listent seulement mormot.net.server et référencent directement les déclarations de peer cache ne compileront plus avant l'ajout de mormot.net.peercache à uses. Le code important l'unité parapluie mormot2 la reçoit automatiquement. Le déplacement est structurel, sans changement du protocole peer ni du comportement du cache.",
+        "zh": "仅列出 mormot.net.server 并直接引用 peer cache 声明的 Delphi/FPC 应用单元将无法编译，直到在 uses 中加入 mormot.net.peercache。导入 mormot2 总入口单元的代码会自动获得它。该变更是结构迁移，不改变 peer 协议或 cache 行为。",
+        "ru": "Модули приложений Delphi и FPC, подключающие только mormot.net.server и напрямую использующие объявления peer cache, перестанут компилироваться до добавления mormot.net.peercache в uses. Код с агрегирующим модулем mormot2 получает его автоматически. Это структурный перенос без изменения peer-протокола или поведения кэша."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search uses clauses and qualified references for THttpPeerCache and THttpPeerCrypt. Add mormot.net.peercache to every affected unit, then rebuild Delphi, FPC and Lazarus package targets.",
+        "fr": "Recherchez THttpPeerCache et THttpPeerCrypt dans les clauses uses et les références qualifiées. Ajoutez mormot.net.peercache à chaque unité concernée, puis recompilez les cibles Delphi, FPC et les packages Lazarus.",
+        "zh": "在 uses 子句和限定引用中查找 THttpPeerCache 与 THttpPeerCrypt。为每个受影响单元加入 mormot.net.peercache，然后重新构建 Delphi、FPC 和 Lazarus package target。",
+        "ru": "Найдите THttpPeerCache и THttpPeerCrypt в секциях uses и квалифицированных ссылках. Добавьте mormot.net.peercache во все затронутые модули и пересоберите цели Delphi, FPC и пакеты Lazarus."
+      },
+      "units": [
+        "mormot.net.peercache",
+        "mormot.net.server",
+        "mormot.tools.mget"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpPeerCache",
+          "change": "removed",
+          "note": {
+            "en": "The type is no longer declared by mormot.net.server; it is declared by mormot.net.peercache.",
+            "fr": "Le type n'est plus déclaré par mormot.net.server ; il l'est par mormot.net.peercache.",
+            "zh": "该类型不再由 mormot.net.server 声明，而由 mormot.net.peercache 声明。",
+            "ru": "Тип больше не объявляется в mormot.net.server; теперь он объявлен в mormot.net.peercache."
+          }
+        },
+        {
+          "symbol": "THttpPeerCrypt",
+          "change": "removed",
+          "note": {
+            "en": "The peer-cache frame type moves with THttpPeerCache to mormot.net.peercache.",
+            "fr": "Le type de frame peer cache passe avec THttpPeerCache dans mormot.net.peercache.",
+            "zh": "Peer cache frame 类型随 THttpPeerCache 迁移到 mormot.net.peercache。",
+            "ru": "Тип кадров peer cache перенесён вместе с THttpPeerCache в mormot.net.peercache."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "653e2fd872d9a721328af1d5f91014b7ef19018b",
+      "headline": {
+        "en": "Windows http.sys servers move to mormot.net.server.win",
+        "fr": "Les serveurs Windows http.sys passent dans mormot.net.server.win",
+        "zh": "Windows http.sys server 迁移到 mormot.net.server.win",
+        "ru": "Серверы Windows http.sys перенесены в mormot.net.server.win"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "The THttpApiServer and THttpApiWebSocketServer interface and implementation sections move from mormot.net.server to the new mormot.net.server.win unit. Framework consumers, package metadata, tests and documentation add the new unit. Request code reaches the same server instance through the existing api field instead of the former cross-unit protected access.",
+        "fr": "Les sections interface et implémentation de THttpApiServer et THttpApiWebSocketServer passent de mormot.net.server à la nouvelle unité mormot.net.server.win. Les consommateurs du framework, les packages, les tests et la documentation ajoutent la nouvelle unité. Le code de requête atteint la même instance serveur via le champ api existant plutôt que par l'ancien accès protected entre unités.",
+        "zh": "THttpApiServer 和 THttpApiWebSocketServer 的 interface 与 implementation 部分从 mormot.net.server 迁移到新的 mormot.net.server.win 单元。框架调用方、package metadata、测试和文档都加入了新单元。request 代码通过现有 api 字段访问同一 server instance，不再使用跨单元 protected 访问。",
+        "ru": "Разделы interface и implementation для THttpApiServer и THttpApiWebSocketServer перенесены из mormot.net.server в новый модуль mormot.net.server.win. Потребители фреймворка, пакеты, тесты и документация подключают новый модуль. Код запроса обращается к тому же экземпляру сервера через существующее поле api вместо прежнего межмодульного protected-доступа."
+      },
+      "impact": {
+        "en": "Windows Delphi and FPC code that imports only mormot.net.server for http.sys classes will fail to compile until mormot.net.server.win is added. POSIX builds see a void unit. Runtime http.sys behavior is intended to remain unchanged, but the later conditional fix in 9f810c80e2c6e17a165423a5c57e5ad96090fdeb belongs with this extraction.",
+        "fr": "Le code Windows Delphi et FPC qui importe uniquement mormot.net.server pour les classes http.sys ne compilera plus avant l'ajout de mormot.net.server.win. Sous POSIX, l'unité est vide. Le comportement runtime http.sys doit rester identique, mais le correctif conditionnel ultérieur 9f810c80e2c6e17a165423a5c57e5ad96090fdeb doit accompagner cette extraction.",
+        "zh": "Windows Delphi/FPC 代码若只通过 mormot.net.server 使用 http.sys 类，将无法编译，直到加入 mormot.net.server.win。POSIX build 中该单元为空。http.sys 运行时行为应保持不变，但本次迁移应与后续条件修复 9f810c80e2c6e17a165423a5c57e5ad96090fdeb 一同采用。",
+        "ru": "Код Windows для Delphi и FPC, импортирующий классы http.sys только через mormot.net.server, перестанет компилироваться до добавления mormot.net.server.win. В POSIX модуль пуст. Поведение http.sys во время выполнения должно сохраниться, но перенос следует брать вместе с последующим исправлением условий 9f810c80e2c6e17a165423a5c57e5ad96090fdeb."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for THttpApiServer, THttpApiWebSocketServer and mormot.net.server in application uses clauses. Add mormot.net.server.win on Windows http.sys paths and take the later 9f810c80 conditional correction before rebuilding.",
+        "fr": "Recherchez THttpApiServer, THttpApiWebSocketServer et mormot.net.server dans les clauses uses applicatives. Ajoutez mormot.net.server.win sur les chemins Windows http.sys et prenez le correctif conditionnel ultérieur 9f810c80 avant de recompiler.",
+        "zh": "在应用 uses 子句中查找 THttpApiServer、THttpApiWebSocketServer 和 mormot.net.server。为 Windows http.sys 路径加入 mormot.net.server.win，并在重新构建前包含后续 9f810c80 条件修复。",
+        "ru": "Найдите THttpApiServer, THttpApiWebSocketServer и mormot.net.server в секциях uses приложения. Добавьте mormot.net.server.win для путей Windows http.sys и включите последующее исправление условий 9f810c80 перед пересборкой."
+      },
+      "units": [
+        "mormot.net.server",
+        "mormot.net.server.win",
+        "mormot.db.proxy",
+        "mormot.rest.http.server"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpApiServer",
+          "change": "removed",
+          "note": {
+            "en": "The public type moves from mormot.net.server to mormot.net.server.win.",
+            "fr": "Le type public passe de mormot.net.server à mormot.net.server.win.",
+            "zh": "该公共类型从 mormot.net.server 迁移到 mormot.net.server.win。",
+            "ru": "Публичный тип перенесён из mormot.net.server в mormot.net.server.win."
+          }
+        },
+        {
+          "symbol": "THttpApiWebSocketServer",
+          "change": "removed",
+          "note": {
+            "en": "The public type moves from mormot.net.server to mormot.net.server.win.",
+            "fr": "Le type public passe de mormot.net.server à mormot.net.server.win.",
+            "zh": "该公共类型从 mormot.net.server 迁移到 mormot.net.server.win。",
+            "ru": "Публичный тип перенесён из mormot.net.server в mormot.net.server.win."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9f810c80e2c6e17a165423a5c57e5ad96090fdeb",
+      "headline": {
+        "en": "http.sys extraction now follows the right feature flag",
+        "fr": "L'extraction http.sys suit maintenant le bon flag",
+        "zh": "http.sys 迁移现在使用正确的功能标志",
+        "ru": "Перенос http.sys теперь использует правильный флаг"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "mormot.net.server.win now wraps its content with USEHTTPSYS instead of USEWININET and supplies a valid empty implementation otherwise. Stale WinHTTP imports are removed from mormot.net.server and mormot.net.peercache. Tests switch their http.sys uses and methods to USEHTTPSYS while keeping USEWININET only where the WinHTTP client is required.",
+        "fr": "mormot.net.server.win entoure maintenant son contenu avec USEHTTPSYS au lieu de USEWININET et fournit sinon une implémentation vide valide. Les imports WinHTTP obsolètes sont retirés de mormot.net.server et mormot.net.peercache. Les tests passent leurs uses et méthodes http.sys sous USEHTTPSYS, en gardant USEWININET uniquement pour le client WinHTTP.",
+        "zh": "mormot.net.server.win 现使用 USEHTTPSYS 而不是 USEWININET 包围其内容，并在其他情况下提供有效的空 implementation。mormot.net.server 与 mormot.net.peercache 中过时的 WinHTTP import 被移除。测试中的 http.sys uses 与方法改用 USEHTTPSYS，仅在需要 WinHTTP client 时保留 USEWININET。",
+        "ru": "Содержимое mormot.net.server.win теперь защищено USEHTTPSYS вместо USEWININET, а для остальных конфигураций дан корректный пустой implementation. Устаревшие импорты WinHTTP удалены из mormot.net.server и mormot.net.peercache. Тесты используют USEHTTPSYS для http.sys, оставляя USEWININET только для клиента WinHTTP."
+      },
+      "impact": {
+        "en": "Builds whose WinHTTP client and http.sys server selections differ no longer expose or hide the new Windows server unit under the wrong define. This is especially relevant after the unit extraction: without it, valid Windows configurations could compile the wrong surface or fail. POSIX remains a void-unit path.",
+        "fr": "Les builds où les sélections du client WinHTTP et du serveur http.sys diffèrent n'exposent ou ne masquent plus la nouvelle unité serveur Windows sous le mauvais define. C'est particulièrement important après l'extraction : sans ce correctif, des configurations Windows valides pouvaient compiler la mauvaise surface ou échouer. POSIX conserve une unité vide.",
+        "zh": "当 WinHTTP client 与 http.sys server 的选择不同时，新 Windows server 单元不再因错误 define 而被错误公开或隐藏。单元迁移后这一点尤其重要；缺少该修复时，有效 Windows 配置可能编译错误 surface 或直接失败。POSIX 仍走空单元路径。",
+        "ru": "В сборках, где выбор клиента WinHTTP и сервера http.sys различается, новый Windows-модуль больше не открывается и не скрывается по неверному define. Это особенно важно после переноса: без исправления корректные конфигурации Windows могли получить неверный API или ошибку компиляции. Для POSIX модуль остаётся пустым."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Do not adopt the mormot.net.server.win extraction without this commit. Rebuild configurations with USEHTTPSYS enabled, disabled, and combined with USEWININET.",
+        "fr": "N'adoptez pas l'extraction mormot.net.server.win sans ce commit. Recompilez les configurations avec USEHTTPSYS activé, désactivé et combiné à USEWININET.",
+        "zh": "不要在缺少此提交的情况下采用 mormot.net.server.win 迁移。请重新构建 USEHTTPSYS 启用、禁用以及与 USEWININET 组合的配置。",
+        "ru": "Не применяйте перенос mormot.net.server.win без этого коммита. Пересоберите конфигурации с включённым и выключенным USEHTTPSYS, а также в сочетании с USEWININET."
+      },
+      "units": [
+        "mormot.net.server.win",
+        "mormot.net.server",
+        "mormot.net.peercache"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d5b3c6018608f87dfad4f9bc5fa08fc70c639da4",
+      "headline": {
+        "en": "Digest authentication accepts empty quoted parameters",
+        "fr": "Digest accepte les paramètres quotés vides",
+        "zh": "Digest 认证接受空的引号参数",
+        "ru": "Digest-аутентификация принимает пустые параметры"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TDigestProcess.Parse no longer rejects an empty value returned by GetNextItem, so valid fields such as opaque=\"\" remain in the parsed challenge. DigestServerAuth still rejects empty mandatory client fields. Regression tests use two real IP-camera challenge layouts and verify the generated RFC 7616 response digest.",
+        "fr": "TDigestProcess.Parse ne rejette plus une valeur vide renvoyée par GetNextItem ; les champs valides comme opaque=\"\" restent donc dans le challenge parsé. DigestServerAuth continue de rejeter les champs client obligatoires vides. Les tests reprennent deux challenges réels de caméras IP et vérifient le digest de réponse RFC 7616.",
+        "zh": "TDigestProcess.Parse 不再拒绝 GetNextItem 返回的空值，因此 opaque=\"\" 等有效字段会保留在解析后的 challenge 中。DigestServerAuth 仍会拒绝为空的必填 client 字段。回归测试使用两种真实 IP camera challenge 布局，并验证生成的 RFC 7616 response digest。",
+        "ru": "TDigestProcess.Parse больше не отклоняет пустое значение из GetNextItem, поэтому допустимые поля вроде opaque=\"\" сохраняются в разобранном challenge. DigestServerAuth по-прежнему отклоняет пустые обязательные поля клиента. Регрессионные тесты используют два реальных challenge от IP-камер и проверяют digest ответа RFC 7616."
+      },
+      "impact": {
+        "en": "THttpClientSocket.AuthorizeDigest can now send an Authorization header to devices that advertise an empty optional Digest parameter, instead of returning an empty result and remaining in a 401 loop. Existing server-side validation of mandatory fields is unchanged. The behavior applies to Delphi and FPC clients.",
+        "fr": "THttpClientSocket.AuthorizeDigest peut maintenant envoyer un header Authorization aux appareils annonçant un paramètre Digest optionnel vide, au lieu de renvoyer un résultat vide et de rester dans une boucle 401. La validation serveur des champs obligatoires ne change pas. Le comportement concerne les clients Delphi et FPC.",
+        "zh": "THttpClientSocket.AuthorizeDigest 现在可向声明空可选 Digest 参数的设备发送 Authorization header，不再返回空结果并陷入 401 循环。server 端必填字段验证不变。该行为适用于 Delphi/FPC client。",
+        "ru": "THttpClientSocket.AuthorizeDigest теперь может отправить заголовок Authorization устройствам с пустым необязательным параметром Digest вместо пустого результата и бесконечных ответов 401. Серверная проверка обязательных полей не изменилась. Исправление действует для клиентов Delphi и FPC."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the fix when using Digest authentication with cameras or embedded HTTP devices. Retest challenges containing opaque=\"\" and confirm the generated Authorization header against the device.",
+        "fr": "Prenez le correctif si vous utilisez Digest avec des caméras ou appareils HTTP embarqués. Retestez les challenges contenant opaque=\"\" et confirmez le header Authorization généré avec l'appareil.",
+        "zh": "使用 camera 或嵌入式 HTTP 设备的 Digest 认证时应采用此修复。重新测试包含 opaque=\"\" 的 challenge，并在设备上确认生成的 Authorization header。",
+        "ru": "Установите исправление при Digest-аутентификации с камерами и встроенными HTTP-устройствами. Повторите тест challenge с opaque=\"\" и проверьте созданный заголовок Authorization на устройстве."
+      },
+      "units": [
+        "mormot.crypt.secure"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TDigestProcess.Parse",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "An empty quoted auth-param is accepted; mandatory field checks remain in DigestServerAuth.",
+            "fr": "Un auth-param quoté vide est accepté ; les contrôles des champs obligatoires restent dans DigestServerAuth.",
+            "zh": "现在接受空的引号 auth-param；必填字段检查仍由 DigestServerAuth 执行。",
+            "ru": "Пустой quoted auth-param теперь принимается; проверки обязательных полей остаются в DigestServerAuth."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4624eda3901a2d45f49e090ecc7d3bd4711f7530",
+      "headline": {
+        "en": "Async Date headers are protected from concurrent updates",
+        "fr": "Les headers Date asynchrones sont protégés des mises à jour concurrentes",
+        "zh": "异步 Date header 受并发更新保护",
+        "ru": "Асинхронный заголовок Date защищён от параллельного обновления"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpAsyncServer adds fHttpDateNowUtcSafe. IdleEverySecond locks while replacing the cached fHttpDateNowUtc buffer, and AppendHttpDate takes the same lock while appending it to a response.",
+        "fr": "THttpAsyncServer ajoute fHttpDateNowUtcSafe. IdleEverySecond verrouille le remplacement du buffer fHttpDateNowUtc en cache, et AppendHttpDate prend le même verrou pendant son ajout à une réponse.",
+        "zh": "THttpAsyncServer 新增 fHttpDateNowUtcSafe。IdleEverySecond 在替换缓存的 fHttpDateNowUtc buffer 时加锁，AppendHttpDate 在将其加入 response 时使用同一锁。",
+        "ru": "В THttpAsyncServer добавлена fHttpDateNowUtcSafe. IdleEverySecond блокирует замену кэшированного буфера fHttpDateNowUtc, а AppendHttpDate берёт ту же блокировку при добавлении буфера в ответ."
+      },
+      "impact": {
+        "en": "Concurrent async responses can no longer read the cached Date header while the idle thread rewrites it. This removes the reported race and the possibility of a torn or inconsistent HTTP Date line. Application APIs and both Delphi/FPC call sites remain unchanged.",
+        "fr": "Les réponses asynchrones concurrentes ne peuvent plus lire le header Date en cache pendant sa réécriture par le thread idle. Cela supprime la race signalée et le risque de ligne HTTP Date partielle ou incohérente. Les API applicatives et les appels Delphi/FPC ne changent pas.",
+        "zh": "并发异步 response 不再能在 idle thread 重写缓存 Date header 时读取它，从而消除已报告的竞态以及 HTTP Date 行撕裂或不一致的风险。应用 API 及 Delphi/FPC 调用方式不变。",
+        "ru": "Параллельные асинхронные ответы больше не читают кэшированный заголовок Date одновременно с его перезаписью idle-потоком. Устранена заявленная гонка и риск частичной или несогласованной строки HTTP Date. API приложения и вызовы Delphi/FPC не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this fix for concurrent THttpAsyncServer deployments, especially when hsoIncludeDateHeader is enabled. Stress parallel responses across second boundaries.",
+        "fr": "Prenez ce correctif pour les déploiements THttpAsyncServer concurrents, surtout avec hsoIncludeDateHeader activé. Testez de nombreuses réponses parallèles au changement de seconde.",
+        "zh": "并发 THttpAsyncServer 部署应采用此修复，尤其是启用 hsoIncludeDateHeader 时。请跨秒边界压力测试并行 response。",
+        "ru": "Установите исправление для параллельных THttpAsyncServer, особенно при включённом hsoIncludeDateHeader. Проведите нагрузочный тест ответов на границах секунд."
+      },
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7ba6029d41e5282d9db281f1e81ccdfa052fd3af",
+      "headline": {
+        "en": "HttpDateNowUtc initializes its cache before first use",
+        "fr": "HttpDateNowUtc initialise son cache avant le premier usage",
+        "zh": "HttpDateNowUtc 在首次使用前初始化缓存",
+        "ru": "HttpDateNowUtc инициализирует кэш до первого использования"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "HttpDateNowUtc now initializes the shared Value buffer under its lock when Value[0] is zero. Later refreshes compute a temporary value outside the lock and publish it only if the cached tick still matches, preventing obsolete calculations from overwriting newer data.",
+        "fr": "HttpDateNowUtc initialise maintenant le buffer Value partagé sous verrou lorsque Value[0] vaut zéro. Les rafraîchissements suivants calculent une valeur temporaire hors verrou et ne la publient que si le tick en cache correspond encore, ce qui empêche un calcul obsolète d'écraser une donnée plus récente.",
+        "zh": "当 Value[0] 为零时，HttpDateNowUtc 现在会在锁内初始化共享 Value buffer。后续刷新在锁外计算临时值，仅当缓存 tick 仍匹配时才发布，避免旧计算覆盖较新数据。",
+        "ru": "HttpDateNowUtc теперь инициализирует общий буфер Value под блокировкой, если Value[0] равен нулю. Последующие обновления вычисляют временное значение вне блокировки и публикуют его, только если tick кэша ещё совпадает, не позволяя устаревшему вычислению затереть новое."
+      },
+      "impact": {
+        "en": "The first call at process startup no longer risks returning an empty HTTP Date value, and concurrent refreshes cannot publish an older computation over a newer tick. Existing Delphi and FPC code keeps the same HttpDateNowUtc signature.",
+        "fr": "Le premier appel au démarrage du processus ne risque plus de renvoyer une date HTTP vide, et les rafraîchissements concurrents ne peuvent plus publier un ancien calcul sur un tick plus récent. Le code Delphi et FPC conserve la même signature HttpDateNowUtc.",
+        "zh": "进程启动时首次调用不再可能返回空 HTTP Date，并发刷新也不会用旧计算覆盖较新的 tick。现有 Delphi/FPC 代码继续使用相同的 HttpDateNowUtc 签名。",
+        "ru": "Первый вызов при запуске процесса больше не рискует вернуть пустую HTTP Date, а параллельные обновления не смогут опубликовать старое вычисление поверх нового tick. Сигнатура HttpDateNowUtc для Delphi и FPC не меняется."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the fix for servers that emit Date headers during startup. Add a cold-start request test if your health checks depend on the first response.",
+        "fr": "Prenez le correctif pour les serveurs qui émettent Date au démarrage. Ajoutez un test de première requête à froid si vos health checks dépendent de la première réponse.",
+        "zh": "启动时发送 Date header 的 server 应采用此修复。如果 health check 依赖首个 response，请加入冷启动首请求测试。",
+        "ru": "Установите исправление для серверов, отправляющих Date при запуске. Добавьте тест первого холодного запроса, если health check зависит от первого ответа."
+      },
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "api_changes": [
+        {
+          "symbol": "HttpDateNowUtc",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The cache is guaranteed to be initialized on the first call.",
+            "fr": "Le cache est garanti initialisé dès le premier appel.",
+            "zh": "首次调用时保证缓存已初始化。",
+            "ru": "Кэш гарантированно инициализируется при первом вызове."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "18fb44d12634e18ac7213b27ba6d55d5444e1ee8",
+      "headline": {
+        "en": "Delayed async responses no longer pre-close on request flags",
+        "fr": "Les réponses async différées ne préferment plus selon le flag de requête",
+        "zh": "延迟异步 response 不再因 request flag 预先关闭",
+        "ru": "Отложенный async-ответ больше не закрывается заранее по флагу запроса"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpAsyncServer.AsyncResponse removes its local response-state selection and always calls c.DoResponse with soContinue. It no longer passes soClose merely because hfConnectionClose was present in the parsed request; DoResponse may still return soClose and trigger the existing close path.",
+        "fr": "THttpAsyncServer.AsyncResponse supprime sa sélection locale d'état et appelle toujours c.DoResponse avec soContinue. Il ne passe plus soClose uniquement parce que hfConnectionClose figurait dans la requête parsée ; DoResponse peut toujours renvoyer soClose et déclencher le chemin de fermeture existant.",
+        "zh": "THttpAsyncServer.AsyncResponse 移除本地 response state 选择，并始终以 soContinue 调用 c.DoResponse。它不再仅因解析后的 request 含 hfConnectionClose 就传入 soClose；DoResponse 仍可返回 soClose 并触发现有关闭路径。",
+        "ru": "THttpAsyncServer.AsyncResponse убирает локальный выбор состояния ответа и всегда вызывает c.DoResponse с soContinue. soClose больше не передаётся только из-за hfConnectionClose в разобранном запросе; DoResponse по-прежнему может вернуть soClose и запустить существующее закрытие."
+      },
+      "impact": {
+        "en": "Applications using delayed THttpAsyncServer.AsyncResponse avoid the reported premature close behavior tied to the request's Connection flag. Connection closure still follows DoResponse's result, so the change is confined to the asynchronous response path and requires no source migration.",
+        "fr": "Les applications utilisant THttpAsyncServer.AsyncResponse en différé évitent la fermeture prématurée signalée, liée au flag Connection de la requête. La fermeture suit toujours le résultat de DoResponse ; le changement reste limité au chemin de réponse asynchrone et ne demande aucune migration source.",
+        "zh": "使用延迟 THttpAsyncServer.AsyncResponse 的应用可避免与 request Connection flag 相关的已报告提前关闭。连接关闭仍由 DoResponse 结果决定；变更仅限异步 response 路径，无需源码迁移。",
+        "ru": "Приложения с отложенным THttpAsyncServer.AsyncResponse избегают заявленного преждевременного закрытия из-за флага Connection запроса. Закрытие по-прежнему определяется результатом DoResponse; изменение ограничено асинхронным путём ответа и не требует миграции исходников."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the fix if AsyncResponse serves deferred work. Retest keep-alive and Connection: close requests whose response is completed from another thread.",
+        "fr": "Prenez le correctif si AsyncResponse sert du travail différé. Retestez keep-alive et Connection: close lorsque la réponse est terminée depuis un autre thread.",
+        "zh": "若 AsyncResponse 用于延迟工作，请采用此修复。重新测试由另一 thread 完成 response 的 keep-alive 与 Connection: close request。",
+        "ru": "Установите исправление, если AsyncResponse завершает отложенную работу. Повторите тесты keep-alive и Connection: close, когда ответ завершается из другого потока."
+      },
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpAsyncServer.AsyncResponse",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "The method enters DoResponse with soContinue regardless of hfConnectionClose.",
+            "fr": "La méthode entre dans DoResponse avec soContinue, indépendamment de hfConnectionClose.",
+            "zh": "无论 hfConnectionClose 如何，该方法都以 soContinue 进入 DoResponse。",
+            "ru": "Метод вызывает DoResponse с soContinue независимо от hfConnectionClose."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d8a8b9650cfd97831d9821e7dec14d1617fb289a",
+      "headline": {
+        "en": "Delphi POSIX light locks become truly non-recursive",
+        "fr": "Les verrous légers Delphi POSIX deviennent réellement non récursifs",
+        "zh": "Delphi POSIX 轻量锁变为真正不可递归",
+        "ru": "Лёгкие блокировки Delphi POSIX стали нерекурсивными"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "On Delphi POSIX, TOSLightLock replaces the TRTLCriticalSection/TMonitor fallback with direct pthread_mutex_init, lock, trylock, unlock and destroy calls using default non-recursive attributes. The opaque TPosixLightMutex storage is sized for Linux and Darwin pthread_mutex_t, and the methods are not inlined because Posix.Pthread remains implementation-only.",
+        "fr": "Sous Delphi POSIX, TOSLightLock remplace le fallback TRTLCriticalSection/TMonitor par des appels directs à pthread_mutex_init, lock, trylock, unlock et destroy avec les attributs non récursifs par défaut. Le stockage opaque TPosixLightMutex est dimensionné pour pthread_mutex_t sous Linux et Darwin, et les méthodes ne sont pas inline car Posix.Pthread reste dans l'implémentation.",
+        "zh": "在 Delphi POSIX 上，TOSLightLock 用默认不可递归属性的 pthread_mutex_init、lock、trylock、unlock 与 destroy 直接调用替代 TRTLCriticalSection/TMonitor fallback。opaque TPosixLightMutex storage 可容纳 Linux/Darwin pthread_mutex_t；由于 Posix.Pthread 仅在 implementation 中，方法不再 inline。",
+        "ru": "В Delphi POSIX TOSLightLock заменяет fallback TRTLCriticalSection/TMonitor прямыми вызовами pthread_mutex_init, lock, trylock, unlock и destroy с нерекурсивными атрибутами по умолчанию. Непрозрачное хранилище TPosixLightMutex рассчитано на pthread_mutex_t Linux и Darwin; методы не inline, поскольку Posix.Pthread остаётся только в implementation."
+      },
+      "impact": {
+        "en": "TryLock from the owning thread now fails and a nested Lock can deadlock, matching the documented TOSLightLock contract and other targets. Windows and FPC are unchanged. Delphi Linux, macOS, Android and iOS code that accidentally relied on recursive behavior needs review, and the later alignment follow-up c280a10c6f05071273a741ae3e7f134860dcadab should be taken with this change.",
+        "fr": "TryLock depuis le thread propriétaire échoue maintenant et un Lock imbriqué peut deadlocker, conformément au contrat documenté de TOSLightLock et aux autres cibles. Windows et FPC ne changent pas. Le code Delphi Linux, macOS, Android ou iOS qui dépendait par erreur de la récursivité doit être revu, et le correctif d'alignement c280a10c6f05071273a741ae3e7f134860dcadab doit accompagner ce changement.",
+        "zh": "同一 owner thread 的 TryLock 现在会失败，嵌套 Lock 可能 deadlock，这与 TOSLightLock 文档契约及其他 target 一致。Windows 与 FPC 不变。误依赖递归行为的 Delphi Linux、macOS、Android、iOS 代码需检查，并应同时采用后续 alignment 修复 c280a10c6f05071273a741ae3e7f134860dcadab。",
+        "ru": "TryLock из владеющего потока теперь завершается неуспешно, а вложенный Lock может привести к deadlock, что соответствует документации TOSLightLock и другим целям. Windows и FPC не изменены. Код Delphi Linux, macOS, Android и iOS, ошибочно полагавшийся на рекурсивность, требует проверки; следует также взять последующее исправление выравнивания c280a10c6f05071273a741ae3e7f134860dcadab."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Audit Delphi POSIX paths for recursive TOSLightLock acquisition or a second TryLock by the owning thread, then test with the alignment follow-up c280a10c.",
+        "fr": "Auditez les chemins Delphi POSIX pour une acquisition récursive de TOSLightLock ou un second TryLock par le thread propriétaire, puis testez avec le correctif d'alignement c280a10c.",
+        "zh": "检查 Delphi POSIX 路径是否递归获取 TOSLightLock，或由 owner thread 再次 TryLock；随后连同 alignment 修复 c280a10c 一起测试。",
+        "ru": "Проверьте пути Delphi POSIX на рекурсивное получение TOSLightLock или повторный TryLock из владеющего потока, затем протестируйте вместе с исправлением выравнивания c280a10c."
+      },
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TOSLightLock",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Delphi POSIX now enforces the documented non-recursive semantics.",
+            "fr": "Delphi POSIX applique maintenant la sémantique non récursive documentée.",
+            "zh": "Delphi POSIX 现在强制执行文档规定的不可递归语义。",
+            "ru": "Delphi POSIX теперь обеспечивает документированную нерекурсивную семантику."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c280a10c6f05071273a741ae3e7f134860dcadab",
+      "headline": {
+        "en": "Delphi POSIX pthread storage gains pointer alignment",
+        "fr": "Le stockage pthread Delphi POSIX gagne un alignement pointeur",
+        "zh": "Delphi POSIX pthread storage 获得指针对齐",
+        "ru": "Хранилище pthread в Delphi POSIX выровнено по указателю"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPosixLightMutex changes from a 64-byte array to a record containing a pointer followed by seven PtrUInt values. The size remains sufficient for pthread_mutex_t while the record now carries pointer alignment.",
+        "fr": "TPosixLightMutex passe d'un tableau de 64 octets à un record contenant un pointer puis sept PtrUInt. La taille reste suffisante pour pthread_mutex_t, avec désormais un alignement de pointeur.",
+        "zh": "TPosixLightMutex 从 64 字节数组改为包含一个 pointer 和七个 PtrUInt 的 record。其大小仍足以容纳 pthread_mutex_t，同时获得指针对齐。",
+        "ru": "TPosixLightMutex изменён с массива 64 байт на record с pointer и семью PtrUInt. Размер по-прежнему достаточен для pthread_mutex_t, но теперь обеспечено выравнивание по указателю."
+      },
+      "impact": {
+        "en": "The direct pthread mutex introduced for Delphi POSIX is no longer placed in byte-aligned storage. This is a correctness follow-up for Linux and Darwin targets; Windows and FPC layouts are unaffected, and application source does not change.",
+        "fr": "Le mutex pthread direct introduit pour Delphi POSIX n'est plus placé dans un stockage aligné sur un octet. C'est un correctif de sûreté pour les cibles Linux et Darwin ; les layouts Windows et FPC ne changent pas, ni le code applicatif.",
+        "zh": "为 Delphi POSIX 引入的直接 pthread mutex 不再放入仅按字节对齐的 storage。这是 Linux/Darwin target 的正确性补丁；Windows/FPC layout 与应用源码不变。",
+        "ru": "Прямой pthread mutex для Delphi POSIX больше не размещается в хранилище с байтовым выравниванием. Это корректирующее дополнение для Linux и Darwin; layout Windows и FPC и исходники приложения не меняются."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this commit together with d8a8b965 on every Delphi POSIX target using TOSLightLock, then run lock and contention tests.",
+        "fr": "Prenez ce commit avec d8a8b965 sur chaque cible Delphi POSIX utilisant TOSLightLock, puis exécutez les tests de verrouillage et de contention.",
+        "zh": "所有使用 TOSLightLock 的 Delphi POSIX target 都应将此提交与 d8a8b965 一起采用，然后运行锁与争用测试。",
+        "ru": "Возьмите этот коммит вместе с d8a8b965 для каждой цели Delphi POSIX с TOSLightLock и выполните тесты блокировок и конкуренции."
+      },
+      "units": [
+        "mormot.core.os"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "570c08a60bf10bd9031f48ac3ede938bf864eabb",
+      "headline": {
+        "en": "WaitFinished reports threads that already stopped",
+        "fr": "WaitFinished signale les threads déjà arrêtés",
+        "zh": "WaitFinished 正确报告已停止的 thread",
+        "ru": "WaitFinished сообщает об уже остановленном потоке"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TLoggedThread.WaitFinished now exits only for a nil instance, initializes Result to not fProcessing, and returns immediately when processing has already ended. The waiting path and timeout normalization remain unchanged.",
+        "fr": "TLoggedThread.WaitFinished ne sort maintenant immédiatement que pour une instance nil, initialise Result à not fProcessing et renvoie cette valeur quand le traitement est déjà terminé. Le chemin d'attente et la normalisation du timeout ne changent pas.",
+        "zh": "TLoggedThread.WaitFinished 现在仅在 instance 为 nil 时直接退出，将 Result 初始化为 not fProcessing，并在 processing 已结束时立即返回。等待路径和 timeout 规范化不变。",
+        "ru": "TLoggedThread.WaitFinished теперь немедленно выходит только для nil, устанавливает Result в not fProcessing и возвращает это значение, если обработка уже закончилась. Путь ожидания и нормализация timeout не изменены."
+      },
+      "impact": {
+        "en": "Callers no longer receive false when they ask about a TLoggedThread that is already finished. Delphi and FPC code using the Boolean result for shutdown or cleanup can now distinguish successful prior completion without another wait.",
+        "fr": "Les appelants ne reçoivent plus false lorsqu'ils interrogent un TLoggedThread déjà terminé. Le code Delphi et FPC utilisant le résultat Boolean pour l'arrêt ou le nettoyage reconnaît maintenant une terminaison antérieure réussie sans attente supplémentaire.",
+        "zh": "调用方查询已完成的 TLoggedThread 时不再得到 false。使用 Boolean 结果进行 shutdown 或 cleanup 的 Delphi/FPC 代码现在无需额外等待即可识别先前已成功完成。",
+        "ru": "Вызов больше не получает false для уже завершённого TLoggedThread. Код Delphi и FPC, использующий Boolean для shutdown или cleanup, теперь распознаёт ранее успешное завершение без дополнительного ожидания."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take the fix if shutdown logic branches on WaitFinished. Add a test that calls WaitFinished after fProcessing has already become false.",
+        "fr": "Prenez le correctif si la logique d'arrêt dépend de WaitFinished. Ajoutez un test appelant WaitFinished après le passage de fProcessing à false.",
+        "zh": "若 shutdown 逻辑依赖 WaitFinished，请采用此修复，并加入在 fProcessing 已变为 false 后调用 WaitFinished 的测试。",
+        "ru": "Установите исправление, если логика shutdown зависит от WaitFinished. Добавьте тест вызова WaitFinished после перехода fProcessing в false."
+      },
+      "units": [
+        "mormot.core.threads"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TLoggedThread.WaitFinished",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Returns true when the thread was already not processing.",
+            "fr": "Renvoie true lorsque le thread n'était déjà plus en traitement.",
+            "zh": "当 thread 已不再 processing 时返回 true。",
+            "ru": "Возвращает true, если поток уже не выполнял обработку."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a2b3264ba074a4a87c675e8b372ebad87b469e48",
+      "headline": {
+        "en": "Encrypted tunnels can connect directly in process",
+        "fr": "Les tunnels chiffrés peuvent se connecter directement en mémoire",
+        "zh": "加密 tunnel 可在进程内直接连接",
+        "ru": "Зашифрованный tunnel может соединяться внутри процесса"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TTunnelLocal adds OpenDirect to perform the existing authenticated encrypted handshake while delivering plaintext to an in-process ITunnelTransmit instead of a local TCP socket. SendData accepts plaintext from that endpoint, preserves the 64 KB payload limit, serializes outbound frames and keeps AES-GCM IV order. Crypto state moves from TTunnelLocalThread to TTunnelLocal so socket and direct transports share the same path.",
+        "fr": "TTunnelLocal ajoute OpenDirect pour effectuer le handshake chiffré authentifié existant tout en livrant le texte clair à un ITunnelTransmit en mémoire plutôt qu'à un socket TCP local. SendData reçoit le texte clair de cet endpoint, conserve la limite de 64 Ko, sérialise les frames sortantes et préserve l'ordre des IV AES-GCM. L'état crypto passe de TTunnelLocalThread à TTunnelLocal afin de partager le même chemin.",
+        "zh": "TTunnelLocal 新增 OpenDirect：继续执行现有的已认证加密 handshake，但将明文交给进程内 ITunnelTransmit，而不是本地 TCP socket。SendData 接收该 endpoint 的明文，保留 64 KB payload 限制，串行化 outbound frame，并维持 AES-GCM IV 顺序。crypto state 从 TTunnelLocalThread 移到 TTunnelLocal，使 socket 与 direct transport 共用路径。",
+        "ru": "TTunnelLocal получает OpenDirect: существующий аутентифицированный шифрованный handshake сохраняется, но открытый текст передаётся внутрипроцессному ITunnelTransmit вместо локального TCP-сокета. SendData принимает открытый текст, сохраняет предел 64 КБ, сериализует исходящие кадры и порядок AES-GCM IV. Crypto-state перенесён из TTunnelLocalThread в TTunnelLocal для общего пути socket и direct transport."
+      },
+      "impact": {
+        "en": "A backend can connect an in-process KVM or stand-alone VNC component to the tunnel without allocating a local listening port. Existing Open and OpenSocket callers keep their signatures, but their internal encryption ownership is refactored; the separate regression-test commit exercises direct bidirectional binary frames.",
+        "fr": "Un backend peut connecter un composant KVM en mémoire ou un serveur VNC autonome au tunnel sans allouer de port d'écoute local. Les appels Open et OpenSocket gardent leurs signatures, mais la propriété interne du chiffrement est refactorée ; le commit de tests séparé couvre les frames binaires bidirectionnelles directes.",
+        "zh": "backend 可将进程内 KVM 或独立 VNC 组件连接到 tunnel，而无需分配本地监听端口。现有 Open 与 OpenSocket 调用签名不变，但内部加密 ownership 被重构；单独的回归测试提交覆盖 direct 双向二进制 frame。",
+        "ru": "Backend может подключить внутрипроцессный KVM или автономный VNC-компонент к tunnel без локального listening port. Сигнатуры Open и OpenSocket сохранены, но внутреннее владение шифрованием переработано; отдельный регрессионный тест проверяет прямые двунаправленные binary frame."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "If adopting OpenDirect, provide live Transmit and LocalTransmit implementations, keep each SendData payload at or below 64 KB, and test handshake failure, closure and bidirectional ordering.",
+        "fr": "Si vous adoptez OpenDirect, fournissez des implémentations Transmit et LocalTransmit vivantes, limitez chaque payload SendData à 64 Ko et testez l'échec du handshake, la fermeture et l'ordre bidirectionnel.",
+        "zh": "采用 OpenDirect 时，请提供有效的 Transmit 与 LocalTransmit 实现，将每个 SendData payload 保持在 64 KB 以内，并测试 handshake 失败、关闭和双向顺序。",
+        "ru": "При использовании OpenDirect предоставьте действующие реализации Transmit и LocalTransmit, ограничьте каждый payload SendData 64 КБ и проверьте отказ handshake, закрытие и двунаправленный порядок."
+      },
+      "units": [
+        "mormot.net.tunnel",
+        "mormot.crypt.ecc"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TTunnelLocal.OpenDirect",
+          "change": "added",
+          "note": {
+            "en": "Opens a portless authenticated tunnel to an in-process ITunnelTransmit.",
+            "fr": "Ouvre un tunnel authentifié sans port vers un ITunnelTransmit en mémoire.",
+            "zh": "打开到进程内 ITunnelTransmit 的无端口已认证 tunnel。",
+            "ru": "Открывает аутентифицированный tunnel без порта к внутрипроцессному ITunnelTransmit."
+          }
+        },
+        {
+          "symbol": "TTunnelLocal.SendData",
+          "change": "added",
+          "note": {
+            "en": "Sends up to 64 KB of plaintext through the direct or socket-backed tunnel.",
+            "fr": "Envoie jusqu'à 64 Ko de texte clair via le tunnel direct ou sur socket.",
+            "zh": "通过 direct 或 socket-backed tunnel 发送最多 64 KB 明文。",
+            "ru": "Отправляет до 64 КБ открытого текста через direct или socket-backed tunnel."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "05fed0b17f3da997ccc7b7c92bf1180fa8085953",
+      "headline": {
+        "en": "Direct tunnels gain bidirectional regression coverage",
+        "fr": "Les tunnels directs gagnent une couverture bidirectionnelle",
+        "zh": "Direct tunnel 新增双向回归覆盖",
+        "ru": "Direct tunnel получил двунаправленные регрессионные тесты"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.net.proto adds an in-process ITunnelTransmit receiver and a TunnelDirect scenario. It opens paired client/server direct tunnels, checks that no worker thread or port is used, sends binary frames in both directions, validates the frame counters and exercises shutdown.",
+        "fr": "test.net.proto ajoute un receiver ITunnelTransmit en mémoire et un scénario TunnelDirect. Il ouvre une paire de tunnels directs client/serveur, vérifie l'absence de worker thread et de port, envoie des frames binaires dans les deux sens, contrôle les compteurs et exerce l'arrêt.",
+        "zh": "test.net.proto 新增进程内 ITunnelTransmit receiver 与 TunnelDirect 场景。测试打开成对的 client/server direct tunnel，确认不使用 worker thread 或端口，双向发送二进制 frame，验证 frame 计数并测试 shutdown。",
+        "ru": "В test.net.proto добавлены внутрипроцессный receiver ITunnelTransmit и сценарий TunnelDirect. Он открывает парные direct tunnel клиента и сервера, проверяет отсутствие worker thread и порта, передаёт binary frame в обе стороны, сверяет счётчики и проверяет shutdown."
+      },
+      "impact": {
+        "en": "No application code changes. The tests document and protect the new portless tunnel behavior for Delphi and FPC builds.",
+        "fr": "Aucun changement du code applicatif. Les tests documentent et protègent le nouveau tunnel sans port pour les builds Delphi et FPC.",
+        "zh": "应用代码不变。测试为 Delphi/FPC build 记录并保护新的无端口 tunnel 行为。",
+        "ru": "Изменений в коде приложения нет. Тесты документируют и защищают новое поведение tunnel без порта для сборок Delphi и FPC."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "544119934f532e730c91dfe554b2d779b3690e79",
+      "headline": {
+        "en": "Socket HTTP servers ignore suffix-only byte ranges",
+        "fr": "Les serveurs HTTP socket ignorent les ranges suffixes seuls",
+        "zh": "Socket HTTP server 忽略仅后缀 byte range",
+        "ru": "Socket HTTP-сервер игнорирует suffix-only byte range"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpRequestContext.ParseHeader now recognizes a Range only when bytes= is followed by a positive numeric offset. Forms such as bytes=100-200 and bytes=100- remain supported. A suffix-only form such as bytes=-10 no longer sets rfWantRange and falls through to a normal full response.",
+        "fr": "THttpRequestContext.ParseHeader ne reconnaît maintenant un Range que si bytes= est suivi d'un offset numérique positif. Les formes bytes=100-200 et bytes=100- restent supportées. Une forme suffixe seule comme bytes=-10 ne définit plus rfWantRange et aboutit à une réponse complète normale.",
+        "zh": "THttpRequestContext.ParseHeader 现在仅在 bytes= 后跟正数 offset 时识别 Range。bytes=100-200 与 bytes=100- 仍受支持。bytes=-10 等仅后缀形式不再设置 rfWantRange，而是回退为正常完整 response。",
+        "ru": "THttpRequestContext.ParseHeader теперь распознаёт Range, только если после bytes= идёт положительное числовое смещение. Формы bytes=100-200 и bytes=100- сохранены. Suffix-only форма bytes=-10 больше не устанавливает rfWantRange и даёт обычный полный ответ."
+      },
+      "impact": {
+        "en": "Socket-based HTTP servers now match the existing http.sys fallback for suffix ranges by returning status 200 with the whole content instead of treating the suffix as a range. Clients that depend on RFC suffix-range behavior will receive more data and must not assume a 206 response. Delphi and FPC server APIs are unchanged.",
+        "fr": "Les serveurs HTTP sur socket suivent maintenant le fallback http.sys pour les ranges suffixes : status 200 et contenu complet plutôt qu'un range. Les clients dépendant des suffix ranges RFC recevront davantage de données et ne doivent pas supposer une réponse 206. Les API serveur Delphi et FPC ne changent pas.",
+        "zh": "基于 socket 的 HTTP server 现在与 http.sys 对 suffix range 的回退一致：返回 status 200 和完整内容，而非 range。依赖 RFC suffix-range 行为的 client 将收到更多数据，不能再假定 response 为 206。Delphi/FPC server API 不变。",
+        "ru": "HTTP-серверы на сокетах теперь совпадают с fallback http.sys для suffix range: возвращают status 200 и всё содержимое вместо range. Клиенты, зависящие от RFC suffix-range, получат больше данных и не должны ожидать 206. API серверов Delphi и FPC не меняется."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Check clients or media downloaders that send suffix-only Range headers. If partial tails are required, issue an explicit start offset or handle the full 200 response.",
+        "fr": "Vérifiez les clients ou downloaders média qui envoient des headers Range avec suffixe seul. Si la fin partielle est nécessaire, envoyez un offset de départ explicite ou gérez la réponse 200 complète.",
+        "zh": "检查发送仅后缀 Range header 的 client 或媒体 downloader。若需要尾部部分内容，请发送显式起始 offset，或处理完整的 200 response。",
+        "ru": "Проверьте клиенты и media downloader, отправляющие suffix-only Range. Если нужен хвост файла, укажите явное начальное смещение или обработайте полный ответ 200."
+      },
+      "units": [
+        "mormot.net.http"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d73d6142cdf9efcff06e6c5846ad82c99b836d58",
+      "headline": {
+        "en": "Crypto factory documentation names the new uses requirement",
+        "fr": "La documentation crypto précise la nouvelle unité requise",
+        "zh": "加密工厂文档说明新的 uses 要求",
+        "ru": "Документация crypto указывает новый модуль uses"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "CHANGELOG.md and SAD chapter 3 now list mormot.crypt.factory, distinguish it from mormot.crypt.secure and show both units in the high-level factory example. The changelog names the moved Rnd, Hash, Sign, Cipher, Asym, Cert, Store, ICryptCert and ICryptStore declarations.",
+        "fr": "CHANGELOG.md et le chapitre 3 du SAD listent maintenant mormot.crypt.factory, le distinguent de mormot.crypt.secure et montrent les deux unités dans l'exemple de factory. Le changelog nomme les déclarations déplacées Rnd, Hash, Sign, Cipher, Asym, Cert, Store, ICryptCert et ICryptStore.",
+        "zh": "CHANGELOG.md 与 SAD 第 3 章现列出 mormot.crypt.factory，将其与 mormot.crypt.secure 区分，并在高层工厂示例中展示两个单元。changelog 明确列出已迁移的 Rnd、Hash、Sign、Cipher、Asym、Cert、Store、ICryptCert 与 ICryptStore 声明。",
+        "ru": "CHANGELOG.md и глава 3 SAD теперь перечисляют mormot.crypt.factory, отличают его от mormot.crypt.secure и показывают оба модуля в примере фабрики. В changelog названы перенесённые Rnd, Hash, Sign, Cipher, Asym, Cert, Store, ICryptCert и ICryptStore."
+      },
+      "impact": {
+        "en": "No code changes. Delphi and FPC developers receive an explicit migration reference for the source-level unit move published in the previous edition.",
+        "fr": "Aucun changement de code. Les développeurs Delphi et FPC disposent d'une référence de migration explicite pour le déplacement d'unité publié dans l'édition précédente.",
+        "zh": "代码不变。Delphi/FPC 开发者现在可明确参考上一期源码级单元迁移说明。",
+        "ru": "Изменений кода нет. Разработчики Delphi и FPC получили явную инструкцию по миграции для переноса модуля из предыдущего выпуска."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b5c58707a072c4b660b27431898f0d8c0883e27c",
+      "headline": {
+        "en": "POSIX numeric tests compare doubles by ULP distance",
+        "fr": "Les tests numériques POSIX comparent les doubles en ULP",
+        "zh": "POSIX 数值测试按 ULP 距离比较 double",
+        "ru": "POSIX-тесты чисел сравнивают double по ULP"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.core.base adds SameWithin2Ulps and uses it for pure Pascal floating-point parsing paths. Exact bit comparisons remain for the x86-64 assembler path without FP80, while the fallback now accepts a difference of at most two ULPs.",
+        "fr": "test.core.base ajoute SameWithin2Ulps et l'utilise pour les chemins de parsing flottant en Pascal pur. Les comparaisons exactes restent pour le chemin assembleur x86-64 sans FP80, tandis que le fallback accepte maintenant au plus deux ULP.",
+        "zh": "test.core.base 新增 SameWithin2Ulps，并用于纯 Pascal 浮点解析路径。无 FP80 的 x86-64 assembler 路径仍做精确 bit 比较，fallback 现在允许最多两个 ULP 差异。",
+        "ru": "В test.core.base добавлен SameWithin2Ulps для путей разбора floating point на чистом Pascal. Точное сравнение битов сохранено для x86-64 assembler без FP80, а fallback допускает расхождение не более двух ULP."
+      },
+      "impact": {
+        "en": "No production behavior changes. Delphi POSIX and other pure-Pascal test runs avoid false failures caused by tiny double-rounding differences.",
+        "fr": "Aucun changement en production. Les tests Delphi POSIX et autres chemins Pascal purs évitent les faux échecs dus à de minuscules différences d'arrondi double.",
+        "zh": "生产行为不变。Delphi POSIX 及其他纯 Pascal 测试可避免因极小 double 舍入差异造成的误报。",
+        "ru": "Поведение production не меняется. Тесты Delphi POSIX и другие pure-Pascal пути избегают ложных сбоев из-за малых различий округления double."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fd983d13fe8346f38fd651fb988de042363f64a0",
+      "headline": {
+        "en": "Tunnel test literals avoid Delphi compilation hints",
+        "fr": "Les littéraux des tests tunnel évitent les hints Delphi",
+        "zh": "Tunnel 测试 literal 避免 Delphi 编译提示",
+        "ru": "Литералы tunnel-тестов устраняют hints Delphi"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "Two binary TunnelDirect test payloads are built with HexToBin instead of mixed text and numeric character literals. The bytes remain video plus 00 80 FF and key plus 00 01 1B.",
+        "fr": "Deux payloads binaires des tests TunnelDirect sont construits avec HexToBin plutôt qu'avec des littéraux mêlant texte et caractères numériques. Les octets restent video suivi de 00 80 FF et key suivi de 00 01 1B.",
+        "zh": "两个 TunnelDirect 二进制测试 payload 改用 HexToBin 构造，不再混用文本与数字字符 literal。字节内容仍为 video 加 00 80 FF，以及 key 加 00 01 1B。",
+        "ru": "Два binary payload в тестах TunnelDirect теперь создаются через HexToBin вместо смешанных текстовых и числовых символьных литералов. Байты остаются video плюс 00 80 FF и key плюс 00 01 1B."
+      },
+      "impact": {
+        "en": "No application or protocol behavior changes. Delphi test compilation is quieter while the same binary frames are exercised.",
+        "fr": "Aucun changement applicatif ni protocolaire. La compilation Delphi des tests est plus propre avec les mêmes frames binaires.",
+        "zh": "应用与协议行为不变。Delphi 测试编译提示更少，同时仍测试相同二进制 frame。",
+        "ru": "Поведение приложения и протокола не меняется. Компиляция тестов Delphi стала чище, проверяются те же binary frame."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0cbde6574c42993e4fe110d7017454e931f7198f",
+      "headline": {
+        "en": "Network documentation clarifies feature flags and read limits",
+        "fr": "La documentation réseau précise les flags et limites de lecture",
+        "zh": "网络文档澄清功能标志与读取限制",
+        "ru": "Сетевая документация уточняет флаги и пределы чтения"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "The network README corrects the void-unit condition for mormot.net.server.win from USEWININET to USEHTTPSYS and adds THttpProxyServer to the async-unit inventory. A source comment records the 1 MB default purpose of fReadMaxBytes.",
+        "fr": "Le README réseau corrige la condition d'unité vide de mormot.net.server.win, de USEWININET vers USEHTTPSYS, et ajoute THttpProxyServer à l'inventaire de l'unité async. Un commentaire source précise le rôle de la valeur par défaut de 1 Mo pour fReadMaxBytes.",
+        "zh": "网络 README 将 mormot.net.server.win 的空单元条件从 USEWININET 修正为 USEHTTPSYS，并在 async 单元清单中加入 THttpProxyServer。源码注释说明 fReadMaxBytes 默认 1 MB 的用途。",
+        "ru": "В сетевом README условие пустого mormot.net.server.win исправлено с USEWININET на USEHTTPSYS, а THttpProxyServer добавлен в список async-модуля. Комментарий в исходнике объясняет назначение значения fReadMaxBytes по умолчанию 1 МБ."
+      },
+      "impact": {
+        "en": "No runtime or application-code change. The documentation now matches the conditional fix and the bounded-read default.",
+        "fr": "Aucun changement runtime ni applicatif. La documentation correspond maintenant au correctif conditionnel et à la limite de lecture par défaut.",
+        "zh": "运行时与应用代码不变。文档现在与条件修复及 bounded-read 默认值一致。",
+        "ru": "Изменений runtime и кода приложения нет. Документация теперь соответствует исправлению условий и пределу чтения по умолчанию."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4b74216255acd916b0394fc747a24ff343f18c11",
+      "headline": {
+        "en": "PDF font tests accept an extra Windows LUTI table",
+        "fr": "Les tests PDF acceptent une table LUTI Windows supplémentaire",
+        "zh": "PDF 字体测试接受额外的 Windows LUTI table",
+        "ru": "PDF-тесты шрифтов принимают дополнительную таблицу LUTI"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The reduced-font test now accepts search fields for either nine tables or ten tables. This covers Windows font versions that include LUTI and stores the inspected bytes in a RawUtf8 value before CheckMatchAny.",
+        "fr": "Le test de police réduite accepte maintenant les champs de recherche de neuf ou dix tables. Cela couvre les versions Windows des polices contenant LUTI et stocke les octets inspectés dans un RawUtf8 avant CheckMatchAny.",
+        "zh": "精简字体测试现在接受 9 个或 10 个 table 的 search field，从而覆盖包含 LUTI 的 Windows 字体版本；被检查字节先存入 RawUtf8 再传给 CheckMatchAny。",
+        "ru": "Тест сокращённого шрифта теперь принимает search fields для девяти или десяти таблиц. Это покрывает версии Windows-шрифтов с LUTI; проверяемые байты сначала сохраняются в RawUtf8 перед CheckMatchAny."
+      },
+      "impact": {
+        "en": "No PDF generation behavior changes. Test suites no longer reject a valid Windows font layout solely because LUTI adds one table.",
+        "fr": "Aucun changement de génération PDF. Les tests ne rejettent plus un layout de police Windows valide uniquement parce que LUTI ajoute une table.",
+        "zh": "PDF 生成行为不变。测试不再仅因 LUTI 增加一个 table 而拒绝有效的 Windows 字体 layout。",
+        "ru": "Поведение генерации PDF не меняется. Тесты больше не отклоняют корректный layout Windows-шрифта только из-за дополнительной таблицы LUTI."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4475ffd8da8d4d9b84dc75bd6f0ec6d441c96c55",
+      "headline": {
+        "en": "CheckMatchAny failures now include their value",
+        "fr": "Les échecs CheckMatchAny affichent leur valeur",
+        "zh": "CheckMatchAny 失败现在包含实际值",
+        "ru": "Ошибки CheckMatchAny теперь показывают значение"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSynTestCase.CheckMatchAny replaces a bare Check(result) with CheckUtf8(result, '%=%', [msg, Value]). The same Boolean match is evaluated, but a failure now reports the caller message and actual RawUtf8 value. The commit also refreshes changelog wording.",
+        "fr": "TSynTestCase.CheckMatchAny remplace Check(result) par CheckUtf8(result, '%=%', [msg, Value]). Le même résultat Boolean est évalué, mais un échec affiche maintenant le message appelant et la valeur RawUtf8 réelle. Le commit actualise aussi le changelog.",
+        "zh": "TSynTestCase.CheckMatchAny 将裸 Check(result) 替换为 CheckUtf8(result, '%=%', [msg, Value])。匹配 Boolean 逻辑不变，但失败时现在会报告调用方消息与实际 RawUtf8 值。提交还更新了 changelog。",
+        "ru": "TSynTestCase.CheckMatchAny заменяет простой Check(result) на CheckUtf8(result, '%=%', [msg, Value]). Проверяется тот же Boolean, но при ошибке выводятся сообщение вызывающего кода и фактическое RawUtf8. Также обновлён текст changelog."
+      },
+      "impact": {
+        "en": "No backend behavior changes. Delphi and FPC test failures become easier to diagnose without changing match semantics.",
+        "fr": "Aucun changement du backend. Les échecs de tests Delphi et FPC sont plus faciles à diagnostiquer sans modifier la sémantique de matching.",
+        "zh": "backend 行为不变。Delphi/FPC 测试失败更易诊断，matching 语义不变。",
+        "ru": "Поведение backend не меняется. Ошибки тестов Delphi и FPC проще диагностировать без изменения семантики matching."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.test"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2b4871955121d8b64fbd1fa9b599966375e54b40",
+      "headline": {
+        "en": "Binary test constants become code-page independent",
+        "fr": "Les constantes binaires deviennent indépendantes de la code page",
+        "zh": "二进制测试常量不再依赖 code page",
+        "ru": "Двоичные константы больше не зависят от code page"
+      },
+      "category": "compat",
+      "severity": "low",
+      "what_changed": {
+        "en": "The Baudot decode table in mormot.core.buffers and the BSON reference bytes in test.core.data are rewritten as hexadecimal strings decoded with HexToBin. This avoids Delphi interpreting concatenated #nnn character escapes through a DBCS host code page.",
+        "fr": "La table de décodage Baudot dans mormot.core.buffers et les octets BSON de référence dans test.core.data deviennent des chaînes hexadécimales décodées par HexToBin. Cela évite que Delphi interprète les escapes #nnn concaténés via la code page DBCS de l'hôte.",
+        "zh": "mormot.core.buffers 中的 Baudot decode table 与 test.core.data 中的 BSON reference bytes 改为十六进制字符串，并由 HexToBin 解码，避免 Delphi 通过 host DBCS code page 解释拼接的 #nnn 字符 escape。",
+        "ru": "Таблица декодирования Baudot в mormot.core.buffers и эталонные BSON-байты в test.core.data переписаны как hex-строки с декодированием HexToBin. Это исключает интерпретацию Delphi объединённых escape #nnn через DBCS code page хоста."
+      },
+      "impact": {
+        "en": "Baudot and BSON expected bytes remain identical, but Delphi builds on DBCS systems no longer depend on source-literal decoding. FPC and non-DBCS builds see no functional change.",
+        "fr": "Les octets Baudot et BSON attendus restent identiques, mais les builds Delphi sur systèmes DBCS ne dépendent plus du décodage des littéraux source. FPC et les builds non DBCS ne changent pas fonctionnellement.",
+        "zh": "Baudot 与 BSON 预期字节保持一致，但 DBCS 系统上的 Delphi build 不再依赖源码 literal 解码。FPC 与非 DBCS build 无功能变化。",
+        "ru": "Ожидаемые байты Baudot и BSON остаются прежними, но сборки Delphi на DBCS-системах больше не зависят от декодирования исходных литералов. Для FPC и не-DBCS сборок функциональных изменений нет."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.buffers"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    }
+  ]
+}
+
