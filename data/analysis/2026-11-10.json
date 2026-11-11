@@ -1,0 +1,608 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-10",
+  "edition_title": {
+    "en": "Windows socket shutdowns stop touching reused handles",
+    "fr": "L’arrêt des sockets Windows n’accède plus aux handles réutilisés",
+    "zh": "Windows socket 关闭不再触碰已复用的句柄",
+    "ru": "Закрытие сокетов Windows больше не затрагивает повторно используемые дескрипторы"
+  },
+  "intro": {
+    "en": "This edition fixes a high-risk Windows socket shutdown race, two tunnel concurrency and payload-limit problems, HTTP request-state initialization, Windows file-version decoding, and PDF clipping of empty EMF regions. Two public contracts need attention: custom INetTls implementations gain SocketClosed, and THttpRequestContext.ProcessInit is replaced by ResetZero.",
+    "fr": "Cette édition corrige une course critique lors de l’arrêt des sockets Windows, deux problèmes de concurrence et de taille des tunnels, l’initialisation de l’état HTTP, le décodage des versions de fichiers Windows et le clipping PDF des régions EMF vides. Deux contrats publics demandent de l’attention : les implémentations INetTls personnalisées reçoivent SocketClosed et THttpRequestContext.ProcessInit est remplacé par ResetZero.",
+    "zh": "本期修复 Windows socket 关闭时的高风险竞争、tunnel 并发与载荷上限问题、HTTP request 状态初始化、Windows 文件版本解码，以及 PDF 对空 EMF 区域的裁剪。两个公共契约需要关注：自定义 INetTls 实现须新增 SocketClosed，THttpRequestContext.ProcessInit 被 ResetZero 取代。",
+    "ru": "В выпуске исправлены опасная гонка при закрытии сокетов Windows, проблемы конкуренции и размера данных tunnel, инициализация HTTP-состояния, чтение версии файлов Windows и PDF-clipping пустых EMF-регионов. Требуют внимания два публичных контракта: пользовательские реализации INetTls получают SocketClosed, а THttpRequestContext.ProcessInit заменён на ResetZero."
+  },
+  "tldr": {
+    "en": [
+      "TCrtSocket.Abort and Close now coordinate on Windows so TLS teardown cannot use a closed SOCKET value that the OS has already reassigned.",
+      "Tunnel handshake draining is serialized to remove a potential deadlock, while OpenDirect payloads may now reach 16 MB; threaded TCP frames remain capped at 64 KB.",
+      "THttpRequestContext.ProcessInit is replaced by ResetZero, and THttpServerSocket.Create now initializes the new -1 sentinels.",
+      "Windows file-version strings are decoded within their resource-entry length and without a trailing terminator.",
+      "Empty EMF clip regions now emit a zero-area PDF path so following graphics stay clipped."
+    ],
+    "fr": [
+      "Sous Windows, TCrtSocket.Abort et Close se coordonnent afin que la fermeture TLS n’utilise jamais une valeur SOCKET fermée puis réattribuée.",
+      "Le drainage du handshake tunnel est sérialisé pour supprimer un deadlock potentiel ; OpenDirect accepte jusqu’à 16 Mo, tandis que les frames TCP restent limitées à 64 Ko.",
+      "THttpRequestContext.ProcessInit est remplacé par ResetZero et THttpServerSocket.Create initialise les nouvelles sentinelles à -1.",
+      "Les chaînes de version Windows sont décodées dans les limites de leur entrée de ressource et sans terminateur final.",
+      "Une région EMF vide produit maintenant un chemin PDF de surface nulle afin que les éléments suivants restent masqués."
+    ],
+    "zh": [
+      "Windows 上 TCrtSocket.Abort 与 Close 现在会协调，避免 TLS teardown 使用已关闭且可能被系统重新分配的 SOCKET 值。",
+      "Tunnel handshake 队列排空改为串行处理以消除潜在死锁；OpenDirect 载荷上限提升至 16 MB，线程式 TCP frame 仍为 64 KB。",
+      "THttpRequestContext.ProcessInit 被 ResetZero 取代，THttpServerSocket.Create 会初始化新的 -1 哨兵值。",
+      "Windows 文件版本字符串按资源条目长度解码，并去除末尾终止符。",
+      "空 EMF 裁剪区域现在会生成零面积 PDF path，使后续图形保持被裁剪。"
+    ],
+    "ru": [
+      "В Windows TCrtSocket.Abort и Close теперь согласованы, поэтому TLS-завершение не использует уже закрытое и повторно назначенное значение SOCKET.",
+      "Очередь handshake tunnel дренируется последовательно, устраняя возможный deadlock; OpenDirect принимает до 16 МБ, а TCP-кадры по-прежнему ограничены 64 КБ.",
+      "THttpRequestContext.ProcessInit заменён на ResetZero, а THttpServerSocket.Create инициализирует новые значения-сентинелы -1.",
+      "Строки версии файлов Windows декодируются строго в пределах resource entry и без завершающего нуля.",
+      "Пустой EMF clip region теперь создаёт PDF-путь нулевой площади, поэтому последующая графика остаётся обрезанной."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Land on the edition head e1158d2b7c9eab28a7b565f44812fec0d41e3679 (2.4.17982). Rebuild Delphi and FPC targets, add SocketClosed to any custom INetTls implementation, replace direct ProcessInit calls with ResetZero plus the appropriate State assignment, and stress Windows server shutdown, tunnel handshakes and OpenDirect large payloads.",
+    "fr": "Prenez la tête d’édition e1158d2b7c9eab28a7b565f44812fec0d41e3679 (2.4.17982). Recompilez les cibles Delphi et FPC, ajoutez SocketClosed aux implémentations INetTls personnalisées, remplacez les appels directs à ProcessInit par ResetZero suivi de l’état voulu, puis stressez l’arrêt des serveurs Windows, les handshakes tunnel et les gros payloads OpenDirect.",
+    "zh": "建议落在本期头部 e1158d2b7c9eab28a7b565f44812fec0d41e3679（2.4.17982）。重新构建 Delphi/FPC target；为自定义 INetTls 实现补充 SocketClosed；将直接 ProcessInit 调用替换为 ResetZero 并显式设置 State；压力测试 Windows server 关闭、tunnel handshake 与 OpenDirect 大载荷。",
+    "ru": "Переходите на вершину выпуска e1158d2b7c9eab28a7b565f44812fec0d41e3679 (2.4.17982). Пересоберите цели Delphi/FPC, добавьте SocketClosed в пользовательские реализации INetTls, замените прямые вызовы ProcessInit на ResetZero с явной установкой State и нагрузочно проверьте остановку Windows-сервера, tunnel handshake и крупные OpenDirect payload."
+  },
+  "upgrade": {
+    "avoid": [],
+    "order": [
+      {
+        "shas": [
+          "38231157d0901a0094f63fb4edbdeb05c548bacc"
+        ],
+        "why": "Take the Windows socket/TLS handle-reuse fix first; custom INetTls implementations must add SocketClosed."
+      },
+      {
+        "shas": [
+          "128e288683d9b64e8e9771503eec84f6d1ddcb5a",
+          "1aeaa636c6ccaca2989633e5b800075904060ec0"
+        ],
+        "why": "Take the HTTP ResetZero API change together with its THttpServerSocket constructor follow-up."
+      },
+      {
+        "shas": [
+          "7f646e3368fa2deb71b65b4590e65d5a72dd85cb",
+          "74cfe56d209040f79b7373b666ec2ba86f43c4f7"
+        ],
+        "why": "Take the tunnel deadlock fix and final direct-payload limits from the same edition head."
+      }
+    ],
+    "still_moving": []
+  },
+  "themes": [
+    {
+      "title": {
+        "en": "Safer Windows socket teardown",
+        "fr": "Arrêt plus sûr des sockets Windows",
+        "zh": "更安全的 Windows socket teardown",
+        "ru": "Безопасное завершение сокетов Windows"
+      },
+      "summary": {
+        "en": "Abort records that it already closed the OS socket; Close skips a second close and tells SChannel or OpenSSL not to send close_notify on the stale handle.",
+        "fr": "Abort mémorise la fermeture du socket OS ; Close évite une seconde fermeture et interdit à SChannel ou OpenSSL d’envoyer close_notify sur l’ancien handle.",
+        "zh": "Abort 会记录 OS socket 已关闭；Close 跳过第二次关闭，并通知 SChannel/OpenSSL 不要在旧句柄上发送 close_notify。",
+        "ru": "Abort отмечает закрытие OS-сокета; Close не закрывает его повторно и запрещает SChannel/OpenSSL отправлять close_notify через старый дескриптор."
+      },
+      "shas": [
+        "38231157d0901a0094f63fb4edbdeb05c548bacc"
+      ]
+    },
+    {
+      "title": {
+        "en": "Tunnel concurrency and larger direct frames",
+        "fr": "Concurrence tunnel et frames directes plus grandes",
+        "zh": "Tunnel 并发与更大的 direct frame",
+        "ru": "Конкурентность tunnel и крупные direct-кадры"
+      },
+      "summary": {
+        "en": "Handshake queues are drained on one path under the tunnel lock, and direct in-process payloads receive a separate 16 MB limit without changing TCP forwarding’s 64 KB application limit.",
+        "fr": "Les files de handshake sont drainées sur un seul chemin sous le verrou tunnel ; les payloads directs reçoivent une limite distincte de 16 Mo sans modifier les 64 Ko du forwarding TCP.",
+        "zh": "Handshake 队列在 tunnel 锁下通过单一路径排空；进程内 direct 载荷使用独立 16 MB 上限，TCP forwarding 的 64 KB 上限不变。",
+        "ru": "Очередь handshake дренируется одним путём под блокировкой tunnel; direct payload получает отдельный предел 16 МБ, а TCP forwarding сохраняет 64 КБ."
+      },
+      "shas": [
+        "7f646e3368fa2deb71b65b4590e65d5a72dd85cb",
+        "74cfe56d209040f79b7373b666ec2ba86f43c4f7"
+      ]
+    }
+  ],
+  "notes": {
+    "en": "All 14 non-merge commits are covered; three merge commits need no separate entries. The raw payload contains no superseded_by data, so upgrade.still_moving is empty. Version include bookkeeping was ignored. The embedded unified diffs and the exact upstream declarations were used to verify the public HTTP, TLS and tunnel contracts.",
+    "fr": "Les 14 commits non-merge sont couverts ; trois commits de merge ne nécessitent pas d’entrée séparée. Le payload brut ne contient aucun superseded_by, donc upgrade.still_moving reste vide. Les includes de version ont été ignorés. Les diffs unifiés et les déclarations upstream exactes ont servi à vérifier les contrats HTTP, TLS et tunnel.",
+    "zh": "已覆盖全部 14 个 non-merge 提交；3 个 merge 提交无需单独条目。原始 payload 不含 superseded_by，因此 upgrade.still_moving 为空。版本 include 记账已忽略。公共 HTTP、TLS 与 tunnel 契约均依据内嵌 unified diff 和精确上游声明核实。",
+    "ru": "Покрыты все 14 non-merge коммитов; три merge-коммита не требуют отдельных записей. В raw payload нет superseded_by, поэтому upgrade.still_moving пуст. Служебные version include проигнорированы. Публичные контракты HTTP, TLS и tunnel проверены по встроенным unified diff и точным upstream-объявлениям."
+  },
+  "entries": [
+    {
+      "sha": "e1158d2b7c9eab28a7b565f44812fec0d41e3679",
+      "headline": {
+        "en": "SSSE3 numeric tests now check the right CPU feature",
+        "fr": "Les tests numériques SSSE3 vérifient désormais le bon flag CPU",
+        "zh": "SSSE3 数值测试现在检查正确的 CPU 特性",
+        "ru": "Числовые тесты SSSE3 теперь проверяют правильный CPU-флаг"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "test.core.base changes the guard for SSSE3 numeric routines from cfSSE3 to cfSSSE3. The accompanying tunnel edits are comments and shutdown-order clarification only.",
+        "fr": "test.core.base remplace le garde cfSSE3 par cfSSSE3 pour les routines numériques SSSE3. Les modifications tunnel associées ne concernent que les commentaires et l’ordre d’arrêt.",
+        "zh": "test.core.base 将 SSSE3 数值例程的条件从 cfSSE3 改为 cfSSSE3；同一提交的 tunnel 改动仅为注释和关闭顺序说明。",
+        "ru": "В test.core.base условие для числовых SSSE3-процедур изменено с cfSSE3 на cfSSSE3. Остальные изменения tunnel касаются только комментариев и порядка остановки."
+      },
+      "impact": {
+        "en": "Application code is unchanged. Test runs no longer invoke SSSE3-only instructions on CPUs that expose SSE3 but not SSSE3; Delphi and FPC runtime paths are unaffected.",
+        "fr": "Le code applicatif ne change pas. Les tests n’exécutent plus d’instructions SSSE3 sur un CPU limité à SSE3 ; les chemins runtime Delphi et FPC sont inchangés.",
+        "zh": "应用代码不变。测试不会再在仅支持 SSE3 的 CPU 上执行 SSSE3 指令；Delphi/FPC 运行路径不受影响。",
+        "ru": "Код приложений не меняется. Тесты больше не запускают SSSE3-инструкции на CPU только с SSE3; runtime-пути Delphi/FPC не затронуты."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f3ebf1bf47942b89cc4d99d54c84c2a3bef533c3",
+      "headline": {
+        "en": "i386 SynLZ decompression removes one branch",
+        "fr": "Декомпрессия SynLZ i386 supprime un branchement",
+        "zh": "i386 SynLZ 解压减少一个分支",
+        "ru": "В i386-декомпрессии SynLZ удалено одно ветвление"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "The i386 assembly decompressor replaces a compare-and-branch cap with a CMOVA instruction when limiting the copy length. No data format or Pascal declaration changes.",
+        "fr": "Le décompresseur assembleur i386 remplace une comparaison avec branchement par CMOVA pour borner la copie. Le format de données et les déclarations Pascal restent identiques.",
+        "zh": "i386 汇编解压器用 CMOVA 替换限制复制长度时的比较与分支；数据格式和 Pascal 声明不变。",
+        "ru": "Ассемблерный i386-декомпрессор заменяет сравнение с переходом инструкцией CMOVA при ограничении длины копирования. Формат данных и Pascal API не меняются."
+      },
+      "impact": {
+        "en": "Only 32-bit x86 SynLZ decompression may become marginally faster. Delphi/FPC applications need no source change, and other architectures are unaffected.",
+        "fr": "Seule la décompression SynLZ x86 32 bits peut gagner légèrement en vitesse. Aucun changement source Delphi/FPC n’est requis et les autres architectures sont inchangées.",
+        "zh": "仅 32 位 x86 的 SynLZ 解压可能略微加速；Delphi/FPC 应用无需源码修改，其他架构不受影响。",
+        "ru": "Небольшое ускорение возможно только для SynLZ на 32-битном x86. Исходники Delphi/FPC менять не нужно; другие архитектуры не затронуты."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.compress"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7f646e3368fa2deb71b65b4590e65d5a72dd85cb",
+      "headline": {
+        "en": "Tunnel handshake draining no longer races socket workers",
+        "fr": "Le drainage du handshake tunnel ne concurrence plus les workers socket",
+        "zh": "Tunnel handshake 排空不再与 socket worker 竞争",
+        "ru": "Дренирование handshake tunnel больше не конфликтует с socket worker"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TTunnelLocal serializes handshake inspection under fSafe, lets TTunnelLocalThread drain queued frames after its handshake, and avoids a second OpenInternal drain for socket-bound workers. This removes competing drain paths.",
+        "fr": "TTunnelLocal sérialise l’inspection du handshake sous fSafe, laisse TTunnelLocalThread vider les frames après son handshake et évite un second drainage dans OpenInternal pour les workers socket.",
+        "zh": "TTunnelLocal 在 fSafe 下串行检查 handshake；TTunnelLocalThread 在握手后排空队列；socket-bound worker 不再从 OpenInternal 再次排空，从而消除竞争路径。",
+        "ru": "TTunnelLocal проверяет handshake под fSafe, TTunnelLocalThread дренирует очередь после handshake, а OpenInternal не запускает второй drain для socket-bound worker. Конкурирующие пути устранены."
+      },
+      "impact": {
+        "en": "Tunnel connections that buffer frames during handshake no longer risk a lock-order deadlock. The fix applies to Delphi and FPC tunnel servers and clients; public method signatures are unchanged.",
+        "fr": "Les connexions tunnel qui bufferisent des frames pendant le handshake n’encourent plus un deadlock d’ordre de verrous. Le correctif concerne serveurs et clients Delphi/FPC sans changer les signatures publiques.",
+        "zh": "握手期间缓存 frame 的 tunnel 连接不再面临锁顺序死锁。Delphi/FPC 的 tunnel server/client 均受益，公共方法签名不变。",
+        "ru": "Tunnel-соединения с кадрами в очереди во время handshake больше не рискуют deadlock из-за порядка блокировок. Исправление действует для Delphi/FPC без изменения публичных сигнатур."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Upgrade tunnel deployments and stress simultaneous handshake completion, queued frames, disconnects and shutdown under load.",
+        "fr": "Mettez à jour les déploiements tunnel et stressez les fins de handshake simultanées, les frames en attente, les déconnexions et l’arrêt en charge.",
+        "zh": "升级 tunnel 部署，并在负载下压力测试同时完成握手、积压 frame、断开和关闭。",
+        "ru": "Обновите tunnel-развёртывания и нагрузочно проверьте одновременное завершение handshake, очередь кадров, разрывы и остановку."
+      },
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f957274521da5e82107d6384e0407bb14162e164",
+      "headline": {
+        "en": "File-version decoding drops the resource terminator",
+        "fr": "Le décodage de version ignore le terminateur de ressource",
+        "zh": "文件版本解码会移除资源终止符",
+        "ru": "Декодирование версии исключает terminator ресурса"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "The Windows file-version reader treats the reported size as WideChar units including a possible final #0, subtracts that terminator, then passes the bounded length to Unicode_ToUtf8.",
+        "fr": "Le lecteur de version Windows interprète la taille en WideChar, retire un éventuel #0 final puis transmet la longueur bornée à Unicode_ToUtf8.",
+        "zh": "Windows 文件版本读取器按 WideChar 单位处理大小，去掉可能存在的末尾 #0，再将有界长度传给 Unicode_ToUtf8。",
+        "ru": "Чтение версии Windows учитывает размер в WideChar, исключает возможный финальный #0 и передаёт ограниченную длину в Unicode_ToUtf8."
+      },
+      "impact": {
+        "en": "Delphi and FPC Windows callers receive the same version text without an embedded trailing NUL. No API or build change is required.",
+        "fr": "Les appels Delphi et FPC sous Windows reçoivent la même version sans NUL final. Aucun changement d’API ou de build n’est requis.",
+        "zh": "Delphi/FPC Windows 调用方得到相同版本文本，但不含嵌入的尾部 NUL；无需 API 或构建调整。",
+        "ru": "Пользователи Delphi/FPC в Windows получают ту же строку версии без завершающего NUL. API и сборка не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b60e0a8c99dddf2e90c01188d488050660ca6a9a",
+      "headline": {
+        "en": "File-version result casing is normalized",
+        "fr": "La casse du résultat de version est normalisée",
+        "zh": "文件版本结果变量大小写统一",
+        "ru": "Регистр имени результата версии унифицирован"
+      },
+      "category": "chore",
+      "severity": "low",
+      "what_changed": {
+        "en": "A local result identifier in the Windows file-version code changes from res to Res. Pascal is case-insensitive, so emitted code and behavior remain identical.",
+        "fr": "Un identifiant local du code de version Windows passe de res à Res. Pascal étant insensible à la casse, le code produit et le comportement restent identiques.",
+        "zh": "Windows 文件版本代码中的局部结果标识符从 res 改为 Res。Pascal 不区分大小写，因此生成代码和行为完全不变。",
+        "ru": "Локальный идентификатор в коде версии Windows изменён с res на Res. Pascal не учитывает регистр, поэтому поведение и машинный код не меняются."
+      },
+      "impact": {
+        "en": "There is no application impact for Delphi or FPC and no action is needed.",
+        "fr": "Aucun impact applicatif pour Delphi ou FPC et aucune action n’est nécessaire.",
+        "zh": "对 Delphi/FPC 应用没有影响，无需操作。",
+        "ru": "Для приложений Delphi/FPC последствий нет; действий не требуется."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4c535155856ab00d18203abbd259a7d56b2a9a5f",
+      "headline": {
+        "en": "Windows file-version reads stay inside each resource entry",
+        "fr": "La lecture de version reste dans les limites de l’entrée de ressource",
+        "zh": "Windows 文件版本读取不再越过资源条目",
+        "ru": "Чтение версии Windows ограничено resource entry"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The Windows version-resource path replaces a NUL-terminated Win32PWideCharToUtf8 read with Unicode_ToUtf8 using the length returned by VerQueryValue. A later same-day commit removes the included final terminator.",
+        "fr": "Le chemin de ressources Windows remplace la lecture terminée par NUL par Unicode_ToUtf8 avec la longueur de VerQueryValue. Un correctif ultérieur du même jour retire le terminateur inclus.",
+        "zh": "Windows 版本资源路径不再按 NUL 终止读取，而使用 VerQueryValue 返回的长度调用 Unicode_ToUtf8；同日后续提交再移除包含的终止符。",
+        "ru": "Windows-путь заменяет NUL-terminated чтение на Unicode_ToUtf8 с длиной из VerQueryValue. Последующий коммит того же дня исключает terminator."
+      },
+      "impact": {
+        "en": "Malformed or tightly packed version resources no longer let conversion scan behind the selected entry. Delphi and FPC Windows backends should take the edition head so the terminator follow-up is included.",
+        "fr": "При некорректных или плотно упакованных ресурсах конверсия больше не читает за выбранной записью. Windows-бэкендам Delphi/FPC следует брать вершину выпуска с последующим исправлением.",
+        "zh": "异常或紧凑排列的版本资源不再导致转换越过所选条目读取。Delphi/FPC Windows backend 应采用本期头部以包含终止符后续修复。",
+        "ru": "При повреждённых или плотно упакованных ресурсах преобразование не читает за пределами записи. Windows-бэкендам Delphi/FPC нужен head выпуска с последующим исправлением."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Take this together with f957274521da5e82107d6384e0407bb14162e164 and test FileVersion on the application binaries you ship.",
+        "fr": "Prenez ce commit avec f957274521da5e82107d6384e0407bb14162e164 et testez FileVersion sur vos binaires distribués.",
+        "zh": "与 f957274521da5e82107d6384e0407bb14162e164 一同采用，并在实际发布二进制上测试 FileVersion。",
+        "ru": "Применяйте вместе с f957274521da5e82107d6384e0407bb14162e164 и проверьте FileVersion на выпускаемых бинарниках."
+      },
+      "units": [
+        "mormot.core.os"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "74cfe56d209040f79b7373b666ec2ba86f43c4f7",
+      "headline": {
+        "en": "Direct tunnels accept payloads up to 16 MB",
+        "fr": "Les tunnels directs acceptent jusqu’à 16 Mo",
+        "zh": "Direct tunnel 载荷上限提升至 16 MB",
+        "ru": "Direct tunnel принимает payload до 16 МБ"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "mormot.net.tunnel splits frame limits by mode: OpenDirect application data may reach 16 MB plus authentication overhead, while handshake frames keep the 72 KB cap and threaded TCP application data remains limited to 64 KB.",
+        "fr": "mormot.net.tunnel sépare les limites : OpenDirect accepte 16 Mo plus l’overhead d’authentification, les frames de handshake restent à 72 Ko et les données TCP threadées à 64 Ko.",
+        "zh": "mormot.net.tunnel 按模式拆分上限：OpenDirect 应用数据可达 16 MB 加认证开销；handshake frame 仍限 72 KB；线程式 TCP 应用数据仍限 64 KB。",
+        "ru": "mormot.net.tunnel разделяет пределы: OpenDirect принимает 16 МБ плюс служебные данные, handshake остаётся 72 КБ, а threaded TCP — 64 КБ."
+      },
+      "impact": {
+        "en": "Delphi/FPC applications using OpenDirect can send larger JPEG, KVM or other binary messages without chunking up to the new limit. TCP forwarding behavior does not change; oversized direct messages above 16 MB are still rejected.",
+        "fr": "Les applications Delphi/FPC avec OpenDirect peuvent envoyer de gros JPEG, KVM ou autres messages binaires sans découpage jusqu’à 16 Mo. Le forwarding TCP ne change pas et les messages au-delà restent refusés.",
+        "zh": "使用 OpenDirect 的 Delphi/FPC 应用可在 16 MB 内无需分块发送 JPEG、KVM 等二进制消息。TCP forwarding 行为不变，超过 16 MB 的 direct 消息仍被拒绝。",
+        "ru": "Приложения Delphi/FPC с OpenDirect могут отправлять JPEG/KVM и другие binary-сообщения до 16 МБ без разбиения. TCP forwarding не меняется; payload больше 16 МБ отклоняется."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Exercise boundary sizes around 64 KB and 16 MB in OpenDirect integrations, and keep chunking for threaded TCP mode.",
+        "fr": "Testez les tailles autour de 64 Ko et 16 Mo dans les intégrations OpenDirect et conservez le découpage pour le mode TCP threadé.",
+        "zh": "在 OpenDirect 集成中测试 64 KB 与 16 MB 边界；线程式 TCP 模式仍需分块。",
+        "ru": "Проверьте границы 64 КБ и 16 МБ в OpenDirect и сохраняйте разбиение для threaded TCP."
+      },
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TTunnelLocal.SendData",
+          "change": "behaviour-changed",
+          "note": {
+            "en": "Accepts application payloads up to 16 MB in direct mode; TCP mode remains capped at 64 KB.",
+            "fr": "Accepte jusqu’à 16 Mo en mode direct ; le mode TCP reste limité à 64 Ko.",
+            "zh": "Direct 模式最多接受 16 MB；TCP 模式仍限 64 KB。",
+            "ru": "В direct-режиме принимает до 16 МБ; TCP остаётся ограничен 64 КБ."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "1aeaa636c6ccaca2989633e5b800075904060ec0",
+      "headline": {
+        "en": "HTTP server sockets initialize request sentinels at construction",
+        "fr": "Les sockets serveur HTTP initialisent leurs sentinelles dès la création",
+        "zh": "HTTP server socket 构造时即初始化 request 哨兵值",
+        "ru": "HTTP server socket инициализирует sentinels в конструкторе"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpServerSocket.Create now calls Http.ResetZero after constructing the socket. RangeLength and ContentLength therefore start at -1 while State remains hrsNoStateMachine until the owning server selects a processing path.",
+        "fr": "THttpServerSocket.Create appelle désormais Http.ResetZero. RangeLength et ContentLength commencent à -1 tandis que State reste hrsNoStateMachine jusqu’au choix du chemin de traitement.",
+        "zh": "THttpServerSocket.Create 现在调用 Http.ResetZero，使 RangeLength 和 ContentLength 初始为 -1，而 State 在 server 选择处理路径前保持 hrsNoStateMachine。",
+        "ru": "THttpServerSocket.Create вызывает Http.ResetZero: RangeLength и ContentLength начинаются с -1, а State остаётся hrsNoStateMachine до выбора режима сервером."
+      },
+      "impact": {
+        "en": "Fresh Delphi/FPC HTTP server sockets no longer carry zero values where the request parser expects -1 sentinels. No source migration is needed unless application code inspects an unprocessed socket context.",
+        "fr": "Les nouveaux sockets serveur Delphi/FPC n’ont plus zéro là où le parser attend -1. Aucune migration n’est requise sauf si l’application inspecte un contexte non traité.",
+        "zh": "新的 Delphi/FPC HTTP server socket 不再在 parser 期望 -1 哨兵处保留零值。除非应用检查尚未处理的 socket context，否则无需迁移。",
+        "ru": "Новые серверные сокеты Delphi/FPC получают -1 там, где parser ожидает sentinel. Миграция не нужна, кроме кода, читающего необработанный контекст."
+      },
+      "action": "upgrade-recommended",
+      "action_detail": {
+        "en": "Take this with the ResetZero introduction and run HTTP startup, first-request, range and empty-body tests.",
+        "fr": "Prenez ce correctif avec l’introduction de ResetZero et testez démarrage HTTP, première requête, ranges et corps vide.",
+        "zh": "与 ResetZero 引入提交一同采用，并测试 HTTP 启动、首个请求、range 与空 body。",
+        "ru": "Берите вместе с введением ResetZero и проверьте запуск HTTP, первый запрос, range и пустой body."
+      },
+      "units": [
+        "mormot.net.server"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "128e288683d9b64e8e9771503eec84f6d1ddcb5a",
+      "headline": {
+        "en": "HTTP request reset no longer chooses a state machine",
+        "fr": "Le reset d’une requête HTTP ne choisit plus la machine d’état",
+        "zh": "HTTP request reset 不再隐式选择状态机",
+        "ru": "Сброс HTTP request больше не выбирает state machine"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpRequestContext.ProcessInit is removed and replaced by ResetZero, which only sets RangeLength and ContentLength to -1. Async client and server callers now assign hrsConnect or hrsGetCommand explicitly after resetting.",
+        "fr": "THttpRequestContext.ProcessInit est supprimé au profit de ResetZero, qui fixe seulement RangeLength et ContentLength à -1. Les appels client et serveur async affectent ensuite explicitement hrsConnect ou hrsGetCommand.",
+        "zh": "THttpRequestContext.ProcessInit 被移除并替换为 ResetZero，后者仅将 RangeLength 与 ContentLength 设为 -1。异步 client/server 调用方随后显式设置 hrsConnect 或 hrsGetCommand。",
+        "ru": "THttpRequestContext.ProcessInit удалён и заменён ResetZero, который только задаёт RangeLength и ContentLength=-1. Async client/server затем явно устанавливают hrsConnect или hrsGetCommand."
+      },
+      "impact": {
+        "en": "Delphi/FPC code that directly calls ProcessInit will fail to compile. Replacement code must call ResetZero and set State to the correct client, server or custom state; framework-owned paths are updated in this edition.",
+        "fr": "Le code Delphi/FPC appelant directement ProcessInit ne compile plus. Il doit appeler ResetZero puis définir State selon le rôle client, serveur ou personnalisé ; les chemins internes sont déjà adaptés.",
+        "zh": "直接调用 ProcessInit 的 Delphi/FPC 代码将无法编译。替代代码必须调用 ResetZero，并按 client、server 或自定义用途设置 State；框架内部路径已更新。",
+        "ru": "Код Delphi/FPC с прямым вызовом ProcessInit перестанет компилироваться. Нужно вызвать ResetZero и установить State для client/server/custom режима; внутренние пути обновлены."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Search for THttpRequestContext.ProcessInit, replace each call with ResetZero, and assign State explicitly before processing input.",
+        "fr": "Recherchez THttpRequestContext.ProcessInit, remplacez chaque appel par ResetZero et affectez State explicitement avant traitement.",
+        "zh": "搜索 THttpRequestContext.ProcessInit，将每个调用替换为 ResetZero，并在处理输入前显式设置 State。",
+        "ru": "Найдите THttpRequestContext.ProcessInit, замените на ResetZero и явно задайте State до обработки."
+      },
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpRequestContext.ProcessInit",
+          "change": "removed",
+          "note": {
+            "en": "Removed; callers must use ResetZero and select State themselves.",
+            "fr": "Supprimé ; utiliser ResetZero puis définir State.",
+            "zh": "已移除；调用方需使用 ResetZero 并自行设置 State。",
+            "ru": "Удалён; вызывающий код использует ResetZero и сам задаёт State."
+          }
+        },
+        {
+          "symbol": "THttpRequestContext.ResetZero",
+          "change": "added",
+          "note": {
+            "en": "Initializes RangeLength and ContentLength to -1 without changing State.",
+            "fr": "Initialise RangeLength et ContentLength à -1 sans modifier State.",
+            "zh": "将 RangeLength 与 ContentLength 初始化为 -1，但不修改 State。",
+            "ru": "Инициализирует RangeLength и ContentLength значением -1, не меняя State."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a668f1d261269a6391d7f110d3e7159e76218cd8",
+      "headline": {
+        "en": "Tunnel documentation now describes direct endpoints and ownership",
+        "fr": "La documentation tunnel décrit les endpoints directs et leur ownership",
+        "zh": "Tunnel 文档补充 direct endpoint 与所有权说明",
+        "ru": "Документация tunnel описывает direct endpoint и ownership"
+      },
+      "category": "docs",
+      "severity": "low",
+      "what_changed": {
+        "en": "The security guide and Pascal comments are reorganized around OpenDirect, SendData, TTunnelSocketTransmit ownership, plaintext-versus-relay frames, and the lifetime of the TCP worker and cryptographic state. Executable statements are unchanged.",
+        "fr": "Le guide de sécurité et les commentaires Pascal sont réorganisés autour de OpenDirect, SendData, de l’ownership de TTunnelSocketTransmit, des frames plaintext ou relay et de la durée de vie du worker TCP et de l’état cryptographique. Le code exécutable ne change pas.",
+        "zh": "安全指南与 Pascal 注释重新说明 OpenDirect、SendData、TTunnelSocketTransmit 所有权、plaintext/relay frame，以及 TCP worker 与加密状态的生命周期；可执行语句未改变。",
+        "ru": "Руководство и комментарии уточняют OpenDirect, SendData, ownership TTunnelSocketTransmit, plaintext/relay frames и время жизни TCP worker и crypto state. Исполняемый код не изменён."
+      },
+      "impact": {
+        "en": "There is no runtime or source impact for Delphi/FPC applications. Maintainers of custom ITunnelTransmit adapters gain clearer ownership and frame-format guidance.",
+        "fr": "Aucun impact runtime ou source pour les applications Delphi/FPC. Les mainteneurs d’adaptateurs ITunnelTransmit personnalisés disposent d’indications plus précises.",
+        "zh": "对 Delphi/FPC 应用没有运行时或源码影响；自定义 ITunnelTransmit adapter 的维护者获得更清晰的所有权和 frame 格式说明。",
+        "ru": "Для приложений Delphi/FPC нет runtime/source последствий. Документация помогает авторам пользовательских ITunnelTransmit adapter."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.tunnel"
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "fc00e4c811d13a1b3718f7615cec008c44eff90a",
+      "headline": {
+        "en": "PDF empty-clip failures now report formatted context",
+        "fr": "Les échecs de clip PDF vide donnent un contexte formaté",
+        "zh": "PDF 空裁剪测试失败会输出格式化上下文",
+        "ru": "Тест пустого PDF clip выводит форматированный контекст"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TTestUiPdf.EmfEmptyClip replaces Check plus a preformatted string with CheckUtf8 and its format arguments. Test conditions and production PDF code are unchanged.",
+        "fr": "TTestUiPdf.EmfEmptyClip remplace Check et une chaîne préformatée par CheckUtf8 et ses arguments. Les conditions du test et le code PDF de production ne changent pas.",
+        "zh": "TTestUiPdf.EmfEmptyClip 将 Check 加预格式化字符串改为 CheckUtf8 与格式参数；测试条件和生产 PDF 代码不变。",
+        "ru": "TTestUiPdf.EmfEmptyClip заменяет Check с заранее созданной строкой на CheckUtf8 с аргументами. Условия теста и production-код не меняются."
+      },
+      "impact": {
+        "en": "Only diagnostic output from the test suite changes. Delphi/FPC application behavior is unaffected.",
+        "fr": "Seul le diagnostic de la suite de tests change. Le comportement des applications Delphi/FPC est inchangé.",
+        "zh": "仅测试套件的诊断输出变化；Delphi/FPC 应用行为不受影响。",
+        "ru": "Меняется только диагностика тестов; поведение приложений Delphi/FPC не затронуто."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c1ea434d2384575711f35edb8808ba02aff949eb",
+      "headline": {
+        "en": "WebSocket broadcast tests wait for slow connection registration",
+        "fr": "Les tests broadcast WebSocket attendent l’enregistrement des connexions lentes",
+        "zh": "WebSocket 广播测试会等待慢速连接完成注册",
+        "ru": "WebSocket broadcast-тест ждёт регистрации медленного соединения"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The WebSocket broadcast regression test records the connected handle and waits up to five seconds for ConnectionFind to see it before broadcasting. This closes a test race observed on slow Raspberry Pi systems.",
+        "fr": "Le test de broadcast WebSocket mémorise le handle et attend jusqu’à cinq secondes que ConnectionFind le voie avant d’émettre. Cela ferme une course de test observée sur Raspberry Pi lent.",
+        "zh": "WebSocket 广播回归测试记录连接句柄，并在广播前最多等待五秒，直到 ConnectionFind 能找到它；这消除了慢速 Raspberry Pi 上的测试竞争。",
+        "ru": "WebSocket broadcast-тест сохраняет handle и ждёт до пяти секунд, пока ConnectionFind зарегистрирует его, прежде чем отправлять broadcast. Это устраняет гонку теста на медленном Raspberry Pi."
+      },
+      "impact": {
+        "en": "Production WebSocket behavior and public APIs do not change. CI and local Delphi/FPC test runs on slower hardware should become less flaky.",
+        "fr": "Le comportement WebSocket de production et les API publiques ne changent pas. Les tests Delphi/FPC sur matériel lent deviennent moins instables.",
+        "zh": "生产 WebSocket 行为和公共 API 不变；较慢硬件上的 Delphi/FPC CI 与本地测试会更稳定。",
+        "ru": "Production-поведение WebSocket и API не меняются. Тесты Delphi/FPC на медленном оборудовании становятся стабильнее."
+      },
+      "action": "none",
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "38231157d0901a0094f63fb4edbdeb05c548bacc",
+      "headline": {
+        "en": "Windows abort and TLS shutdown no longer reuse a closed SOCKET",
+        "fr": "Abort Windows et l’arrêt TLS ne réutilisent plus un SOCKET fermé",
+        "zh": "Windows Abort 与 TLS 关闭不再复用已关闭 SOCKET",
+        "ru": "Windows Abort и TLS shutdown не используют закрытый SOCKET"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TCrtSocket.Abort marks that Windows already called closesocket; Close then skips a second close and calls the new INetTls.SocketClosed hook. SChannel clears its socket and OpenSSL disables SSL_shutdown so neither sends close_notify through a stale, possibly reassigned handle.",
+        "fr": "TCrtSocket.Abort marque que Windows a déjà appelé closesocket ; Close évite une seconde fermeture et appelle le nouveau hook INetTls.SocketClosed. SChannel efface son socket et OpenSSL désactive SSL_shutdown pour ne pas utiliser un handle réattribué.",
+        "zh": "TCrtSocket.Abort 标记 Windows 已调用 closesocket；Close 跳过二次关闭并调用新的 INetTls.SocketClosed。SChannel 清空 socket，OpenSSL 禁用 SSL_shutdown，避免通过已重新分配的旧句柄发送 close_notify。",
+        "ru": "TCrtSocket.Abort отмечает выполненный closesocket; Close не закрывает повторно и вызывает новый INetTls.SocketClosed. SChannel очищает socket, OpenSSL отключает SSL_shutdown, чтобы не обращаться к повторно назначенному handle."
+      },
+      "impact": {
+        "en": "Stopping a Windows HTTP server with idle keep-alive TLS connections no longer risks WSAENOTSOCK or closing an unrelated connection after rapid SOCKET-value reuse. Delphi and FPC Windows backends benefit; custom INetTls implementations must add the new method.",
+        "fr": "Остановка Windows HTTP-сервера с idle keep-alive TLS больше не рискует WSAENOTSOCK или закрытием чужого соединения после быстрого reuse SOCKET. Delphi/FPC выигрывают, но пользовательские INetTls должны добавить новый метод.",
+        "zh": "Windows HTTP server 在存在 idle keep-alive TLS 连接时停止，不再因 SOCKET 值快速复用而触发 WSAENOTSOCK 或关闭无关连接。Delphi/FPC Windows backend 均受益；自定义 INetTls 实现必须新增该方法。",
+        "ru": "Остановка Windows HTTP-сервера с idle keep-alive TLS больше не вызывает WSAENOTSOCK и не рискует закрыть чужое соединение после быстрого reuse SOCKET. Пользовательские INetTls должны добавить метод."
+      },
+      "action": "migration-required",
+      "action_detail": {
+        "en": "Upgrade Windows network servers. If you implement INetTls, add SocketClosed and make it suppress every later access to the OS socket; then test aborting blocked receives and TLS server shutdown.",
+        "fr": "Mettez à jour les serveurs réseau Windows. Si vous implémentez INetTls, ajoutez SocketClosed pour interdire tout accès ultérieur au socket OS, puis testez l’abort d’un recv bloqué et l’arrêt TLS.",
+        "zh": "升级 Windows 网络 server。若实现 INetTls，请新增 SocketClosed 并禁止之后访问 OS socket；随后测试中止阻塞 recv 与 TLS server 关闭。",
+        "ru": "Обновите Windows-серверы. В пользовательском INetTls добавьте SocketClosed, запрещающий последующий доступ к OS socket, и проверьте abort блокирующего recv и TLS shutdown."
+      },
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.sock.windows",
+        "mormot.lib.openssl11"
+      ],
+      "api_changes": [
+        {
+          "symbol": "INetTls.SocketClosed",
+          "change": "added",
+          "note": {
+            "en": "Implementations must stop using the OS socket after this notification.",
+            "fr": "Les implémentations ne doivent plus utiliser le socket OS après cette notification.",
+            "zh": "收到通知后，实现不得再使用 OS socket。",
+            "ru": "После уведомления реализация не должна обращаться к OS socket."
+          }
+        },
+        {
+          "symbol": "TNetTlsContext.SocketClosed",
+          "change": "added",
+          "note": {
+            "en": "Forwards the already-closed notification to the active TLS implementation.",
+            "fr": "Transmet la notification de fermeture à l’implémentation TLS active.",
+            "zh": "将已关闭通知转发给当前 TLS 实现。",
+            "ru": "Передаёт уведомление активной TLS-реализации."
+          }
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ae4f9372a2c1f29c7d8fea25523c13b4d3dd0d6d",
+      "headline": {
+        "en": "Empty EMF regions now clip all following PDF content",
+        "fr": "Les régions EMF vides masquent tout le contenu PDF suivant",
+        "zh": "空 EMF 区域现在会裁剪后续全部 PDF 内容",
+        "ru": "Пустой EMF region теперь обрезает последующий PDF-контент"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPdfEnum.ExtSelectClipRgn represents an empty EMF region as one zero-size PdfBox. PDF output now emits a real zero-area rectangle before the clip operator instead of a clip operator with no path.",
+        "fr": "TPdfEnum.ExtSelectClipRgn représente une région EMF vide par un PdfBox de taille nulle. Le PDF émet un vrai rectangle de surface nulle avant l’opérateur de clipping au lieu d’un opérateur sans path.",
+        "zh": "TPdfEnum.ExtSelectClipRgn 将空 EMF 区域表示为零尺寸 PdfBox。PDF 输出会在裁剪操作前生成真实的零面积矩形，而不是没有 path 的裁剪操作。",
+        "ru": "TPdfEnum.ExtSelectClipRgn представляет пустой EMF region одним PdfBox нулевого размера. PDF выводит реальный нулевой прямоугольник перед clip operator вместо оператора без path."
+      },
+      "impact": {
+        "en": "PDFs generated from EMF input no longer leave bitmaps or text visible after an empty SelectClipRgn. Delphi and FPC PDF users get corrected rendering without source changes; the commit notes an unrelated existing FPC 3.2.2 Win32 test failure.",
+        "fr": "Les PDF issus d’EMF n’affichent plus bitmap ou texte après un SelectClipRgn vide. Les utilisateurs Delphi/FPC obtiennent le bon rendu sans changement source ; le commit signale un échec FPC 3.2.2 Win32 préexistant et indépendant.",
+        "zh": "由 EMF 生成的 PDF 不会再在空 SelectClipRgn 后错误显示 bitmap 或文本。Delphi/FPC PDF 用户无需改源码；提交说明 FPC 3.2.2 Win32 另有既存且无关的测试失败。",
+        "ru": "PDF из EMF больше не показывает bitmap или текст после пустого SelectClipRgn. Для Delphi/FPC исходники менять не нужно; упомянут отдельный прежний сбой теста FPC 3.2.2 Win32."
+      },
+      "action": "review",
+      "action_detail": {
+        "en": "Regenerate representative EMF-based PDFs and compare empty or disjoint clip regions in the viewers you support.",
+        "fr": "Régénérez des PDF représentatifs depuis EMF et comparez les régions de clip vides ou disjointes dans vos viewers.",
+        "zh": "重新生成代表性的 EMF PDF，并在支持的 viewer 中比较空或不相交裁剪区域。",
+        "ru": "Пересоздайте типичные PDF из EMF и проверьте пустые или непересекающиеся clip regions в поддерживаемых viewer."
+      },
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "confidence": "confirmed"
+    }
+  ]
+}
+
