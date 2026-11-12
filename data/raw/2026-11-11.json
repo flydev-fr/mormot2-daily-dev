@@ -1,0 +1,461 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-11",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-12T03:32:42Z",
+  "range": {
+    "since": "2026-11-10T23:00:00Z",
+    "until": "2026-11-11T23:00:00Z",
+    "base_sha": "e1158d2b7c9eab28a7b565f44812fec0d41e3679",
+    "head_sha": "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 8,
+    "additions": 4700,
+    "deletions": 404
+  },
+  "commits": [
+    {
+      "sha": "856cfa42952707fc9ddf8ffc72c7b863608eedee",
+      "short_sha": "856cfa42",
+      "subject": "Merge pull request #734 from zen010101/feat-external-process-648",
+      "body": "core: new TExternalProcess class - see #648",
+      "author": "ab",
+      "date": "2026-11-11T10:36:17Z",
+      "url": "https://github.com/synopse/mORMot2/commit/856cfa42952707fc9ddf8ffc72c7b863608eedee",
+      "parents": [
+        "e1158d2b7c9eab28a7b565f44812fec0d41e3679",
+        "1d5b3085671691e4133d00d626d27ad8a7e0511f"
+      ],
+      "stats": {
+        "additions": 2288,
+        "deletions": 140,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.delphi.pas",
+          "status": "modified",
+          "additions": 79,
+          "deletions": 0,
+          "patch": "@@ -50,6 +50,7 @@ interface\n   Posix.SysMman,\r\n   Posix.SysStat,\r\n   Posix.SysWait,\r\n+  Posix.Signal,\r\n   Posix.SysSocket,\r\n   Posix.SysUtsname,\r\n   Posix.SysSysctl,\r\n@@ -160,9 +161,20 @@ procedure RTLEventWaitFor(state: TEvent; timeout: cint); overload;\n   SIGINT  = 2;\r\n   SIGQUIT = 3;\r\n   SIGKILL = 9;\r\n+  SIGPIPE = 13;\r\n   SIGTERM = 15;\r\n \r\n+  // same values on Linux, Android and MacOS\r\n+  F_GETFD = 1;\r\n+  F_SETFD = 2;\r\n+  WNOHANG = 1;\r\n+  SIG_SETMASK = Posix.Signal.SIG_SETMASK; // 2 on Linux, but 3 on MacOS\r\n+  {$ifdef OSLINUX}\r\n+  O_CLOEXEC = $80000; // for pipe2() and open()\r\n+  {$endif OSLINUX}\r\n+\r\n   W_OK    = Posix.Unistd.W_OK;\r\n+  X_OK    = Posix.Unistd.X_OK;\r\n   S_IRUSR = Posix.SysStat.S_IRUSR;\r\n   S_IWUSR = Posix.SysStat.S_IWUSR;\r\n   S_IRGRP = Posix.SysStat.S_IRGRP;\r\n@@ -270,6 +282,28 @@ function fpexecve(path: PAnsiChar; argc, envp: pointer): cint;\n procedure fpexit(code: cint);\r\n function WaitProcess(pid: cint): cint;\r\n \r\n+type\r\n+  TFilDes       = array[0..1] of cint;\r\n+  TSigSet       = sigset_t;\r\n+  PSigSet       = Psigset_t;\r\n+  SigactionRec  = sigaction_t; // handler field name depends on the platform\r\n+  PSigactionRec = Psigaction_t;\r\n+\r\n+function fppipe(var fd: TFilDes): cint;\r\n+function fpdup2(oldfd, newfd: cint): cint;\r\n+function fpfcntl(fd, cmd: cint; arg: cint = 0): cint;\r\n+function fpwaitpid(pid: TPid; status: pcint; options: cint): TPid;\r\n+function wifexited(status: cint): boolean;\r\n+function wexitstatus(status: cint): cint;\r\n+function fpsigemptyset(var nset: TSigSet): cint;\r\n+function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n+function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+\r\n+{$ifdef OSLINUX}\r\n+function pipe2(fd: pcint; flags: cint): cint; cdecl;\r\n+  external clib name 'pipe2'; // glibc 2.9+\r\n+{$endif OSLINUX}\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n function fpmunmap(start: pointer; len: PtrUInt): cint;\r\n \r\n@@ -791,6 +825,51 @@ function WaitProcess(pid: cint): cint;\n     result := -result;\r\n end;\r\n \r\n+function fppipe(var fd: TFilDes): cint;\r\n+begin\r\n+  result := pipe(PInteger(@fd));\r\n+end;\r\n+\r\n+function fpdup2(oldfd, newfd: cint): cint;\r\n+begin\r\n+  result := dup2(oldfd, newfd);\r\n+end;\r\n+\r\n+function fpfcntl(fd, cmd, arg: cint): cint;\r\n+begin\r\n+  result := fcntl(fd, cmd, arg);\r\n+end;\r\n+\r\n+function fpwaitpid(pid: TPid; status: pcint; options: cint): TPid;\r\n+begin\r\n+  result := waitpid(pid, PInteger(status), options);\r\n+end;\r\n+\r\n+function wifexited(status: cint): boolean;\r\n+begin\r\n+  result := Posix.SysWait.WIFEXITED(status);\r\n+end;\r\n+\r\n+function wexitstatus(status: cint): cint;\r\n+begin\r\n+  result := Posix.SysWait.WEXITSTATUS(status);\r\n+end;\r\n+\r\n+function fpsigemptyset(var nset: TSigSet): cint;\r\n+begin\r\n+  result := sigemptyset(nset);\r\n+end;\r\n+\r\n+function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n+begin\r\n+  result := sigprocmask(how, nset, oset);\r\n+end;\r\n+\r\n+function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+begin\r\n+  result := sigaction(sig, act, oact);\r\n+end;\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n begin\r\n   result := mmap(start, len, prot, flags, fd, offst);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 482,
+          "deletions": 5,
+          "patch": "@@ -6411,19 +6411,32 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   // - roWinNewConsole won't inherit the parent console, but have its own console\r\n   // - roWinKeepProcessOnTimeout won't make Ctrl+C / WM_QUIT or TerminateProcess\r\n   // - roWinCheckSynchronize will call CheckSynchronize() from the main thread\r\n+  // - by default, the child stdin and stderr are inherited from the current\r\n+  // process: roStdinNull reads stdin from the null device, and roStdinPipe from\r\n+  // TExternalProcess.Write; roStderrMerge redirects stderr to stdout, and\r\n+  // roStderrPipe to TExternalProcess.OnError/ReadErrorAvailable\r\n+  // - RunRedirect() ignores roStdinPipe and roStderrPipe\r\n   TRunOptions = set of (\r\n     roEnvAddExisting,\r\n     roWinJobCloseChildren,\r\n     roWinNoProcessDetach,\r\n     roWinNewConsole,\r\n     roWinKeepProcessOnTimeout,\r\n-    roWinCheckSynchronize);\r\n+    roWinCheckSynchronize,\r\n+    roStdinNull,\r\n+    roStdinPipe,\r\n+    roStderrMerge,\r\n+    roStderrPipe);\r\n \r\n const\r\n   /// the default options for RunCommand() and RunRedirect() transient execution\r\n   // - detaching the process from the console and Job group by default does only\r\n   // make sense for RunProcess() which will use TRunOptions = []\r\n   RUN_CMD = [roWinNoProcessDetach];\r\n+\r\n+  /// the default options for TExternalProcess.Start\r\n+  // - with the same behavior on all systems: no stdin, and stderr in stdout\r\n+  RUN_PROCESS = [roWinNoProcessDetach, roStdinNull, roStderrMerge];\r\n type\r\n   /// the low-level OS API type for executing processes arguments\r\n   TRunArg = {$ifdef OSPOSIX} RawUtf8 {$else} TFileName {$endif};\r\n@@ -6451,8 +6464,8 @@ function RunCommand(const cmd: TRunArg; waitfor: boolean = true;\n   {$else} processhandle: PHandle = nil {$endif OSPOSIX}): integer;\r\n \r\n /// execute a command, returning its output console as text\r\n-// - calls CreateProcessW on Windows (via our RunCommandWin function), and\r\n-// FPC RTL popen/pclose on POSIX to be truly cross-platform\r\n+// - calls CreateProcessW on Windows (via our RunCommandWin function), and our\r\n+// TExternalProcess class on POSIX to be truly cross-platform\r\n // - return '' on cmd execution error, or the whole output console text content\r\n // with no conversion (unless setresult is false - see below)\r\n // - on POSIX, result is likely to be UTF-8 but on Windows it depends on each\r\n@@ -6463,8 +6476,8 @@ function RunCommand(const cmd: TRunArg; waitfor: boolean = true;\n // onoutput() callback returns true - see RedirectToConsole global callback\r\n // - will abort once waitfordelayms expires - if not its default INFINITE\r\n // - force setresult=false if you only need onouput() and will discard the result\r\n-// - optional env is Windows only, (FPC popen does not support it), and should\r\n-// be encoded as name=value#0 pairs - with env[length(env)]=#0 to end with #0#0\r\n+// - optional env should be encoded as name=value#0 pairs - with\r\n+// env[length(env)]=#0 to end with #0#0\r\n // - you can specify a wrkdir if the path specified by cmd is not good enough\r\n // - TRunOptions = RUN_CMD as expected from executing a transient command\r\n // - warning: exitcode^ should be a 32-bit \"integer\" variable, not a PtrInt\r\n@@ -6523,6 +6536,150 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - used before hard SIGKILL/TerminateProcess\r\n   RunAbortMethods: TRunAbortMethods = RUNABORT_DEFAULT;\r\n \r\n+type\r\n+  /// the execution state of a TExternalProcess instance\r\n+  TExternalProcessState = (\r\n+    epsNotStarted,\r\n+    epsRunning,\r\n+    epsExited,\r\n+    epsFailed);\r\n+\r\n+  /// execute an external process with redirected standard input and output\r\n+  // - stdin/stdout/stderr redirection is defined by the Start() options, by\r\n+  // default RUN_PROCESS for the same behavior on all systems: stdin from the\r\n+  // null device, and stderr merged into stdout\r\n+  // - a single background thread per instance reads stdout/stderr in blocking\r\n+  // mode, and calls OnOutput/OnError - or appen\n... [truncated, 15667 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 497,
+          "deletions": 135,
+          "patch": "@@ -5518,8 +5518,6 @@ begin\n   end;\r\n end;\r\n \r\n-{$ifdef FPC}\r\n-\r\n // retrieve the PATH= value from the environment to be passed to execve()\r\n // - i.e. from the RunBuildEnv() output, or the current environment\r\n function RunEnvPath(envpp: PPUtf8Char): RawUtf8;\r\n@@ -5548,7 +5546,7 @@ var\n   p, s: PUtf8Char;\r\n begin\r\n   if name <> nil then\r\n-    if PosChar(name, '/') <> nil then\r\n+    if PosChar(PUtf8Char(name), '/') <> nil then\r\n     begin\r\n       // a supplied path is used as-is, with no $PATH lookup - as a shell would\r\n       FastSetString(result, name, StrLen(name));\r\n@@ -5575,187 +5573,551 @@ begin\n   FastAssignNew(result); // not found: caller would fallback to the shell\r\n end;\r\n \r\n-function RunRedirect(const cmd: TRunArg; exitcode: PInteger;\r\n-  const onoutput: TOnRedirect; waitfordelayms: cardinal; setresult: boolean;\r\n-  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): RawByteString;\r\n+{ TExternalProcess }\r\n+\r\n+{$ifdef FPCLINUX} // Delphi has no syscall, and libc close_range() is glibc 2.34+\r\n+  {$if defined(CPUINTEL) or defined(CPUARM) or defined(CPUAARCH64)}\r\n+const\r\n+  syscall_nr_close_range = 436; // same number for all those CPUs\r\n+  {$define HASCLOSERANGE}\r\n+  {$ifend}\r\n+{$endif FPCLINUX}\r\n+\r\n+{$ifdef OSBSD} // FreeBSD 8+, OpenBSD 3.5+, NetBSD 3+\r\n+procedure closefrom(lowfd: cint);\r\n+  cdecl; external clib name 'closefrom';\r\n+{$endif OSBSD}\r\n+\r\n+const\r\n+  // same values on Linux, BSD and MacOS - not defined by the RTL on Linux\r\n+  FCNTL_DUPFD   = 0;\r\n+  FCNTL_CLOEXEC = 1;\r\n+\r\n+procedure CloseValid(var fd: cint);\r\n+begin\r\n+  if fd < 0 then\r\n+    exit;\r\n+  fpclose(fd);\r\n+  fd := -1;\r\n+end;\r\n+\r\n+// set close-on-exec, and move a descriptor above stdin/stdout/stderr, so that\r\n+// the dup2() calls in the child process won't overlap: the parent may have\r\n+// closed its own standard descriptors, e.g. as a daemon\r\n+function EnsureCloseOnExec(fd: cint): cint;\r\n+begin\r\n+  result := fd;\r\n+  if fd < 0 then\r\n+    exit;\r\n+  if fd > 2 then\r\n+  begin\r\n+    {$ifndef OSLINUX} // O_CLOEXEC is set at creation on Linux\r\n+    fpfcntl(fd, F_SETFD, FCNTL_CLOEXEC);\r\n+    {$endif OSLINUX}\r\n+    exit;\r\n+  end;\r\n+  result := fpfcntl(fd, FCNTL_DUPFD, 3);\r\n+  if result >= 0 then\r\n+    fpfcntl(result, F_SETFD, FCNTL_CLOEXEC);\r\n+  fpclose(fd);\r\n+end;\r\n+\r\n+// create a pipe with close-on-exec, to be inherited only via dup2()\r\n+function NewPipe(var fd: TFilDes): boolean;\r\n+begin\r\n+  fd[0] := -1;\r\n+  fd[1] := -1;\r\n+  // without pipe2() e.g. on MacOS, there is a race window with any concurrent\r\n+  // fork() by another library - but our own children close all their\r\n+  // inherited descriptors anyway\r\n+  {$ifdef OSLINUX}\r\n+  {$ifdef FPC}\r\n+  result := Do_SysCall(syscall_nr_pipe2, TSysParam(@fd), O_CLOEXEC) = 0;\r\n+  {$else}\r\n+  result := pipe2(@fd, O_CLOEXEC) = 0; // Delphi POSIX has no syscall\r\n+  {$endif FPC}\r\n+  {$else}\r\n+  result := fppipe(fd) = 0;\r\n+  {$endif OSLINUX}\r\n+  if not result then\r\n+    exit;\r\n+  fd[0] := EnsureCloseOnExec(fd[0]);\r\n+  fd[1] := EnsureCloseOnExec(fd[1]);\r\n+  result := (fd[0] >= 0) and\r\n+            (fd[1] >= 0);\r\n+end;\r\n+\r\n+function OpenNull: cint;\r\n+begin\r\n+  result := EnsureCloseOnExec(FpOpen('/dev/null',\r\n+    O_RDONLY {$ifdef OSLINUX} or O_CLOEXEC {$endif}));\r\n+end;\r\n+\r\n+// close all descriptors >= lowfd, in the child process\r\n+procedure CloseDescriptorsFrom(lowfd, maxfd: cint);\r\n+begin\r\n+  {$ifdef HASCLOSERANGE}\r\n+  if Do_SysCall(syscall_nr_close_range, TSysParam(lowfd),\r\n+       TSysParam($ffffffff), 0) = 0 then\r\n+    exit; // Linux 5.9+\r\n+  {$endif HASCLOSERANGE}\r\n+  {$ifdef OSBSD}\r\n+  closefrom(lowfd);\r\n+  {$else}\r\n+  while lowfd < maxfd do\r\n+  begin\r\n+    fpclose(lowfd);\r\n+    inc(lowfd);\r\n+  end;\r\n+  {$endif OSBSD}\r\n+end;\r\n+\r\n+function MaxDescriptors: cint;\r\n+begin\r\n+  result := GetFileOpenLimit; // -1 on Delphi POSIX\r\n+  if (result <= 0) or\r\n+     (result > 1 shl 20) then\r\n+    result := 1 shl 20; // reasonable upper limit\r\n+end;\r\n+\r\n+{$ifdef HASCLOSERANGE}\r\n var\r\n-  fds: TFilDes;\r\n-  fd: THand\n... [truncated, 17188 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 445,
+          "deletions": 0,
+          "patch": "@@ -5078,6 +5078,447 @@ begin\n end;\r\n \r\n \r\n+{ TExternalProcess }\r\n+\r\n+const\r\n+  PROC_THREAD_ATTRIBUTE_HANDLE_LIST = $00020002;\r\n+  EXTENDED_STARTUPINFO_PRESENT      = $00080000;\r\n+\r\n+type\r\n+  TStartupInfoEx = record\r\n+    StartupInfo: TStartupInfo;\r\n+    lpAttributeList: pointer;\r\n+  end;\r\n+\r\n+function TerminateJobObject(hJob: THandle; uExitCode: cardinal): BOOL;\r\n+  stdcall; external kernel32;\r\n+\r\n+var\r\n+  // Vista+ API to restrict the handles inherited by a new process\r\n+  // - resolved once at startup by InitializeSpecificUnit, i.e. thread-safe\r\n+  InitializeProcThreadAttributeList: function(lpAttributeList: pointer;\r\n+    dwAttributeCount, dwFlags: DWord; var lpSize: PtrUInt): BOOL; stdcall;\r\n+  Updat\n... [truncated, 13215 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 785,
+          "deletions": 0,
+          "patch": "\n... [truncated, 25844 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.delphi",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": 734,
+      "is_merge": true
+    },
+    {
+      "sha": "1d5b3085671691e4133d00d626d27ad8a7e0511f",
+      "short_sha": "1d5b3085",
+      "subject": "core: TExternalProcess compiles with the Delphi Linux compiler - see #648",
+      "body": "THandle is unsigned on Delphi POSIX: the descriptors of TExternalProcess are\nnow an integer on POSIX, as CloseValid() and their checks against -1 expect.\nRunSearchPath() casts its PAnsiChar argument for PosChar().\n\nTested with Delphi 13 for Linux64 on Debian 11: _RunRedirect and\n_TExternalProcess pass.",
+      "author": "zen010101",
+      "date": "2026-11-07T15:06:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1d5b3085671691e4133d00d626d27ad8a7e0511f",
+      "parents": [
+        "d1de8cc6f470cffb6eeb94ad0f04314883be6293"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -6560,7 +6560,9 @@   TExternalProcess = class(TSynPersistent)\n     fOutputSafe: TLightLock; // protect fOutput/fError\r\n     fOutput, fError: RawUtf8;\r\n     fStdinSafe: TOSLightLock; // Write() may block: use an OS lock\r\n-    fStdin, fStdout, fStderr, fWakeUpRead, fWakeUpWrite: THandle;\r\n+    // POSIX descriptors are signed, but THandle is unsigned on Delphi POSIX\r\n+    fStdin, fStdout, fStderr, fWakeUpRead, fWakeUpWrite:\r\n+      {$ifdef OSWINDOWS} THandle {$else} integer {$endif OSWINDOWS};\r\n     {$ifdef OSWINDOWS}\r\n     fProcess, fJob: THandle;\r\n     {$endif OSWINDOWS}\r\n@@ -13788,7 +13790,7 @@ procedure TExternalProcessThread.Execute;\n end;\r\n \r\n const\r\n-  NO_HANDLE = THandle({$ifdef OSPOSIX} -1 {$else} 0 {$endif});\r\n+  NO_HANDLE = {$ifdef OSPOSIX} -1 {$else} 0 {$endif};\r\n \r\n function Deadline(waitms: cardinal): Int64;\r\n begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -5504,7 +5504,7 @@ var\n   p, s: PUtf8Char;\r\n begin\r\n   if name <> nil then\r\n-    if PosChar(name, '/') <> nil then\r\n+    if PosChar(PUtf8Char(name), '/') <> nil then\r\n     begin\r\n       // a supplied path is used as-is, with no $PATH lookup - as a shell would\r\n       FastSetString(result, name, StrLen(name));\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "8c07aafee86183719be63d8f542bd7eeae7e16e6",
+      "short_sha": "8c07aafe",
+      "subject": "core: TExternalProcess and RunRedirect() on Delphi POSIX - see #648",
+      "body": "mormot.core.os.delphi.pas now publishes the fppipe, fpdup2, fpfcntl,\nfpwaitpid, wifexited, wexitstatus, fpsigemptyset, fpsigprocmask and\nfpsigaction wrappers, with the TFilDes, TSigSet and SigactionRec types, so\nthat the POSIX code of TExternalProcess and RunRedirect() is no longer FPC-only.\nOn Linux, Delphi calls pipe2() from libc. close_range() is called on FPC only:\nlibc close_range() needs glibc 2.34, so Delphi uses the closing loop, up to the\nhighest opened descriptor. MaxDescriptors() now calls GetFileOpenLimit().\nThe child process zero-fills its sigaction record for SIG_DFL, since the\nhandler field name of the Delphi record depends on the platform.\nThe regression tests are compiled on Delphi POSIX too, except the SIGUSR1\nsender of _RunRedirect, for the same reason.\nNot compiled yet with a Delphi POSIX compiler.",
+      "author": "zen010101",
+      "date": "2026-11-07T11:33:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8c07aafee86183719be63d8f542bd7eeae7e16e6",
+      "parents": [
+        "96554b8ece099bc002996fc3d95af47113680f90"
+      ],
+      "stats": {
+        "additions": 116,
+        "deletions": 94,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.delphi.pas",
+          "status": "modified",
+          "additions": 79,
+          "deletions": 0,
+          "patch": "@@ -50,6 +50,7 @@ interface\n   Posix.SysMman,\r\n   Posix.SysStat,\r\n   Posix.SysWait,\r\n+  Posix.Signal,\r\n   Posix.SysSocket,\r\n   Posix.SysUtsname,\r\n   Posix.SysSysctl,\r\n@@ -160,9 +161,20 @@ procedure RTLEventWaitFor(state: TEvent; timeout: cint); overload;\n   SIGINT  = 2;\r\n   SIGQUIT = 3;\r\n   SIGKILL = 9;\r\n+  SIGPIPE = 13;\r\n   SIGTERM = 15;\r\n \r\n+  // same values on Linux, Android and MacOS\r\n+  F_GETFD = 1;\r\n+  F_SETFD = 2;\r\n+  WNOHANG = 1;\r\n+  SIG_SETMASK = Posix.Signal.SIG_SETMASK; // 2 on Linux, but 3 on MacOS\r\n+  {$ifdef OSLINUX}\r\n+  O_CLOEXEC = $80000; // for pipe2() and open()\r\n+  {$endif OSLINUX}\r\n+\r\n   W_OK    = Posix.Unistd.W_OK;\r\n+  X_OK    = Posix.Unistd.X_OK;\r\n   S_IRUSR = Posix.SysStat.S_IRUSR;\r\n   S_IWUSR = Posix.SysStat.S_IWUSR;\r\n   S_IRGRP = Posix.SysStat.S_IRGRP;\r\n@@ -270,6 +282,28 @@ function fpexecve(path: PAnsiChar; argc, envp: pointer): cint;\n procedure fpexit(code: cint);\r\n function WaitProcess(pid: cint): cint;\r\n \r\n+type\r\n+  TFilDes       = array[0..1] of cint;\r\n+  TSigSet       = sigset_t;\r\n+  PSigSet       = Psigset_t;\r\n+  SigactionRec  = sigaction_t; // handler field name depends on the platform\r\n+  PSigactionRec = Psigaction_t;\r\n+\r\n+function fppipe(var fd: TFilDes): cint;\r\n+function fpdup2(oldfd, newfd: cint): cint;\r\n+function fpfcntl(fd, cmd: cint; arg: cint = 0): cint;\r\n+function fpwaitpid(pid: TPid; status: pcint; options: cint): TPid;\r\n+function wifexited(status: cint): boolean;\r\n+function wexitstatus(status: cint): cint;\r\n+function fpsigemptyset(var nset: TSigSet): cint;\r\n+function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n+function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+\r\n+{$ifdef OSLINUX}\r\n+function pipe2(fd: pcint; flags: cint): cint; cdecl;\r\n+  external clib name 'pipe2'; // glibc 2.9+\r\n+{$endif OSLINUX}\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n function fpmunmap(start: pointer; len: PtrUInt): cint;\r\n \r\n@@ -784,6 +818,51 @@ function WaitProcess(pid: cint): cint;\n     result := -result;\r\n end;\r\n \r\n+function fppipe(var fd: TFilDes): cint;\r\n+begin\r\n+  result := pipe(PInteger(@fd));\r\n+end;\r\n+\r\n+function fpdup2(oldfd, newfd: cint): cint;\r\n+begin\r\n+  result := dup2(oldfd, newfd);\r\n+end;\r\n+\r\n+function fpfcntl(fd, cmd, arg: cint): cint;\r\n+begin\r\n+  result := fcntl(fd, cmd, arg);\r\n+end;\r\n+\r\n+function fpwaitpid(pid: TPid; status: pcint; options: cint): TPid;\r\n+begin\r\n+  result := waitpid(pid, PInteger(status), options);\r\n+end;\r\n+\r\n+function wifexited(status: cint): boolean;\r\n+begin\r\n+  result := Posix.SysWait.WIFEXITED(status);\r\n+end;\r\n+\r\n+function wexitstatus(status: cint): cint;\r\n+begin\r\n+  result := Posix.SysWait.WEXITSTATUS(status);\r\n+end;\r\n+\r\n+function fpsigemptyset(var nset: TSigSet): cint;\r\n+begin\r\n+  result := sigemptyset(nset);\r\n+end;\r\n+\r\n+function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n+begin\r\n+  result := sigprocmask(how, nset, oset);\r\n+end;\r\n+\r\n+function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+begin\r\n+  result := sigaction(sig, act, oact);\r\n+end;\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n begin\r\n   result := mmap(start, len, prot, flags, fd, offst);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -6451,8 +6451,8 @@ function RunCommand(const cmd: TRunArg; waitfor: boolean = true;\n   {$else} processhandle: PHandle = nil {$endif OSPOSIX}): integer;\r\n \r\n /// execute a command, returning its output console as text\r\n-// - calls CreateProcessW on Windows (via our RunCommandWin function), and\r\n-// FPC RTL popen/pclose on POSIX to be truly cross-platform\r\n+// - calls CreateProcessW on Windows (via our RunCommandWin function), and our\r\n+// TExternalProcess class on POSIX to be truly cross-platform\r\n // - return '' on cmd execution error, or the whole output console text content\r\n // with no conversion (unless setresult is false - see below)\r\n // - on POSIX, result is likely to be UTF-8 but on Windows it depends on each\r\n@@ -6463,8 +6463,8 @@ function RunCommand(const cmd: TRunArg; waitfor: boolean = true;\n // onoutput() callback returns true - see RedirectToConsole global callback\r\n // - will abort once waitfordelayms expires - if not its default INFINITE\r\n // - force setresult=false if you only need onouput() and will discard the result\r\n-// - optional env is Windows only, (FPC popen does not support it), and should\r\n-// be encoded as name=value#0 pairs - with env[length(env)]=#0 to end with #0#0\r\n+// - optional env should be encoded as name=value#0 pairs - with\r\n+// env[length(env)]=#0 to end with #0#0\r\n // - you can specify a wrkdir if the path specified by cmd is not good enough\r\n // - TRunOptions = RUN_CMD as expected from executing a transient command\r\n // - warning: exitcode^ should be a 32-bit \"integer\" variable, not a PtrInt\r\n@@ -6609,7 +6609,8 @@   TExternalProcess = class(TSynPersistent)\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     // - returns false on error, e.g. if the process ended\r\n     // - on POSIX, Start() with roStdinPipe calls SigPipeIntercept, so that\r\n-    // writing to an ended process does not raise SIGPIPE\r\n+    // writing to an ended process does not raise SIGPIPE - but SigPipeIntercept\r\n+    // does nothing yet on Delphi POSIX\r\n     function Write(const data: RawByteString): boolean; overload;\r\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     function Write(p: pointer; len: PtrInt): boolean; overload;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 72,
+          "patch": "@@ -5476,8 +5476,6 @@ begin\n   end;\r\n end;\r\n \r\n-{$ifdef FPC}\r\n-\r\n // retrieve the PATH= value from the environment to be passed to execve()\r\n // - i.e. from the RunBuildEnv() output, or the current environment\r\n function RunEnvPath(envpp: PPUtf8Char): RawUtf8;\r\n@@ -5535,13 +5533,13 @@ end;\n \r\n { TExternalProcess }\r\n \r\n-{$ifdef OSLINUX}\r\n+{$ifdef FPCLINUX} // Delphi has no syscall, and libc close_range() is glibc 2.34+\r\n   {$if defined(CPUINTEL) or defined(CPUARM) or defined(CPUAARCH64)}\r\n const\r\n   syscall_nr_close_range = 436; // same number for all those CPUs\r\n   {$define HASCLOSERANGE}\r\n   {$ifend}\r\n-{$endif OSLINUX}\r\n+{$endif FPCLINUX}\r\n \r\n {$ifdef OSBSD} // FreeBSD 8+, OpenBSD 3.5+, NetBSD 3+\r\n procedure closefrom(lowfd: cint);\r\n@@ -5591,8 +5589,12 @@ begin\n   // fork() by another library - but our own children close all their\r\n   // inherited descriptors anyway\r\n   {$ifdef OSLINUX}\r\n+  {$ifdef FPC}\r\n   result := Do_SysCall(syscall_nr_pipe2, TSysParam(@fd), O_CLOEXEC) = 0;\r\n   {$else}\r\n+  result := pipe2(@fd, O_CLOEXEC) = 0; // Delphi POSIX has no syscall\r\n+  {$endif FPC}\r\n+  {$else}\r\n   result := fppipe(fd) = 0;\r\n   {$endif OSLINUX}\r\n   if not result then\r\n@@ -5629,13 +5631,11 @@ begin\n end;\r\n \r\n function MaxDescriptors: cint;\r\n-var\r\n-  rl: TRLimit;\r\n begin\r\n-  result := 1 shl 20; // reasonable upper limit\r\n-  if (fpgetrlimit(RLIMIT_NOFILE, @rl) = 0) and\r\n-     (rl.rlim_cur < 1 shl 20) then\r\n-    result := rl.rlim_cur;\r\n+  result := GetFileOpenLimit; // -1 on Delphi POSIX\r\n+  if (result <= 0) or\r\n+     (result > 1 shl 20) then\r\n+    result := 1 shl 20; // reasonable upper limit\r\n end;\r\n \r\n {$ifdef HASCLOSERANGE}\r\n@@ -5656,9 +5656,9 @@ end;\n {$endif HASCLOSERANGE}\r\n \r\n // upper bound of the opened descriptors, for the closing loop of the child\r\n-// - without closefrom() nor close_range(), e.g. on MacOS or Linux < 5.9, a loop\r\n-// up to RLIMIT_NOFILE costs 118ms per execution with 524288 descriptors, as set\r\n-// by TPollSockets from the hard limit\r\n+// - without closefrom() nor close_range(), e.g. on MacOS, Linux < 5.9 or\r\n+// Delphi POSIX, a loop up to RLIMIT_NOFILE costs 118ms per execution with\r\n+// 524288 descriptors, as set by TPollSockets from the hard limit\r\n // - descriptors opened by other threads until fork() take the lowest free\r\n // numbers, so should be within the margin\r\n function ChildMaxDescriptor: cint;\r\n@@ -5841,8 +5841,7 @@ begin\n     SigPipeIntercept; // Write() should return false, not raise SIGPIPE\r\n   maxfd := ChildMaxDescriptor; // after all our own descriptors were opened\r\n   fpsigemptyset(nomask);\r\n-  FillCharFast(dfl, SizeOf(dfl), 0);\r\n-  dfl.sa_handler := SigActionHandler(SIG_DFL);\r\n+  FillCharFast(dfl, SizeOf(dfl), 0); // SIG_DFL = nil handler on all systems\r\n   pid := RunFork;\r\n   if pid = 0 then\r\n   begin\r\n@@ -6078,63 +6077,6 @@ begin\n   end;\r\n end;\r\n \r\n-{$else}\r\n-\r\n-function RunRedirect(const cmd: TRunArg; exitcode: PInteger;\r\n-  const onoutput: TOnRedirect; waitfordelayms: cardinal; setresult: boolean;\r\n-  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): RawByteString;\r\n-begin\r\n-  FastAssignNew(result); // not implemented yet on Delphi POSIX - see libc popen()\r\n-  if exitcode <> nil then\r\n-    exitcode^ := -1; // error\r\n-end;\r\n-\r\n-{ TExternalProcess }\r\n-\r\n-// NOT IMPLEMENTED YET on Delphi POSIX\r\n-\r\n-function TExternalProcess.DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n-  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n-  withthread: boolean): boolean;\r\n-begin\r\n-  fState := epsFailed;\r\n-  result := false;\r\n-end;\r\n-\r\n-function TExternalProcess.DoReap: boolean;\r\n-begin\r\n-  result := true;\r\n-end;\r\n-\r\n-procedure TExternalProcess.DoSignal(hard: boolean);\r\n-begin\r\n-end;\r\n-\r\n-function TExternalProcess.DoPump(timeoutms: integer): integer;\r\n-begin\r\n-  fOutputEof := true;\r\n-  result := -1;\r\n-end;\r\n-\r\n-function TExternalProcess.DoWrite(p: pointer; len: PtrInt): boolean;\r\n-begin\r\n-  result := false;\r\n-end;\r\n-\r\n-procedure TExternalProcess.DoCloseStdin\n... [truncated, 218 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 17,
+          "patch": "@@ -311,10 +311,14 @@   TTestCoreBase = class(TSynTestCase)\n \r\n implementation\r\n \r\n-{$ifdef FPCPOSIX}\r\n+{$ifdef OSPOSIX}\r\n uses\r\n+  {$ifdef FPC}\r\n   baseunix;\r\n-{$endif FPCPOSIX}\r\n+  {$else}\r\n+  mormot.core.os.delphi;\r\n+  {$endif FPC}\r\n+{$endif OSPOSIX}\r\n \r\n \r\n { TOrmPeople }\r\n@@ -3696,7 +3700,9 @@ function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): bo\n             (text <> '');\r\n end;\r\n \r\n-{$ifdef FPCPOSIX}\r\n+{$ifdef OSPOSIX}\r\n+\r\n+{$ifdef FPC} // sigaction_t handler field name depends on the Delphi platform\r\n \r\n type\r\n   // send SIGUSR1 to a given thread every 20 ms\r\n@@ -3732,6 +3738,8 @@ procedure NoopSignalHandler(sig: cint); cdecl;\n begin\r\n end;\r\n \r\n+{$endif FPC}\r\n+\r\n function ProcessExists(pid: cint): boolean; // also true for a zombie\r\n begin\r\n   result := (pid > 0) and\r\n@@ -3782,8 +3790,10 @@ function ReadFirstLinePid(p: TExternalProcess): cint;\n procedure TTestCoreBase._RunRedirect;\r\n var\r\n   r: TRunRedirectTest;\r\n+  {$ifdef FPC}\r\n   sender: TSignalSender;\r\n   sa, old: SigactionRec;\r\n+  {$endif FPC}\r\n   exitcode: integer;\r\n   bg: cint;\r\n   output: RawByteString;\r\n@@ -3829,6 +3839,7 @@ procedure TTestCoreBase._RunRedirect;\n   // the child should not inherit an ignored SIGPIPE, e.g. from a server\r\n   SigPipeIntercept;\r\n   Run('kill -PIPE $$; echo alive', '', -SIGPIPE);\r\n+  {$ifdef FPC}\r\n   // a signal received by the calling thread should not abort the redirection\r\n   FillCharFast(sa, SizeOf(sa), 0);\r\n   sa.sa_handler := SigActionHandler(@NoopSignalHandler);\r\n@@ -3844,6 +3855,7 @@ procedure TTestCoreBase._RunRedirect;\n     sender.Free;\r\n     fpsigaction(SIGUSR1, @old, nil);\r\n   end;\r\n+  {$endif FPC}\r\n   r := TRunRedirectTest.Create;\r\n   try\r\n     // the callback is called at startup with '', then with the output\r\n@@ -3981,7 +3993,7 @@ procedure TTestCoreBase._TExternalProcess;\n   Check(CreateDir(Utf8ToString(dir)), 'dir');\r\n   tool := dir + '/zvb648tool';\r\n   FileFromString('#!/bin/sh'#10'echo found $ZVB648'#10, Utf8ToString(tool));\r\n-  fpchmod(pointer(tool), &755);\r\n+  fpchmod(pointer(tool), $1ed); // octal 755\r\n   p := TExternalProcess.Create;\r\n   try\r\n     Check(p.Start(['zvb648tool'], 'PATH=' + dir + #0'ZVB648=bar'#0#0), 'path');\r\n@@ -4435,20 +4447,8 @@ procedure TTestCoreBase._TExternalProcess;\n   CheckUtf8(OpenedHandles - files < 20, 'handles=% %', [files, OpenedHandles]);\r\n end;\r\n \r\n-{$else}\r\n-\r\n-procedure TTestCoreBase._RunRedirect;\r\n-begin\r\n-  // not implemented on Delphi POSIX\r\n-end;\r\n-\r\n-procedure TTestCoreBase._TExternalProcess;\n... [truncated, 178 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.delphi",
+        "mormot.core.os.posix"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "d1de8cc6f470cffb6eeb94ad0f04314883be6293",
+      "short_sha": "d1de8cc6",
+      "subject": "core: TExternalProcess resolves the Windows attribute list API at startup - see #648",
+      "body": "InitializeProcThreadAttributeList, UpdateProcThreadAttribute and\nDeleteProcThreadAttributeList are now resolved by InitializeSpecificUnit, as\nthe other Vista+ kernel32 functions, instead of at first use with no lock.",
+      "author": "zen010101",
+      "date": "2026-11-07T11:33:09Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d1de8cc6f470cffb6eeb94ad0f04314883be6293",
+      "parents": [
+        "8c07aafee86183719be63d8f542bd7eeae7e16e6"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 13,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 13,
+          "patch": "@@ -5090,30 +5090,18 @@ function TerminateJobObject(hJob: THandle; uExitCode: cardinal): BOOL;\n \r\n var\r\n   // Vista+ API to restrict the handles inherited by a new process\r\n+  // - resolved once at startup by InitializeSpecificUnit, i.e. thread-safe\r\n   InitializeProcThreadAttributeList: function(lpAttributeList: pointer;\r\n     dwAttributeCount, dwFlags: DWord; var lpSize: PtrUInt): BOOL; stdcall;\r\n   UpdateProcThreadAttribute: function(lpAttributeList: pointer; dwFlags: DWord;\r\n     Attribute: PtrUInt; lpValue: pointer; cbSize: PtrUInt;\r\n     lpPreviousValue, lpReturnSize: pointer): BOOL; stdcall;\r\n   DeleteProcThreadAttributeList: procedure(lpAttributeList: pointer); stdcall;\r\n-  ProcThreadAttributeChecked: boolean;\r\n   // serialize the inheritable handles window if there is no such API\r\n   ExternalProcessSafe: TLightLock;\r\n \r\n function HasProcThreadAttribute: boolean;\r\n-var\r\n-  k: THandle;\r\n begin\r\n-  if not ProcThreadAttributeChecked then\r\n-  begin\r\n-    k := GetModuleHandle(kernel32);\r\n-    @InitializeProcThreadAttributeList :=\r\n-      GetProcAddress(k, 'InitializeProcThreadAttributeList');\r\n-    @UpdateProcThreadAttribute := GetProcAddress(k, 'UpdateProcThreadAttribute');\r\n-    @DeleteProcThreadAttributeList :=\r\n-      GetProcAddress(k, 'DeleteProcThreadAttributeList');\r\n-    ProcThreadAttributeChecked := true;\r\n-  end;\r\n   result := Assigned(InitializeProcThreadAttributeList) and\r\n             Assigned(UpdateProcThreadAttribute) and\r\n             Assigned(DeleteProcThreadAttributeList);\r\n@@ -5686,6 +5674,10 @@ begin\n   if not Assigned(GetTickCount64) then\r\n     GetTickCount64 := @GetTickCount64ForXP;\r\n   QueryFullProcessImageNameW     := LibraryResolve(h, 'QueryFullProcessImageNameW');\r\n+  InitializeProcThreadAttributeList :=\r\n+    LibraryResolve(h, 'InitializeProcThreadAttributeList');\r\n+  UpdateProcThreadAttribute      := LibraryResolve(h, 'UpdateProcThreadAttribute');\r\n+  DeleteProcThreadAttributeList  := LibraryResolve(h, 'DeleteProcThreadAttributeList');\r\n   GetLogicalProcessorInformation := LibraryResolve(h, 'GetLogicalProcessorInformation');\r\n   CreateSymbolicLinkW            := LibraryResolve(h, 'CreateSymbolicLinkW');\r\n   InitializeSRWLock              := LibraryResolve(h, 'InitializeSRWLock');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "96554b8ece099bc002996fc3d95af47113680f90",
+      "short_sha": "96554b8e",
+      "subject": "test: TTestCoreBase._RunRedirect expects fewer signals - see #648",
+      "body": "The sender thread of MacOS arm64 GitHub runners sleeps about 100ms instead of\n20ms, so only 9 or 10 signals were sent during the 1 second command.",
+      "author": "zen010101",
+      "date": "2026-11-06T19:06:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/96554b8ece099bc002996fc3d95af47113680f90",
+      "parents": [
+        "fa95d0f350dd103a122637a9264dfe3d836c60af"
+      ],
+      "stats": {
+        "additions": 2,
+        "deletions": 1,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -3839,7 +3839,8 @@ procedure TTestCoreBase._RunRedirect;\n   finally\r\n     sender.Terminate;\r\n     sender.WaitFor;\r\n-    CheckUtf8(sender.Sent > 10, 'signals=%', [sender.Sent]);\r\n+    // MacOS arm64 runners only send 9 or 10 signals in this second\r\n+    CheckUtf8(sender.Sent >= 3, 'signals=%', [sender.Sent]);\r\n     sender.Free;\r\n     fpsigaction(SIGUSR1, @old, nil);\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "fa95d0f350dd103a122637a9264dfe3d836c60af",
+      "short_sha": "fa95d0f3",
+      "subject": "core: TExternalProcess child closes descriptors up to the highest opened - see #648",
+      "body": "Without closefrom() nor close_range(), e.g. on MacOS or Linux < 5.9, the child\nprocess looped up to RLIMIT_NOFILE, which TPollSockets raises to the hard limit:\none RunRedirect() took 118ms with 524288 descriptors and 230ms with 1048576 on\nLinux, instead of 1.3ms - and 33ms instead of 6ms on a MacOS x86_64 runner with\n46080 descriptors.\nUnless close_range() is available, the parent now lists /proc/self/fd or\n/dev/fd before fork(), and the child loops up to the highest descriptor, with\na margin of 64 for the descriptors opened meanwhile by other threads.\nA new regression test checks that a descriptor far above all the others is\nnot inherited.",
+      "author": "zen010101",
+      "date": "2026-11-06T15:47:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fa95d0f350dd103a122637a9264dfe3d836c60af",
+      "parents": [
+        "4b165bd9fee2a29ebda36bf3e55ad43c40d37436"
+      ],
+      "stats": {
+        "additions": 84,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 62,
+          "deletions": 1,
+          "patch": "@@ -5638,6 +5638,67 @@ begin\n     result := rl.rlim_cur;\r\n end;\r\n \r\n+{$ifdef HASCLOSERANGE}\r\n+var\r\n+  CloseRangeState: integer; // 0 = not tested yet, 1 = available, 2 = missing\r\n+\r\n+function CloseRangeAvailable: boolean;\r\n+begin\r\n+  if CloseRangeState = 0 then\r\n+    // nothing to close so far in the table, but ENOSYS before Linux 5.9\r\n+    if Do_SysCall(syscall_nr_close_range, TSysParam($fffffffe),\r\n+         TSysParam($fffffffe), 0) = 0 then\r\n+      CloseRangeState := 1\r\n+    else\r\n+      CloseRangeState := 2;\r\n+  result := CloseRangeState = 1;\r\n+end;\r\n+{$endif HASCLOSERANGE}\r\n+\r\n+// upper bound of the opened descriptors, for the closing loop of the child\r\n+// - without closefrom() nor close_range(), e.g. on MacOS or Linux < 5.9, a loop\r\n+// up to RLIMIT_NOFILE costs 118ms per execution with 524288 descriptors, as set\r\n+// by TPollSockets from the hard limit\r\n+// - descriptors opened by other threads until fork() take the lowest free\r\n+// numbers, so should be within the margin\r\n+function ChildMaxDescriptor: cint;\r\n+{$ifdef OSBSD}\r\n+begin\r\n+  result := 0; // not used with closefrom()\r\n+end;\r\n+{$else}\r\n+var\r\n+  d: pDir;\r\n+  e: pDirent;\r\n+  fd, n: integer;\r\n+begin\r\n+  result := MaxDescriptors;\r\n+  {$ifdef HASCLOSERANGE}\r\n+  if CloseRangeAvailable then\r\n+    exit;\r\n+  {$endif HASCLOSERANGE}\r\n+  d := fpOpendir(PAnsiChar({$ifdef OSLINUX}'/proc/self/fd'{$else}'/dev/fd'{$endif}));\r\n+  if d = nil then\r\n+    exit; // e.g. no /proc mounted\r\n+  fd := -1;\r\n+  repeat\r\n+    e := FpReaddir(d^);\r\n+    if e = nil then\r\n+      break;\r\n+    if AnsiChar(e.d_name[0]) in ['0'..'9'] then\r\n+    begin\r\n+      n := GetCardinal(@e.d_name[0]);\r\n+      if n > fd then\r\n+        fd := n;\r\n+    end;\r\n+  until false;\r\n+  FpClosedir(d^);\r\n+  if (fd >= 0) and\r\n+     (fd + 65 < result) then\r\n+    result := fd + 65; // margin of 64 descriptors\r\n+end;\r\n+{$endif OSBSD}\r\n+\r\n function TExternalProcess.DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n   const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n   withthread: boolean): boolean;\r\n@@ -5778,7 +5839,7 @@ begin\n   end;\r\n   if roStdinPipe in options then\r\n     SigPipeIntercept; // Write() should return false, not raise SIGPIPE\r\n-  maxfd := MaxDescriptors;\r\n+  maxfd := ChildMaxDescriptor; // after all our own descriptors were opened\r\n   fpsigemptyset(nomask);\r\n   FillCharFast(dfl, SizeOf(dfl), 0);\r\n   dfl.sa_handler := SigActionHandler(SIG_DFL);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 1,
+          "patch": "@@ -3879,7 +3879,7 @@ procedure TTestCoreBase._TExternalProcess;\n   data, s, dir, tool: RawUtf8;\r\n   cwd: TFileName;\r\n   start: Int64;\r\n-  bg, pid: cint;\r\n+  bg, pid, hfd: cint;\r\n   fds: TFilDes;\r\n   files, i: integer;\r\n begin\r\n@@ -4106,6 +4106,27 @@ procedure TTestCoreBase._TExternalProcess;\n   finally\r\n     p.Free;\r\n   end;\r\n+  // nor a descriptor far above all the others - e.g. 255 on MacOS by default\r\n+  hfd := GetFileOpenLimit - 1;\r\n+  if hfd > 1000 then\r\n+    hfd := 1000;\r\n+  if hfd > 200 then\r\n+  begin\r\n+    Check(fppipe(fds) = 0, 'fppipe');\r\n+    CheckEqual(fpdup2(fds[1], hfd), hfd, 'dup2'); // without close-on-exec\r\n+    fpclose(fds[1]);\r\n+    p := TExternalProcess.Create;\r\n+    try\r\n+      Check(p.Start('sleep 2'), 'high');\r\n+      fpclose(hfd);\r\n+      start := GetTickCount64;\r\n+      CheckEqual(fpread(fds[0], @i, SizeOf(i)), 0, 'high eof');\r\n+      CheckUtf8(GetTickCount64 - start < 1000, 'high delay');\r\n+      fpclose(fds[0]);\r\n+    finally\r\n+      p.Free;\r\n+    end;\r\n+  end;\r\n   // the child should not inherit an ignored SIGPIPE, e.g. from a server\r\n   SigPipeIntercept;\r\n   p := TExternalProcess.Create;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "4b165bd9fee2a29ebda36bf3e55ad43c40d37436",
+      "short_sha": "4b165bd9",
+      "subject": "core: TExternalProcess Windows implementation - see #648",
+      "body": "- CreateProcessW() with PROC_THREAD_ATTRIBUTE_HANDLE_LIST, so that each child\n  inherits only its own handles - with a lock as fallback before Vista\n- the process is created suspended in its own process group and job, so that\n  Terminate() sends CTRL_BREAK and WM_QUIT, then stops the whole job, as the\n  process group on POSIX\n- roWinJobCloseChildren keeps the CREATE_BREAKAWAY_FROM_JOB fallback of\n  mormot.ext.os when the current job forbids breakaway\n- the background thread peeks and reads the stdout/stderr anonymous pipes,\n  and is woken by an event\n- Start() with an array of arguments quotes them as CommandLineToArgvW() expects\n- RunRedirect() still uses RunCommandWin() on Windows\n- Windows regression tests, including the inheritance of handles",
+      "author": "zen010101",
+      "date": "2026-11-06T05:41:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4b165bd9fee2a29ebda36bf3e55ad43c40d37436",
+      "parents": [
+        "cd48e5efc812311006d5c1b57ee8eea7d65dea2a"
+      ],
+      "stats": {
+        "additions": 722,
+        "deletions": 22,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 3,
+          "patch": "@@ -6541,8 +6541,11 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - Write/WriteAndCloseStdin/CloseStdin need the roStdinPipe option\r\n   // - on POSIX, a simple command line is executed with no shell, and the process\r\n   // is created in its own session, so that Terminate/Kill also stop its children\r\n-  // - RunRedirect() is implemented over this class, from the calling thread\r\n-  // - Windows implementation is not available yet: Start() returns false\r\n+  // - on Windows, the command line is given to CreateProcessW() as such - so use\r\n+  // e.g. 'cmd /c ...' for a shell built-in - and the process is created in its\r\n+  // own process group and job, so that Terminate/Kill also stop its children\r\n+  // - RunRedirect() is implemented over this class on POSIX, from the calling\r\n+  // thread, but still uses RunCommandWin() on Windows\r\n   TExternalProcess = class(TSynPersistent)\r\n   protected\r\n     fSafe: TLightLock; // protect fState/fExitCode against concurrent reaping\r\n@@ -6558,6 +6561,9 @@   TExternalProcess = class(TSynPersistent)\n     fOutput, fError: RawUtf8;\r\n     fStdinSafe: TOSLightLock; // Write() may block: use an OS lock\r\n     fStdin, fStdout, fStderr, fWakeUpRead, fWakeUpWrite: THandle;\r\n+    {$ifdef OSWINDOWS}\r\n+    fProcess, fJob: THandle;\r\n+    {$endif OSWINDOWS}\r\n     // OS-specific methods\r\n     function DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n       const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n@@ -6587,6 +6593,8 @@   TExternalProcess = class(TSynPersistent)\n     /// start the execution of a command line\r\n     // - on POSIX, a simple command is executed directly after a lookup in the\r\n     // PATH of env, and the shell is called only for complex commands\r\n+    // - on Windows, cmd is given to CreateProcessW() as such, which searches\r\n+    // the executable in the PATH of the current process\r\n     // - env is encoded as 'n1=v1'#0'n2=v2'#0#0 pairs, possibly with\r\n     // roEnvAddExisting to complete the current environment\r\n     // - returns false if the process could not be executed\r\n@@ -6595,6 +6603,7 @@   TExternalProcess = class(TSynPersistent)\n     /// start the execution of an executable with some explicit arguments\r\n     // - args[0] is the executable, args[1..] its arguments, with no parsing\r\n     // nor shell call, e.g. if any argument comes from an untrusted source\r\n+    // - on Windows, the arguments are quoted as CommandLineToArgvW() expects\r\n     function Start(const args: array of TRunArg; const env: TRunArg = '';\r\n       const wrkdir: TFileName = ''; options: TRunOptions = RUN_PROCESS): boolean; overload;\r\n     /// send some data to the process stdin, with the roStdinPipe option\r\n@@ -6631,6 +6640,7 @@   TExternalProcess = class(TSynPersistent)\n     /// the exit code of the process, once ended\r\n     // - is -1 before, and negative if the process was terminated by a signal\r\n     // on POSIX, following the RTL WaitProcess() function convention\r\n+    // - on Windows, is 255 after a hard Terminate() or Kill()\r\n     property ExitCode: integer\r\n       read fExitCode;\r\n     /// the OS process ID\r\n@@ -13945,8 +13955,8 @@ function TExternalProcess.Redirect(waitfordelayms: cardinal; setresult: boolean;\n       break;\r\n     end;\r\n   until false;\r\n-  DoClose;\r\n   WaitExit(0); // reap the zombie (immediate after SIGKILL)\r\n+  DoClose;\r\n   if (exitcode <> nil) and\r\n      not fAborted then\r\n     exitcode^ := fExitCode;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 413,
+          "deletions": 5,
+          "patch": "@@ -5075,46 +5075,454 @@ end;\n \r\n { TExternalProcess }\r\n \r\n-// NOT IMPLEMENTED YET on Windows - see https://github.com/synopse/mORMot2/issues/648\r\n+const\r\n+  PROC_THREAD_ATTRIBUTE_HANDLE_LIST = $00020002;\r\n+  EXTENDED_STARTUPINFO_PRESENT      = $00080000;\r\n+\r\n+type\r\n+  TStartupInfoEx = record\r\n+    StartupInfo: TStartupInfo;\r\n+    lpAttributeList: pointer;\r\n+  end;\r\n+\r\n+function TerminateJobObject(hJob: THandle; uExitCode: cardinal): BOOL;\r\n+  stdcall; external kernel32;\r\n+\r\n+var\r\n+  // Vista+ API to restrict the handles inherited by a new process\r\n+  InitializeProcThreadAttributeList: function(lpAttributeList: pointer;\r\n+    dwAttributeCount, dwFlags: DWord; var lpSize: PtrUInt): BOOL; stdcall;\r\n+  UpdateProcThreadAttribute: function(lpAttributeList: pointer; dwFlags: DWord;\r\n+    Attribute: PtrUInt; lpValue: pointer; cbSize: PtrUInt;\r\n+    lpPreviousValue, lpReturnSize: pointer): BOOL; stdcall;\r\n+  DeleteProcThreadAttributeList: procedure(lpAttributeList: pointer); stdcall;\r\n+  ProcThreadAttributeChecked: boolean;\r\n+  // serialize the inheritable handles window if there is no such API\r\n+  ExternalProcessSafe: TLightLock;\r\n+\r\n+function HasProcThreadAttribute: boolean;\r\n+var\r\n+  k: THandle;\r\n+begin\r\n+  if not ProcThreadAttributeChecked then\r\n+  begin\r\n+    k := GetModuleHandle(kernel32);\r\n+    @InitializeProcThreadAttributeList :=\r\n+      GetProcAddress(k, 'InitializeProcThreadAttributeList');\r\n+    @UpdateProcThreadAttribute := GetProcAddress(k, 'UpdateProcThreadAttribute');\r\n+    @DeleteProcThreadAttributeList :=\r\n+      GetProcAddress(k, 'DeleteProcThreadAttributeList');\r\n+    ProcThreadAttributeChecked := true;\r\n+  end;\r\n+  result := Assigned(InitializeProcThreadAttributeList) and\r\n+            Assigned(UpdateProcThreadAttribute) and\r\n+            Assigned(DeleteProcThreadAttributeList);\r\n+end;\r\n+\r\n+procedure CloseValid(var h: THandle);\r\n+begin\r\n+  if h = 0 then\r\n+    exit;\r\n+  CloseHandle(h);\r\n+  h := 0;\r\n+end;\r\n+\r\n+// a duplicated inheritable handle of the current stdin/stdout/stderr, or 0\r\n+function DuplicateStdHandle(std: cardinal): THandle;\r\n+var\r\n+  h: THandle;\r\n+begin\r\n+  result := 0;\r\n+  h := GetStdHandle(std);\r\n+  if (h = 0) or\r\n+     (h = INVALID_HANDLE_VALUE) or\r\n+     not DuplicateHandle(GetCurrentProcess, h, GetCurrentProcess, @result,\r\n+       0, {inherit=}true, DUPLICATE_SAME_ACCESS) then\r\n+    result := 0;\r\n+end;\r\n+\r\n+// append an argument to a command line, quoted as CommandLineToArgvW() expects\r\n+procedure AppendArg(var line: TFileName; const arg: TFileName);\r\n+var\r\n+  i, bs: PtrInt;\r\n+  c: char;\r\n+begin\r\n+  if line <> '' then\r\n+    line := line + ' ';\r\n+  if (arg <> '') and\r\n+     (Pos(' ', arg) = 0) and\r\n+     (Pos(#9, arg) = 0) and\r\n+     (Pos('\"', arg) = 0) then\r\n+  begin\r\n+    line := line + arg;\r\n+    exit;\r\n+  end;\r\n+  line := line + '\"';\r\n+  bs := 0;\r\n+  for i := 1 to length(arg) do\r\n+  begin\r\n+    c := arg[i];\r\n+    if c = '\\' then\r\n+    begin\r\n+      inc(bs); // backslashes are only escaped before a double quote\r\n+      continue;\r\n+    end;\r\n+    if c = '\"' then\r\n+      bs := bs * 2 + 1; // escape the backslashes and the double quote\r\n+    line := line + StringOfChar('\\', bs) + c;\r\n+    bs := 0;\r\n+  end;\r\n+  line := line + StringOfChar('\\', bs * 2) + '\"'; // before the final quote\r\n+end;\r\n \r\n function TExternalProcess.DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n   const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n   withthread: boolean): boolean;\r\n+var\r\n+  si: TStartupInfoEx;\r\n+  pi: TProcessInformation;\r\n+  inr, inw, outr, outw, errr, errw: THandle;\r\n+  list: array[0..2] of THandle;\r\n+  n, i: PtrInt;\r\n+  attrsize: PtrUInt;\r\n+  flags: cardinal;\r\n+  line: TFileName;\r\n+  wcmd, wenv, wpath: SynUnicode;\r\n+  created, locked: boolean;\r\n+\r\n+  procedure AddToList(h: THandle);\r\n+  var\r\n+    j: PtrInt;\r\n+  begin\r\n+    if h = 0 then\r\n+      exit;\r\n+    for j := 0 to n - 1 do\r\n+      if list[j] = h then\r\n+        exit; // e.g. stderr merged into stdout\r\n+    SetHandleInforma\n... [truncated, 9710 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 296,
+          "deletions": 14,
+          "patch": "@@ -3674,8 +3674,6 @@ procedure TTestCoreBase._ParseCommandArgs;\n   Test('\"one one\" two', ['one one', 'two'], [], false);\r\n end;\r\n \r\n-{$ifdef FPCPOSIX}\r\n-\r\n type\r\n   // TOnRedirect is a method, so needs a class instance\r\n   TRunRedirectTest = class\r\n@@ -3687,16 +3685,6 @@   TRunRedirectTest = class\n     function OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n   end;\r\n \r\n-  // send SIGUSR1 to a given thread every 20 ms\r\n-  TSignalSender = class(TThread)\r\n-  protected\r\n-    fTarget: TThreadID;\r\n-    procedure Execute; override;\r\n-  public\r\n-    Sent: integer;\r\n-    constructor Create(target: TThreadID); reintroduce;\r\n-  end;\r\n-\r\n function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n begin\r\n   if Calls = 0 then\r\n@@ -3708,6 +3696,19 @@ function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): bo\n             (text <> '');\r\n end;\r\n \r\n+{$ifdef FPCPOSIX}\r\n+\r\n+type\r\n+  // send SIGUSR1 to a given thread every 20 ms\r\n+  TSignalSender = class(TThread)\r\n+  protected\r\n+    fTarget: TThreadID;\r\n+    procedure Execute; override;\r\n+  public\r\n+    Sent: integer;\r\n+    constructor Create(target: TThreadID); reintroduce;\r\n+  end;\r\n+\r\n function pthread_kill(thread: TThreadID; sig: cint): cint;\r\n   cdecl; external {$ifdef OSLINUX} 'pthread' {$endif} name 'pthread_kill';\r\n \r\n@@ -4133,17 +4134,298 @@ procedure TTestCoreBase._TExternalProcess;\n end;\r\n \r\n {$else}\r\n+{$ifdef OSWINDOWS}\r\n+\r\n+const\r\n+  SYNCHRONIZE  = $00100000;\r\n+  WAIT_TIMEOUT = $00000102;\r\n+\r\n+function GetProcessHandleCount(hProcess: THandle; var count: cardinal): BOOL;\r\n+  stdcall; external 'kernel32.dll';\r\n+function OpenProcess(dwDesiredAccess: cardinal; bInheritHandle: BOOL;\r\n+  dwProcessId: cardinal): THandle;\r\n+  stdcall; external 'kernel32.dll';\r\n+function CreatePipe(var hReadPipe, hWritePipe: THandle; lpPipeAttributes: pointer;\r\n+  nSize: cardinal): BOOL;\r\n+  stdcall; external 'kernel32.dll';\r\n+function PeekNamedPipe(hNamedPipe: THandle; lpBuffer: pointer; nBufferSize: cardinal;\r\n+  lpBytesRead, lpTotalBytesAvail, lpBytesLeftThisMessage: pointer): BOOL;\r\n+  stdcall; external 'kernel32.dll';\r\n+\r\n+type\r\n+  TPipeSecurity = record\r\n+    nLength: cardinal;\r\n+    lpSecurityDescriptor: pointer;\r\n+    bInheritHandle: BOOL;\r\n+  end;\r\n+\r\n+// true if the pipe returns ERROR_BROKEN_PIPE within 1 second\r\n+function PipeBrokenSoon(rd: THandle): boolean;\r\n+var\r\n+  i: integer;\r\n+begin\r\n+  result := true;\r\n+  for i := 1 to 100 do\r\n+    if PeekNamedPipe(rd, nil, 0, nil, nil, nil) then\r\n+      SleepHiRes(10)\r\n+    else\r\n+      exit;\r\n+  result := false;\r\n+end;\r\n+\r\n+function OpenedHandles: integer;\r\n+var\r\n+  n: cardinal;\r\n+begin\r\n+  n := 0;\r\n+  GetProcessHandleCount(GetCurrentProcess, n);\r\n+  result := n;\r\n+end;\r\n+\r\n+function ProcessRunning(pid: cardinal): boolean;\r\n+var\r\n+  h: THandle;\r\n+begin\r\n+  h := OpenProcess(SYNCHRONIZE, false, pid);\r\n+  result := (h <> 0) and\r\n+            (WaitForSingleObject(h, 0) = WAIT_TIMEOUT);\r\n+  if h <> 0 then\r\n+    CloseHandle(h);\r\n+end;\r\n \r\n procedure TTestCoreBase._RunRedirect;\r\n+var\r\n+  exitcode: integer;\r\n begin\r\n-  // POSIX specific by now\r\n+  // RunRedirect() still uses RunCommandWin() on Windows\r\n+  CheckEqual(RunRedirect('cmd /c \"echo hello& exit 3\"', @exitcode),\r\n+    'hello'#13#10, 'output');\r\n+  CheckEqual(exitcode, 3, 'exitcode');\r\n end;\r\n \r\n procedure TTestCoreBase._TExternalProcess;\r\n+var\r\n+  p, b: TExternalProcess;\r\n+  r: TRunRedirectTest;\r\n+  data, s: RawUtf8;\r\n+  dir: TFileName;\r\n+  start: Int64;\r\n+  pid: cardinal;\r\n+  files, i, timeout: integer;\r\n+  sec: TPipeSecurity;\r\n+  rd, wr: THandle;\r\n begin\r\n-  // TExternalProcess is POSIX only by now\r\n+  // basic execution with stdout and exit code - no shell on Windows\r\n+  p := TExternalProcess.Create;\r\n+  try\r\n+    Check(p.State = epsNotStarted, 'state0');\r\n+    CheckEqual(p.ExitCode, -1, 'exitcode0');\r\n+    Check(p.Start('cmd /c \"echo hello& exit 3\"'), 'start');\r\n+    Check(p.State = epsRunning, 'state1');\r\n+    Check(p.Pid <> 0, 'pid');\n... [truncated, 6802 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "cd48e5efc812311006d5c1b57ee8eea7d65dea2a",
+      "short_sha": "cd48e5ef",
+      "subject": "core: new TExternalProcess class with redirected stdin/stdout/stderr - see #648",
+      "body": "- one background thread per instance reads stdout/stderr in blocking mode,\n  then calls OnOutput/OnError or fills the ReadAvailable/ReadErrorAvailable\n  buffers; Destroy terminates the process and waits for this thread\n- Start() from a command line, parsed by ParseCommandArgs() as RunRedirect()\n  does, or from an array of arguments with no parsing nor shell call\n- new roStdinNull/roStdinPipe/roStderrMerge/roStderrPipe options, and\n  RUN_PROCESS with the same defaults on all systems: no stdin, stderr in stdout\n- POSIX: close-on-exec pipes (pipe2 on Linux), the child closes all other\n  descriptors (close_range on Linux 5.9+, closefrom on BSD), restores SIGPIPE\n  and its signal mask, and reports an execve() failure so that Start() returns\n  false; a lock protects waitpid() and the signals to the process group\n- POSIX RunRedirect() is now implemented over this class from the calling\n  thread, with the same behavior, plus the roStdinNull/roStderrMerge options\n- Windows implementation is pending: Start() returns false by now\n- regression tests of RunRedirect(), including the #647 ones, and of\n  TExternalProcess",
+      "author": "zen010101",
+      "date": "2026-11-06T04:08:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/cd48e5efc812311006d5c1b57ee8eea7d65dea2a",
+      "parents": [
+        "5df7dc803073b59d037470aa29dc3b8adca9e65f"
+      ],
+      "stats": {
+        "additions": 1478,
+        "deletions": 129,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 465,
+          "deletions": 1,
+          "patch": "@@ -6398,19 +6398,32 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   // - roWinNewConsole won't inherit the parent console, but have its own console\r\n   // - roWinKeepProcessOnTimeout won't make Ctrl+C / WM_QUIT or TerminateProcess\r\n   // - roWinCheckSynchronize will call CheckSynchronize() from the main thread\r\n+  // - by default, the child stdin and stderr are inherited from the current\r\n+  // process: roStdinNull reads stdin from the null device, and roStdinPipe from\r\n+  // TExternalProcess.Write; roStderrMerge redirects stderr to stdout, and\r\n+  // roStderrPipe to TExternalProcess.OnError/ReadErrorAvailable\r\n+  // - RunRedirect() ignores roStdinPipe and roStderrPipe\r\n   TRunOptions = set of (\r\n     roEnvAddExisting,\r\n     roWinJobCloseChildren,\r\n     roWinNoProcessDetach,\r\n     roWinNewConsole,\r\n     roWinKeepProcessOnTimeout,\r\n-    roWinCheckSynchronize);\r\n+    roWinCheckSynchronize,\r\n+    roStdinNull,\r\n+    roStdinPipe,\r\n+    roStderrMerge,\r\n+    roStderrPipe);\r\n \r\n const\r\n   /// the default options for RunCommand() and RunRedirect() transient execution\r\n   // - detaching the process from the console and Job group by default does only\r\n   // make sense for RunProcess() which will use TRunOptions = []\r\n   RUN_CMD = [roWinNoProcessDetach];\r\n+\r\n+  /// the default options for TExternalProcess.Start\r\n+  // - with the same behavior on all systems: no stdin, and stderr in stdout\r\n+  RUN_PROCESS = [roWinNoProcessDetach, roStdinNull, roStderrMerge];\r\n type\r\n   /// the low-level OS API type for executing processes arguments\r\n   TRunArg = {$ifdef OSPOSIX} RawUtf8 {$else} TFileName {$endif};\r\n@@ -6510,6 +6523,137 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - used before hard SIGKILL/TerminateProcess\r\n   RunAbortMethods: TRunAbortMethods = RUNABORT_DEFAULT;\r\n \r\n+type\r\n+  /// the execution state of a TExternalProcess instance\r\n+  TExternalProcessState = (\r\n+    epsNotStarted,\r\n+    epsRunning,\r\n+    epsExited,\r\n+    epsFailed);\r\n+\r\n+  /// execute an external process with redirected standard input and output\r\n+  // - stdin/stdout/stderr redirection is defined by the Start() options, by\r\n+  // default RUN_PROCESS for the same behavior on all systems: stdin from the\r\n+  // null device, and stderr merged into stdout\r\n+  // - a single background thread per instance reads stdout/stderr in blocking\r\n+  // mode, and calls OnOutput/OnError - or append to an internal buffer, to be\r\n+  // retrieved by ReadAvailable/ReadErrorAvailable if no callback is set\r\n+  // - Write/WriteAndCloseStdin/CloseStdin need the roStdinPipe option\r\n+  // - on POSIX, a simple command line is executed with no shell, and the process\r\n+  // is created in its own session, so that Terminate/Kill also stop its children\r\n+  // - RunRedirect() is implemented over this class, from the calling thread\r\n+  // - Windows implementation is not available yet: Start() returns false\r\n+  TExternalProcess = class(TSynPersistent)\r\n+  protected\r\n+    fSafe: TLightLock; // protect fState/fExitCode against concurrent reaping\r\n+    fState: TExternalProcessState;\r\n+    fOutputEof, fTerminated, fAborted, fKilling, fThreaded: boolean;\r\n+    fKeepOutput, fKeepError: boolean; // append to fOutput/fError\r\n+    fThreadDone: integer; // set by the background thread when done\r\n+    fPid: cardinal;\r\n+    fExitCode: integer;\r\n+    fOptions: TRunOptions;\r\n+    fOnOutput, fOnError: TOnRedirect;\r\n+    fOutputSafe: TLightLock; // protect fOutput/fError\r\n+    fOutput, fError: RawUtf8;\r\n+    fStdinSafe: TOSLightLock; // Write() may block: use an OS lock\r\n+    fStdin, fStdout, fStderr, fWakeUpRead, fWakeUpWrite: THandle;\r\n+    // OS-specific methods\r\n+    function DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n+      const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n+      withthread: boolean): boolean;\r\n+    function DoReap: boolean; // true if not running any more\r\n+    procedure DoSignal(hard: boolean);\r\n+    funct\n... [truncated, 13314 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 487,
+          "deletions": 128,
+          "patch": "@@ -5533,178 +5533,492 @@ begin\n   FastAssignNew(result); // not found: caller would fallback to the shell\r\n end;\r\n \r\n-function RunRedirect(const cmd: TRunArg; exitcode: PInteger;\r\n-  const onoutput: TOnRedirect; waitfordelayms: cardinal; setresult: boolean;\r\n-  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): RawByteString;\r\n+{ TExternalProcess }\r\n+\r\n+{$ifdef OSLINUX}\r\n+  {$if defined(CPUINTEL) or defined(CPUARM) or defined(CPUAARCH64)}\r\n+const\r\n+  syscall_nr_close_range = 436; // same number for all those CPUs\r\n+  {$define HASCLOSERANGE}\r\n+  {$ifend}\r\n+{$endif OSLINUX}\r\n+\r\n+{$ifdef OSBSD} // FreeBSD 8+, OpenBSD 3.5+, NetBSD 3+\r\n+procedure closefrom(lowfd: cint);\r\n+  cdecl; external clib name 'closefrom';\r\n+{$endif OSBSD}\r\n+\r\n+const\r\n+  // same values on Linux, BSD and MacOS - not defined by the RTL on Linux\r\n+  FCNTL_DUPFD   = 0;\r\n+  FCNTL_CLOEXEC = 1;\r\n+\r\n+procedure CloseValid(var fd: cint);\r\n+begin\r\n+  if fd < 0 then\r\n+    exit;\r\n+  fpclose(fd);\r\n+  fd := -1;\r\n+end;\r\n+\r\n+// set close-on-exec, and move a descriptor above stdin/stdout/stderr, so that\r\n+// the dup2() calls in the child process won't overlap: the parent may have\r\n+// closed its own standard descriptors, e.g. as a daemon\r\n+function EnsureCloseOnExec(fd: cint): cint;\r\n+begin\r\n+  result := fd;\r\n+  if fd < 0 then\r\n+    exit;\r\n+  if fd > 2 then\r\n+  begin\r\n+    {$ifndef OSLINUX} // O_CLOEXEC is set at creation on Linux\r\n+    fpfcntl(fd, F_SETFD, FCNTL_CLOEXEC);\r\n+    {$endif OSLINUX}\r\n+    exit;\r\n+  end;\r\n+  result := fpfcntl(fd, FCNTL_DUPFD, 3);\r\n+  if result >= 0 then\r\n+    fpfcntl(result, F_SETFD, FCNTL_CLOEXEC);\r\n+  fpclose(fd);\r\n+end;\r\n+\r\n+// create a pipe with close-on-exec, to be inherited only via dup2()\r\n+function NewPipe(var fd: TFilDes): boolean;\r\n+begin\r\n+  fd[0] := -1;\r\n+  fd[1] := -1;\r\n+  // without pipe2() e.g. on MacOS, there is a race window with any concurrent\r\n+  // fork() by another library - but our own children close all their\r\n+  // inherited descriptors anyway\r\n+  {$ifdef OSLINUX}\r\n+  result := Do_SysCall(syscall_nr_pipe2, TSysParam(@fd), O_CLOEXEC) = 0;\r\n+  {$else}\r\n+  result := fppipe(fd) = 0;\r\n+  {$endif OSLINUX}\r\n+  if not result then\r\n+    exit;\r\n+  fd[0] := EnsureCloseOnExec(fd[0]);\r\n+  fd[1] := EnsureCloseOnExec(fd[1]);\r\n+  result := (fd[0] >= 0) and\r\n+            (fd[1] >= 0);\r\n+end;\r\n+\r\n+function OpenNull: cint;\r\n+begin\r\n+  result := EnsureCloseOnExec(FpOpen('/dev/null',\r\n+    O_RDONLY {$ifdef OSLINUX} or O_CLOEXEC {$endif}));\r\n+end;\r\n+\r\n+// close all descriptors >= lowfd, in the child process\r\n+procedure CloseDescriptorsFrom(lowfd, maxfd: cint);\r\n+begin\r\n+  {$ifdef HASCLOSERANGE}\r\n+  if Do_SysCall(syscall_nr_close_range, TSysParam(lowfd),\r\n+       TSysParam($ffffffff), 0) = 0 then\r\n+    exit; // Linux 5.9+\r\n+  {$endif HASCLOSERANGE}\r\n+  {$ifdef OSBSD}\r\n+  closefrom(lowfd);\r\n+  {$else}\r\n+  while lowfd < maxfd do\r\n+  begin\r\n+    fpclose(lowfd);\r\n+    inc(lowfd);\r\n+  end;\r\n+  {$endif OSBSD}\r\n+end;\r\n+\r\n+function MaxDescriptors: cint;\r\n var\r\n-  fds: TFilDes;\r\n-  fd: THandle;\r\n-  pid, res, wr: cint;\r\n+  rl: TRLimit;\r\n+begin\r\n+  result := 1 shl 20; // reasonable upper limit\r\n+  if (fpgetrlimit(RLIMIT_NOFILE, @rl) = 0) and\r\n+     (rl.rlim_cur < 1 shl 20) then\r\n+    result := rl.rlim_cur;\r\n+end;\r\n+\r\n+function TExternalProcess.DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n+  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n+  withthread: boolean): boolean;\r\n+var\r\n+  i: PtrInt;\r\n+  pid, nul, maxfd, e: cint;\r\n   n: ssize_t;\r\n-  wait: cardinal;\r\n-  endtix: Int64;\r\n-  aborted, reaped: boolean;\r\n+  inp, outp, errp, rep, wake: TFilDes;\r\n   err: TParseCommands;\r\n   a: TParseCommandsArgs;\r\n   temp, path, wdir: RawUtf8;\r\n-  e: TRunEnv;\r\n+  ev: TRunEnv;\r\n   envpp: PPUtf8Char;\r\n-  tmp: TBuffer64K;\r\n+  nomask: TSigSet;\r\n+  dfl: SigactionRec;\r\n \r\n-  function RedirectOutput(killing: boolean; var redir: RawByteString): boolean;\r\n-  var\r\n-    u: RawUtf8;\r\n-    pending: integer;\r\n+  function ChildRedirect: bo\n... [truncated, 15644 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 45,
+          "deletions": 0,
+          "patch": "@@ -5073,6 +5073,51 @@ begin\n end;\r\n \r\n \r\n+{ TExternalProcess }\r\n+\r\n+// NOT IMPLEMENTED YET on Windows - see https://github.com/synopse/mORMot2/issues/648\r\n+\r\n+function TExternalProcess.DoStart(const cmd: TRunArg; const args: array of TRunArg;\r\n+  const env: TRunArg; const wrkdir: TFileName; options: TRunOptions;\r\n+  withthread: boolean): boolean;\r\n+begin\r\n+  fState := epsFailed;\r\n+  result := false;\r\n+end;\r\n+\r\n+function TExternalProcess.DoReap: boolean;\r\n+begin\r\n+  result := true;\r\n+end;\r\n+\r\n+procedure TExternalProcess.DoSignal(hard: boolean);\r\n+begin\r\n+end;\r\n+\r\n+function TExternalProcess.DoPump(timeoutms: integer): integer;\r\n+begin\r\n+  fOutputEof := true;\r\n+  result := -1;\r\n+end;\r\n+\r\n+function TExternalProcess.DoWrite(p: pointer; len: PtrInt): boolean;\r\n+begin\r\n+  result := false;\r\n+end;\r\n+\r\n+procedure TExternalProcess.DoCloseStdin;\r\n+begin\r\n+end;\r\n+\r\n+procedure TExternalProcess.DoClose;\r\n+begin\r\n+end;\r\n+\r\n+procedure TExternalProcess.DoWakeUp;\r\n+begin\r\n+end;\r\n+\r\n+\r\n { ****************** Gather Operating System Information }\r\n \r\n const\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 481,
+          "deletions": 0,
+          "patch": "@@ -238,6 +238,10 @@   TTestCoreBase = class(TSynTestCase)\n     procedure _GUID;\r\n     /// test ParseCommandArgs() functions\r\n     procedure _ParseCommandArgs;\r\n+    /// test RunRedirect() function\r\n+    procedure _RunRedirect;\r\n+    /// test TExternalProcess class\r\n+    procedure _TExternalProcess;\r\n     /// test TExecutableCommandLine class\r\n     procedure _TExecutableCommandLine;\r\n     /// test IsMatch() function\r\n@@ -307,6 +311,11 @@   TTestCoreBase = class(TSynTestCase)\n \r\n implementation\r\n \r\n+{$ifdef FPCPOSIX}\r\n+uses\r\n+  baseunix;\r\n+{$endif FPCPOSIX}\r\n+\r\n \r\n { TOrmPeople }\r\n \r\n@@ -3665,6 +3674,478 @@ procedure TTestCoreBase._ParseCommandArgs;\n   Test('\"one one\" two', ['one one', 'two'], [], false);\r\n end;\r\n \r\n+{$ifdef FPCPOSIX}\r\n+\r\n+type\r\n+  // TOnRedirect is a method, so needs a class instance\r\n+  TRunRedirectTest = class\r\n+  public\r\n+    Output: RawUtf8;\r\n+    Calls: integer;\r\n+    FirstCallEmpty, AbortOnText: boolean;\r\n+    SeenPid: cardinal;\r\n+    function OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n+  end;\r\n+\r\n+  // send SIGUSR1 to a given thread every 20 ms\r\n+  TSignalSender = class(TThread)\r\n+  protected\r\n+    fTarget: TThreadID;\r\n+    procedure Execute; override;\r\n+  public\r\n+    Sent: integer;\r\n+    constructor Create(target: TThreadID); reintroduce;\r\n+  end;\r\n+\r\n+function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n+begin\r\n+  if Calls = 0 then\r\n+    FirstCallEmpty := text = '';\r\n+  inc(Calls);\r\n+  SeenPid := pid;\r\n+  Output := Output + text;\r\n+  result := AbortOnText and\r\n+            (text <> '');\r\n+end;\r\n+\r\n+function pthread_kill(thread: TThreadID; sig: cint): cint;\r\n+  cdecl; external {$ifdef OSLINUX} 'pthread' {$endif} name 'pthread_kill';\r\n+\r\n+constructor TSignalSender.Create(target: TThreadID);\r\n+begin\r\n+  fTarget := target;\r\n+  inherited Create({suspended=}false);\r\n+end;\r\n+\r\n+procedure TSignalSender.Execute;\r\n+begin\r\n+  while not Terminated do\r\n+  begin\r\n+    if pthread_kill(fTarget, SIGUSR1) = 0 then\r\n+      inc(Sent);\r\n+    SleepHiRes(20);\r\n+  end;\r\n+end;\r\n+\r\n+procedure NoopSignalHandler(sig: cint); cdecl;\r\n+begin\r\n+end;\r\n+\r\n+function ProcessExists(pid: cint): boolean; // also true for a zombie\r\n+begin\r\n+  result := (pid > 0) and\r\n+            ((fpkill(pid, 0) = 0) or\r\n+             (fpgeterrno = ESysEPERM));\r\n+end;\r\n+\r\n+function ProcessEnded(pid: cint): boolean;\r\n+var\r\n+  i: integer;\r\n+begin\r\n+  for i := 1 to 200 do // an orphan may take some time to be reaped by init\r\n+  begin\r\n+    result := not ProcessExists(pid);\r\n+    if result then\r\n+      exit;\r\n+    SleepHiRes(10);\r\n+  end;\r\n+end;\r\n+\r\n+function OpenedHandles: integer;\r\n+var\r\n+  fd: cint;\r\n+begin\r\n+  result := 0;\r\n+  for fd := 0 to 1023 do\r\n+    if fpfcntl(fd, F_GETFD) >= 0 then\r\n+      inc(result);\r\n+end;\r\n+\r\n+// wait for the first line of output, i.e. the PID of a background process\r\n+functi\n... [truncated, 13143 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": 648,
+      "is_merge": false
+    }
+  ]
+}
