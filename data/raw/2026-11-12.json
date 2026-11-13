@@ -1,0 +1,2196 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-12",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-13T03:32:11Z",
+  "range": {
+    "since": "2026-11-11T23:00:00Z",
+    "until": "2026-11-12T23:00:00Z",
+    "base_sha": "856cfa42952707fc9ddf8ffc72c7b863608eedee",
+    "head_sha": "034fd7badd6dcd712d3a36fbce26560156304662"
+  },
+  "version": {
+    "after": "2.4.18026",
+    "before": "2.4.17982"
+  },
+  "totals": {
+    "commits": 38,
+    "additions": 1793,
+    "deletions": 501
+  },
+  "commits": [
+    {
+      "sha": "034fd7badd6dcd712d3a36fbce26560156304662",
+      "short_sha": "034fd7ba",
+      "subject": "Merge pull request #778 from zen010101/net-proxy-tests",
+      "body": "tests: THttpProxyServer end-to-end regression tests - see #392",
+      "author": "ab",
+      "date": "2026-11-12T20:00:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/034fd7badd6dcd712d3a36fbce26560156304662",
+      "parents": [
+        "be7dfa2be352e1b6993902c24f1d93ed68132e0c",
+        "0309bbc052c13fa9097b1dd360a2b63a1094b064"
+      ],
+      "stats": {
+        "additions": 329,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 329,
+          "deletions": 0,
+          "patch": "@@ -97,6 +97,10 @@   TNetworkProtocols = class(TSynTestCase)\n     reqfour: Int64;\r\n     // for FileRange\r\n     rangefile, rangesmall: TFileName;\r\n+    // for HttpProxyServer\r\n+    proxysmall, proxybig, proxyfresh: RawByteString;\r\n+    proxyfreshmod: RawUtf8;\r\n+    proxyget, proxyhead, proxyevent: integer;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -186,6 +190,12 @@   TNetworkProtocols = class(TSynTestCase)\n     function DoReadMaxBytesRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n     function DoReadMaxBytesDownload(const aUrl, aMethod, aInHeaders,\r\n       aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n+    /// validate THttpProxyServer local folder, remote URI and event sources\r\n+    procedure DoHttpProxyServer(Sender: TObject);\r\n+    function DoProxyOriginRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoProxyEventRequest(Ctxt: THttpServerRequestAbstract;\r\n+      const Uri: TUriMatchName; Met: TUriRouterMethod;\r\n+      ProxyUrl: THttpProxyUrl): cardinal;\r\n     /// validate clean start/shutdown of several DHCP servers\r\n     procedure DoDhcpServerShutdown(Sender: TObject);\r\n     /// validate that TCrtSocket.Close won't touch a handle closed by Abort\r\n@@ -624,6 +634,7 @@ procedure TNetworkProtocols.DoTFTPShutdown;\n procedure TNetworkProtocols.SlowTests;\r\n begin\r\n   // start some slow tests in background if /multithread is enabled\r\n+  Run(DoHttpProxyServer, self, 'HttpProxyServer', true, false);\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n   Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n@@ -8107,6 +8118,324 @@ procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoProxyOriginRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  // a minimal origin server, publishing resources with their own validator\r\n+  if IsHead(Ctxt.Method) then\r\n+    LockedInc32(@proxyhead)\r\n+  else\r\n+    LockedInc32(@proxyget);\r\n+  result := HTTP_SUCCESS;\r\n+  Ctxt.OutContentType := BINARY_CONTENT_TYPE;\r\n+  if Ctxt.Url = '/files/small.txt' then\r\n+  begin\r\n+    Ctxt.OutContent := proxysmall;\r\n+    Ctxt.OutCustomHeaders := 'Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT';\r\n+  end\r\n+  else if Ctxt.Url = '/files/big.bin' then\r\n+  begin\r\n+    Ctxt.OutContent := proxybig;\r\n+    Ctxt.OutCustomHeaders := 'ETag: \"big-1\"';\r\n+  end\r\n+  else if Ctxt.Url = '/files/fresh.txt' then\r\n+  begin\r\n+    Ctxt.OutContent := proxyfresh;\r\n+    Ctxt.OutCustomHeaders := proxyfreshmod;\r\n+  end\r\n+  else if Ctxt.Url = '/files/error' then\r\n+    result := HTTP_SERVERERROR\r\n+  else\r\n+    result := HTTP_NOTFOUND;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoProxyEventRequest(Ctxt: THttpServerRequestAbstract;\r\n+  const Uri: TUriMatchName; Met: TUriRouterMethod;\r\n+  ProxyUrl: THttpProxyUrl): cardinal;\r\n+var\r\n+  path: RawUtf8;\r\n+begin\r\n+  LockedInc32(@proxyevent);\r\n+  FastSetString(path, Uri.Path.Text, Uri.Path.Len);\r\n+  Ctxt.OutContent := Join([Ctxt.Method, ' ', path]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpProxyServer(Sender: TObject);\r\n+const\r\n+  HELLO: RawUtf8 = 'hello proxy';\r\n+  INNER: RawUtf8 = 'inner file';\r\n+  ORIGIN = 'http://127.0.0.1:8882/files/';\r\n+var\r\n+  srv: THttpServer; // the origin server\r\n+  settings: THttpProxyServerSettings;\r\n+  url: THttpProxyUrlSettings;\r\n+  proxy: THttpProxyServer;\r\n+  clt: THttpClientSocket;\r\n+  raw: TCrtSocket;\r\n+  root, cache, cachefresh, cacheslow: TFileName;\r\n+  local, first: RawByteString;\r\n+  validator, line: RawUtf8;\r\n+  len: integer;\r\n+  files: TFindFilesDynArray;\r\n+  gets, i: integer;\r\n+  endtix: Int64;\r\n+  found: boolean;\r\n+\r\n+  procedure Expect(const method, uri: RawUtf8; expected: integer;\r\n+    const header: RawUtf8 = ''; const body: RawByteString = '');\r\n+  var\r\n+\n... [truncated, 12821 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 778,
+      "is_merge": true
+    },
+    {
+      "sha": "be7dfa2be352e1b6993902c24f1d93ed68132e0c",
+      "short_sha": "be7dfa2b",
+      "subject": "crypt: enhanced TotpValidate()",
+      "body": "- as reported by #759",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T17:52:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/be7dfa2be352e1b6993902c24f1d93ed68132e0c",
+      "parents": [
+        "4d8d207171571b1cddd987aac12508ba423d8d0a"
+      ],
+      "stats": {
+        "additions": 45,
+        "deletions": 21,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -4567,7 +4567,6 @@ function Iso8601ToTimeLog(const S: RawByteString): TTimeLog;\n \r\n { ******************* TTextDateWriter supporting date/time ISO-8601 serialization }\r\n \r\n-\r\n { TTextDateWriter }\r\n \r\n procedure TTextDateWriter.AddSpaced(Value: QWord; Width: PtrInt; SepChar: AnsiChar);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 8,
+          "patch": "@@ -1382,15 +1382,16 @@ function ScramClientServerAuth(const Hash, User, ServerProof: RawUtf8;\n /// compute the RFC 6238 TOTP user code from its base32 (or binary) secret\r\n // - supports digits in [4..8] and at least 128-bit = 16-byte of binary secret\r\n function TotpGenerate(const secret: RawUtf8; digits: integer = TOTP_DIGITS;\r\n-  algo: TSignAlgo = saSha1; binary: boolean = false; timestep: Int64 = -1): RawUtf8;\r\n+  algo: TSignAlgo = saSha1; binary: boolean = false; timestep: TUnixTime = -1): RawUtf8;\r\n \r\n /// compute a base32-encoded RFC 6238 TOTP secret to share with the client\r\n // - any len < 16 bytes would be rounded up to 16 (i.e. 128-bit)\r\n function TotpGenerateSecret(len: PtrInt = 20): RawUtf8;\r\n \r\n /// verify a RFC 6238 TOTP user code from its base32 (or binary) secret\r\n-function TotpValidate(const secret, usercode: RawUtf8; window: integer = 1;\r\n-  algo: TSignAlgo = saSha1; timestep: Int64 = -1; binary: boolean = false): boolean;\r\n+function TotpValidate(const secret, usercode: RawUtf8;\r\n+  digits: integer = TOTP_DIGITS; window: integer = 1; algo: TSignAlgo = saSha1;\r\n+  timestep: TUnixTime = -1; timematch: PUnixTime = nil; binary: boolean = false): boolean;\r\n \r\n /// encode Google Authenticator otpauth:// URI scheme value\r\n function TotpUrl(const issuer, account, b32secret: RawUtf8;\r\n@@ -4279,7 +4280,7 @@ function TScramClient.CheckFinalResponse(const ServerResponse: RawUtf8): boolean\n   TOTP_MOD: array[4..8] of cardinal = (10000, 100000, 1000000, 10000000, 100000000);\r\n \r\n function TotpGenerate(const secret: RawUtf8; digits: integer; algo: TSignAlgo;\r\n-  binary: boolean; timestep: Int64): RawUtf8;\r\n+  binary: boolean; timestep: TUnixTime): RawUtf8;\r\n var\r\n   sec: RawByteString;\r\n   signer: TSynSigner;\r\n@@ -4313,16 +4314,16 @@ function TotpGenerateSecret(len: PtrInt): RawUtf8;\n   FillZero(bin);\r\n end;\r\n \r\n-function TotpValidate(const secret, usercode: RawUtf8; window: integer;\r\n-  algo: TSignAlgo; timestep: Int64; binary: boolean): boolean;\r\n+function TotpValidate(const secret, usercode: RawUtf8; digits, window: integer;\r\n+  algo: TSignAlgo; timestep: TUnixTime; timematch: PUnixTime; binary: boolean): boolean;\r\n var\r\n   sec: RawByteString;\r\n-  digits, key: cardinal;\r\n+  key: cardinal;\r\n   w: PtrInt;\r\n begin\r\n   result := false;\r\n-  digits := length(usercode);\r\n   if (cardinal(window) > 100) or\r\n+     (digits <> length(usercode)) or\r\n      not (digits in [low(TOTP_MOD) .. high(TOTP_MOD)]) or\r\n      not ToCardinal(usercode, key) then\r\n     exit; // reject weak usercode ASAP\r\n@@ -4335,12 +4336,18 @@ function TotpValidate(const secret, usercode: RawUtf8; window: integer;\n   if timestep < 0 then\r\n     timestep := UnixTimeUtc div TOTP_PERIOD;\r\n   result := true;\r\n+  if timematch <> nil then\r\n+    timematch^ := timestep;\r\n   if TotpGenerate(sec, digits, algo, {bin=}true, timestep) = userCode then\r\n     exit; // first check current time step (most common)\r\n   for w := -window to +window do\r\n     if (w <> 0) and\r\n        (TotpGenerate(sec, digits, algo, {bin=}true, timestep + w) = userCode) then\r\n+    begin\r\n+      if timematch <> nil then\r\n+        timematch^ := timestep + w;\r\n       exit; // verify previous and next time steps\r\n+    end;\r\n   result := false;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18025\n+18026",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18025'\r\n+'2.4.18026'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 4,
+          "patch": "@@ -9748,10 +9748,10 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n   CheckReducedTime('20300101T081742', 8, 17, 42, '2030-01-01T08:17:42');\r\n   CheckReducedTime('2030-01-01T08:17Z', 8, 17, 0, '2030-01-01T08:17:00');\r\n   CheckReducedTime('2030-01-01T08:17:42', 8, 17, 42, '2030-01-01T08:17:42');\r\n-  Check(Iso8601ToTimeLog('20300101081742') =\r\n-        Iso8601ToTimeLog('2030-01-01T08:17:42'));\r\n-  Check(DateTimeToIso8601(Iso8601ToDateTime('2030-01-01'), true) =\r\n-        '2030-01-01T00:00:00');\r\n+  CheckEqual(Iso8601ToTimeLog('20300101081742'),\r\n+             Iso8601ToTimeLog('2030-01-01T08:17:42'));\r\n+  CheckEqual(DateTimeToIso8601(Iso8601ToDateTime('2030-01-01'), true),\r\n+             '2030-01-01T00:00:00');\r\n   tmp := '2030-01-01';\r\n   noTime := false;\r\n   b.Value := Iso8601ToTimeLogPUtf8Char(pointer(tmp), length(tmp), @noTime);\r\n@@ -9762,6 +9762,14 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n   b.Value := Iso8601ToTimeLogPUtf8Char(pointer(tmp), length(tmp), @noTime);\r\n   Check(not noTime);\r\n   Check(b.Hour = 0);\r\n+  // Midnight and over-range values coverage\r\n+  CheckReducedTime('2030-01-01T00', 0, 0, 0, '2030-01-01T00:00:00');\r\n+  CheckReducedTime('2030-01-01T00:00', 0, 0, 0, '2030-01-01T00:00:00');\r\n+  CheckReducedTime('2030-01-01T23:59', 23, 59, 0, '2030-01-01T23:59:00');\r\n+  Check(Iso8601ToDateTime('2030-01-01T24') = 0);\r\n+  Check(Iso8601ToDateTime('2030-01-01T08:60') = 0);\r\n+  Check(Iso8601ToTimeLog('2030-01-01T24') = 0);\r\n+  Check(Iso8601ToTimeLog('2030-01-01T08:60') = 0);\r\n   // Standalone time-only decoders: hh, hhmm, hh:mm, complete and midnight.\r\n   CheckSame(Iso8601ToTime('08'), 8 / 24, 1e-10);\r\n   CheckSame(Iso8601ToTime('T08'), 8 / 24, 1e-10);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 6,
+          "patch": "@@ -1995,6 +1995,7 @@ procedure TTestCoreCrypto.CrcSlow(Context: TObject);\n   buf: RawByteString;\r\n   u, pw, nfo, nfo2, exp, db, proof, mech, sec, pin: RawUtf8;\r\n   iv: Int64;\r\n+  t: TUnixTime;\r\n   P: PAnsiChar;\r\n   unalign: PtrInt;\r\n   n, rnd, dig: integer;\r\n@@ -2425,18 +2426,27 @@ procedure TTestCoreCrypto.CrcSlow(Context: TObject);\n       pin := TotpGenerate(sec, dig, s);\r\n       Check(pin <> '', 'TotpGenerate');\r\n       CheckEqual(length(pin), dig);\r\n-      Check(TotpValidate(sec, pin, 1, s), 'TotpValidate with current time');\r\n-      Check(TotpValidate(Base32ToBin(sec), pin, 1, s, -1, true), 'Totp bin');\r\n-      Check(TotpValidate(sec, pin, 0, s, 123) =\r\n+      Check(TotpValidate(sec, pin, dig, 1, s), 'TotpValidate with current time');\r\n+      Check(TotpValidate(Base32ToBin(sec), pin, dig, 1, s, -1, nil, true), 'Totp bin');\r\n+      Check(TotpValidate(sec, pin, dig, 0, s, 123) =\r\n             (TotpGenerate(sec, dig, s, false, 123) = pin),\r\n             'TotpValidate with time=123');\r\n       CheckEqual(TotpGenerate('', 6, s), '', 'no sec');\r\n       CheckEqual(TotpGenerate(sec, 3, s), '', 'dig=3<4');\r\n       CheckEqual(TotpGenerate(sec, 9, s), '', 'dig=9>8');\r\n-      Check(not TotpValidate(sec, '', 1, s));\r\n-      Check(not TotpValidate(sec, '123', 1, s));\r\n-      Check(not TotpValidate(sec, '123456789', 1, s));\r\n+      Check(not TotpValidate(sec, '', dig, 1, s));\r\n+      Check(not TotpValidate(sec, '123', dig, 1, s));\r\n+      Check(not TotpValidate(sec, '123456789', dig, 1, s));\r\n     end;\r\n+  sec := 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';\r\n+  t := 0;\r\n+  Check(TotpValidate(sec, '287082', 6, 0, saSha1, 1, @t));\r\n+  CheckEqual(t, 1);\r\n+  Check(not TotpValidate(sec, '7082', 6, 0, saSha1, 1, @t));\r\n+  Check(TotpValidate(sec, '94287082', 8, 0, saSha1, 1, @t));\r\n+  CheckEqual(t, 1);\r\n+  Check(not TotpValidate(sec, '123456', 6, 0, saSha1, 1, @t));\r\n+  CheckEqual(t, 1);\r\n   CheckEqual(TotpUrl('Google', 'alice@google.com', 'JBSWY3DPEHPK3PXP'),\r\n     'otpauth://totp/Google:alice%40google.com?secret=JBSWY3DPEHPK3PXP&issuer=' +\r\n     'Google&digits=6&period=30');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.datetime",
+        "mormot.crypt.secure"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4d8d207171571b1cddd987aac12508ba423d8d0a",
+      "short_sha": "4d8d2071",
+      "subject": "db: hardened TIDListRowset.GetData against wrong OleDB usage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T17:03:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4d8d207171571b1cddd987aac12508ba423d8d0a",
+      "parents": [
+        "1c96c089e28b18f5ad764df5ab882b00b74591d5"
+      ],
+      "stats": {
+        "additions": 10,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.oledb.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 5,
+          "patch": "@@ -142,6 +142,7 @@ interface\n   DBACCESSOR_PARAMETERDATA = $00000004;\r\n   DBACCESSOR_OPTIMIZED     = $00000008;\r\n \r\n+  DB_E_BADROWHANDLE = HRESULT($80040E04);\r\n   DB_E_CANCELED     = HRESULT($80040E4E);\r\n   DB_E_NOTSUPPORTED = HRESULT($80040E53);\r\n \r\n@@ -945,12 +946,14 @@ procedure TIDListRowset.FillRowData(HROW: HROW; pCurrentRec: PIDListRec);\n \r\n function TIDListRowset.GetData(HROW: HROW; HACCESSOR: HACCESSOR;\r\n   pData: pointer): HResult;\r\n-var\r\n-  currentRec: PIDListRec;\r\n begin\r\n-  inherited GetData(HROW, HACCESSOR, pData);\r\n-  currentRec := pData;\r\n-  FillRowData(HROW, currentRec);\r\n+  if (HROW = 0) or\r\n+     (HROW > PtrUInt(Length(farr))) then\r\n+  begin\r\n+    result := DB_E_BADROWHANDLE;\r\n+    exit;\r\n+  end;\r\n+  FillRowData(HROW, PIDListRec(pData));\r\n   result := S_OK;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18024\n+18025",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18024'\r\n+'2.4.18025'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "low"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.oledb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "1c96c089e28b18f5ad764df5ab882b00b74591d5",
+      "short_sha": "1c96c089",
+      "subject": "db: fixed TIDListRowset.GetData OleDB rewind support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T16:58:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/1c96c089e28b18f5ad764df5ab882b00b74591d5",
+      "parents": [
+        "21e86cb501d938921899c1d1f96ac0b70aa0086b"
+      ],
+      "stats": {
+        "additions": 15,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.oledb.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 14,
+          "patch": "@@ -668,16 +668,15 @@   SSERRORINFO = record\n type\r\n   /// our custom IRowSet implementation\r\n   TBaseAggregatingRowset = class(TObject, IUnknown, IRowset)\r\n-  private\r\n-   fcTotalRows: UINT;\r\n-   // Defining as an array because in general there can be as many accessors as necessary\r\n-   // the reading rules from the provider for such scenarios are describe in the Books online\r\n-   fhAccessor: HACCESSORDynArray;\r\n   protected\r\n-   fidxRow: UINT;\r\n-   fUnkInnerSQLNCLIRowset: IUnknown;\r\n-   // Save the handle of the accessor that we create, the indexing is 0 based\r\n-   procedure SetAccessorHandle(idxAccessor: ULONG; hAccessor: HACCESSOR );\r\n+    fcTotalRows: UINT;\r\n+    // Defining as an array because in general there can be as many accessors as necessary\r\n+    // the reading rules from the provider for such scenarios are describe in the Books online\r\n+    fhAccessor: HACCESSORDynArray;\r\n+    fidxRow: UINT;\r\n+    fUnkInnerSQLNCLIRowset: IUnknown;\r\n+    // Save the handle of the accessor that we create, the indexing is 0 based\r\n+    procedure SetAccessorHandle(idxAccessor: ULONG; hAccessor: HACCESSOR );\r\n   public\r\n     constructor Create(cTotalRows: UINT);\r\n     function SetupAccessors(pIAccessorTVP: IAccessor): HRESULT; virtual; abstract;\r\n@@ -723,7 +722,7 @@   TIDListRowset = class(TBaseAggregatingRowset)\n     function GetData(HROW: HROW; HACCESSOR: HACCESSOR; pData: pointer): HRESULT; override; stdcall;\r\n     function SetupAccessors(pIAccessorIDList: IAccessor): HRESULT; override;\r\n \r\n-    procedure FillRowData(pCurrentRec:PIDListRec);\r\n+    procedure FillRowData(HROW: HROW; pCurrentRec:PIDListRec);\r\n     procedure FillBindingsAndSetupRowBuffer(pBindingsList: PDBBindingArray);\r\n   end;\r\n \r\n@@ -906,13 +905,13 @@ procedure TIDListRowset.FillBindingsAndSetupRowBuffer(pBindingsList: PDBBindingA\n   pBindingsList[0].obLength := PAnsiChar(@rec^.IDLen) - pointer(rec);\r\n end;\r\n \r\n-procedure TIDListRowset.FillRowData(pCurrentRec: PIDListRec);\r\n+procedure TIDListRowset.FillRowData(HROW: HROW; pCurrentRec: PIDListRec);\r\n var\r\n   p: pointer;\r\n   tmp: RawUtf8;\r\n-  w: WideString; // BSTR\r\n+  w: WideString; // BSTR local variable allocation\r\n begin\r\n-  p := pointer(farr[fidxRow - 2]);\r\n+  p := pointer(farr[HROW - 1]);\r\n   if (p <> nil) and\r\n      (PInteger(p)^ = NULL_LOW) then\r\n   begin\r\n@@ -951,7 +950,7 @@ function TIDListRowset.GetData(HROW: HROW; HACCESSOR: HACCESSOR;\n begin\r\n   inherited GetData(HROW, HACCESSOR, pData);\r\n   currentRec := pData;\r\n-  FillRowData(currentRec);\r\n+  FillRowData(HROW, currentRec);\r\n   result := S_OK;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18023\n+18024",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18023'\r\n+'2.4.18024'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.oledb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "21e86cb501d938921899c1d1f96ac0b70aa0086b",
+      "short_sha": "21e86cb5",
+      "subject": "test: completed ISO-8601 coverage",
+      "body": "- especially after #755 fix",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T16:53:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/21e86cb501d938921899c1d1f96ac0b70aa0086b",
+      "parents": [
+        "a58f88a645807871e6dded20dd586ea5fdc37dd9"
+      ],
+      "stats": {
+        "additions": 113,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18022\n+18023",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18022'\r\n+'2.4.18023'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 107,
+          "deletions": 2,
+          "patch": "@@ -9583,11 +9583,11 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n     t := s;\r\n     t[11] := ''''; // as in SynDB VArray[] quoted parameters\r\n     J.From(pointer(t), 10);\r\n-    Check(I.Value and not (1 shl (6 + 6 + 5) - 1) = J.Value);\r\n+    CheckEqual(I.Value and not (1 shl (6 + 6 + 5) - 1), J.Value);\r\n     I.From(s);\r\n     t := I.Text(Expanded);\r\n     if t <> s then // we allow error on time = 00:00:00 -> I.Text = just date\r\n-      Check(I.Value and (1 shl (6 + 6 + 5) - 1) = 0)\r\n+      CheckEqual(I.Value and (1 shl (6 + 6 + 5) - 1), 0)\r\n     else\r\n       Check(true);\r\n     J.From(E);\r\n@@ -9631,12 +9631,32 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n     end;\r\n   end;\r\n \r\n+  procedure CheckReducedTime(const S: RawUtf8;\r\n+    H, M, Sec: cardinal; const Expected: RawUtf8);\r\n+  var\r\n+    d: TDateTime;\r\n+    bits: TTimeLogBits;\r\n+    noTime: boolean;\r\n+  begin\r\n+    d := Iso8601ToDateTime(S);\r\n+    CheckEqual(DateTimeToIso8601(d, true), Expected);\r\n+    bits.Value := Iso8601ToTimeLog(S);\r\n+    CheckEqual(bits.Value, TimeLogFromDateTime(d), S);\r\n+    CheckEqual(bits.Hour, H, S);\r\n+    CheckEqual(bits.Minute, M, S);\r\n+    CheckEqual(bits.Second, Sec, S);\r\n+    noTime := true;\r\n+    bits.Value := Iso8601ToTimeLogPUtf8Char(pointer(S), length(S), @noTime);\r\n+    CheckUtf8(not noTime, S);\r\n+  end;\r\n+\r\n var\r\n   i: integer;\r\n   D, D2: TDateTime;\r\n   u: Int64; // TUnixTime/TUnixMSTime\r\n   tmp: RawUtf8;\r\n   b: TTimeLogBits;\r\n+  noTime: boolean;\r\n   st, start: TSynSystemTime;\r\n begin\r\n   Check(TTextDateWriter.InstanceSize <= SizeOf(TLocalWriter) - 256, 'TLocalWriter');\r\n@@ -9719,6 +9739,91 @@ procedure TTestCoreBase.Iso8601DateAndTime;\n     Check(Abs(D2 - D) < (1 / MilliSecsPerDay)); // we allow 1 ms error\r\n     D := D + rnd.NextDouble * 57; // go further a little bit: change date/time\r\n   end;\r\n+  // Issue #755 - support ISO-8601 reduced time precision in both parsers.\r\n+  CheckReducedTime('2030-01-01T08', 8, 0, 0, '2030-01-01T08:00:00');\r\n+  CheckReducedTime('2030-01-01T08:17', 8, 17, 0, '2030-01-01T08:17:00');\r\n+  CheckReducedTime('2030-01-01 08:17', 8, 17, 0, '2030-01-01T08:17:00');\r\n+  CheckReducedTime('20300101T08', 8, 0, 0, '2030-01-01T08:00:00');\r\n+  CheckReducedTime('20300101T0817', 8, 17, 0, '2030-01-01T08:17:00');\r\n+  CheckReducedTime('20300101T081742', 8, 17, 42, '2030-01-01T08:17:42');\r\n+  CheckReducedTime('2030-01-01T08:17Z', 8, 17, 0, '2030-01-01T08:17:00');\r\n+  CheckReducedTime('2030-01-01T08:17:42', 8, 17, 42, '2030-01-01T08:17:42');\r\n+  Check(Iso8601ToTimeLog('20300101081742') =\r\n+        Iso8601ToTimeLog('2030-01-01T08:17:42'));\r\n+  Check(DateTimeToIso8601(Iso8601ToDateTime('2030-01-01'), true) =\r\n+        '2030-01-01T00:00:00');\r\n+  tmp := '2030-01-01';\r\n+  noTime := false;\r\n+  b.Value := Iso8601ToTimeLogPUtf8Char(pointer(tmp), length(tmp), @noTime);\r\n+  Check(noTime);\r\n+  Check(b.Year = 2030);\r\n+  tmp := '2030-01-01T00';\r\n+  noTime := true;\r\n+  b.Value := Iso8601ToTimeLogPUtf8Char(pointer(tmp), length(tmp), @noTime);\r\n+  Check(not noTime);\r\n+  Check(b.Hour = 0);\r\n+  // Standalone time-only decoders: hh, hhmm, hh:mm, complete and midnight.\r\n+  CheckSame(Iso8601ToTime('08'), 8 / 24, 1e-10);\r\n+  CheckSame(Iso8601ToTime('T08'), 8 / 24, 1e-10);\r\n+  CheckSame(Iso8601ToTime('0800'), 8 / 24, 1e-10);\r\n+  CheckSame(Iso8601ToTime('08:17'),\r\n+    (8 * 60 + 17) / 1440, 1e-10);\r\n+  CheckSame(Iso8601ToTime('T0817'),\r\n+    (8 * 60 + 17) / 1440, 1e-10);\r\n+  CheckSame(Iso8601ToTime('T08:17'),\r\n+    (8 * 60 + 17) / 1440, 1e-10);\r\n+  CheckSame(Iso8601ToDateTime('T08'), 8 / 24, 1e-10);\r\n+  CheckSame(Iso8601ToDateTime('08:17'),\r\n+    (8 * 60 + 17) / 1440, 1e-10);\r\n+  CheckSame(Iso8601ToTime('T00'), 0, 1e-10);\r\n+  Check(IsIso8601('T00', 3));\r\n+  Check(IsIso8601('08', 2));\r\n+  Check(Iso8601ToTimeLog('08') = Iso8601ToTimeLog('T08'));\r\n+  Check(Iso8601ToTimeLog('08:17') = Iso8601ToTimeLog('T08:17'));\r\n+  Check(IsIso8601('2030-01-01T08:17', 16));\r\n+  // Strict JSON/BSON decoder keeps its full-precision format contract.\r\n+  tmp := '2030-01-01\n... [truncated, 1955 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -506,6 +506,7 @@ procedure TTestCoreProcess.Setup;\n procedure TTestCoreProcess.Variants;\r\n var\r\n   v: Variant;\r\n+  c: currency;\r\n   u: SynUnicode;\r\n   i64: Int64;\r\n   d: double;\r\n@@ -854,7 +855,8 @@ procedure TTestCoreProcess.Variants;\n   VariantSaveJson(v, twJsonEscape, s);\r\n   CheckEqual(s, 'null');\r\n   // Currency serialization remains unchanged\r\n-  v := Currency(1.5);\r\n+  c := 1.5;\r\n+  v := c;\r\n   CheckEqual(vd.VType, varCurrency);\r\n   CheckEqual(VariantSaveJson(v), '1.50');\r\n end;\r\n@@ -6523,7 +6525,7 @@ procedure TTestCoreProcess._BSON;\n   u := VariantSaveMongoJson(o, modMongoStrict);\r\n   CheckEqual(u, FormatUtf8('{\"id\":{\"$oid\":\"%\"},\"name\":\"John\",\"date\":{\"$date\":\"%\"}}',\r\n     [BSONID, st]));\r\n-  Check(u3 = u);\r\n+  CheckEqual(u3, u);\r\n   _Json(u, o2);\r\n   u := VariantSaveMongoJson(o2, modMongoShell);\r\n   CheckEqual(u, FormatUtf8('{id:ObjectId(\"%\"),name:\"John\",date:ISODate(\"%\")}',\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a58f88a645807871e6dded20dd586ea5fdc37dd9",
+      "short_sha": "a58f88a6",
+      "subject": "core: allow ISO-8601 HH:MM and HH decoding",
+      "body": "- as reported by #755",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T16:52:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a58f88a645807871e6dded20dd586ea5fdc37dd9",
+      "parents": [
+        "a756d8a0caf23cfdee76afbed0d1e6b8e5147015"
+      ],
+      "stats": {
+        "additions": 176,
+        "deletions": 136,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 174,
+          "deletions": 134,
+          "patch": "@@ -191,7 +191,6 @@ function Iso8601CheckAndDecode(P: PUtf8Char; L: PtrInt;\n // - calls internally Iso8601ToTimeLogPUtf8Char() and returns true if contains\r\n // at least a valid year (YYYY)\r\n function IsIso8601(P: PUtf8Char; L: PtrInt): boolean;\r\n-  {$ifdef HASINLINE}inline;{$endif}\r\n \r\n /// Time conversion from ISO-8601 (with no Date part)\r\n // - handle 'hhmmss' and 'hh:mm:ss' format\r\n@@ -1769,10 +1768,91 @@ function Iso8601FractionToMS(P: PUtf8Char; L: PtrInt): cardinal;\n     inc(result, c);\r\n end;\r\n \r\n+// internal inlined ISO-8601 time text decoder used by other functions\r\n+type\r\n+  TIsoTime = record\r\n+    H, M, S, MS: cardinal;\r\n+  end;\r\n+\r\n+function _Iso8601DecodeTime(P: PUtf8Char; L: PtrInt; var iso: TIsoTime): boolean;\r\n+  {$ifdef HASINLINE}inline;{$endif}\r\n+var\r\n+  i: PtrInt;\r\n+begin\r\n+  result := false;\r\n+  if P = nil then\r\n+    exit;\r\n+  if L = 0 then\r\n+    while P[L] <> #0 do\r\n+      inc(L);\r\n+  i := 0;\r\n+  if (L > 0) and (P[0] = 'T') then\r\n+    inc(i);\r\n+  if (L - i < 2) or\r\n+     not (P[i] in ['0'..'9']) or\r\n+     not (P[i + 1] in ['0'..'9']) then\r\n+    exit;\r\n+  iso.H := (ord(P[i]) - 48) * 10 + ord(P[i + 1]) - 48;\r\n+  iso.M := 0;\r\n+  iso.S := 0;\r\n+  iso.MS := 0;\r\n+  if iso.H >= 24 then\r\n+    exit;\r\n+  inc(i, 2);\r\n+  if (i = L) or ((i + 1 = L) and (P[i] = 'Z')) then\r\n+  begin\r\n+    result := true;\r\n+    exit;\r\n+  end;\r\n+  if P[i] = ':' then\r\n+    inc(i)\r\n+  else if not (P[i] in ['0'..'9']) then\r\n+    exit;\r\n+  if (L - i < 2) or\r\n+     not (P[i] in ['0'..'9']) or\r\n+     not (P[i + 1] in ['0'..'9']) then\r\n+    exit;\r\n+  iso.M := (ord(P[i]) - 48) * 10 + ord(P[i + 1]) - 48;\r\n+  if iso.M >= 60 then\r\n+    exit;\r\n+  inc(i, 2);\r\n+  if (i = L) or ((i + 1 = L) and (P[i] = 'Z')) then\r\n+  begin\r\n+    result := true;\r\n+    exit;\r\n+  end;\r\n+  if P[i] = ':' then\r\n+    inc(i)\r\n+  else if not (P[i] in ['0'..'9']) then\r\n+    exit;\r\n+  if (L - i < 2) or\r\n+     not (P[i] in ['0'..'9']) or\r\n+     not (P[i + 1] in ['0'..'9']) then\r\n+    exit;\r\n+  iso.S := (ord(P[i]) - 48) * 10 + ord(P[i + 1]) - 48;\r\n+  if iso.S >= 60 then\r\n+    exit;\r\n+  inc(i, 2);\r\n+  if (i < L) and (P[i] = '.') then\r\n+  begin\r\n+    inc(i);\r\n+    if (i = L) or not (P[i] in ['0'..'9']) then\r\n+      exit;\r\n+    iso.MS := Iso8601FractionToMS(@P[i], L - i);\r\n+    while (i < L) and (P[i] in ['0'..'9']) do\r\n+      inc(i);\r\n+  end;\r\n+  // preserve the existing UTC marker and unconverted numeric offset policy\r\n+  result := (i = L) or\r\n+            ((i + 1 = L) and (P[i] = 'Z')) or\r\n+            ((i < L) and (P[i] in ['+', '-']));\r\n+end;\r\n+\r\n procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\r\n   var result: TDateTime);\r\n var\r\n-  b, y, m, d, h, mi, ss, ms: cardinal;\r\n+  b, y, m, d: cardinal;\r\n+  t: TIsoTime;\r\n   time: TDateTime;\r\n   {$ifdef FPC}\r\n   y100: cardinal;\r\n@@ -1784,37 +1864,36 @@ procedure Iso8601ToDateTimePUtf8CharVar(P: PUtf8Char; L: PtrInt;\n   {$else}\r\n   tab: PByteArray; // faster on PIC, ARM and x86_64\r\n   {$endif CPUX86NOTPIC}\r\n-// expect 'YYYYMMDDThhmmss[.sss]' format but handle also\r\n-// 'YYYY-MM-DDThh:mm:ss[.sss]' or plain '[T]hh:mm:ss[.sss]'\r\n begin\r\n   PInt64(@result)^ := 0;\r\n   if P = nil then\r\n     exit;\r\n   if L = 0 then\r\n     while P[L] <> #0 do // no need to call external StrLen() for a few chars\r\n       inc(L);\r\n-  if L < 4 then\r\n-    exit; // we need 'YYYY' at least\r\n+  if L < 2 then\r\n+    exit; // at least 'hh' or 'YYYY'\r\n   if (P[0] = '''') and\r\n      (P[L - 1] = '''') then\r\n   begin\r\n     // in-place unquote of input - typical from SQL values\r\n     inc(P);\r\n     dec(L, 2);\r\n-    if L < 4 then\r\n+    if L < 2 then\r\n       exit;\r\n   end;\r\n-  if P[0] = 'T' then // 'Thhmmss[.sss]'\r\n-  begin\r\n-    dec(P, 8); // hhmmss at P[9..] position\r\n-    inc(L, 8);\r\n-  end\r\n-  else if P[2] = ':' then // 'hh:mm:ss[.sss]'\r\n+  if (P[0] = 'T') or (L = 2) or\r\n+     ((L >= 3) and (P[2] = ':')) then\r\n   begin\r\n-    dec(P, 9); // hh:mm:ss at P[9..] position\r\n-    inc(L, 9);\r\n-  end\r\n-  else\r\n+    if not _Iso8601DecodeTime(P, L, t) then\r\n+      exit;\r\n+    re\n... [truncated, 9708 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18021\n+18022",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18021'\r\n+'2.4.18022'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a756d8a0caf23cfdee76afbed0d1e6b8e5147015",
+      "short_sha": "a756d8a0",
+      "subject": "db: fixed OleDB TIDListRowset implementation",
+      "body": "- some dangling BSTR pointers were used which may trigger random GPF",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T16:51:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a756d8a0caf23cfdee76afbed0d1e6b8e5147015",
+      "parents": [
+        "9226b8d9f90ca18e6aa3a7c5462230124ba5c17b"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 23,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.oledb.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 21,
+          "patch": "@@ -877,10 +877,9 @@ constructor TIDListRowset.Create(arr: TRawUtf8DynArray; aType: TSqlDBFieldType);\n \r\n procedure TIDListRowset.FillBindingsAndSetupRowBuffer(pBindingsList: PDBBindingArray);\r\n var\r\n-  i: PtrInt;\r\n-  rec: TIDListRec; // pseudo record to compute offset within TIDListRec\r\n+  rec: PIDListRec; // pseudo record to compute offset within TIDListRec\r\n begin\r\n-  FillcharFast(rec, SizeOf(rec), 0); // makes Win64 compiler happy\r\n+  rec := nil; // make Delphi compiler happy (rec is never accessed by itself)\r\n   pBindingsList[0].pTypeInfo := nil;\r\n   pBindingsList[0].pObject := nil;\r\n   pBindingsList[0].pBindExt := nil;\r\n@@ -893,45 +892,50 @@ procedure TIDListRowset.FillBindingsAndSetupRowBuffer(pBindingsList: PDBBindingA\n     ftInt64:\r\n       begin\r\n         pBindingsList[0].cbMaxLen := SizeOf(int64);\r\n-        pBindingsList[0].obValue := PAnsiChar(@rec.IDVal) - pointer(@rec);\r\n-        pBindingsList[0].wType := DBTYPE_I8;\r\n+        pBindingsList[0].obValue  := PAnsiChar(@rec^.IDVal) - pointer(rec);\r\n+        pBindingsList[0].wType    := DBTYPE_I8;\r\n       end;\r\n     ftUtf8:\r\n       begin\r\n-        pBindingsList[0].cbMaxLen := SizeOf(PWideChar); //Check bind ''\r\n-        for i := 0 to Length(farr) - 1 do\r\n-          if Length(farr[i]) * SizeOf(WideChar) > integer(pBindingsList[0].cbMaxLen) then\r\n-            pBindingsList[0].cbMaxLen := Length(farr[i]) * SizeOf(WideChar);\r\n-        pBindingsList[0].obValue := PAnsiChar(@rec.StrVal) - pointer(@rec);\r\n-        pBindingsList[0].wType := DBTYPE_BSTR\r\n+        pBindingsList[0].cbMaxLen := SizeOf(pointer);\r\n+        pBindingsList[0].obValue  := PAnsiChar(@rec^.StrVal) - pointer(rec);\r\n+        pBindingsList[0].wType    := DBTYPE_BSTR;\r\n       end;\r\n   end;\r\n-  pBindingsList[0].obStatus := PAnsiChar(@rec.IDST) - pointer(@rec);\r\n-  pBindingsList[0].obLength := PAnsiChar(@rec.IDLen) - pointer(@rec);\r\n+  pBindingsList[0].obStatus := PAnsiChar(@rec^.IDST) - pointer(rec);\r\n+  pBindingsList[0].obLength := PAnsiChar(@rec^.IDLen) - pointer(rec);\r\n end;\r\n \r\n procedure TIDListRowset.FillRowData(pCurrentRec: PIDListRec);\r\n var\r\n-  curInd: integer;\r\n+  p: pointer;\r\n   tmp: RawUtf8;\r\n+  w: WideString; // BSTR\r\n begin\r\n-  curInd := fidxRow - 2;\r\n-  if IsNullJson(farr[curInd]) then\r\n-    pCurrentRec.IDST := ord(stIsNull)\r\n+  p := pointer(farr[fidxRow - 2]);\r\n+  if (p <> nil) and\r\n+     (PInteger(p)^ = NULL_LOW) then\r\n+  begin\r\n+    pCurrentRec.IDST := ord(stIsNull);\r\n+    pCurrentRec.IDLen := 0;\r\n+    pCurrentRec.StrVal := nil; // should be reset\r\n+  end\r\n   else\r\n   begin\r\n     pCurrentRec.IDST := 0;\r\n     case fType of\r\n       ftInt64:\r\n         begin\r\n-          SetInt64(pointer(farr[curInd]), pCurrentRec.IDVal);\r\n+          SetInt64(p, pCurrentRec.IDVal);\r\n           pCurrentRec.IDLen := SizeOf(Int64);\r\n         end;\r\n       ftUtf8:\r\n         begin\r\n-          tmp := UnQuoteSqlString(farr[curInd]);\r\n-          pCurrentRec.IDLen := (Length(tmp) + 1) * SizeOf(WideChar);\r\n-          pCurrentRec.StrVal := pointer(Utf8ToWideString(tmp));\r\n+          UnQuoteSqlStringVar(p, tmp);\r\n+          Utf8ToWideString(tmp, w);\r\n+          pCurrentRec.IDLen := SizeOf(pointer); // DBTYPE_BSTR\r\n+          pCurrentRec.StrVal := pointer(w);\r\n+          pointer(w) := nil; // binding uses DBMEMOWNER_CLIENTOWNED\r\n         end\r\n     else\r\n       EOleDBException.RaiseUtf8('Unsupported array parameter type %',\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18020\n+18021",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18020'\r\n+'2.4.18021'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.oledb"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9226b8d9f90ca18e6aa3a7c5462230124ba5c17b",
+      "short_sha": "9226b8d9",
+      "subject": "db: fixed TryDate() BSON decoding",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T16:51:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9226b8d9f90ca18e6aa3a7c5462230124ba5c17b",
+      "parents": [
+        "aff9a0e1aef7225122a8ea71e08cd561a981837e"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.nosql.bson.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2448,7 +2448,7 @@ function TBsonVariant.TryJsonToVariant(var Json: PUtf8Char; var Value: variant;\n         exit\r\n       else\r\n         inc(L);\r\n-    Iso8601ToDateTimePUtf8CharVar(P + 1, L, varvalue.VDate);\r\n+    Iso8601ToDateTimePUtf8CharVar(P + 1, L - 1, varvalue.VDate);\r\n     if varvalue.VDate <> 0 then\r\n       Return(betDateTime, P + L + 1, GotoEndOfObject);\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18019\n+18020",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18019'\r\n+'2.4.18020'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.nosql.bson"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aff9a0e1aef7225122a8ea71e08cd561a981837e",
+      "short_sha": "aff9a0e1",
+      "subject": "core: fixed VariantSaveJson()",
+      "body": "- as reported by #766",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T15:29:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aff9a0e1aef7225122a8ea71e08cd561a981837e",
+      "parents": [
+        "51d84d035b33706f03dc49cb94e853839ff3b0bd"
+      ],
+      "stats": {
+        "additions": 73,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 3,
+          "patch": "@@ -5502,6 +5502,7 @@ procedure __VariantSaveJson(V: PVarData; Escape: TTextWriterKind;\n   cv: TSynInvokeableVariantType;\r\n   vt: cardinal;\r\n   dummy: boolean;\r\n+  quote: AnsiChar;\r\n begin // supports complex or simple values\r\n   if cardinal(V.VType) = varVariantByRef then\r\n     V := V^.VPointer;\r\n@@ -5511,10 +5512,27 @@ procedure __VariantSaveJson(V: PVarData; Escape: TTextWriterKind;\n     vt := V.VType;\r\n     if (vt >= varFirstCustom) or\r\n        ((Escape <> twNone) and\r\n-        not (vt in VTYPE_SIMPLE)) then\r\n-      __VariantSaveJsonEscape(PVariant(V)^, result, Escape) // AddVariant()\r\n+        not (vt in VTYPE_SIMPLE)) then // complex types require AddVariant\r\n+      __VariantSaveJsonEscape(PVariant(V)^, result, Escape)\r\n     else\r\n-      VariantToUtf8(PVariant(V)^, result, dummy); // no escape for simple values\r\n+      case vt of\r\n+        varBoolean:\r\n+          result := BOOL_UTF8[ord(V^.VBoolean) <> 0]; // normalize\r\n+        varDate: // follow _JS_DateTime/TTextDateWriter.AddDateTime format\r\n+          if V^.VInt64 = 0 then\r\n+            result := NULL_STR_VAR\r\n+          else\r\n+          begin\r\n+            if Escape = twJsonEscape then\r\n+              quote := '\"'\r\n+            else\r\n+              quote := #0;\r\n+            DateTimeToIso8601Var(V^.VDate, {exp=}true, {ms=}false, 'T', quote,\r\n+              result, {AlwaysDateAndTime=}false);\r\n+          end;\r\n+      else // no escape for simple values\r\n+        VariantToUtf8(PVariant(V)^, result, dummy);\r\n+      end;\r\n   end\r\n   else\r\n     cv.ToJson(V, result);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18018\n+18019",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18018'\r\n+'2.4.18019'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 50,
+          "deletions": 0,
+          "patch": "@@ -807,6 +807,56 @@ procedure TTestCoreProcess.Variants;\n   CheckEqual(i64, 12);\r\n   Check(AnyVariantToDouble(v, d));\r\n   Check(d = 12.0, '12');\r\n+  // VariantSaveJson: Boolean and TDateTime regression (#766)\r\n+  v := true;\r\n+  CheckEqual(vd.VType, varBoolean);\r\n+  CheckEqual(VariantSaveJson(v), 'true');\r\n+  CheckEqual(VariantSaveJson(v, twNone), 'true');\r\n+  v := false;\r\n+  CheckEqual(vd.VType, varBoolean);\r\n+  CheckEqual(VariantSaveJson(v), 'false');\r\n+  CheckEqual(VariantSaveJson(v, twNone), 'false');\r\n+  // Date and time\r\n+  dt := EncodeDate(2030, 1, 1) + EncodeTime(8, 30, 45, 0);\r\n+  v := VarAsType(dt, varDate);\r\n+  CheckEqual(vd.VType, varDate);\r\n+  CheckEqual(VariantSaveJson(v), '\"2030-01-01T08:30:45\"');\r\n+  CheckEqual(VariantSaveJson(v, twNone), '2030-01-01T08:30:45');\r\n+  // Date only\r\n+  v := VarAsType(EncodeDate(2030, 1, 1), varDate);\r\n+  CheckEqual(VariantSaveJson(v), '\"2030-01-01\"');\r\n+  CheckEqual(VariantSaveJson(v, twNone), '2030-01-01');\r\n+  // Time only\r\n+  v := VarAsType(EncodeTime(8, 30, 45, 0), varDate);\r\n+  CheckEqual(VariantSaveJson(v), '\"T08:30:45\"');\r\n+  CheckEqual(VariantSaveJson(v, twNone), 'T08:30:45');\r\n+  // Milliseconds are not serialized\r\n+  dt := EncodeDate(2030, 1, 1) + EncodeTime(8, 30, 45, 123);\r\n+  v := VarAsType(dt, varDate);\r\n+  CheckEqual(VariantSaveJson(v), '\"2030-01-01T08:30:45\"');\r\n+  // Zero TDateTime\r\n+  v := VarAsType(0, varDate);\r\n+  CheckEqual(vd.VType, varDate);\r\n+  CheckEqual(VariantSaveJson(v), 'null');\r\n+  CheckEqual(VariantSaveJson(v, twNone), 'null');\r\n+  // Reusing the same destination RawUtf8\r\n+  s := 'previous value';\r\n+  v := true;\r\n+  VariantSaveJson(v, twJsonEscape, s);\r\n+  CheckEqual(s, 'true');\r\n+  v := false;\r\n+  VariantSaveJson(v, twJsonEscape, s);\r\n+  CheckEqual(s, 'false');\r\n+  v := VarAsType(EncodeDate(2030, 1, 1), varDate);\r\n+  VariantSaveJson(v, twJsonEscape, s);\r\n+  CheckEqual(s, '\"2030-01-01\"');\r\n+  v := VarAsType(0, varDate);\r\n+  VariantSaveJson(v, twJsonEscape, s);\r\n+  CheckEqual(s, 'null');\r\n+  // Currency serialization remains unchanged\r\n+  v := Currency(1.5);\r\n+  CheckEqual(vd.VType, varCurrency);\r\n+  CheckEqual(VariantSaveJson(v), '1.50');\r\n end;\r\n \r\n type\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.variants"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "51d84d035b33706f03dc49cb94e853839ff3b0bd",
+      "short_sha": "51d84d03",
+      "subject": "net: avoid potential buffer overflow in TPascalType.ToDefaultParameterValue",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T15:25:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/51d84d035b33706f03dc49cb94e853839ff3b0bd",
+      "parents": [
+        "e56e2ed6cae482abe1647f582731cf9143ddc1bc"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18017\n+18018",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18017'\r\n+'2.4.18018'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.openapi.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -2140,7 +2140,7 @@ function TPascalType.ToDefaultParameterValue(aParam: TPascalParameter): RawUtf8;\n   begin\n     // explicit default value\n     if cardinal(PVarData(def)^.VType) = varBoolean then\n-      result := BOOL_UTF8[PVarData(def)^.VBoolean] // normalize\n+      result := BOOL_UTF8[ord(PVarData(def)^.VBoolean) <> 0] // normalize\n     else if VariantToUtf8(def^, result) then\n       result := QuotedStr(result); // single quoted pascal string\n   end",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "security",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.openapi"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e56e2ed6cae482abe1647f582731cf9143ddc1bc",
+      "short_sha": "e56e2ed6",
+      "subject": "core: simplified TJsonSaveContext.AddDateTime",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T15:24:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e56e2ed6cae482abe1647f582731cf9143ddc1bc",
+      "parents": [
+        "30b881391d82e8e013da7460fa5fa0f50fe46508"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.json.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 5,
+          "patch": "@@ -5394,15 +5394,12 @@ procedure TJsonSaveContext.AddDateTime(Value: PDateTime; WithMS: boolean);\n     else\r\n       W.AddShort4(NULL_LOW);\r\n     exit;\r\n-  end\r\n-  else\r\n-    W.Add('\"');\r\n+  end;\r\n   bak := W.CustomOptions;\r\n   if woDateTimeWithZSuffix in Options then\r\n     include(W.fCustomOptions, twoDateTimeWithZ);\r\n-  W.AddDateTime(Value, 'T', #0, WithMS);\r\n+  W.AddDateTime(Value, 'T', '\"', WithMS);\r\n   W.CustomOptions := bak;\r\n-  W.AddDirect('\"');\r\n end;\r\n \r\n procedure TJsonSaveContext.AddShortBoolean(PS: PShortString; Value: boolean);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18016\n+18017",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18016'\r\n+'2.4.18017'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.json"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "30b881391d82e8e013da7460fa5fa0f50fe46508",
+      "short_sha": "30b88139",
+      "subject": "core: optional AlwaysDateAndTime parameter to Date/Time conversion functions",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T15:24:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/30b881391d82e8e013da7460fa5fa0f50fe46508",
+      "parents": [
+        "a662be4efafb1e1f1f52e77010ac83d5c8e16a54"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 9,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 7,
+          "patch": "@@ -250,7 +250,7 @@ function DateTimeToIso8601(D: TDateTime; Expanded: boolean; FirstChar: AnsiChar\n \r\n /// raw basic Date/Time conversion into ISO-8601 RawUtf8\r\n procedure DateTimeToIso8601Var(D: TDateTime; Expanded, WithMS: boolean;\r\n-  FirstChar, QuotedChar: AnsiChar; var Result: RawUtf8);\r\n+  FirstChar, QuotedChar: AnsiChar; var Result: RawUtf8; AlwaysDateAndTime: boolean = true);\r\n \r\n /// raw basic Date/Time conversion into ISO-8601 ShortString\r\n function DateTimeToIso8601Short(D: TDateTime; Expanded: boolean = true;\r\n@@ -266,7 +266,7 @@ function DateTimeToIso8601Short(D: TDateTime; Expanded: boolean = true;\n // - returns the number of chars written to P^ buffer\r\n function DateTimeToIso8601(P: PUtf8Char; D: TDateTime; Expanded: boolean;\r\n   FirstChar: AnsiChar = 'T'; WithMS: boolean = false;\r\n-  QuotedChar: AnsiChar = #0): PtrInt; overload;\r\n+  QuotedChar: AnsiChar = #0; AlwaysDateAndTime: boolean = true): PtrInt; overload;\r\n \r\n /// basic Date conversion into ISO-8601\r\n // - use 'YYYYMMDD' format if not Expanded\r\n@@ -2226,7 +2226,8 @@ function TimeToIso8601PChar(Time: TDateTime; P: PUtf8Char; Expanded: boolean;\n end;\r\n \r\n function DateTimeToIso8601(P: PUtf8Char; D: TDateTime; Expanded: boolean;\r\n-  FirstChar: AnsiChar; WithMS: boolean; QuotedChar: AnsiChar): PtrInt;\r\n+  FirstChar: AnsiChar; WithMS: boolean; QuotedChar: AnsiChar;\r\n+  AlwaysDateAndTime: boolean): PtrInt;\r\n var\r\n   beg: PUtf8Char;\r\n begin\r\n@@ -2236,8 +2237,12 @@ function DateTimeToIso8601(P: PUtf8Char; D: TDateTime; Expanded: boolean;\n     P^ := QuotedChar;\r\n     inc(P);\r\n   end;\r\n-  P := DateToIso8601PChar(D, P, Expanded);\r\n-  P := TimeToIso8601PChar(D, P, Expanded, FirstChar, WithMS);\r\n+  if AlwaysDateAndTime or // see TTextDateWriter.AddDateTime()\r\n+     (trunc(D) <> 0) then\r\n+    P := DateToIso8601PChar(D, P, Expanded);\r\n+  if AlwaysDateAndTime or\r\n+     (frac(D) <> 0) then\r\n+    P := TimeToIso8601PChar(D, P, Expanded, FirstChar, WithMS);\r\n   if QuotedChar <> #0 then\r\n   begin\r\n     P^ := QuotedChar;\r\n@@ -2253,13 +2258,13 @@ function DateTimeToIso8601(D: TDateTime; Expanded: boolean;\n end;\r\n \r\n procedure DateTimeToIso8601Var(D: TDateTime; Expanded, WithMS: boolean;\r\n-  FirstChar, QuotedChar: AnsiChar; var Result: RawUtf8);\r\n+  FirstChar, QuotedChar: AnsiChar; var Result: RawUtf8; AlwaysDateAndTime: boolean);\r\n var\r\n   tmp: TTemp32;\r\n begin\r\n   // D=0 is handled in DateTimeToIso8601Text()\r\n   FastSetString(result, @tmp,\r\n-    DateTimeToIso8601(@tmp, D, Expanded, FirstChar, WithMS, QuotedChar));\r\n+    DateTimeToIso8601(@tmp, D, Expanded, FirstChar, WithMS, QuotedChar, AlwaysDateAndTime));\r\n end;\r\n \r\n function DateTimeToIso8601Short(D: TDateTime; Expanded, WithMS: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18015\n+18016",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18015'\r\n+'2.4.18016'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.datetime"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a662be4efafb1e1f1f52e77010ac83d5c8e16a54",
+      "short_sha": "a662be4e",
+      "subject": "core: huge refactoring of 'null' constant usage",
+      "body": "- when assigned or when tested as RawUtf8 variable",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T15:00:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a662be4efafb1e1f1f52e77010ac83d5c8e16a54",
+      "parents": [
+        "75fea00a54bb619619b69fdad3089cd86ba1a833"
+      ],
+      "stats": {
+        "additions": 62,
+        "deletions": 58,
+        "files": 16
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.json.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -195,6 +195,10 @@ function IsStringJson(P: PUtf8Char; len: PtrInt): boolean; overload;\n /// test if the supplied buffer is a valid JSON number with no trailing space\r\n function IsNumberJson(P: PUtf8Char): boolean;\r\n \r\n+/// test if the supplied variable is case-sensitive 'null' JSON identifier\r\n+function IsNullJson(const U: RawUtf8): boolean;\r\n+  {$ifdef HASINLINE} inline; {$endif}\r\n+\r\n /// test if the supplied buffer is a valid JSON true/false boolean with no space\r\n function IsBooleanJson(P: PUtf8Char; V: PBoolean = nil): boolean;\r\n   {$ifdef HASINLINE} inline; {$endif}\r\n@@ -3639,6 +3643,12 @@ function IsBooleanJson(P: PUtf8Char; V: PBoolean): boolean;\n   result := false;\r\n end;\r\n \r\n+function IsNullJson(const U: RawUtf8): boolean;\r\n+begin\r\n+  result := (pointer(U) <> nil) and\r\n+            (PInteger(U)^ = NULL_LOW);\r\n+end;\r\n+\r\n function IsConstantOrNumberJson(P: PUtf8Char; len: PtrUInt): boolean;\r\n begin\r\n   result := false;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.mustache.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 6,
+          "patch": "@@ -733,9 +733,7 @@ function TSynMustacheContext.GetVariantFromContext(\n begin\r\n   if (ValueName = '') or\r\n      (ValueName[1] in ['-', '0'..'9', '\"', '{', '[']) or\r\n-     (ValueName = 'true') or\r\n-     (ValueName = 'false') or\r\n-     (ValueName = 'null') then\r\n+     IsConstantJson(pointer(ValueName), length(ValueName)) then // null/false/true\r\n     VariantLoadJson(result, ValueName, @JSON_[mFast])\r\n   else if fGetVarDataFromContextNeedsFree then\r\n   begin\r\n@@ -771,9 +769,7 @@ function TSynMustacheContext.ProcessHelper(const ValueName: RawUtf8;\n       GetVarDataFromContext(-1, valnam, val)\r\n     else if ((valnam <> '') and\r\n              (valnam[1] in ['1'..'9', '\"', '{', '['])) or\r\n-            (valnam = 'true') or\r\n-            (valnam = 'false') or\r\n-            (valnam = 'null') then\r\n+            IsConstantJson(pointer(valnam), length(valnam)) then // null/fast/true\r\n     begin\r\n       // {{helper 123}} or {{helper \"constant\"}} or {{helper [1,2,3]}}\r\n       JsonToVariantInPlace(variant(val), pointer(valnam), JSON_FAST_FLOAT);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -14130,9 +14130,9 @@ procedure InitializeUnit;\n   // setup some constants\r\n   JSON_CONTENT_TYPE_VAR        := JSON_CONTENT_TYPE;\r\n   JSON_CONTENT_TYPE_HEADER_VAR := JSON_CONTENT_TYPE_HEADER;\r\n-  NULL_STR_VAR     := 'null';\r\n-  BOOL_UTF8[false] := 'false';\r\n-  BOOL_UTF8[true]  := 'true';\r\n+  PCardinal(FastSetString(NULL_STR_VAR, 4))^ := NULL_LOW;    // 'null'\r\n+  FastSetString(BOOL_UTF8[false], @BOOL_STR[false][1], 5);   // 'false'\r\n+  PCardinal(FastSetString(BOOL_UTF8[true], 4))^ := TRUE_LOW; // 'true'\r\n   // minimal stubs which will be properly implemented in other mormot.core units\r\n   ShortToUuid           := _ShortToUuid;           // mormot.core.text\r\n   AppendShortUuid       := _AppendShortUuid;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -6276,7 +6276,7 @@ function DocVariantToObject(var doc: TDocVariantData; obj: TObject;\n   begin\r\n     json := dv^.ToJson;\r\n     if (json <> '') and\r\n-       (json <> 'null')  then\r\n+       (PInteger(json)^ <> NULL_LOW)  then\r\n       PropertyFromJson(prop, obj, pointer(json), valid, JSONPARSER_TOLERANTOPTIONS);\r\n   end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.core.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -3376,7 +3376,7 @@ constructor TSelectStatement.Create(const SQL: RawUtf8;\n         exit; // end of string before end quote -> incorrect\r\n       RawUtf8ToVariant(Where.Value, Where.ValueVariant);\r\n     end\r\n-    else if (PInteger(P)^ and $DFDFDFDF = NULL_HI) and\r\n+    else if (PInteger(P)^ and $DFDFDFDF = NULL_HI) and // case-insentive\r\n             (P[4] in [#0..' ', ';']) then\r\n     begin\r\n       // NULL statement\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.nosql.mongodb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -2751,7 +2751,7 @@ function TMongoReplyCursor.ToJson(Mode: TMongoJsonMode; WithHeader: boolean;\n begin\r\n   if (fReply = '') or\r\n      (fDocumentCount <= 0) then\r\n-    result := 'null'\r\n+    result := NULL_STR_VAR\r\n   else\r\n   begin\r\n     W := TJsonWriter.CreateOwnedStream(tmp);\r\n@@ -2911,7 +2911,7 @@ function TMongoConnection.GetJsonAndFree(Query: TMongoRequest;\n     if (result = '') or\r\n        (result = '[]') or\r\n        (result = '{}') then\r\n-      result := 'null';\r\n+      result := NULL_STR_VAR;\r\n   finally\r\n     W.Free;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.rad.firedac.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "@@ -590,12 +590,12 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftInt64: begin\r\n           if fPreparedUseArrayDML then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n                 P.Clear(i)\r\n               else\r\n                 P.AsLargeInts[i] := GetInt64(pointer(VArray[i]))\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n               P.AsLargeInt := GetInt64(pointer(VArray[aArrayIndex]))\r\n@@ -605,12 +605,12 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftDouble:\r\n           if fPreparedUseArrayDML then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n                 P.Clear(i)\r\n               else\r\n                 P.AsFloats[i] := GetExtended(pointer(VArray[i]))\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n               P.AsFloat := GetExtended(pointer(VArray[aArrayIndex]))\r\n@@ -619,12 +619,12 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftCurrency:\r\n           if fPreparedUseArrayDML then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n                 P.Clear(i)\r\n               else\r\n                 P.AsCurrencys[i] := StrToCurrency(pointer(VArray[i]))\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n               P.AsCurrency := StrToCurrency(pointer(VArray[aArrayIndex]))\r\n@@ -633,15 +633,15 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftDate:\r\n           if fPreparedUseArrayDML then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-            if VArray[i] = 'null' then\r\n+            if IsNullJson(VArray[i]) then\r\n               P.Clear(i)\r\n             else\r\n             begin\r\n               UnQuoteSqlStringVar(pointer(VArray[i]), tmp);\r\n               P.AsDateTimes[i] := Iso8601ToDateTime(tmp);\r\n             end\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n             begin\r\n@@ -655,7 +655,7 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n           begin\r\n             StoreVoidStringAsNull := fConnection.Properties.StoreVoidStringAsNull;\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if (VArray[i] = 'null') or\r\n+              if (IsNullJson(VArray[i])) or\r\n                  (StoreVoidStringAsNull and\r\n                   (VArray[i] = #39#39)) then\r\n                 P.Clear(i)\r\n@@ -673,7 +673,7 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n               end\r\n           end\r\n           else if aArrayIndex >= 0 then\r\n-            if (VArray[aArrayIndex] = 'null') or\r\n+            if (IsNullJson(VArray[aArrayIndex])) or\r\n                (fConnection.Properties.StoreVoidStringAsNull and\r\n                 (VArray[aArrayIndex] = #39#39)) then\r\n               P.Clear\r\n@@ -703,12 +703,12 @@ procedure TSqlDBFireDacStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftBlob:\r\n           if fPreparedUseArrayDML then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n \n... [truncated, 330 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.rad.ui.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -712,7 +712,7 @@ function DataSetToJson(Data: TDataSet): RawJson;\n   f: TField;\r\n   blob: TRawByteStringStream;\r\n begin\r\n-  result := 'null';\r\n+  result := NULL_STR_VAR;\r\n   if Data = nil then\r\n     exit;\r\n   Data.First;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.rad.unidac.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "@@ -667,12 +667,12 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n           begin\r\n             if fBatchExecute then\r\n               for i := 0 to fParamsArrayCount-1 do\r\n-                if VArray[i] = 'null' then\r\n+                if IsNullJson(VArray[i]) then\r\n                   P.Values[i].Clear\r\n                 else\r\n                   P.Values[i].AsLargeInt := GetInt64(pointer(VArray[i]))\r\n             else if aArrayIndex >= 0 then\r\n-              if VArray[aArrayIndex] = 'null' then\r\n+              if IsNullJson(VArray[aArrayIndex]) then\r\n                 P.Clear\r\n               else\r\n                 P.AsLargeInt := GetInt64(pointer(VArray[aArrayIndex]))\r\n@@ -682,12 +682,12 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftDouble:\r\n           if fBatchExecute then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n                 P.Values[i].Clear\r\n               else\r\n                 P.Values[i].AsFloat := GetExtended(pointer(VArray[i]))\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n               P.AsFloat := GetExtended(pointer(VArray[aArrayIndex]))\r\n@@ -696,12 +696,12 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftCurrency:\r\n           if fBatchExecute then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if VArray[i] = 'null' then\r\n+              if IsNullJson(VArray[i]) then\r\n                 P.Values[i].Clear\r\n               else\r\n                 P.Values[i].AsCurrency := StrToCurrency(pointer(VArray[i]))\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n               P.AsCurrency := StrToCurrency(pointer(VArray[aArrayIndex]))\r\n@@ -710,15 +710,15 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n         mormot.db.core.ftDate:\r\n           if fBatchExecute then\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-            if VArray[i] = 'null' then\r\n+            if IsNullJson(VArray[i]) then\r\n               P.Values[i].Clear\r\n             else\r\n             begin\r\n               UnQuoteSQLStringVar(pointer(VArray[i]), tmp);\r\n               P.Values[i].AsDateTime := Iso8601ToDateTime(tmp);\r\n             end\r\n           else if aArrayIndex >= 0 then\r\n-            if VArray[aArrayIndex] = 'null' then\r\n+            if IsNullJson(VArray[aArrayIndex]) then\r\n               P.Clear\r\n             else\r\n             begin\r\n@@ -732,7 +732,7 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n           begin\r\n             StoreVoidStringAsNull := fConnection.Properties.StoreVoidStringAsNull;\r\n             for i := 0 to fParamsArrayCount - 1 do\r\n-              if (VArray[i] = 'null') or\r\n+              if (IsNullJson(VArray[i])) or\r\n                  (StoreVoidStringAsNull and\r\n                   (VArray[i] = #39#39)) then\r\n                 P.Values[i].Clear\r\n@@ -750,7 +750,7 @@ procedure TSqlDBUniDACStatement.DataSetBindSqlParam(const aArrayIndex,\n               end\r\n           end\r\n           else if aArrayIndex >= 0 then\r\n-            if (VArray[aArrayIndex] = 'null') or\r\n+            if (IsNullJson(VArray[aArrayIndex])) or\r\n                (fConnection.Properties.StoreVoidStringAsNull and\r\n                 (VArray[aArrayIndex] = #39#39)) then\r\n               P.Clear\r\n@@ -781,7 +781,7 @@ procedure \n... [truncated, 714 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.oledb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 4,
+          "patch": "\n... [truncated, 353 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 352 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.ibx.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 360 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.oledb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 340 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.oracle.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 436 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 9,
+          "patch": "\n... [truncated, 3029 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 444 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 25 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 39 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Database"
+      ],
+      "units": [
+        "mormot.core.json",
+        "mormot.core.mustache",
+        "mormot.core.os",
+        "mormot.core.variants",
+        "mormot.db.core",
+        "mormot.db.nosql.mongodb",
+        "mormot.db.rad.firedac",
+        "mormot.db.rad.ui",
+        "mormot.db.rad.unidac",
+        "mormot.db.raw.oledb",
+        "mormot.db.sql",
+        "mormot.db.sql.duckdb",
+        "mormot.db.sql.ibx",
+        "mormot.db.sql.oledb",
+        "mormot.db.sql.oracle",
+        "mormot.db.sql.zeos"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "75fea00a54bb619619b69fdad3089cd86ba1a833",
+      "short_sha": "75fea00a",
+      "subject": "rest: fixed TRestClientUri.IsOpen error handling",
+      "body": "- as reported by #756",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T13:16:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/75fea00a54bb619619b69fdad3089cd86ba1a833",
+      "parents": [
+        "dc568099041e03eeb1beadcd93a09cf055ea9c97"
+      ],
+      "stats": {
+        "additions": 17,
+        "deletions": 9,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18013\n+18014",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18013'\r\n+'2.4.18014'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/rest/mormot.rest.client.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 7,
+          "patch": "@@ -2317,15 +2317,19 @@ function TRestClientUri.IsOpen: boolean;\n         on E: Exception do\r\n         begin\r\n           InternalClose;\r\n-          if (started = 0) or\r\n-             (isDestroying in fInternalState) then\r\n+          if isDestroying in fInternalState then\r\n             exit;\r\n+          exc := PPointer(E)^; // no SetLastException() which calls OnFailed()\r\n+          fLastErrorCode := HTTP_CLIENTERROR;\r\n+          fLastErrorException := exc;\r\n+          ObjectToJson(E, fLastErrorMessage, TEXTWRITEROPTIONS_DEBUG);\r\n           if Assigned(fOnConnectionFailed) then\r\n             try\r\n               fOnConnectionFailed(self, E, nil);\r\n             except\r\n             end;\r\n-          exc := PPointer(E)^;\r\n+          if started = 0 then\r\n+            exit;\r\n         end;\r\n       end;\r\n       if InternalIsOpen then\r\n@@ -2358,6 +2362,9 @@ function TRestClientUri.IsOpen: boolean;\n   finally\r\n     fSafe.Leave;\r\n   end;\r\n+  fLastErrorCode := HTTP_SUCCESS;\r\n+  fLastErrorMessage := '';\r\n+  fLastErrorException := nil;\r\n   if Assigned(fOnConnected) then\r\n     try\r\n       with fLogClass.Enter(self, 'IsOpen: call OnConnected') do\r\n@@ -2740,10 +2747,11 @@ function TRestClientUri.Uri(const url, method: RawUtf8; Resp: PRawUtf8;\n           exit;\r\n       end;\r\n       StatusCodeToReason(Call.OutStatus, StatusMsg);\r\n-      if Call.OutBody = '' then\r\n-        fLastErrorMessage := StatusMsg\r\n-      else\r\n-        fLastErrorMessage := Call.OutBody;\r\n+      if Call.OutBody <> '' then\r\n+        fLastErrorMessage := Call.OutBody\r\n+      else if (Call.OutStatus <> HTTP_CLIENTERROR) or\r\n+              (fLastErrorException = nil) then\r\n+        fLastErrorMessage := StatusMsg;\r\n       InternalLog('% % returned % (%) with message %',\r\n         [method, url, Call.OutStatus, StatusMsg, fLastErrorMessage],\r\n         LOG_TRACEERROR[Call.OutStatus <> HTTP_NOTFOUND]); // 404 is not fatal\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "REST"
+      ],
+      "units": [
+        "mormot.rest.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "dc568099041e03eeb1beadcd93a09cf055ea9c97",
+      "short_sha": "dc568099",
+      "subject": "net: fixed potential race in TAsyncConnections.Shutdown",
+      "body": "- as reported by #757",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T12:55:34Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dc568099041e03eeb1beadcd93a09cf055ea9c97",
+      "parents": [
+        "78ba5286427837ca2442db01c233034ba575881b"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18012\n+18013",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18012'\r\n+'2.4.18013'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -3287,7 +3287,9 @@ procedure TAsyncConnections.Shutdown;\n           end;\r\n     until (n = 0) or\r\n           (mormot.core.os.GetTickCount64 > endtix);\r\n-    ObjArrayClear(fThreads, {continueonexception=}true); // joins the workers\r\n+    for i := 0 to high(fThreads) do\r\n+      fThreads[i].WaitFor; // require explicit WaitFor for each thread\r\n+    ObjArrayClear(fThreads, {continueonexception=}true); // release instances\r\n   end;\r\n   // the accept/client-connect thread can still be rolling back ConnectionNew\r\n   if (GetCurrentThreadId <> ThreadID) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "78ba5286427837ca2442db01c233034ba575881b",
+      "short_sha": "78ba5286",
+      "subject": "db: fixed TSqlDBPostgresConnection.PrepareCached on error",
+      "body": "- as reported by #758",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T12:25:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/78ba5286427837ca2442db01c233034ba575881b",
+      "parents": [
+        "e5e90048c40ef194a50a62ccc189ec6f62021894"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -431,10 +431,11 @@ function TSqlDBPostgresConnection.PrepareCached(\n       exit; // already prepared -> we will just give the statement name to PQ\r\n     end;\r\n   end;\r\n-  result := fPrepared.Add(aSql);\r\n-  aName := Int64ToHexLower(result);\r\n+  result := fPrepared.Count;\r\n+  aName := Int64ToHexLower(result); // 00,01,...,09,0a,0b,...\r\n   PQ.Check(fPGConn, 'Prepare',\r\n     PQ.Prepare(fPGConn, pointer(aName), pointer(aSql), aParamCount, nil));\r\n+  fPrepared.Add(aSql);\r\n end;\r\n \r\n procedure TSqlDBPostgresConnection.DirectExecSql(const SQL: RawUtf8);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18011\n+18012",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18011'\r\n+'2.4.18012'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.postgres"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e5e90048c40ef194a50a62ccc189ec6f62021894",
+      "short_sha": "e5e90048",
+      "subject": "db: hardened TSqlDBOdbcStatement.ExecutePrepared fix on WCHAR",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T12:21:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e5e90048c40ef194a50a62ccc189ec6f62021894",
+      "parents": [
+        "e9c7377ae61a9607ceafe2e5a2d9608b2849224d"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 3,
+          "patch": "@@ -1150,9 +1150,12 @@ procedure TSqlDBOdbcStatement.ExecutePrepared;\n               else\r\n                 ParameterValue := pointer(VData);\r\n               BufferSize := length(VData);\r\n-              if (CValueType = SQL_C_CHAR) or\r\n-                 (CValueType = SQL_C_WCHAR) then // SQL_C_WCHAR is in bytes\r\n-                inc(BufferSize, 4); // ftUtf8 VData always includes 4 ending #0\r\n+              case CValueType of // ftUtf8 VData always includes 4 ending #0\r\n+                SQL_C_CHAR:\r\n+                  inc(BufferSize);\r\n+                SQL_C_WCHAR: // SQL_C_WCHAR is in bytes\r\n+                  inc(BufferSize, 2);\r\n+              end;\r\n             end\r\n             else\r\n               BufferSize := SizeOf(Int64);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18010\n+18011",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18010'\r\n+'2.4.18011'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.odbc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e9c7377ae61a9607ceafe2e5a2d9608b2849224d",
+      "short_sha": "e9c7377a",
+      "subject": "core: fixed TInterfaceMethodExecuteCached.Acquire",
+      "body": "-- as reported by #765",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T12:18:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e9c7377ae61a9607ceafe2e5a2d9608b2849224d",
+      "parents": [
+        "01582ed1c05f09ba6a76688db7da276fd77191c2"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.interfaces.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -8007,7 +8007,7 @@ function TInterfaceMethodExecuteCached.Acquire(\n     // on thread contention, will use a transient temporary instance\r\n     result := TInterfaceMethodExecuteCached.Create(\r\n       fFactory, fMethod, ExecuteOptions);\r\n-  fWR.CustomOptions := WROptions;\r\n+  result.fWR.CustomOptions := WROptions;\r\n end;\r\n \r\n procedure TInterfaceMethodExecuteCached.Release(exec: TInterfaceMethodExecuteCached);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18009\n+18010",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18009'\r\n+'2.4.18010'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.interfaces"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "01582ed1c05f09ba6a76688db7da276fd77191c2",
+      "short_sha": "01582ed1",
+      "subject": "db: some other buffer length fixes to ODBC driver",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T11:41:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/01582ed1c05f09ba6a76688db7da276fd77191c2",
+      "parents": [
+        "2ed24df7210306d43d52d54d3b0ce045b946d6b0"
+      ],
+      "stats": {
+        "additions": 7,
+        "deletions": 9,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1082,9 +1082,9 @@ procedure TOdbcLib.GetInfoString(ConnectionHandle: SqlHDbc;\n begin\r\n   Len := 0;\r\n   Check(nil, nil,\r\n-    GetInfoW(ConnectionHandle, InfoType, @Info, SizeOf(Info) shr 1, @Len),\r\n+    GetInfoW(ConnectionHandle, InfoType, @Info, SizeOf(Info){bytes!}, @Len),\r\n       SQL_HANDLE_DBC, ConnectionHandle);\r\n-  Dest := RawUnicodeToUtf8(Info, Len shr 1);\r\n+  Dest := RawUnicodeToUtf8(Info, Len shr 1{bytes to WideChar});\r\n end;\r\n \r\n procedure TOdbcLib.HandleError(Conn: TSqlDBConnection; Stmt: TSqlDBStatement;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 5,
+          "patch": "@@ -1150,11 +1150,9 @@ procedure TSqlDBOdbcStatement.ExecutePrepared;\n               else\r\n                 ParameterValue := pointer(VData);\r\n               BufferSize := length(VData);\r\n-              if CValueType = SQL_C_CHAR then\r\n-                inc(BufferSize) // include last #0\r\n-              else\r\n-              if CValueType = SQL_C_WCHAR then\r\n-                BufferSize := BufferSize shr 1;\r\n+              if (CValueType = SQL_C_CHAR) or\r\n+                 (CValueType = SQL_C_WCHAR) then // SQL_C_WCHAR is in bytes\r\n+                inc(BufferSize, 4); // ftUtf8 VData always includes 4 ending #0\r\n             end\r\n             else\r\n               BufferSize := SizeOf(Int64);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18008\n+18009",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18008'\r\n+'2.4.18009'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.odbc",
+        "mormot.db.sql.odbc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2ed24df7210306d43d52d54d3b0ce045b946d6b0",
+      "short_sha": "2ed24df7",
+      "subject": "db: fixed TSqlDBPostgresConnection.IsConnected",
+      "body": "- as reported by #771",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T11:31:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2ed24df7210306d43d52d54d3b0ce045b946d6b0",
+      "parents": [
+        "4aaa5ab331fccfbf8492ffbcbbedc56cd804f351"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -385,7 +385,7 @@ procedure TSqlDBOdbcConnection.Connect;\n     Check(self, nil,\r\n       AllocHandle(SQL_HANDLE_DBC, fEnv, fDbc),\r\n       SQL_HANDLE_ENV, fEnv);\r\n-    // note: use *W() for conenction to trigger UTF-16 in provider e.g. MariaDB\r\n+    // note: use *W() to connect and trigger UTF-16 in providers e.g. MariaDB\r\n     with fOdbcProperties do\r\n       if fServerName <> '' then\r\n       begin\r\n@@ -394,15 +394,16 @@ procedure TSqlDBOdbcConnection.Connect;\n         Utf8ToSynUnicode(fPassWord, pwd);\r\n         ret := ConnectW(fDbc, pointer(srv), length(srv),\r\n                  pointer(usr), length(usr), pointer(pwd), length(pwd));\r\n-        FillZero(pointer(pwd)^, length(pwd) shl 1);\r\n+        if pwd <> '' then\r\n+          FillZero(pointer(pwd)^, length(pwd) shl 1); // anti-forensic\r\n         Check(self, nil, ret, SQL_HANDLE_DBC, fDbc);\r\n       end\r\n       else\r\n       begin\r\n         if fDatabaseName = '' then\r\n           EOdbcException.RaiseU(\r\n             'Missing ServerName=DataSourceName or DataBaseName=FullConnectString');\r\n-        SetLength(full, 2048); // 1024 UTF-16 codepoints - filled with 0\r\n+        SetLength(full, 2048); // 1024 UTF-16 WideChar - filled with 0\r\n         Utf8ToSynUnicode(fDatabaseName, db);\r\n         Len := 0;\r\n         Check(self, nil,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -553,7 +553,8 @@ procedure TSqlDBPostgresConnection.Disconnect;\n \r\n function TSqlDBPostgresConnection.IsConnected: boolean;\r\n begin\r\n-  result := (fPGConn <> nil);\r\n+  result := (fPGConn <> nil) and\r\n+            (PQ.Status(fPGConn) = CONNECTION_OK); // very fast API field lookup\r\n end;\r\n \r\n function TSqlDBPostgresConnection.NewStatement: TSqlDBStatement;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17994\n+18008",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17994'\r\n+'2.4.18008'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql.odbc",
+        "mormot.db.sql.postgres"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4aaa5ab331fccfbf8492ffbcbbedc56cd804f351",
+      "short_sha": "4aaa5ab3",
+      "subject": "Merge branch 'master' of https://github.com/synopse/mORMot2",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T11:25:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4aaa5ab331fccfbf8492ffbcbbedc56cd804f351",
+      "parents": [
+        "236ce73bcbfc2cc7bf046d41ffc2850b3a2efa4d",
+        "bc7d99d226991345dc5ac741de4de89f7dbd613c"
+      ],
+      "stats": {
+        "additions": 126,
+        "deletions": 19,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 10,
+          "patch": "@@ -6593,7 +6593,7 @@   TExternalProcess = class(TSynPersistent)\n     procedure DoClose;\r\n     procedure DoWakeUp;\r\n     // cross-platform methods\r\n-    procedure StartThread;\r\n+    function StartThread: boolean;\r\n     procedure DoOutput(p: pointer; len: PtrInt; iserror: boolean);\r\n     function WaitExit(endtix: Int64): boolean;\r\n     function Redirect(waitfordelayms: cardinal; setresult: boolean;\r\n@@ -6614,7 +6614,8 @@   TExternalProcess = class(TSynPersistent)\n     // the executable in the PATH of the current process\r\n     // - env is encoded as 'n1=v1'#0'n2=v2'#0#0 pairs, possibly with\r\n     // roEnvAddExisting to complete the current environment\r\n-    // - returns false if the process could not be executed\r\n+    // - returns false if the process could not be executed, or if its\r\n+    // background thread could not be created - the process is then killed\r\n     function Start(const cmd: TRunArg; const env: TRunArg = '';\r\n       const wrkdir: TFileName = ''; options: TRunOptions = RUN_PROCESS): boolean; overload;\r\n     /// start the execution of an executable with some explicit arguments\r\n@@ -6644,7 +6645,15 @@   TExternalProcess = class(TSynPersistent)\n     function HasDataAvailable: boolean;\r\n     /// try a graceful termination of the process, then a hard kill\r\n     // - on POSIX, send SIGTERM then SIGKILL to the whole process group\r\n+    // - on Windows, send CTRL_BREAK if the process shares the console of the\r\n+    // caller - i.e. roWinNoProcessDetach without roWinNewConsole, from a\r\n+    // console application - and WM_QUIT, then terminate it: a console\r\n+    // process started from a GUI application has therefore no graceful\r\n+    // termination, and is killed after waitms - rather write to its stdin\r\n+    // if it expects a quit command, e.g. 'q' for ffmpeg\r\n     // - returns true if the process ended within waitms\r\n+    // - at return, the last output of the process may not have been read\r\n+    // yet: call WaitFor() to wait for the end of the output\r\n     function Terminate(waitms: cardinal = 5000): boolean;\r\n     /// unconditionally and immediately kill the process\r\n     procedure Kill;\r\n@@ -13843,33 +13852,42 @@ destructor TExternalProcess.Destroy;\n   inherited Destroy;\r\n end;\r\n \r\n-procedure TExternalProcess.StartThread;\r\n+function TExternalProcess.StartThread: boolean;\r\n begin\r\n+  result := true;\r\n   fKeepOutput := not Assigned(fOnOutput);\r\n   fKeepError := not Assigned(fOnError);\r\n   if fOutputEof then\r\n     exit; // nothing to read\r\n   fThreaded := true;\r\n-  TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  try\r\n+    TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  except\r\n+    // the thread could not be created, e.g. out of resources: nothing would\r\n+    // read the output of this process, and Destroy would wait for ever\r\n+    Terminate(0);       // hard kill - fThreaded: WaitExit() only reaps\r\n+    fThreaded := false; // Destroy has no thread to wait for\r\n+    DoClose;\r\n+    fState := epsFailed;\r\n+    result := false;\r\n+  end;\r\n end;\r\n \r\n function TExternalProcess.Start(const cmd: TRunArg; const env: TRunArg;\r\n   const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n-            DoStart(cmd, [], env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart(cmd, [], env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n function TExternalProcess.Start(const args: array of TRunArg;\r\n   const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n             (high(args) >= 0) and\r\n-            DoStart('', args, env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart('', args, env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n procedure TExternalProcess.Pump;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -3973,6 +3973,7 @@ var\n   h: THandle;\r\n begin\r\n   result := 0;\r\n+  dest[0] := #0; // callers expect a #0 terminated buffer, even on error\r\n   repeat\r\n     h := FpOpen(fn, O_RDONLY); // direct PAnsiChar syscall with no fpFlock()\r\n   until (PtrInt(h) >= 0) or (fpgeterrno <> ESysEINTR); // as FileOpen()\r\n@@ -4098,7 +4099,7 @@ begin\n   begin\r\n     // may need to be root to follow /fn/[pid]/exe\r\n     AppendShort('/exe'#0, fn);\r\n-    l := fpReadLink(@fn, @tmp, SizeOf(tmp)); // a single syscall is enough\r\n+    l := fpReadLink(@fn[1], @tmp, SizeOf(tmp)); // a single syscall is enough\r\n     if l > 0 then\r\n     begin\r\n       FastSetString(result, pointer(@tmp), l);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -6312,8 +6312,9 @@ procedure THttpProxyUrl.BackgroundGet(Sender: TObject);\n   finally\r\n     // stop writing before notifying progressive readers of a failure\r\n     if back.writestream <> back.filestream then\r\n-      FreeAndNil(back.writestream);\r\n-    FreeAndNil(back.filestream);\r\n+      back.writestream.Free // TStreamRedirect.Destroy releases filestream\r\n+    else\r\n+      back.filestream.Free;\r\n     back.Free;\r\n     fOwner.fLog.Add.Log(sllInfo, 'BackgroundGet=%: % [%] size=% expected=%',\r\n       [status, fn, msg, actual, expected], self);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 6,
+          "patch": "@@ -1402,6 +1402,7 @@   TPdfDocument = class\n     fMissingBookmarks: TRawUtf8List;\r\n     fLastOutline: TPdfOutlineEntry; // used by CreateOutline\r\n     fFileFormat: TPdfFileFormat;\r\n+    fHeaderFileFormat: TPdfFileFormat;\r\n     fPdfA: TPdfALevel;\r\n     fPdfAMetadaExtension: RawUtf8;\r\n     fSaveToStreamWriter: TPdfWrite;\r\n@@ -1417,6 +1418,9 @@   TPdfDocument = class\n     function GetGeneratePdf20File: boolean;\r\n     procedure SetGeneratePdf20File(Value: boolean);\r\n     procedure PreparePdf20;\r\n+    // a feature needs at least Value: raises the file format, or the\r\n+    // catalog's /Version once a lower header was written\r\n+    procedure NeedFileFormat(Value: TPdfFileFormat);\r\n     function GetInfo: TPdfInfo;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetOutlineRoot: TPdfOutlineRoot;\r\n@@ -1781,6 +1785,8 @@   TPdfDocument = class\n     property PdfAMetadaExtension: RawUtf8\r\n       read fPdfAMetadaExtension write fPdfAMetadaExtension;\r\n     /// set to true to force PDF 1.5 format, which may produce smaller files\r\n+    // - set after SaveToStreamDirectBegin, it no longer changes the file's\r\n+    // cross-reference format, which follows the header written\r\n     property GeneratePdf15File: boolean\r\n       read GetGeneratePdf15File write SetGeneratePdf15File;\r\n     /// set to true to generate a PDF 2.0 (ISO 32000-2) file\r\n@@ -7754,6 +7760,7 @@ procedure TPdfDocument.SaveToStreamDirectBegin(AStream: TStream; ForceModDate: T\n   end;\r\n   // write beginning of the content\r\n   fSaveToStreamWriter := TPdfWrite.Create(self, AStream);\r\n+  fHeaderFileFormat := fFileFormat; // the format may still be raised\r\n   fSaveToStreamWriter.Add('%PDF-').Add(PDF_HEADER[fFileformat]).Add(#10);\r\n   if fFileFormat > pdf13 then\r\n     fSaveToStreamWriter.Add(@PDFA_MARKER, SizeOf(PDFA_MARKER));\r\n@@ -7795,8 +7802,9 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n       with TPdfFontTrueType(fFontList.List[i]) do\r\n         if fTrueTypeFontsIndex <> 0 then\r\n           PrepareForSaving;\r\n-    // write pending objects\r\n-    if fFileFormat >= pdf15 then\r\n+    // write pending objects - the cross-reference as the header allows:\r\n+    // the format may have been raised after it\r\n+    if fHeaderFileFormat >= pdf15 then\r\n       fTrailer.ToCrossReference(self);\r\n     for i := 1 to fXRef.ItemCount - 1 do\r\n       with fXRef.Items[i] do\r\n@@ -7810,7 +7818,7 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n     if Assigned(fTrailer.fCrossReference) and\r\n       (fTrailer.fCrossReference.ObjectNumber > 0) then\r\n       fXRef.Items[fTrailer.fCrossReference.ObjectNumber].fByteOffset := fTrailer.XrefAddress;\r\n-    if fFileFormat < pdf15 then\r\n+    if fHeaderFileFormat < pdf15 then\r\n       fXRef.WriteTo(fSaveToStreamWriter);\r\n     fTrailer.Attributes.PdfNumberByName('Size').Value := fXRef.ItemCount;\r\n     fTrailer.WriteTo(fSaveToStreamWriter);\r\n@@ -8427,6 +8435,23 @@ procedure TPdfDocument.SetGeneratePdf20File(Value: boolean);\n     fFileFormat := pdf17;\r\n end;\r\n \r\n+procedure TPdfDocument.NeedFileFormat(Value: TPdfFileFormat);\r\n+var\r\n+  v: TPdfObject;\r\n+begin\r\n+  if fFileFormat < Value then\r\n+    fFileFormat := Value;\r\n+  if (fSaveToStreamWriter = nil) or\r\n+     (fHeaderFileFormat >= Value) then\r\n+    exit;\r\n+  // the header is written (SaveToStreamDirectBegin): the catalog, written\r\n+  // last, overrides its version (ISO 32000-1 7.5.2)\r\n+  v := fRoot.Data.ValueByName('Version');\r\n+  if not (v is TPdfName) or\r\n+     (TPdfName(v).Value < PDF_HEADER[Value]) then // never lower it\r\n+    fRoot.Data.AddItem('Version', PDF_HEADER[Value]);\r\n+end;\r\n+\r\n procedure TPdfDocument.PreparePdf20;\r\n var\r\n   hex: PdfString;\r\n@@ -10149,9 +10174,8 @@ procedure TPdfCatalog.SetViewerPreference(Value: TPdfViewerPreferences);\n     if vpEnforcePrintScaling in Value then\r\n     begin\r\n       d.AddItem('Enforce', TPdfArray.CreateNames(Data.ObjectMgr, ['PrintScaling']));\r\n-      if (fOwner <> nil) and\r\n-         (fOwner.fFileFormat < pdf16) then\r\n-        fOwner.fFileFormat := pdf16;\r\n+      if fOw\n... [truncated, 110 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -3914,6 +3914,13 @@ procedure TTestCoreBase._TExternalProcess;\n     CheckEqual(p.ReadAvailable, 'hello'#10, 'output');\r\n     CheckEqual(p.ReadAvailable, '', 'output2');\r\n     Check(not p.Start('true'), 'restart');\r\n+    {$ifdef OSLINUX}\r\n+    // a pid which is gone has no name, even just after a successful call\r\n+    s := EnumProcessName(GetCurrentProcessId); // from /proc/<pid>/exe\r\n+    Check((s <> '') and\r\n+          (s[1] = '/'), 'ownpath');\r\n+    CheckEqual(EnumProcessName(p.Pid), '', 'noname');\r\n+    {$endif OSLINUX}\r\n   finally\r\n     p.Free;\r\n   end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 0,
+          "patch": "@@ -83,6 +83,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure IntegerCoordinates;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n+    procedure VersionAfterHeader;\r\n   end;\r\n \r\n implementation\r\n@@ -4456,6 +4457,61 @@ procedure TTestUiPdf.Pdf20File;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+// a document streamed from a 1.4 or 1.5 header, a page flushed: then on\r\n+// page 2 either vpEnforcePrintScaling, or GeneratePdf15File set\r\n+function StreamedAfterHeader(Pdf15, PrintScaling: boolean): RawByteString;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  stream: TMemoryStream;\r\n+begin\r\n+  stream := TMemoryStream.Create;\r\n+  try\r\n+    pdf := TPdfDocument.Create;\r\n+    try\r\n+      pdf.CompressionMethod := cmNone;\r\n+      pdf.GeneratePdf15File := Pdf15;\r\n+      pdf.SaveToStreamDirectBegin(stream);\r\n+      pdf.AddPage;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.AddPage;\r\n+      if PrintScaling then\r\n+        pdf.Root.ViewerPreference := [vpEnforcePrintScaling]\r\n+      else\r\n+        pdf.GeneratePdf15File := true;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.SaveToStreamDirectEnd;\r\n+    finally\r\n+      pdf.Free;\r\n+    end;\r\n+    SetString(result, PAnsiChar(stream.Memory), stream.Size);\r\n+  finally\r\n+    stream.Free;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.VersionAfterHeader;\r\n+var\r\n+  s: RawByteString;\r\n+begin\r\n+  // a format raised after the header: the catalog's /Version, written last\r\n+  s := StreamedAfterHeader(false, true);\r\n+  Check(copy(s, 1, 8) = '%PDF-1.4', 'print scaling: the header written');\r\n+  Check(PosEx('/Enforce', s) > 0, 'print scaling: /Enforce');\r\n+  Check(PosEx('/Version/1.6', s) > 0, 'print scaling: the catalog /Version');\r\n+  Check((PosEx('/XRef', s) = 0) and\r\n+        (PosEx(#10'xref'#10, s) > 0), 'print scaling: an xref table');\r\n+  // a 1.5 header keeps its cross-reference stream\r\n+  s := StreamedAfterHeader(true, true);\r\n+  Check((PosEx('/Version/1.6', s) > 0) and\r\n+        (PosEx('/XRef', s) > 0), 'print scaling: 1.5, an xref stream');\r\n+  // GeneratePdf15File set after the header: the file follows the header\r\n+  s := StreamedAfterHeader(false, false);\r\n+  Check((copy(s, 1, 8) = '%PDF-1.4') and\r\n+        (PosEx('/Version', s) = 0), 'GeneratePdf\n... [truncated, 200 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Network",
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.net.async",
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "236ce73bcbfc2cc7bf046d41ffc2850b3a2efa4d",
+      "short_sha": "236ce73b",
+      "subject": "db: fixed TSqlDBOdbcConnection.Connect to trigger UTF-16",
+      "body": "- *ConnectW() is to be used e.g. on MariaDB otherwise the whole returned data remains Ansi encoded\n- as reported by https://synopse.info/forum/viewtopic.php?id=7623",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T11:24:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/236ce73bcbfc2cc7bf046d41ffc2850b3a2efa4d",
+      "parents": [
+        "587894c724f5df4d2f3f49cd0d210626f64a6a31"
+      ],
+      "stats": {
+        "additions": 29,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1037,8 +1037,8 @@ function OdbcInstalledDriversList(const aIncludeVersion: boolean;\n \r\n { TOdbcLib }\r\n \r\n-procedure TOdbcLib.Check(Conn: TSqlDBConnection; Stmt: TSqlDBStatement; Status:\r\n-  SqlReturn; HandleType: SqlSmallint; Handle: SqlHandle;\r\n+procedure TOdbcLib.Check(Conn: TSqlDBConnection; Stmt: TSqlDBStatement;\r\n+  Status: SqlReturn; HandleType: SqlSmallint; Handle: SqlHandle;\r\n   InfoRaiseException: boolean; LogLevelNoRaise: TSynLogLevel);\r\n begin\r\n   if Status <> SQL_SUCCESS then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 25,
+          "deletions": 13,
+          "patch": "@@ -366,6 +366,9 @@ procedure TSqlDBOdbcConnection.Connect;\n var\r\n   Log: ISynLog;\r\n   Len: SqlSmallint;\r\n+  ret: SqlReturn;\r\n+  srv, usr, pwd, db: SynUnicode; // UTF-16 for the *W() API\r\n+  full: TBytes;\r\n begin\r\n   SynDBLog.EnterLocal(Log, self, 'Connect');\r\n   Disconnect; // force fDbc=nil\r\n@@ -382,26 +385,35 @@ procedure TSqlDBOdbcConnection.Connect;\n     Check(self, nil,\r\n       AllocHandle(SQL_HANDLE_DBC, fEnv, fDbc),\r\n       SQL_HANDLE_ENV, fEnv);\r\n+    // note: use *W() for conenction to trigger UTF-16 in provider e.g. MariaDB\r\n     with fOdbcProperties do\r\n       if fServerName <> '' then\r\n-        Check(self, nil,\r\n-          ConnectA(fDbc, pointer(fServerName), length(fServerName),\r\n-          pointer(fUserID), length(fUserID), pointer(fPassWord), length(fPassWord)),\r\n-        SQL_HANDLE_DBC, fDbc)\r\n-      else if fDatabaseName = '' then\r\n-        EOdbcException.RaiseU(\r\n-          'Missing ServerName=DataSourceName or DataBaseName=FullConnectString')\r\n+      begin\r\n+        Utf8ToSynUnicode(fServerName, srv);\r\n+        Utf8ToSynUnicode(fUserID, usr);\r\n+        Utf8ToSynUnicode(fPassWord, pwd);\r\n+        ret := ConnectW(fDbc, pointer(srv), length(srv),\r\n+                 pointer(usr), length(usr), pointer(pwd), length(pwd));\r\n+        FillZero(pointer(pwd)^, length(pwd) shl 1);\r\n+        Check(self, nil, ret, SQL_HANDLE_DBC, fDbc);\r\n+      end\r\n       else\r\n       begin\r\n-        FastSetString(fSqlDriverFullString, 1024);\r\n-        fSqlDriverFullString[1] := #0;\r\n+        if fDatabaseName = '' then\r\n+          EOdbcException.RaiseU(\r\n+            'Missing ServerName=DataSourceName or DataBaseName=FullConnectString');\r\n+        SetLength(full, 2048); // 1024 UTF-16 codepoints - filled with 0\r\n+        Utf8ToSynUnicode(fDatabaseName, db);\r\n         Len := 0;\r\n         Check(self, nil,\r\n-          SqlDriverConnectA(fDbc, GetDesktopWindow, pointer(fDatabaseName),\r\n-            length(fDatabaseName), pointer(fSqlDriverFullString), length(fSqlDriverFullString),\r\n-            Len, DRIVERCOMPLETION[fOdbcProperties.fSqlDriverConnectPrompt]),\r\n+          SqlDriverConnectW(fDbc, GetDesktopWindow,\r\n+            pointer(db), length(db), pointer(full), length(full) shr 1, Len,\r\n+            DRIVERCOMPLETION[fOdbcProperties.fSqlDriverConnectPrompt]),\r\n           SQL_HANDLE_DBC, fDbc);\r\n-        SetLength(fSqlDriverFullString, Len);\r\n+        if (Len >= length(full) shr 1) then\r\n+          EOdbcException.RaiseU(\r\n+            'SQLDriverConnectW output connection string truncated');\r\n+        RawUnicodeToUtf8(pointer(full), Len, fSqlDriverFullString);\r\n       end;\r\n     // retrieve information of the just created connection\r\n     GetInfoString(fDbc, SQL_DRIVER_NAME, fDriverName);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17993\n+17994",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17993'\r\n+'2.4.17994'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.raw.odbc",
+        "mormot.db.sql.odbc"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bc7d99d226991345dc5ac741de4de89f7dbd613c",
+      "short_sha": "bc7d99d2",
+      "subject": "Merge pull request #777 from zen010101/net-proxy-doublefree",
+      "body": "net: fixed double release of the file stream in THttpProxyUrl.BackgroundGet",
+      "author": "ab",
+      "date": "2026-11-12T10:47:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bc7d99d226991345dc5ac741de4de89f7dbd613c",
+      "parents": [
+        "e37ec17784502188ee6f5dd4ceb48640dcac2ea7",
+        "083ff5c5bf2347327fd59ed2eeb9613746761f27"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -6312,8 +6312,9 @@ procedure THttpProxyUrl.BackgroundGet(Sender: TObject);\n   finally\r\n     // stop writing before notifying progressive readers of a failure\r\n     if back.writestream <> back.filestream then\r\n-      FreeAndNil(back.writestream);\r\n-    FreeAndNil(back.filestream);\r\n+      back.writestream.Free // TStreamRedirect.Destroy releases filestream\r\n+    else\r\n+      back.filestream.Free;\r\n     back.Free;\r\n     fOwner.fLog.Add.Log(sllInfo, 'BackgroundGet=%: % [%] size=% expected=%',\r\n       [status, fn, msg, actual, expected], self);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 777,
+      "is_merge": true
+    },
+    {
+      "sha": "e37ec17784502188ee6f5dd4ceb48640dcac2ea7",
+      "short_sha": "e37ec177",
+      "subject": "Merge pull request #776 from landrix/fix/pdf-version-after-header",
+      "body": "ui: pdf - a version needed after the header is written goes to the catalog",
+      "author": "ab",
+      "date": "2026-11-12T10:46:27Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e37ec17784502188ee6f5dd4ceb48640dcac2ea7",
+      "parents": [
+        "101fe615a785a96fdb551b3d28055e0355d21354",
+        "985555310cf92cea25b2019417e50bc0bd88209b"
+      ],
+      "stats": {
+        "additions": 86,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 30,
+          "deletions": 6,
+          "patch": "@@ -1402,6 +1402,7 @@   TPdfDocument = class\n     fMissingBookmarks: TRawUtf8List;\r\n     fLastOutline: TPdfOutlineEntry; // used by CreateOutline\r\n     fFileFormat: TPdfFileFormat;\r\n+    fHeaderFileFormat: TPdfFileFormat;\r\n     fPdfA: TPdfALevel;\r\n     fPdfAMetadaExtension: RawUtf8;\r\n     fSaveToStreamWriter: TPdfWrite;\r\n@@ -1417,6 +1418,9 @@   TPdfDocument = class\n     function GetGeneratePdf20File: boolean;\r\n     procedure SetGeneratePdf20File(Value: boolean);\r\n     procedure PreparePdf20;\r\n+    // a feature needs at least Value: raises the file format, or the\r\n+    // catalog's /Version once a lower header was written\r\n+    procedure NeedFileFormat(Value: TPdfFileFormat);\r\n     function GetInfo: TPdfInfo;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetOutlineRoot: TPdfOutlineRoot;\r\n@@ -1781,6 +1785,8 @@   TPdfDocument = class\n     property PdfAMetadaExtension: RawUtf8\r\n       read fPdfAMetadaExtension write fPdfAMetadaExtension;\r\n     /// set to true to force PDF 1.5 format, which may produce smaller files\r\n+    // - set after SaveToStreamDirectBegin, it no longer changes the file's\r\n+    // cross-reference format, which follows the header written\r\n     property GeneratePdf15File: boolean\r\n       read GetGeneratePdf15File write SetGeneratePdf15File;\r\n     /// set to true to generate a PDF 2.0 (ISO 32000-2) file\r\n@@ -7754,6 +7760,7 @@ procedure TPdfDocument.SaveToStreamDirectBegin(AStream: TStream; ForceModDate: T\n   end;\r\n   // write beginning of the content\r\n   fSaveToStreamWriter := TPdfWrite.Create(self, AStream);\r\n+  fHeaderFileFormat := fFileFormat; // the format may still be raised\r\n   fSaveToStreamWriter.Add('%PDF-').Add(PDF_HEADER[fFileformat]).Add(#10);\r\n   if fFileFormat > pdf13 then\r\n     fSaveToStreamWriter.Add(@PDFA_MARKER, SizeOf(PDFA_MARKER));\r\n@@ -7795,8 +7802,9 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n       with TPdfFontTrueType(fFontList.List[i]) do\r\n         if fTrueTypeFontsIndex <> 0 then\r\n           PrepareForSaving;\r\n-    // write pending objects\r\n-    if fFileFormat >= pdf15 then\r\n+    // write pending objects - the cross-reference as the header allows:\r\n+    // the format may have been raised after it\r\n+    if fHeaderFileFormat >= pdf15 then\r\n       fTrailer.ToCrossReference(self);\r\n     for i := 1 to fXRef.ItemCount - 1 do\r\n       with fXRef.Items[i] do\r\n@@ -7810,7 +7818,7 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n     if Assigned(fTrailer.fCrossReference) and\r\n       (fTrailer.fCrossReference.ObjectNumber > 0) then\r\n       fXRef.Items[fTrailer.fCrossReference.ObjectNumber].fByteOffset := fTrailer.XrefAddress;\r\n-    if fFileFormat < pdf15 then\r\n+    if fHeaderFileFormat < pdf15 then\r\n       fXRef.WriteTo(fSaveToStreamWriter);\r\n     fTrailer.Attributes.PdfNumberByName('Size').Value := fXRef.ItemCount;\r\n     fTrailer.WriteTo(fSaveToStreamWriter);\r\n@@ -8427,6 +8435,23 @@ procedure TPdfDocument.SetGeneratePdf20File(Value: boolean);\n     fFileFormat := pdf17;\r\n end;\r\n \r\n+procedure TPdfDocument.NeedFileFormat(Value: TPdfFileFormat);\r\n+var\r\n+  v: TPdfObject;\r\n+begin\r\n+  if fFileFormat < Value then\r\n+    fFileFormat := Value;\r\n+  if (fSaveToStreamWriter = nil) or\r\n+     (fHeaderFileFormat >= Value) then\r\n+    exit;\r\n+  // the header is written (SaveToStreamDirectBegin): the catalog, written\r\n+  // last, overrides its version (ISO 32000-1 7.5.2)\r\n+  v := fRoot.Data.ValueByName('Version');\r\n+  if not (v is TPdfName) or\r\n+     (TPdfName(v).Value < PDF_HEADER[Value]) then // never lower it\r\n+    fRoot.Data.AddItem('Version', PDF_HEADER[Value]);\r\n+end;\r\n+\r\n procedure TPdfDocument.PreparePdf20;\r\n var\r\n   hex: PdfString;\r\n@@ -10149,9 +10174,8 @@ procedure TPdfCatalog.SetViewerPreference(Value: TPdfViewerPreferences);\n     if vpEnforcePrintScaling in Value then\r\n     begin\r\n       d.AddItem('Enforce', TPdfArray.CreateNames(Data.ObjectMgr, ['PrintScaling']));\r\n-      if (fOwner <> nil) and\r\n-         (fOwner.fFileFormat < pdf16) then\r\n-        fOwner.fFileFormat := pdf16;\r\n+      if fOw\n... [truncated, 110 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 0,
+          "patch": "@@ -83,6 +83,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure IntegerCoordinates;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n+    procedure VersionAfterHeader;\r\n   end;\r\n \r\n implementation\r\n@@ -4456,6 +4457,61 @@ procedure TTestUiPdf.Pdf20File;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+// a document streamed from a 1.4 or 1.5 header, a page flushed: then on\r\n+// page 2 either vpEnforcePrintScaling, or GeneratePdf15File set\r\n+function StreamedAfterHeader(Pdf15, PrintScaling: boolean): RawByteString;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  stream: TMemoryStream;\r\n+begin\r\n+  stream := TMemoryStream.Create;\r\n+  try\r\n+    pdf := TPdfDocument.Create;\r\n+    try\r\n+      pdf.CompressionMethod := cmNone;\r\n+      pdf.GeneratePdf15File := Pdf15;\r\n+      pdf.SaveToStreamDirectBegin(stream);\r\n+      pdf.AddPage;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.AddPage;\r\n+      if PrintScaling then\r\n+        pdf.Root.ViewerPreference := [vpEnforcePrintScaling]\r\n+      else\r\n+        pdf.GeneratePdf15File := true;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.SaveToStreamDirectEnd;\r\n+    finally\r\n+      pdf.Free;\r\n+    end;\r\n+    SetString(result, PAnsiChar(stream.Memory), stream.Size);\r\n+  finally\r\n+    stream.Free;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.VersionAfterHeader;\r\n+var\r\n+  s: RawByteString;\r\n+begin\r\n+  // a format raised after the header: the catalog's /Version, written last\r\n+  s := StreamedAfterHeader(false, true);\r\n+  Check(copy(s, 1, 8) = '%PDF-1.4', 'print scaling: the header written');\r\n+  Check(PosEx('/Enforce', s) > 0, 'print scaling: /Enforce');\r\n+  Check(PosEx('/Version/1.6', s) > 0, 'print scaling: the catalog /Version');\r\n+  Check((PosEx('/XRef', s) = 0) and\r\n+        (PosEx(#10'xref'#10, s) > 0), 'print scaling: an xref table');\r\n+  // a 1.5 header keeps its cross-reference stream\r\n+  s := StreamedAfterHeader(true, true);\r\n+  Check((PosEx('/Version/1.6', s) > 0) and\r\n+        (PosEx('/XRef', s) > 0), 'print scaling: 1.5, an xref stream');\r\n+  // GeneratePdf15File set after the header: the file follows the header\r\n+  s := StreamedAfterHeader(false, false);\r\n+  Check((copy(s, 1, 8) = '%PDF-1.4') and\r\n+        (PosEx('/Version', s) = 0), 'GeneratePdf15File late: no version');\r\n+  Check((PosEx('/XRef', s) = 0) and\r\n+        (PosEx(#10'xref'#10, s) > 0), 'GeneratePdf15File late: an xref table');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "UI"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": 776,
+      "is_merge": true
+    },
+    {
+      "sha": "101fe615a785a96fdb551b3d28055e0355d21354",
+      "short_sha": "101fe615",
+      "subject": "Merge pull request #772 from zen010101/fix-external-process-thread",
+      "body": "core: TExternalProcess.Start returns false if its thread could not be created",
+      "author": "ab",
+      "date": "2026-11-12T10:45:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/101fe615a785a96fdb551b3d28055e0355d21354",
+      "parents": [
+        "299894f5cccb58dc2b67e3bed9835a1dcd267b47",
+        "b2eaa6f6b79819bf6823c8ae81dc227e09e1aa80"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 10,
+          "patch": "@@ -6593,7 +6593,7 @@   TExternalProcess = class(TSynPersistent)\n     procedure DoClose;\r\n     procedure DoWakeUp;\r\n     // cross-platform methods\r\n-    procedure StartThread;\r\n+    function StartThread: boolean;\r\n     procedure DoOutput(p: pointer; len: PtrInt; iserror: boolean);\r\n     function WaitExit(endtix: Int64): boolean;\r\n     function Redirect(waitfordelayms: cardinal; setresult: boolean;\r\n@@ -6614,7 +6614,8 @@   TExternalProcess = class(TSynPersistent)\n     // the executable in the PATH of the current process\r\n     // - env is encoded as 'n1=v1'#0'n2=v2'#0#0 pairs, possibly with\r\n     // roEnvAddExisting to complete the current environment\r\n-    // - returns false if the process could not be executed\r\n+    // - returns false if the process could not be executed, or if its\r\n+    // background thread could not be created - the process is then killed\r\n     function Start(const cmd: TRunArg; const env: TRunArg = '';\r\n       const wrkdir: TFileName = ''; options: TRunOptions = RUN_PROCESS): boolean; overload;\r\n     /// start the execution of an executable with some explicit arguments\r\n@@ -13851,33 +13852,42 @@ destructor TExternalProcess.Destroy;\n   inherited Destroy;\r\n end;\r\n \r\n-procedure TExternalProcess.StartThread;\r\n+function TExternalProcess.StartThread: boolean;\r\n begin\r\n+  result := true;\r\n   fKeepOutput := not Assigned(fOnOutput);\r\n   fKeepError := not Assigned(fOnError);\r\n   if fOutputEof then\r\n     exit; // nothing to read\r\n   fThreaded := true;\r\n-  TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  try\r\n+    TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  except\r\n+    // the thread could not be created, e.g. out of resources: nothing would\r\n+    // read the output of this process, and Destroy would wait for ever\r\n+    Terminate(0);       // hard kill - fThreaded: WaitExit() only reaps\r\n+    fThreaded := false; // Destroy has no thread to wait for\r\n+    DoClose;\r\n+    fState := epsFailed;\r\n+    result := false;\r\n+  end;\r\n end;\r\n \r\n function TExternalProcess.Start(const cmd: TRunArg; const env: TRunArg;\r\n   const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n-            DoStart(cmd, [], env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart(cmd, [], env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n function TExternalProcess.Start(const args: array of TRunArg;\r\n   const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n             (high(args) >= 0) and\r\n-            DoStart('', args, env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart('', args, env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n procedure TExternalProcess.Pump;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": 772,
+      "is_merge": true
+    },
+    {
+      "sha": "299894f5cccb58dc2b67e3bed9835a1dcd267b47",
+      "short_sha": "299894f5",
+      "subject": "Merge pull request #773 from zen010101/docs-external-process-terminate",
+      "body": "core: more TExternalProcess.Terminate documentation - see #648",
+      "author": "ab",
+      "date": "2026-11-12T10:41:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/299894f5cccb58dc2b67e3bed9835a1dcd267b47",
+      "parents": [
+        "790d271bddf72ac1512c5464463af4dcec774b9f",
+        "7a479e07f437ffdb3d5ac89046062e46ce08f2af"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -6644,7 +6644,15 @@   TExternalProcess = class(TSynPersistent)\n     function HasDataAvailable: boolean;\r\n     /// try a graceful termination of the process, then a hard kill\r\n     // - on POSIX, send SIGTERM then SIGKILL to the whole process group\r\n+    // - on Windows, send CTRL_BREAK if the process shares the console of the\r\n+    // caller - i.e. roWinNoProcessDetach without roWinNewConsole, from a\r\n+    // console application - and WM_QUIT, then terminate it: a console\r\n+    // process started from a GUI application has therefore no graceful\r\n+    // termination, and is killed after waitms - rather write to its stdin\r\n+    // if it expects a quit command, e.g. 'q' for ffmpeg\r\n     // - returns true if the process ended within waitms\r\n+    // - at return, the last output of the process may not have been read\r\n+    // yet: call WaitFor() to wait for the end of the output\r\n     function Terminate(waitms: cardinal = 5000): boolean;\r\n     /// unconditionally and immediately kill the process\r\n     procedure Kill;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": 773,
+      "is_merge": true
+    },
+    {
+      "sha": "790d271bddf72ac1512c5464463af4dcec774b9f",
+      "short_sha": "790d271b",
+      "subject": "Merge pull request #774 from zen010101/fix-loadprocfile-unknown-pid",
+      "body": "core: two EnumProcessName fixes on Linux",
+      "author": "ab",
+      "date": "2026-11-12T10:40:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/790d271bddf72ac1512c5464463af4dcec774b9f",
+      "parents": [
+        "587894c724f5df4d2f3f49cd0d210626f64a6a31",
+        "52600cfd3770151b1b98f5cfde447bddc2ea8195"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 1,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -3973,6 +3973,7 @@ var\n   h: THandle;\r\n begin\r\n   result := 0;\r\n+  dest[0] := #0; // callers expect a #0 terminated buffer, even on error\r\n   repeat\r\n     h := FpOpen(fn, O_RDONLY); // direct PAnsiChar syscall with no fpFlock()\r\n   until (PtrInt(h) >= 0) or (fpgeterrno <> ESysEINTR); // as FileOpen()\r\n@@ -4098,7 +4099,7 @@ begin\n   begin\r\n     // may need to be root to follow /fn/[pid]/exe\r\n     AppendShort('/exe'#0, fn);\r\n-    l := fpReadLink(@fn, @tmp, SizeOf(tmp)); // a single syscall is enough\r\n+    l := fpReadLink(@fn[1], @tmp, SizeOf(tmp)); // a single syscall is enough\r\n     if l > 0 then\r\n     begin\r\n       FastSetString(result, pointer(@tmp), l);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -3914,6 +3914,13 @@ procedure TTestCoreBase._TExternalProcess;\n     CheckEqual(p.ReadAvailable, 'hello'#10, 'output');\r\n     CheckEqual(p.ReadAvailable, '', 'output2');\r\n     Check(not p.Start('true'), 'restart');\r\n+    {$ifdef OSLINUX}\r\n+    // a pid which is gone has no name, even just after a successful call\r\n+    s := EnumProcessName(GetCurrentProcessId); // from /proc/<pid>/exe\r\n+    Check((s <> '') and\r\n+          (s[1] = '/'), 'ownpath');\r\n+    CheckEqual(EnumProcessName(p.Pid), '', 'noname');\r\n+    {$endif OSLINUX}\r\n   finally\r\n     p.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": 774,
+      "is_merge": true
+    },
+    {
+      "sha": "587894c724f5df4d2f3f49cd0d210626f64a6a31",
+      "short_sha": "587894c7",
+      "subject": "test: fixed IDE, XP and Wine context support",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-12T10:26:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/587894c724f5df4d2f3f49cd0d210626f64a6a31",
+      "parents": [
+        "6b61281e4c8fb4d0b09f5eb4836bb28e64842881"
+      ],
+      "stats": {
+        "additions": 82,
+        "deletions": 86,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -5135,7 +5135,7 @@ begin\n end;\r\n \r\n // append an argument to a command line, quoted as CommandLineToArgvW() expects\r\n-procedure AppendArg(var line: TFileName; const arg: TFileName);\r\n+procedure AppendArg(var line: TRunArg; const arg: TRunArg);\r\n var\r\n   i, bs: PtrInt;\r\n   c: char;\r\n@@ -5216,8 +5216,8 @@ begin\n   else\r\n     for i := 0 to high(args) do\r\n       AppendArg(line, args[i]);\r\n-  wcmd := SynUnicode(line);\r\n-  UniqueString(wcmd); // CreateProcessW() modifies wcmd buffer in-place\r\n+  wcmd := SynUnicode(line);    // inc(refcnt) on Delphi where SynUnicode=TRunArg\r\n+  UniqueString(wcmd);          // CreateProcessW() modifies wcmd buffer in-place\r\n   wpath := SynUnicode(wrkdir); // '' = inherit the current folder, as on POSIX\r\n   if env <> '' then\r\n   begin\r\n@@ -5350,9 +5350,9 @@ begin\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n   if roWinJobCloseChildren in options then\r\n-    // no silent breakaway: the children should stay in the job\r\n+    \r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n-      {allowSilentBreakaway=}false)\r\n+      {allowSilentBreakaway=}false) // false: children should stay in the job\r\n   else\r\n     fJob := CreateJobObjectA(nil, nil);\r\n   if (fJob <> 0) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-17982\n+17993",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.17982'\r\n+'2.4.17993'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 75,
+          "deletions": 79,
+          "patch": "@@ -213,6 +213,8 @@   TTestCoreBase = class(TSynTestCase)\n     procedure TStreamSlow(Context: TObject);\r\n     /// client side geniune 64 bit identifiers generation\r\n     procedure TSynUniqueIdentifierSlow(Sender: TObject);\r\n+    /// test RunRedirect() function\r\n+    procedure DoRunRedirect(Dummy: TObject);\r\n   published\r\n     /// test RecordCopy(), TRttiMap and TRttiFilter\r\n     procedure _Records;\r\n@@ -238,8 +240,6 @@   TTestCoreBase = class(TSynTestCase)\n     procedure _GUID;\r\n     /// test ParseCommandArgs() functions\r\n     procedure _ParseCommandArgs;\r\n-    /// test RunRedirect() function\r\n-    procedure _RunRedirect;\r\n     /// test TExternalProcess class\r\n     procedure _TExternalProcess;\r\n     /// test TExecutableCommandLine class\r\n@@ -3787,7 +3787,7 @@ function ReadFirstLinePid(p: TExternalProcess): cint;\n   result := GetInteger(pointer(s));\r\n end;\r\n \r\n-procedure TTestCoreBase._RunRedirect;\r\n+procedure TTestCoreBase.DoRunRedirect(Dummy: TObject);\r\n var\r\n   r: TRunRedirectTest;\r\n   {$ifdef FPC}\r\n@@ -3839,23 +3839,26 @@ procedure TTestCoreBase._RunRedirect;\n   // the child should not inherit an ignored SIGPIPE, e.g. from a server\r\n   SigPipeIntercept;\r\n   Run('kill -PIPE $$; echo alive', '', -SIGPIPE);\r\n-  {$ifdef FPC}\r\n-  // a signal received by the calling thread should not abort the redirection\r\n-  FillCharFast(sa, SizeOf(sa), 0);\r\n-  sa.sa_handler := SigActionHandler(@NoopSignalHandler);\r\n-  fpsigaction(SIGUSR1, @sa, @old);\r\n-  sender := TSignalSender.Create(GetCurrentThreadId);\r\n-  try\r\n-    Run('sh -c \"sleep 1; echo done; exit 7\"', 'done'#10, 7);\r\n-  finally\r\n-    sender.Terminate;\r\n-    sender.WaitFor;\r\n-    // MacOS arm64 runners only send 9 or 10 signals in this second\r\n-    CheckUtf8(sender.Sent >= 3, 'signals=%', [sender.Sent]);\r\n-    sender.Free;\r\n-    fpsigaction(SIGUSR1, @old, nil);\r\n+  if not IsDebuggerPresent then\r\n+  begin\r\n+    {$ifdef FPC}\r\n+    // a signal received by the calling thread should not abort the redirection\r\n+    FillCharFast(sa, SizeOf(sa), 0);\r\n+    sa.sa_handler := SigActionHandler(@NoopSignalHandler);\r\n+    fpsigaction(SIGUSR1, @sa, @old);\r\n+    sender := TSignalSender.Create(GetCurrentThreadId);\r\n+    try\r\n+      Run('sh -c \"sleep 1; echo done; exit 7\"', 'done'#10, 7);\r\n+    finally\r\n+      sender.Terminate;\r\n+      sender.WaitFor;\r\n+      // MacOS arm64 runners only send 9 or 10 signals in this second\r\n+      CheckUtf8(sender.Sent >= 3, 'signals=%', [sender.Sent]);\r\n+      sender.Free;\r\n+      fpsigaction(SIGUSR1, @old, nil);\r\n+    end;\r\n+    {$endif FPC}\r\n   end;\r\n-  {$endif FPC}\r\n   r := TRunRedirectTest.Create;\r\n   try\r\n     // the callback is called at startup with '', then with the output\r\n@@ -4227,7 +4230,7 @@ function ProcessRunning(pid: cardinal): boolean;\n     CloseHandle(h);\r\n end;\r\n \r\n-procedure TTestCoreBase._RunRedirect;\r\n+procedure TTestCoreBase.DoRunRedirect(Dummy: TObject);\r\n var\r\n   exitcode: integer;\r\n begin\r\n@@ -4296,19 +4299,22 @@ procedure TTestCoreBase._TExternalProcess;\n   finally\r\n     p.Free;\r\n   end;\r\n-  // full duplex: Write() blocks until findstr output is read by the thread\r\n-  for i := 1 to 300000 do\r\n-    Append(data, ['line ', i, #13#10]);\r\n-  p := TExternalProcess.Create;\r\n-  try\r\n-    Check(p.Start('findstr \"^\"', '', '', RUN_PROCESS + [roStdinPipe]), 'findstr');\r\n-    Check(p.WriteAndCloseStdin(data), 'write');\r\n-    CheckEqual(p.WaitFor(30000), 0, 'findstr');\r\n-    s := p.ReadAvailable;\r\n-    CheckEqual(length(s), length(data), 'duplex');\r\n-    Check(s = data, 'duplex');\r\n-  finally\r\n-    p.Free;\r\n+  if not (wsWine in WindowsSpecs) then // findstr limination\r\n+  begin\r\n+    // full duplex: Write() blocks until findstr output is read by the thread\r\n+    for i := 1 to 300000 do\r\n+      Append(data, ['line ', i, #13#10]);\r\n+    p := TExternalProcess.Create;\r\n+    try\r\n+      Check(p.Start('findstr \"^\"', '', '', RUN_PROCESS + [roStdinPipe]), 'findstr');\r\n+      Check(p.WriteAndCloseStdin(data), 'write');\r\n+      CheckEqual(p.WaitFor(30000), 0, 'findstr')\n... [truncated, 3970 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6b61281e4c8fb4d0b09f5eb4836bb28e64842881",
+      "short_sha": "6b61281e",
+      "subject": "Merge pull request #775 from zen010101/fix-external-process-job-children",
+      "body": "core: TExternalProcess roWinJobCloseChildren also closes the children",
+      "author": "ab",
+      "date": "2026-11-12T10:14:45Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6b61281e4c8fb4d0b09f5eb4836bb28e64842881",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee",
+        "aeb9645abb02fedf6a786421c94406c4a47db2e9"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 1,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -6557,6 +6557,8 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - on Windows, the command line is given to CreateProcessW() as such - so use\r\n   // e.g. 'cmd /c ...' for a shell built-in - and the process is created in its\r\n   // own process group and job, so that Terminate/Kill also stop its children\r\n+  // - on Windows, roWinJobCloseChildren also kills any child still running\r\n+  // when this instance is released, or when the current process ends\r\n   // - RunRedirect() is implemented over this class on POSIX, from the calling\r\n   // thread, but still uses RunCommandWin() on Windows\r\n   TExternalProcess = class(TSynPersistent)\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -5350,8 +5350,9 @@ begin\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n   if roWinJobCloseChildren in options then\r\n+    // no silent breakaway: the children should stay in the job\r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n-      {allowSilentBreakaway=}true)\r\n+      {allowSilentBreakaway=}false)\r\n   else\r\n     fJob := CreateJobObjectA(nil, nil);\r\n   if (fJob <> 0) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 0,
+          "patch": "@@ -4377,6 +4377,23 @@ procedure TTestCoreBase._TExternalProcess;\n   finally\r\n     p.Free;\r\n   end;\r\n+  // roWinJobCloseChildren also stops the children of the process\r\n+  p := TExternalProcess.Create;\r\n+  try\r\n+    Check(p.Start('cmd /c ping -n 30 127.0.0.1', '', '',\r\n+      RUN_PROCESS + [roWinJobCloseChildren]), 'job');\r\n+    for i := 1 to 500 do\r\n+      if p.HasDataAvailable then\r\n+        break\r\n+      else\r\n+        SleepHiRes(10);\r\n+    Check(p.ReadAvailable <> '', 'job ping'); // ping is running\r\n+    p.Terminate(500);\r\n+    Check(not p.Running, 'job');\r\n+    Check(p.WaitFor(5000) <> -1, 'job children'); // ping closed stdout\r\n+  finally\r\n+    p.Free;\r\n+  end;\r\n   // WaitFor() timeout, then Kill()\r\n   p := TExternalProcess.Create;\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": 775,
+      "is_merge": true
+    },
+    {
+      "sha": "985555310cf92cea25b2019417e50bc0bd88209b",
+      "short_sha": "98555531",
+      "subject": "ui: pdf - GeneratePdf15File documented for a late change, a shorter test comment",
+      "body": "",
+      "author": "Sven Harazim",
+      "date": "2026-11-12T06:27:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/985555310cf92cea25b2019417e50bc0bd88209b",
+      "parents": [
+        "29551210eb10132bd8b3ee19ff3e63c853387b16"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -1785,6 +1785,8 @@   TPdfDocument = class\n     property PdfAMetadaExtension: RawUtf8\r\n       read fPdfAMetadaExtension write fPdfAMetadaExtension;\r\n     /// set to true to force PDF 1.5 format, which may produce smaller files\r\n+    // - set after SaveToStreamDirectBegin, it no longer changes the file's\r\n+    // cross-reference format, which follows the header written\r\n     property GeneratePdf15File: boolean\r\n       read GetGeneratePdf15File write SetGeneratePdf15File;\r\n     /// set to true to generate a PDF 2.0 (ISO 32000-2) file\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 5,
+          "patch": "@@ -4493,12 +4493,9 @@ procedure TTestUiPdf.VersionAfterHeader;\n var\r\n   s: RawByteString;\r\n begin\r\n-  { vpEnforcePrintScaling set once the header was written raised the format\r\n-    to 1.6: the file ended with a cross-reference stream (PDF 1.5) under a\r\n-    1.4 header; the catalog's /Version says 1.6 now - it is written last,\r\n-    after a page flushed too }\r\n+  // a format raised after the header: the catalog's /Version, written last\r\n   s := StreamedAfterHeader(false, true);\r\n-  CheckEqual(copy(s, 1, 8), '%PDF-1.4', 'print scaling: the header written');\r\n+  Check(copy(s, 1, 8) = '%PDF-1.4', 'print scaling: the header written');\r\n   Check(PosEx('/Enforce', s) > 0, 'print scaling: /Enforce');\r\n   Check(PosEx('/Version/1.6', s) > 0, 'print scaling: the catalog /Version');\r\n   Check((PosEx('/XRef', s) = 0) and\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "29551210eb10132bd8b3ee19ff3e63c853387b16",
+      "short_sha": "29551210",
+      "subject": "ui: pdf - a version needed after the header is written goes to the catalog",
+      "body": "vpEnforcePrintScaling set after SaveToStreamDirectBegin raised the file\nformat to 1.6 under a 1.3 or 1.4 header already written, so\nSaveToStreamDirectEnd ended the file in a cross-reference stream (PDF 1.5);\nGeneratePdf15File := true after Begin did the same.\n\nThe header's version is kept, and the cross-reference follows it. A feature\nneeding more once the header is written sets the catalog's /Version, which\nis written last (ISO 32000-1 7.5.2).\n\nVersionAfterHeader: 4 of its 7 checks fail before the change.",
+      "author": "Sven Harazim",
+      "date": "2026-11-12T06:23:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/29551210eb10132bd8b3ee19ff3e63c853387b16",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 87,
+        "deletions": 6,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 6,
+          "patch": "@@ -1402,6 +1402,7 @@   TPdfDocument = class\n     fMissingBookmarks: TRawUtf8List;\r\n     fLastOutline: TPdfOutlineEntry; // used by CreateOutline\r\n     fFileFormat: TPdfFileFormat;\r\n+    fHeaderFileFormat: TPdfFileFormat;\r\n     fPdfA: TPdfALevel;\r\n     fPdfAMetadaExtension: RawUtf8;\r\n     fSaveToStreamWriter: TPdfWrite;\r\n@@ -1417,6 +1418,9 @@   TPdfDocument = class\n     function GetGeneratePdf20File: boolean;\r\n     procedure SetGeneratePdf20File(Value: boolean);\r\n     procedure PreparePdf20;\r\n+    // a feature needs at least Value: raises the file format, or the\r\n+    // catalog's /Version once a lower header was written\r\n+    procedure NeedFileFormat(Value: TPdfFileFormat);\r\n     function GetInfo: TPdfInfo;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n     function GetOutlineRoot: TPdfOutlineRoot;\r\n@@ -7754,6 +7758,7 @@ procedure TPdfDocument.SaveToStreamDirectBegin(AStream: TStream; ForceModDate: T\n   end;\r\n   // write beginning of the content\r\n   fSaveToStreamWriter := TPdfWrite.Create(self, AStream);\r\n+  fHeaderFileFormat := fFileFormat; // the format may still be raised\r\n   fSaveToStreamWriter.Add('%PDF-').Add(PDF_HEADER[fFileformat]).Add(#10);\r\n   if fFileFormat > pdf13 then\r\n     fSaveToStreamWriter.Add(@PDFA_MARKER, SizeOf(PDFA_MARKER));\r\n@@ -7795,8 +7800,9 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n       with TPdfFontTrueType(fFontList.List[i]) do\r\n         if fTrueTypeFontsIndex <> 0 then\r\n           PrepareForSaving;\r\n-    // write pending objects\r\n-    if fFileFormat >= pdf15 then\r\n+    // write pending objects - the cross-reference as the header allows:\r\n+    // the format may have been raised after it\r\n+    if fHeaderFileFormat >= pdf15 then\r\n       fTrailer.ToCrossReference(self);\r\n     for i := 1 to fXRef.ItemCount - 1 do\r\n       with fXRef.Items[i] do\r\n@@ -7810,7 +7816,7 @@ procedure TPdfDocument.SaveToStreamDirectEnd;\n     if Assigned(fTrailer.fCrossReference) and\r\n       (fTrailer.fCrossReference.ObjectNumber > 0) then\r\n       fXRef.Items[fTrailer.fCrossReference.ObjectNumber].fByteOffset := fTrailer.XrefAddress;\r\n-    if fFileFormat < pdf15 then\r\n+    if fHeaderFileFormat < pdf15 then\r\n       fXRef.WriteTo(fSaveToStreamWriter);\r\n     fTrailer.Attributes.PdfNumberByName('Size').Value := fXRef.ItemCount;\r\n     fTrailer.WriteTo(fSaveToStreamWriter);\r\n@@ -8427,6 +8433,23 @@ procedure TPdfDocument.SetGeneratePdf20File(Value: boolean);\n     fFileFormat := pdf17;\r\n end;\r\n \r\n+procedure TPdfDocument.NeedFileFormat(Value: TPdfFileFormat);\r\n+var\r\n+  v: TPdfObject;\r\n+begin\r\n+  if fFileFormat < Value then\r\n+    fFileFormat := Value;\r\n+  if (fSaveToStreamWriter = nil) or\r\n+     (fHeaderFileFormat >= Value) then\r\n+    exit;\r\n+  // the header is written (SaveToStreamDirectBegin): the catalog, written\r\n+  // last, overrides its version (ISO 32000-1 7.5.2)\r\n+  v := fRoot.Data.ValueByName('Version');\r\n+  if not (v is TPdfName) or\r\n+     (TPdfName(v).Value < PDF_HEADER[Value]) then // never lower it\r\n+    fRoot.Data.AddItem('Version', PDF_HEADER[Value]);\r\n+end;\r\n+\r\n procedure TPdfDocument.PreparePdf20;\r\n var\r\n   hex: PdfString;\r\n@@ -10149,9 +10172,8 @@ procedure TPdfCatalog.SetViewerPreference(Value: TPdfViewerPreferences);\n     if vpEnforcePrintScaling in Value then\r\n     begin\r\n       d.AddItem('Enforce', TPdfArray.CreateNames(Data.ObjectMgr, ['PrintScaling']));\r\n-      if (fOwner <> nil) and\r\n-         (fOwner.fFileFormat < pdf16) then\r\n-        fOwner.fFileFormat := pdf16;\r\n+      if fOwner <> nil then\r\n+        fOwner.NeedFileFormat(pdf16);\r\n     end\r\n     else\r\n       d.RemoveItem('Enforce');\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 0,
+          "patch": "@@ -83,6 +83,7 @@   TTestUiPdf = class(TSynTestCase)\n     procedure IntegerCoordinates;\r\n     procedure EncryptionAes256;\r\n     procedure Pdf20File;\r\n+    procedure VersionAfterHeader;\r\n   end;\r\n \r\n implementation\r\n@@ -4456,6 +4457,64 @@ procedure TTestUiPdf.Pdf20File;\n   {$endif NO_USE_PDFSECURITY}\r\n end;\r\n \r\n+// a document streamed from a 1.4 or 1.5 header, a page flushed: then on\r\n+// page 2 either vpEnforcePrintScaling, or GeneratePdf15File set\r\n+function StreamedAfterHeader(Pdf15, PrintScaling: boolean): RawByteString;\r\n+var\r\n+  pdf: TPdfDocument;\r\n+  stream: TMemoryStream;\r\n+begin\r\n+  stream := TMemoryStream.Create;\r\n+  try\r\n+    pdf := TPdfDocument.Create;\r\n+    try\r\n+      pdf.CompressionMethod := cmNone;\r\n+      pdf.GeneratePdf15File := Pdf15;\r\n+      pdf.SaveToStreamDirectBegin(stream);\r\n+      pdf.AddPage;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.AddPage;\r\n+      if PrintScaling then\r\n+        pdf.Root.ViewerPreference := [vpEnforcePrintScaling]\r\n+      else\r\n+        pdf.GeneratePdf15File := true;\r\n+      pdf.SaveToStreamDirectPageFlush;\r\n+      pdf.SaveToStreamDirectEnd;\r\n+    finally\r\n+      pdf.Free;\r\n+    end;\r\n+    SetString(result, PAnsiChar(stream.Memory), stream.Size);\r\n+  finally\r\n+    stream.Free;\r\n+  end;\r\n+end;\r\n+\r\n+procedure TTestUiPdf.VersionAfterHeader;\r\n+var\r\n+  s: RawByteString;\r\n+begin\r\n+  { vpEnforcePrintScaling set once the header was written raised the format\r\n+    to 1.6: the file ended with a cross-reference stream (PDF 1.5) under a\r\n+    1.4 header; the catalog's /Version says 1.6 now - it is written last,\r\n+    after a page flushed too }\r\n+  s := StreamedAfterHeader(false, true);\r\n+  CheckEqual(copy(s, 1, 8), '%PDF-1.4', 'print scaling: the header written');\r\n+  Check(PosEx('/Enforce', s) > 0, 'print scaling: /Enforce');\r\n+  Check(PosEx('/Version/1.6', s) > 0, 'print scaling: the catalog /Version');\r\n+  Check((PosEx('/XRef', s) = 0) and\r\n+        (PosEx(#10'xref'#10, s) > 0), 'print scaling: an xref table');\r\n+  // a 1.5 header keeps its cross-reference stream\r\n+  s := StreamedAfterHeader(true, true);\r\n+  Check((PosEx('/Version/1.6', s) > 0) and\r\n+        (PosEx('/XRef', s) > 0), 'print scaling: 1.5, an xref stream');\r\n+  // GeneratePdf15File set after the header: the file follows the header\r\n+  s := StreamedAfterHeader(false, false);\r\n+  Check((copy(s, 1, 8) = '%PDF-1.4') and\r\n+        (PosEx('/Version', s) = 0), 'GeneratePdf15File late: no version');\r\n+  Check((PosEx('/XRef', s) = 0) and\r\n+        (PosEx(#10'xref'#10, s) > 0), 'GeneratePdf15File late: an xref table');\r\n+end;\r\n+\r\n {$else}\r\n \r\n implementation // void unit\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "UI",
+        "Tests"
+      ],
+      "units": [
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "aeb9645abb02fedf6a786421c94406c4a47db2e9",
+      "short_sha": "aeb9645a",
+      "subject": "core: TExternalProcess roWinJobCloseChildren also closes the children",
+      "body": "The job of this option was created with allowSilentBreakaway = true, as\nRunCommandWin() does: the children of the process were not in the job,\nso Terminate/Kill did not stop them, and nothing killed them when the\ninstance was released. RunCommandWin() is not changed.\n\nTested with FPC 3.2.3 and Delphi 13.0 for Win64.",
+      "author": "zen010101",
+      "date": "2026-11-12T05:01:37Z",
+      "url": "https://github.com/synopse/mORMot2/commit/aeb9645abb02fedf6a786421c94406c4a47db2e9",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 21,
+        "deletions": 1,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -6557,6 +6557,8 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - on Windows, the command line is given to CreateProcessW() as such - so use\r\n   // e.g. 'cmd /c ...' for a shell built-in - and the process is created in its\r\n   // own process group and job, so that Terminate/Kill also stop its children\r\n+  // - on Windows, roWinJobCloseChildren also kills any child still running\r\n+  // when this instance is released, or when the current process ends\r\n   // - RunRedirect() is implemented over this class on POSIX, from the calling\r\n   // thread, but still uses RunCommandWin() on Windows\r\n   TExternalProcess = class(TSynPersistent)\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -5350,8 +5350,9 @@ begin\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n   if roWinJobCloseChildren in options then\r\n+    // no silent breakaway: the children should stay in the job\r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n-      {allowSilentBreakaway=}true)\r\n+      {allowSilentBreakaway=}false)\r\n   else\r\n     fJob := CreateJobObjectA(nil, nil);\r\n   if (fJob <> 0) and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 0,
+          "patch": "@@ -4377,6 +4377,23 @@ procedure TTestCoreBase._TExternalProcess;\n   finally\r\n     p.Free;\r\n   end;\r\n+  // roWinJobCloseChildren also stops the children of the process\r\n+  p := TExternalProcess.Create;\r\n+  try\r\n+    Check(p.Start('cmd /c ping -n 30 127.0.0.1', '', '',\r\n+      RUN_PROCESS + [roWinJobCloseChildren]), 'job');\r\n+    for i := 1 to 500 do\r\n+      if p.HasDataAvailable then\r\n+        break\r\n+      else\r\n+        SleepHiRes(10);\r\n+    Check(p.ReadAvailable <> '', 'job ping'); // ping is running\r\n+    p.Terminate(500);\r\n+    Check(not p.Running, 'job');\r\n+    Check(p.WaitFor(5000) <> -1, 'job children'); // ping closed stdout\r\n+  finally\r\n+    p.Free;\r\n+  end;\r\n   // WaitFor() timeout, then Kill()\r\n   p := TExternalProcess.Create;\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "52600cfd3770151b1b98f5cfde447bddc2ea8195",
+      "short_sha": "52600cfd",
+      "subject": "core: EnumProcessName reads the /proc/<pid>/exe link on Linux",
+      "body": "fpReadLink() was given the address of the ShortString length byte, so\nit always failed: the first argument of the command line was returned\ninstead of the path of the executable.",
+      "author": "zen010101",
+      "date": "2026-11-12T04:57:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/52600cfd3770151b1b98f5cfde447bddc2ea8195",
+      "parents": [
+        "9024a67e8c970f0b7738b3a3bc2055139e66aa8d"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -4099,7 +4099,7 @@ begin\n   begin\r\n     // may need to be root to follow /fn/[pid]/exe\r\n     AppendShort('/exe'#0, fn);\r\n-    l := fpReadLink(@fn, @tmp, SizeOf(tmp)); // a single syscall is enough\r\n+    l := fpReadLink(@fn[1], @tmp, SizeOf(tmp)); // a single syscall is enough\r\n     if l > 0 then\r\n     begin\r\n       FastSetString(result, pointer(@tmp), l);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -3913,7 +3913,9 @@ procedure TTestCoreBase._TExternalProcess;\n     Check(not p.Start('true'), 'restart');\r\n     {$ifdef OSLINUX}\r\n     // a pid which is gone has no name, even just after a successful call\r\n-    Check(EnumProcessName(GetCurrentProcessId) <> '', 'ownname');\r\n+    s := EnumProcessName(GetCurrentProcessId); // from /proc/<pid>/exe\r\n+    Check((s <> '') and\r\n+          (s[1] = '/'), 'ownpath');\r\n     CheckEqual(EnumProcessName(p.Pid), '', 'noname');\r\n     {$endif OSLINUX}\r\n   finally\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9024a67e8c970f0b7738b3a3bc2055139e66aa8d",
+      "short_sha": "9024a67e",
+      "subject": "core: LoadProcFile always returns a #0 terminated buffer",
+      "body": "When the file could not be opened, dest was left untouched, and\nEnumProcessName(), FindFileValue() and FindFileCardinal() read what was\nleft on the stack: EnumProcessName() of a pid which does not exist did\nnot return ''.",
+      "author": "zen010101",
+      "date": "2026-11-12T04:37:33Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9024a67e8c970f0b7738b3a3bc2055139e66aa8d",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 0,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -3973,6 +3973,7 @@ var\n   h: THandle;\r\n begin\r\n   result := 0;\r\n+  dest[0] := #0; // callers expect a #0 terminated buffer, even on error\r\n   repeat\r\n     h := FpOpen(fn, O_RDONLY); // direct PAnsiChar syscall with no fpFlock()\r\n   until (PtrInt(h) >= 0) or (fpgeterrno <> ESysEINTR); // as FileOpen()\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -3911,6 +3911,11 @@ procedure TTestCoreBase._TExternalProcess;\n     CheckEqual(p.ReadAvailable, 'hello'#10, 'output');\r\n     CheckEqual(p.ReadAvailable, '', 'output2');\r\n     Check(not p.Start('true'), 'restart');\r\n+    {$ifdef OSLINUX}\r\n+    // a pid which is gone has no name, even just after a successful call\r\n+    Check(EnumProcessName(GetCurrentProcessId) <> '', 'ownname');\r\n+    CheckEqual(EnumProcessName(p.Pid), '', 'noname');\r\n+    {$endif OSLINUX}\r\n   finally\r\n     p.Free;\r\n   end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "7a479e07f437ffdb3d5ac89046062e46ce08f2af",
+      "short_sha": "7a479e07",
+      "subject": "core: more TExternalProcess.Terminate documentation - see #648",
+      "body": "No code change. The comment of Terminate() now states when Windows has a\ngraceful termination, and that the last output of the process may not have\nbeen read yet at return.",
+      "author": "zen010101",
+      "date": "2026-11-12T03:58:13Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7a479e07f437ffdb3d5ac89046062e46ce08f2af",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 0,
+          "patch": "@@ -6642,7 +6642,15 @@   TExternalProcess = class(TSynPersistent)\n     function HasDataAvailable: boolean;\r\n     /// try a graceful termination of the process, then a hard kill\r\n     // - on POSIX, send SIGTERM then SIGKILL to the whole process group\r\n+    // - on Windows, send CTRL_BREAK if the process shares the console of the\r\n+    // caller - i.e. roWinNoProcessDetach without roWinNewConsole, from a\r\n+    // console application - and WM_QUIT, then terminate it: a console\r\n+    // process started from a GUI application has therefore no graceful\r\n+    // termination, and is killed after waitms - rather write to its stdin\r\n+    // if it expects a quit command, e.g. 'q' for ffmpeg\r\n     // - returns true if the process ended within waitms\r\n+    // - at return, the last output of the process may not have been read\r\n+    // yet: call WaitFor() to wait for the end of the output\r\n     function Terminate(waitms: cardinal = 5000): boolean;\r\n     /// unconditionally and immediately kill the process\r\n     procedure Kill;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": 648,
+      "is_merge": false
+    },
+    {
+      "sha": "b2eaa6f6b79819bf6823c8ae81dc227e09e1aa80",
+      "short_sha": "b2eaa6f6",
+      "subject": "core: TExternalProcess.Start returns false if its thread could not be created",
+      "body": "StartThread set fThreaded before TExternalProcessThread.Create: when the\nthread could not be created (e.g. out of resources), Start raised EThread\nwith the process running and nothing reading its output, then Destroy\nwaited for ever for a thread which never existed.\n\nStart now kills the process, releases its handles, sets State to epsFailed\nand returns false.\n\nTested with FPC 3.2.3 on Linux x86_64 and aarch64 with a real failure (the\nstack of the thread cannot be allocated under a lowered RLIMIT_AS), and\nwith FPC and Delphi 13.0 on Win64 and Linux64 with an injected failure.\n_RunRedirect and _TExternalProcess still pass on all of them.",
+      "author": "zen010101",
+      "date": "2026-11-12T03:54:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b2eaa6f6b79819bf6823c8ae81dc227e09e1aa80",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 20,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 10,
+          "patch": "@@ -6591,7 +6591,7 @@   TExternalProcess = class(TSynPersistent)\n     procedure DoClose;\r\n     procedure DoWakeUp;\r\n     // cross-platform methods\r\n-    procedure StartThread;\r\n+    function StartThread: boolean;\r\n     procedure DoOutput(p: pointer; len: PtrInt; iserror: boolean);\r\n     function WaitExit(endtix: Int64): boolean;\r\n     function Redirect(waitfordelayms: cardinal; setresult: boolean;\r\n@@ -6612,7 +6612,8 @@   TExternalProcess = class(TSynPersistent)\n     // the executable in the PATH of the current process\r\n     // - env is encoded as 'n1=v1'#0'n2=v2'#0#0 pairs, possibly with\r\n     // roEnvAddExisting to complete the current environment\r\n-    // - returns false if the process could not be executed\r\n+    // - returns false if the process could not be executed, or if its\r\n+    // background thread could not be created - the process is then killed\r\n     function Start(const cmd: TRunArg; const env: TRunArg = '';\r\n       const wrkdir: TFileName = ''; options: TRunOptions = RUN_PROCESS): boolean; overload;\r\n     /// start the execution of an executable with some explicit arguments\r\n@@ -13841,33 +13842,42 @@ destructor TExternalProcess.Destroy;\n   inherited Destroy;\r\n end;\r\n \r\n-procedure TExternalProcess.StartThread;\r\n+function TExternalProcess.StartThread: boolean;\r\n begin\r\n+  result := true;\r\n   fKeepOutput := not Assigned(fOnOutput);\r\n   fKeepError := not Assigned(fOnError);\r\n   if fOutputEof then\r\n     exit; // nothing to read\r\n   fThreaded := true;\r\n-  TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  try\r\n+    TExternalProcessThread.Create(self); // with FreeOnTerminate = true\r\n+  except\r\n+    // the thread could not be created, e.g. out of resources: nothing would\r\n+    // read the output of this process, and Destroy would wait for ever\r\n+    Terminate(0);       // hard kill - fThreaded: WaitExit() only reaps\r\n+    fThreaded := false; // Destroy has no thread to wait for\r\n+    DoClose;\r\n+    fState := epsFailed;\r\n+    result := false;\r\n+  end;\r\n end;\r\n \r\n function TExternalProcess.Start(const cmd: TRunArg; const env: TRunArg;\r\n   const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n-            DoStart(cmd, [], env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart(cmd, [], env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n function TExternalProcess.Start(const args: array of TRunArg;\r\n   const env: TRunArg; const wrkdir: TFileName; options: TRunOptions): boolean;\r\n begin\r\n   result := (fState = epsNotStarted) and\r\n             (high(args) >= 0) and\r\n-            DoStart('', args, env, wrkdir, options, {withthread=}true);\r\n-  if result then\r\n-    StartThread;\r\n+            DoStart('', args, env, wrkdir, options, {withthread=}true) and\r\n+            StartThread;\r\n end;\r\n \r\n procedure TExternalProcess.Pump;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "083ff5c5bf2347327fd59ed2eeb9613746761f27",
+      "short_sha": "083ff5c5",
+      "subject": "net: fixed double release of the file stream in THttpProxyUrl.BackgroundGet",
+      "body": "When HttpLimitPerSecond is set, the background download writes through a\nTStreamRedirect, which owns the file stream and releases it in its Destroy:\nthe file stream was then released a second time.",
+      "author": "zen010101",
+      "date": "2026-11-11T09:41:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/083ff5c5bf2347327fd59ed2eeb9613746761f27",
+      "parents": [
+        "856cfa42952707fc9ddf8ffc72c7b863608eedee"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "@@ -6312,8 +6312,9 @@ procedure THttpProxyUrl.BackgroundGet(Sender: TObject);\n   finally\r\n     // stop writing before notifying progressive readers of a failure\r\n     if back.writestream <> back.filestream then\r\n-      FreeAndNil(back.writestream);\r\n-    FreeAndNil(back.filestream);\r\n+      back.writestream.Free // TStreamRedirect.Destroy releases filestream\r\n+    else\r\n+      back.filestream.Free;\r\n     back.Free;\r\n     fOwner.fLog.Add.Log(sllInfo, 'BackgroundGet=%: % [%] size=% expected=%',\r\n       [status, fn, msg, actual, expected], self);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0309bbc052c13fa9097b1dd360a2b63a1094b064",
+      "short_sha": "0309bbc0",
+      "subject": "tests: THttpProxyServer end-to-end regression tests - see #392",
+      "body": "Validate the three kinds of sources against a local origin server:\n- local folder: memory cache, 304, HEAD, sub-folder, HTML index, range,\n  RejectCsv, unsafe paths, published hashes, hpoNoSubFolder\n- remote URI: blocking and progressive GET, disk cache, HEAD cache, origin\n  errors, new validator, range, 304, two clients sharing one download,\n  cached content served when the origin is down\n- event callback, Settings.Methods filtering, and Stop/Start",
+      "author": "zen010101",
+      "date": "2026-11-11T07:29:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0309bbc052c13fa9097b1dd360a2b63a1094b064",
+      "parents": [
+        "dc568099041e03eeb1beadcd93a09cf055ea9c97"
+      ],
+      "stats": {
+        "additions": 329,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 329,
+          "deletions": 0,
+          "patch": "@@ -97,6 +97,10 @@   TNetworkProtocols = class(TSynTestCase)\n     reqfour: Int64;\r\n     // for FileRange\r\n     rangefile, rangesmall: TFileName;\r\n+    // for HttpProxyServer\r\n+    proxysmall, proxybig, proxyfresh: RawByteString;\r\n+    proxyfreshmod: RawUtf8;\r\n+    proxyget, proxyhead, proxyevent: integer;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -186,6 +190,12 @@   TNetworkProtocols = class(TSynTestCase)\n     function DoReadMaxBytesRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n     function DoReadMaxBytesDownload(const aUrl, aMethod, aInHeaders,\r\n       aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n+    /// validate THttpProxyServer local folder, remote URI and event sources\r\n+    procedure DoHttpProxyServer(Sender: TObject);\r\n+    function DoProxyOriginRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoProxyEventRequest(Ctxt: THttpServerRequestAbstract;\r\n+      const Uri: TUriMatchName; Met: TUriRouterMethod;\r\n+      ProxyUrl: THttpProxyUrl): cardinal;\r\n     /// validate clean start/shutdown of several DHCP servers\r\n     procedure DoDhcpServerShutdown(Sender: TObject);\r\n     /// validate that TCrtSocket.Close won't touch a handle closed by Abort\r\n@@ -624,6 +634,7 @@ procedure TNetworkProtocols.DoTFTPShutdown;\n procedure TNetworkProtocols.SlowTests;\r\n begin\r\n   // start some slow tests in background if /multithread is enabled\r\n+  Run(DoHttpProxyServer, self, 'HttpProxyServer', true, false);\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n   Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n@@ -8107,6 +8118,324 @@ procedure TNetworkProtocols.DoHttpBodyDownload(Sender: TObject);\n   end;\r\n end;\r\n \r\n+function TNetworkProtocols.DoProxyOriginRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  // a minimal origin server, publishing resources with their own validator\r\n+  if IsHead(Ctxt.Method) then\r\n+    LockedInc32(@proxyhead)\r\n+  else\r\n+    LockedInc32(@proxyget);\r\n+  result := HTTP_SUCCESS;\r\n+  Ctxt.OutContentType := BINARY_CONTENT_TYPE;\r\n+  if Ctxt.Url = '/files/small.txt' then\r\n+  begin\r\n+    Ctxt.OutContent := proxysmall;\r\n+    Ctxt.OutCustomHeaders := 'Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT';\r\n+  end\r\n+  else if Ctxt.Url = '/files/big.bin' then\r\n+  begin\r\n+    Ctxt.OutContent := proxybig;\r\n+    Ctxt.OutCustomHeaders := 'ETag: \"big-1\"';\r\n+  end\r\n+  else if Ctxt.Url = '/files/fresh.txt' then\r\n+  begin\r\n+    Ctxt.OutContent := proxyfresh;\r\n+    Ctxt.OutCustomHeaders := proxyfreshmod;\r\n+  end\r\n+  else if Ctxt.Url = '/files/error' then\r\n+    result := HTTP_SERVERERROR\r\n+  else\r\n+    result := HTTP_NOTFOUND;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoProxyEventRequest(Ctxt: THttpServerRequestAbstract;\r\n+  const Uri: TUriMatchName; Met: TUriRouterMethod;\r\n+  ProxyUrl: THttpProxyUrl): cardinal;\r\n+var\r\n+  path: RawUtf8;\r\n+begin\r\n+  LockedInc32(@proxyevent);\r\n+  FastSetString(path, Uri.Path.Text, Uri.Path.Len);\r\n+  Ctxt.OutContent := Join([Ctxt.Method, ' ', path]);\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpProxyServer(Sender: TObject);\r\n+const\r\n+  HELLO: RawUtf8 = 'hello proxy';\r\n+  INNER: RawUtf8 = 'inner file';\r\n+  ORIGIN = 'http://127.0.0.1:8882/files/';\r\n+var\r\n+  srv: THttpServer; // the origin server\r\n+  settings: THttpProxyServerSettings;\r\n+  url: THttpProxyUrlSettings;\r\n+  proxy: THttpProxyServer;\r\n+  clt: THttpClientSocket;\r\n+  raw: TCrtSocket;\r\n+  root, cache, cachefresh, cacheslow: TFileName;\r\n+  local, first: RawByteString;\r\n+  validator, line: RawUtf8;\r\n+  len: integer;\r\n+  files: TFindFilesDynArray;\r\n+  gets, i: integer;\r\n+  endtix: Int64;\r\n+  found: boolean;\r\n+\r\n+  procedure Expect(const method, uri: RawUtf8; expected: integer;\r\n+    const header: RawUtf8 = ''; const body: RawByteString = '');\r\n+  var\r\n+\n... [truncated, 12821 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 392,
+      "is_merge": false
+    }
+  ]
+}
