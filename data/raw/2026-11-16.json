@@ -1,0 +1,2252 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-16",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-17T03:32:22Z",
+  "range": {
+    "since": "2026-11-15T23:00:00Z",
+    "until": "2026-11-16T23:00:00Z",
+    "base_sha": "ac9d6c2db0056d23ee34c2ccb5f3039df3f59c7d",
+    "head_sha": "8f054b580b1267aa5e2cc556fe2616e47bd17cd9"
+  },
+  "version": {
+    "after": "2.4.18103",
+    "before": "2.4.18082"
+  },
+  "totals": {
+    "commits": 21,
+    "additions": 23614,
+    "deletions": 14403
+  },
+  "commits": [
+    {
+      "sha": "8f054b580b1267aa5e2cc556fe2616e47bd17cd9",
+      "short_sha": "8f054b58",
+      "subject": "crypt: (much) faster #730 .zip cryptography",
+      "body": "- on Intel, will use 4 interleaved AES-NI and SHA-NI opcodes if available",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T17:34:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8f054b580b1267aa5e2cc556fe2616e47bd17cd9",
+      "parents": [
+        "3cc6cc265496993ab94544f09e7547277c356166"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 16,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.zip.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 14,
+          "patch": "@@ -53,20 +53,25 @@   TZipCryptPkware = class(TZipCrypt)\n \r\n { ************ TZipCryptAes Class Implementing the WinZip AE-1/AE-2 Format }\r\n \r\n+const\r\n+  // WinZip AES-CTR uses 64 * 128-bit = 1KB of pre-computed AES blocks\r\n+  ZIP_AESCTR = 64;\r\n+\r\n type\r\n   /// WinZip AES encryption (AE-1/AE-2) of .zip entries\r\n   // - registered by this unit into the mormot.core.zip ZipCryptClass[] variable\r\n   // - key derivation is PBKDF2-HMAC-SHA1 with 1000 rounds over a random salt,\r\n   // data is encrypted using AES-CTR with a little-endian counter, then\r\n   // authenticated with the first 80-bit of its HMAC-SHA1\r\n+  // - on Intel, will use 4 interleaved AES-NI and SHA-NI opcodes if available\r\n   // - see https://www.winzip.com/en/support/aes-encryption\r\n   TZipCryptAes = class(TZipCrypt)\r\n   protected\r\n     fAes: TAes;\r\n-    fHmac: TSynSigner;\r\n     fCtr: QWord;\r\n     fKeyLen, fKeyStreamPos: PtrInt;\r\n-    fKeyStream: array[0 .. 63] of TAesBlock; // pre-computed AES-CTR blocks\r\n+    fHmac: TSynSigner;\r\n+    fKeyStream: array[0 .. ZIP_AESCTR - 1] of TAesBlock; // pre-computed blocks\r\n     function Setup(const Password: RawByteString; Salt: PByteArray): cardinal;\r\n     procedure Crypt(Data: PByteArray; Len: PtrInt);\r\n   public\r\n@@ -235,25 +240,39 @@ function TZipCryptAes.Setup(const Password: RawByteString;\n   result := PWord(@PByteArray(k)[fKeyLen * 2])^;\r\n   FillZero(k);\r\n   fCtr := 0;\r\n-  fKeyStreamPos := SizeOf(fKeyStream); // compute on first Crypt() call\r\n+  fKeyStreamPos := SizeOf(fKeyStream); // trigger the first DoBlocks() call\r\n+end;\r\n+\r\n+procedure FillCtr(p: PHash128Rec; ctr: PtrUInt);\r\n+var\r\n+  n: integer;\r\n+begin\r\n+  // WinZip AES-CTR uses a 128-bit little-endian counter starting at 1\r\n+  n := ZIP_AESCTR;\r\n+  repeat\r\n+    inc(ctr);\r\n+    p^.L := ctr;\r\n+    p^.H := 0;\r\n+    inc(p);\r\n+    dec(n);\r\n+  until n = 0;\r\n end;\r\n \r\n procedure TZipCryptAes.Crypt(Data: PByteArray; Len: PtrInt);\r\n var\r\n-  i, n: PtrInt;\r\n+  n: PtrInt;\r\n begin\r\n   while Len > 0 do\r\n   begin\r\n     if fKeyStreamPos = SizeOf(fKeyStream) then\r\n     begin\r\n-      // WinZip AES-CTR uses a 128-bit little-endian counter starting at 1\r\n-      FillCharFast(fKeyStream, SizeOf(fKeyStream), 0);\r\n-      for i := 0 to high(fKeyStream) do\r\n-      begin\r\n-        inc(fCtr);\r\n-        PQWord(@fKeyStream[i])^ := fCtr;\r\n-      end;\r\n-      fAes.DoBlocks(@fKeyStream, @fKeyStream, length(fKeyStream), true);\r\n+      FillCtr(@fKeyStream, fCtr);\r\n+      inc(fCtr, ZIP_AESCTR);\r\n+      {$ifdef CPU32}\r\n+      if PtrUInt(fCtr) = 0 then // PtrUInt ctr would overflow after 64GB\r\n+        ESynZip.RaiseUtf8('%.Crypt: 32-bit overflow', [self]);\r\n+      {$endif CPU32}\r\n+      fAes.DoBlocks(@fKeyStream, @fKeyStream, length(fKeyStream), true); // AES-NI\r\n       fKeyStreamPos := 0;\r\n     end;\r\n     n := SizeOf(fKeyStream) - fKeyStreamPos;\r\n@@ -284,7 +303,7 @@ procedure TZipCryptAes.EncryptInit(const Password: RawByteString;\n procedure TZipCryptAes.Encrypt(Data: PByteArray; Len: PtrInt);\r\n begin\r\n   Crypt(Data, Len);\r\n-  fHmac.Update(Data, Len); // authenticate the encrypted data\r\n+  fHmac.Update(Data, Len); // authenticate the encrypted data - may use SHA-NI\r\n end;\r\n \r\n procedure TZipCryptAes.EncryptDone(Trailer: PByteArray);\r\n@@ -303,7 +322,7 @@ function TZipCryptAes.DecryptInit(const Password: RawByteString;\n \r\n procedure TZipCryptAes.Decrypt(Data: PByteArray; Len: PtrInt; AuthOnly: boolean);\r\n begin\r\n-  fHmac.Update(Data, Len); // authenticate the encrypted data\r\n+  fHmac.Update(Data, Len); // authenticate the encrypted data - may use SHA-NI\r\n   if not AuthOnly then\r\n     Crypt(Data, Len);\r\n end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18102\n+18103",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18102'\r\n+'2.4.18103'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.zip"
+      ],
+      "pr": 730,
+      "is_merge": false
+    },
+    {
+      "sha": "3cc6cc265496993ab94544f09e7547277c356166",
+      "short_sha": "3cc6cc26",
+      "subject": "crypt: 4x interleaved AES-NI asm for TAes.DoBlocks",
+      "body": "- on both i386 and x64 Intel/AMD platforms",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T17:34:03Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3cc6cc265496993ab94544f09e7547277c356166",
+      "parents": [
+        "de964e2047f8a32c8b0fcab3a32ca4789c8c85f9"
+      ],
+      "stats": {
+        "additions": 547,
+        "deletions": 2,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx64.inc",
+          "status": "modified",
+          "additions": 254,
+          "deletions": 0,
+          "patch": "@@ -4818,6 +4818,260 @@ asm     // Windows x64 calling convention expects to preserve XMM6-XMM15\n         {$endif ABIWINX64}\r\n end;\r\n \r\n+{\r\n+  Four-way interleaved AES-NI ECB block transforms for TAes.DoBlocks.\r\n+  The caller passes groups of four 16-byte blocks; remaining 0..3 blocks\r\n+  are handled by the existing DoBlock path.\r\n+  Only XMM0..XMM4 are used, so Win64 nonvolatile XMM6..XMM15 are intact.\r\n+  No TAes field is written; the routine is reentrant/thread-safe.\r\n+}\r\n+\r\n+procedure AesNiEncryptBlocks4(var p: TAesNiBlocks4Params);\r\n+{$ifdef FPC}nostackframe; assembler; asm{$else}asm .noframe{$endif}\r\n+        {$ifdef ABIWINX64}\r\n+        mov     rax, rcx                     // Win64: p=rcx\r\n+        {$else}\r\n+        mov     rax, rdi                     // SysV: p=rdi\r\n+        {$endif ABIWINX64}\r\n+        mov     r8,  qword ptr [rax].TAesNiBlocks4Params.groups\r\n+        mov     r10, qword ptr [rax].TAesNiBlocks4Params.src\r\n+        mov     r11, qword ptr [rax].TAesNiBlocks4Params.dst\r\n+        mov     rax, qword ptr [rax].TAesNiBlocks4Params.ctxt\r\n+        test    r8, r8\r\n+        jz      @done\r\n+        {$ifdef FPC} align 16 {$endif}\r\n+@by4:   // four independent AES-NI streams, 64 input bytes\r\n+        movups  xmm0, dqword ptr [r10]\r\n+        movups  xmm1, dqword ptr [r10 + $10]\r\n+        movups  xmm2, dqword ptr [r10 + $20]\r\n+        movups  xmm3, dqword ptr [r10 + $30]\r\n+        movups  xmm4, dqword ptr [rax]  // RK[0]\r\n+        pxor    xmm0, xmm4\r\n+        pxor    xmm1, xmm4\r\n+        pxor    xmm2, xmm4\r\n+        pxor    xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $10]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $20]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $30]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $40]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $50]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $60]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $70]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $80]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $90]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        cmp     byte ptr [rax].TAes.Rounds, 10\r\n+        ja      @x192\r\n+        movups  xmm4, dqword ptr [rax + $a0]\r\n+        aesenclast xmm0, xmm4\r\n+        aesenclast xmm1, xmm4\r\n+        aesenclast xmm2, xmm4\r\n+        aesenclast xmm3, xmm4\r\n+        jmp     @wr\r\n+@x192:  movups  xmm4, dqword ptr [rax + $a0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [rax + $b0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        cmp     byte ptr [rax].TAes.Rounds, 12\r\n+        ja      @x256\r\n+        movups  xmm4, dqword ptr [rax + $c0]\r\n+        aesenclast xmm0, xmm4\r\n+        aesenclast xmm1, xmm4\r\n+        aesenclast xmm2, xmm4\r\n+        aesenclast xmm3, xmm4\r\n+        jmp     @wr\r\n+@x256:  movups  xmm4, dqword ptr [rax + $c0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm\n... [truncated, 5260 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.asmx86.inc",
+          "status": "modified",
+          "additions": 262,
+          "deletions": 0,
+          "patch": "@@ -3627,6 +3627,268 @@ asm     // called from TAesC64.Encrypt\n         pop     ebx\r\n end;\r\n \r\n+{$ifdef ASMAESNI}\r\n+\r\n+{\r\n+  Four-way interleaved AES-NI ECB block transforms for TAes.DoBlocks.\r\n+  The caller passes groups of four 16-byte blocks; remaining 0..3 blocks\r\n+  are handled by the existing DoBlock path.\r\n+  Only XMM0..XMM4 are used, so Win64 nonvolatile XMM6..XMM15 are intact.\r\n+  No TAes field is written; the routine is reentrant/thread-safe.\r\n+}\r\n+\r\n+procedure AesNiEncryptBlocks4(var p: TAesNiBlocks4Params);\r\n+  {$ifdef FPC}nostackframe; assembler;{$endif}\r\n+asm\r\n+        push    ebx\r\n+        push    esi\r\n+        push    edi\r\n+        mov     ebx, dword ptr [eax].TAesNiBlocks4Params.groups\r\n+        mov     esi, dword ptr [eax].TAesNiBlocks4Params.src\r\n+        mov     edi, dword ptr [eax].TAesNiBlocks4Params.dst\r\n+        mov     eax, dword ptr [eax].TAesNiBlocks4Params.ctxt\r\n+        test    ebx, ebx\r\n+        jz      @done\r\n+        {$ifdef FPC} align 16 {$endif}\r\n+@by4:   // four independent AES-NI streams, 64 input bytes\r\n+        movups  xmm0, dqword ptr [esi]\r\n+        movups  xmm1, dqword ptr [esi + $10]\r\n+        movups  xmm2, dqword ptr [esi + $20]\r\n+        movups  xmm3, dqword ptr [esi + $30]\r\n+        movups  xmm4, dqword ptr [eax]  // RK[0]\r\n+        pxor    xmm0, xmm4\r\n+        pxor    xmm1, xmm4\r\n+        pxor    xmm2, xmm4\r\n+        pxor    xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $10]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $20]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $30]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $40]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $50]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $60]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $70]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $80]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $90]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        cmp     byte ptr [eax].TAes.Rounds, 10\r\n+        ja      @x192\r\n+        movups  xmm4, dqword ptr [eax + $a0]\r\n+        aesenclast xmm0, xmm4\r\n+        aesenclast xmm1, xmm4\r\n+        aesenclast xmm2, xmm4\r\n+        aesenclast xmm3, xmm4\r\n+        jmp     @wr\r\n+@x192:  movups  xmm4, dqword ptr [eax + $a0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $b0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        cmp     byte ptr [eax].TAes.Rounds, 12\r\n+        ja      @x256\r\n+        movups  xmm4, dqword ptr [eax + $c0]\r\n+        aesenclast xmm0, xmm4\r\n+        aesenclast xmm1, xmm4\r\n+        aesenclast xmm2, xmm4\r\n+        aesenclast xmm3, xmm4\r\n+        jmp     @wr\r\n+@x256:  movups  xmm4, dqword ptr [eax + $c0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, xmm4\r\n+        aesenc  xmm2, xmm4\r\n+        aesenc  xmm3, xmm4\r\n+        movups  xmm4, dqword ptr [eax + $d0]\r\n+        aesenc  xmm0, xmm4\r\n+        aesenc  xmm1, \n... [truncated, 5110 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.core.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 0,
+          "patch": "@@ -2884,6 +2884,12 @@   TShaHash = record\n     // will use A..E with TSha1, A..H with TSha256\r\n     A, B, C, D, E, F, G, H: cardinal;\r\n   end;\r\n+  {$ifdef ASMAESNI}\r\n+  TAesNiBlocks4Params = record\r\n+    ctxt, src, dst: pointer;\r\n+    groups: PtrUInt; // groups of four blocks, not a byte count\r\n+  end;\r\n+  {$endif ASMAESNI}\r\n \r\n const\r\n   // used by SHA-256\r\n@@ -4163,7 +4169,30 @@ procedure TAes.Decrypt(const BI: TAesBlock; var BO: TAesBlock);\n \r\n procedure TAes.DoBlocks(pIn, pOut: PAesBlock; out oIn, oOut: PAesBLock;\r\n   Count: integer; doEncrypt: boolean);\r\n+{$ifdef ASMAESNI}\r\n+var\r\n+  p: TAesNiBlocks4Params;\r\n+  n: integer;\r\n+{$endif ASMAESNI}\r\n begin\r\n+  {$ifdef ASMAESNI}\r\n+  if (Count >= 4) and\r\n+     (aesNi in Flags) then\r\n+  begin\r\n+    n := Count and not 3; // number of complete 4-block groups\r\n+    p.ctxt := @self;\r\n+    p.src := pIn;\r\n+    p.dst := pOut;\r\n+    p.groups := n shr 2;\r\n+    if doEncrypt then\r\n+      AesNiEncryptBlocks4(p)\r\n+    else\r\n+      AesNiDecryptBlocks4(p);\r\n+    inc(pIn, n);\r\n+    inc(pOut, n);\r\n+    dec(Count, n); // 0..3 blocks left for the ordinary per-block path\r\n+  end;\r\n+  {$endif ASMAESNI}\r\n   if Count > 0 then\r\n     repeat\r\n       DoBlock(self, pIn^, pOut^);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18101\n+18102",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18101'\r\n+'2.4.18102'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto"
+      ],
+      "units": [
+        "mormot.crypt.core",
+        "mormot.crypt.core.asmx64",
+        "mormot.crypt.core.asmx86"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "de964e2047f8a32c8b0fcab3a32ca4789c8c85f9",
+      "short_sha": "de964e20",
+      "subject": "test: parallel run of TTestCoreCompression tests",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T16:18:44Z",
+      "url": "https://github.com/synopse/mORMot2/commit/de964e2047f8a32c8b0fcab3a32ca4789c8c85f9",
+      "parents": [
+        "d7cd527d8f2bdd86eba0b6ac4c481ecd330f303a"
+      ],
+      "stats": {
+        "additions": 280,
+        "deletions": 275,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18100\n+18101",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18100'\r\n+'2.4.18101'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 278,
+          "deletions": 273,
+          "patch": "@@ -251,24 +251,24 @@   TTestCoreCompression = class(TSynTestCase)\n     procedure Run7zExtract(const Params: array of const);\r\n     procedure Run7zUpdate(const Params: array of const);\r\n     {$endif OSWINDOWS}\r\n+    /// direct deflate/inflate/synlz functions\r\n+    procedure InMemoryCompression(Sender: TObject);\r\n+    procedure DoSynLZ;\r\n+    /// .zip archive handling\r\n+    procedure ZipFormat(Sender: TObject);\r\n+    procedure ZipEncryption(Sender: TObject);\r\n+    /// TAlgoCompress classes\r\n+    procedure _TAlgoCompress(Sender: TObject);\r\n   public\r\n     procedure Setup; override;\r\n     procedure CleanUp; override;\r\n   published\r\n-    /// direct deflate/inflate functions\r\n-    procedure InMemoryCompression;\r\n-    /// .gzip archive handling\r\n-    procedure GZIPFormat;\r\n-    /// .zip archive handling\r\n-    procedure ZIPFormat;\r\n+    /// validate all supported formats and archives\r\n+    procedure Algorithms;\r\n     {$ifdef OSWINDOWS}\r\n     /// validate the 7z.dll wrapper in mormot.lib.win7zip\r\n     procedure _7Zip;\r\n     {$endif OSWINDOWS}\r\n-    /// SynLZ internal format\r\n-    procedure _SynLZ;\r\n-    /// TAlgoCompress classes\r\n-    procedure _TAlgoCompress;\r\n   end;\r\n \r\n type\r\n@@ -11788,7 +11788,7 @@ function ReferenceCrc32(aCRC32: cardinal; inBuf: pointer; inLen: integer): cardi\n   result := not result;\r\n end;\r\n \r\n-procedure TTestCoreCompression.GZipFormat;\r\n+procedure TTestCoreCompression.Algorithms;\r\n var\r\n   Z: TSynZipCompressor;\r\n   L, n: integer;\r\n@@ -11798,6 +11798,8 @@ procedure TTestCoreCompression.GZipFormat;\n   s, tmp: RawByteString;\r\n   gzr: TGZRead;\r\n begin\r\n+  Run(InMemoryCompression, self, 'deflate synlz', true, true);\r\n+  NotifyProgress(['gzip']);\r\n   Check(crc32(0, @c32t, 5) = $DF4EC16C, 'crc32');\r\n   Check(ReferenceCrc32(0, @c32t, 5) = $DF4EC16C, 'crc32');\r\n   Check(crc32(0, @c32t, 1024) = $6FCF9E13, 'crc32');\r\n@@ -11829,7 +11831,7 @@ procedure TTestCoreCompression.GZipFormat;\n     inc(P, n);\r\n     dec(L, n);\r\n   end;\r\n-  Check(crc0 = ReferenceCrc32(0, Pointer(Data), length(Data)));\r\n+  CheckEqual(crc0, ReferenceCrc32(0, Pointer(Data), length(Data)), 'crc32');\r\n   Check(crc0 = Z.CRC, '0crc32');\r\n   Check(crc2 = crc0,  '2crc32');\r\n   Check(crc3 = crc0,  '3crc32');\r\n@@ -11853,10 +11855,9 @@ procedure TTestCoreCompression.GZipFormat;\n   s := '';\r\n   repeat\r\n     n := gzr.ZStreamNext;\r\n-    if n = 0 then\r\n-      break;\r\n-    s := s + copy(tmp, 1, n);\r\n-  until false;\r\n+    Check(n >= 0, 'ZStreamNext');\r\n+    Append(s, pointer(tmp), n);\r\n+  until n = 0;\r\n   check(gzr.ZStreamDone, 'ZStreamDone');\r\n   Check(gzr.uncomplen32 = Cardinal(length(s)));\r\n   check(s = Data);\r\n@@ -11870,6 +11871,9 @@ procedure TTestCoreCompression.GZipFormat;\n   Check(CompressDeflate(s, true) = 'deflate');\r\n   Check(CompressDeflate(s, false) = 'deflate');\r\n   Check(s = Data, 'CompressDeflate');\r\n+  Run(ZipFormat, self, '.zip', true, true);\r\n+  Run(ZipEncryption, self, 'zipcrypt', true, true);\r\n+  Run(_TAlgoCompress, self, 'TAlgoCompress', true, true);\r\n end;\r\n \r\n procedure TTestCoreCompression.InMemoryCompression;\r\n@@ -11889,6 +11893,7 @@ procedure TTestCoreCompression.InMemoryCompression;\n     CompressZLib(tmp, false);\r\n     CheckHash(tmp, hash, 'CompressZLib');\r\n   end;\r\n+  DoSynLZ;\r\n end;\r\n \r\n function W(p: PAnsiChar; value, bytes: PtrUInt): PAnsiChar;\r\n@@ -11904,7 +11909,7 @@ function WS(p: PAnsiChar; const text: RawUtf8): PAnsiChar;\n   result := @p[length(text)];\r\n end;\r\n \r\n-procedure TTestCoreCompression.ZipFormat;\r\n+procedure TTestCoreCompression.ZipFormat(Sender: TObject);\r\n var\r\n   FN, FN2: TFileName;\r\n   S: TRawByteStringStream;\r\n@@ -12108,259 +12113,6 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n-  procedure CheckAesWritePolicy(const Plain: RawByteString;\r\n-    Mode: integer);\r\n-  var\r\n-    s: TRawByteStringStream;\r\n-    w: TZipWrite;\r\n-    z: TZipRead;\r\n-    st: TStream;\r\n-    zip: RawByteString;\r\n-    fn: TFileName;\r\n-    expected: integer;\r\n-    crc: cardinal;\r\n-  begin\r\n-    fn := WorkDir + 'zip-ae-test-input\n... [truncated, 19385 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d7cd527d8f2bdd86eba0b6ac4c481ecd330f303a",
+      "short_sha": "d7cd527d",
+      "subject": "core: hardened TZipRead",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T16:07:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d7cd527d8f2bdd86eba0b6ac4c481ecd330f303a",
+      "parents": [
+        "ba28eaa31f2e946673bc44fc43bafc4afa8de8a2"
+      ],
+      "stats": {
+        "additions": 32,
+        "deletions": 20,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "CHANGELOG.md",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -6,8 +6,9 @@ Details are available [on out GitHub repository](https://github.com/synopse/mORM\n ## [2.5.stable] - trunk\n ### Added \n - Preliminary compatibility with Delphi 13.1+ Linux MacOS Android iOS\n+- New `mormot.core.fmt.pas` `mormot.crypt.factory.pas` `mormot.net.peercache.pas` `mormot.net.server.win.pas` `mormot.net.proxy.pas` extracted units\n - Native CNG support on Windows via `mormot.crypt.win.pas`\n-- new `mormot.core.fmt.pas` `mormot.crypt.factory.pas` `mormot.net.peercache.pas` `mormot.net.server.win.pas` `mormot.net.proxy.pas` extracted units\n+- Zip file password encryption via `mormot.crypt.zip.pas`\n - Text resources translation via the new `mormot.core.i18n.pas` unit\n - XML pull/SAX/DOM Parser\n - YAML 1.2 Read and Write Support",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 17,
+          "patch": "@@ -1891,7 +1891,7 @@ function TZipAbstract.GetCrypt(AesStrength: integer): TZipCrypt;\n     else\r\n       enc := zeAes256;\r\n     if ZipCryptClass[enc] = nil then\r\n-      ESynZip.RaiseUtf8('%: % requires the mormot.crypt.zip unit',\r\n+      ESynZip.RaiseUtf8('%.GetCrypt: % requires the mormot.crypt.zip unit',\r\n         [self, ENCRYPTION_NAME[enc]]);\r\n     fCrypt := ZipCryptClass[enc].Create(AesStrength);\r\n   end;\r\n@@ -2151,7 +2151,8 @@ procedure TZipWrite.SetEncryption(Value: TZipEncryption);\n \r\n destructor TZipWrite.Destroy;\r\n begin\r\n-  FinalFlush;\r\n+  if fDest <> nil then\r\n+    FinalFlush; // write central directory to disk\r\n   inherited Destroy;\r\n   fCryptWriter.Free;\r\n   if fDestOwned then\r\n@@ -3468,19 +3469,27 @@ function TZipRead.CryptPrepare(e: PZipReadEntry; const info: TFileInfoFull;\n   if not (method in [Z_STORED, Z_DEFLATED]) then\r\n     ESynZip.RaiseUtf8('%.UnZip: Unsupported method % for % %',\r\n       [self, method, e^.zipName, fFileName]);\r\n-  if (info.f32.flags and FLAG_ENCRYPTED = 0) and\r\n-     (e^.aes = nil) then\r\n-    exit;\r\n-  if fPassword = '' then\r\n-    ESynZip.RaiseUtf8('%.UnZip: % is encrypted: missing Password',\r\n-      [self, e^.zipName]);\r\n-  result := GetCrypt(strength);\r\n-  if info.f64.zzipSize < result.HeaderLen + result.TrailerLen then\r\n-    ESynZip.RaiseUtf8('%.UnZip: truncated %', [self, e^.zipName]);\r\n-  if (method = Z_STORED) and\r\n-     (info.f64.zzipSize - result.HeaderLen - result.TrailerLen <> info.f64.zfullSize) then\r\n-    ESynZip.RaiseUtf8('%.UnZip: invalid stored size for %',\r\n-      [self, e^.zipName]);\r\n+  if (info.f32.flags and FLAG_ENCRYPTED <> 0) or\r\n+     (e^.aes <> nil) then\r\n+  begin\r\n+    if fPassword = '' then\r\n+      ESynZip.RaiseUtf8('%.UnZip: % is encrypted: missing Password',\r\n+        [self, e^.zipName]);\r\n+    result := GetCrypt(strength);\r\n+    if info.f64.zzipSize < result.HeaderLen + result.TrailerLen then\r\n+      ESynZip.RaiseUtf8('%.UnZip: truncated %', [self, e^.zipName]);\r\n+  end;\r\n+  if method = Z_STORED then\r\n+    if result = nil then\r\n+    begin\r\n+      if info.f64.zzipSize <> info.f64.zfullSize then\r\n+        ESynZip.RaiseUtf8('%.UnZip: invalid stored size for %',\r\n+          [self, e^.zipName]);\r\n+    end\r\n+    else if info.f64.zzipSize - result.HeaderLen - result.TrailerLen <>\r\n+            info.f64.zfullSize then\r\n+      ESynZip.RaiseUtf8('%.UnZip: invalid stored size for %',\r\n+        [self, e^.zipName]);\r\n end;\r\n \r\n procedure TZipRead.CryptHeader(c: TZipCrypt; e: PZipReadEntry;\r\n@@ -3549,7 +3558,7 @@ function TZipRead.UnZip(aIndex: integer; aMaxSize: Int64): RawByteString;\n var\r\n   e: PZipReadEntry;\r\n   len, ziplen: PtrUInt;\r\n-  method: integer;\r\n+  method: integer; // not PtrInt\r\n   data: PAnsiChar;\r\n   tmp: RawByteString;\r\n   info: TFileInfoFull;\r\n@@ -3624,7 +3633,7 @@ function TZipRead.UnZipStream(aIndex: integer; const aInfo: TFileInfoFull;\n   tmp, plain: RawByteString;\r\n   tmplen, len, ziplen, written: Int64;\r\n   read: PtrInt;\r\n-  method: integer;\r\n+  method: integer; // not PtrInt\r\n   local: TLocalFileHeader;\r\n   c: TZipCrypt;\r\n   buf: TTemp64; // encryption header or trailer\r\n@@ -3717,6 +3726,8 @@ function TZipRead.UnZipStream(aIndex: integer; const aInfo: TFileInfoFull;\n             begin\r\n               deflate.Flush; // needed for accurate CRC final value\r\n               crc := deflate.CRC;\r\n+              if deflate.SizeOut <> aInfo.f64.zfullSize then\r\n+                exit; // AES HMAC authenticates compressed ciphertext\r\n             end;\r\n             written := deflate.SizeOut - written;\r\n           end;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18099\n+18100",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18099'\r\n+'2.4.18100'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Other"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ba28eaa31f2e946673bc44fc43bafc4afa8de8a2",
+      "short_sha": "ba28eaa3",
+      "subject": "core: enhanced TZipRead process",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T15:24:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ba28eaa31f2e946673bc44fc43bafc4afa8de8a2",
+      "parents": [
+        "fd6b3fa5e2d4a65b633a627c0dc5bb70c473d2ed"
+      ],
+      "stats": {
+        "additions": 63,
+        "deletions": 37,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 59,
+          "deletions": 33,
+          "patch": "@@ -299,7 +299,7 @@   TFileInfoExtraName = record\n     /// version of this extra field, currently 1\r\n     version: byte;\r\n     /// File Name Field CRC32 Checksum\r\n-    nameCRC32: cardinal;\r\n+    nameCrc32: cardinal;\r\n     /// UTF-8 version of the entry File Name of size bytes length\r\n     utf8Name: AnsiChar;\r\n   end;\r\n@@ -2987,7 +2987,7 @@ constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);\n   h, hnext: PFileHeader;\r\n   extraname: PFileInfoExtraName;\r\n   e, prev: PZipReadEntry;\r\n-  i: PtrInt;\r\n+  i, needed: PtrInt;\r\n   p64: PQWord;\r\n   tmp: RawByteString;\r\n begin\r\n@@ -3034,11 +3034,19 @@ constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);\n     else\r\n     begin\r\n       extraname := h^.LocateExtra(UNICODEPATH_EXTRA_ID);\r\n+      if extraname <> nil then\r\n+        if extraname^.size < 5 then // at least version + nameCrc\r\n+          ESynZip.RaiseUtf8('%.Create: truncated Unicode Path extra in %',\r\n+            [self, fFileName])\r\n+        else if (extraname^.version <> 1) or\r\n+                (extraname^.nameCrc32 <>\r\n+                   mormot.lib.z.crc32(0, e^.storedName, h^.fileInfo.nameLen)) or\r\n+                (extraname^.size = 5) then\r\n+          extraname := nil; // skip unsupported/stale Unicode Path metadata\r\n       if extraname <> nil then\r\n       begin\r\n         // unicode path stored in file info extra block\r\n-        SetString(tmp, PAnsiChar(@extraname.utf8Name),\r\n-          extraname.size - 5{version+nameCrc});\r\n+        SetString(tmp, PAnsiChar(@extraname.utf8Name), extraname.size - 5);\r\n         Utf8ToFileName(tmp, e^.zipName)\r\n       end\r\n       else if h^.fileInfo.GetUtf8FileNameFlag or\r\n@@ -3074,34 +3082,42 @@ constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);\n       ESynZip.RaiseUtf8('%.Create: Unsupported zipmethod % for % in %',\r\n         [self, h^.fileInfo.zZipMethod, e^.zipName, fFileName]);\r\n     // proper zip64 support\r\n+    needed := 0;\r\n     { TFileInfoExtra64 is the layout of the zip64 extended info \"extra\" block.\r\n       If one of the size or offset fields in the Local or Central directory\r\n       record is too small to hold the required data, a zip64 extended information\r\n       record is created. The order of the fields in the zip64 extended information\r\n       record is fixed, but the fields **MUST only appear** if the corresponding\r\n       Local or Central directory record field is set to 0xFFFF or 0xFFFFFFFF. }\r\n-    if (h^.localHeadOff       = ZIP32_MAXSIZE) or\r\n-       (h^.fileInfo.zfullSize = ZIP32_MAXSIZE) or\r\n-       (h^.fileInfo.zzipSize  = ZIP32_MAXSIZE) then\r\n-      // zip64 format: retrieve TFileInfoExtra64 position in dir64\r\n-      if h^.fileInfo.IsZip64 then\r\n-      begin\r\n-        e^.dir64 := h^.LocateExtra(ZIP64_EXTRA_ID);\r\n-        if e^.dir64 = nil then\r\n-          ESynZip.RaiseUtf8('%.Create: zip64 extra not found for % in %',\r\n-            [self, e^.zipName, fFileName]);\r\n-        e^.fileinfo.zip64id := ZIP64_EXTRA_ID;\r\n-        e^.fileinfo.size := 3 * SizeOf(QWord);\r\n-      end\r\n-      else\r\n+    if h^.fileInfo.zfullSize = ZIP32_MAXSIZE then\r\n+      inc(needed, SizeOf(QWord));\r\n+    if h^.fileInfo.zzipSize = ZIP32_MAXSIZE then\r\n+      inc(needed, SizeOf(QWord));\r\n+    if h^.localHeadOff = ZIP32_MAXSIZE then\r\n+      inc(needed, SizeOf(QWord));\r\n+    if needed <> 0 then\r\n+    begin\r\n+      if not h^.fileInfo.IsZip64 then\r\n         ESynZip.RaiseUtf8('%.Create: zip64 version % error for % in %',\r\n           [self, ToByte(h^.fileInfo.neededVersion), e^.zipName, fFileName]);\r\n-    p64 := @e^.dir64^.zfullSize; // where 64-bit field(s) may appear\r\n+      e^.dir64 := h^.LocateExtra(ZIP64_EXTRA_ID);\r\n+      if e^.dir64 = nil then\r\n+        ESynZip.RaiseUtf8('%.Create: zip64 extra not found for % in %',\r\n+          [self, e^.zipName, fFileName]);\r\n+      if e^.dir64^.size < needed then\r\n+        ESynZip.RaiseUtf8('%.Create: zip64 truncated extra (% < %) for %',\r\n+          [self, e^.dir64^.size, needed, e^.zip\n... [truncated, 4166 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.zip.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -204,8 +204,8 @@ procedure TZipCryptPkware.Decrypt(Data: PByteArray; Len: PtrInt; AuthOnly: boole\n constructor TZipCryptAes.Create(AesStrength: integer);\r\n begin\r\n   inherited Create(AesStrength);\r\n-  fKeyLen := 8 + AesStrength shl 3;          // 16/24/32 bytes\r\n-  fHeaderLen := fKeyLen shr 1 + AES_PWV;     // salt is 8/12/16 bytes\r\n+  fKeyLen := 8 + AesStrength shl 3;      // 16/24/32 bytes\r\n+  fHeaderLen := fKeyLen shr 1 + AES_PWV; // salt is 8/12/16 bytes\r\n   fTrailerLen := AES_MAC;\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18098\n+18099",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18098'\r\n+'2.4.18099'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Crypto"
+      ],
+      "units": [
+        "mormot.core.zip",
+        "mormot.crypt.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fd6b3fa5e2d4a65b633a627c0dc5bb70c473d2ed",
+      "short_sha": "fd6b3fa5",
+      "subject": "crypt: enhanced/refactored zip encryption",
+      "body": "- don't run AES if we only need the HMAC\n- favor Random128() which is enough for cryptographic salt",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T13:29:46Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fd6b3fa5e2d4a65b633a627c0dc5bb70c473d2ed",
+      "parents": [
+        "99109b0b78d09807ade5471fa8565933844adffd"
+      ],
+      "stats": {
+        "additions": 38,
+        "deletions": 24,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -538,7 +538,8 @@   TZipCrypt = class\n     function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n       Header: PByteArray): boolean; virtual; abstract;\r\n     /// in-place decryption of some entry data\r\n-    procedure Decrypt(Data: PByteArray; Len: PtrInt); virtual; abstract;\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt;\r\n+      AuthOnly: boolean = false); virtual; abstract;\r\n     /// validate the TrailerLen bytes stored after the entry data\r\n     // - this default implementation returns true\r\n     function DecryptDone(Trailer: PByteArray): boolean; virtual;\r\n@@ -3492,7 +3493,6 @@ function TZipRead.CryptLoad(c: TZipCrypt; e: PZipReadEntry;\n     result := nil;\r\n end;\r\n \r\n-\r\n function TZipRead.CryptAuthenticate(c: TZipCrypt;\r\n   e: PZipReadEntry; const info: TFileInfoFull): boolean;\r\n var\r\n@@ -3518,7 +3518,7 @@ function TZipRead.CryptAuthenticate(c: TZipCrypt;\n     if remaining < n then\r\n       n := remaining;\r\n     fSource.ReadBuffer(tmp, n);\r\n-    c.Decrypt(@tmp, n);\r\n+    c.Decrypt(@tmp, n, {AuthOnly=}true);\r\n     dec(remaining, n);\r\n   end;\r\n   if c.TrailerLen <> 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.zip.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 19,
+          "patch": "@@ -47,7 +47,7 @@   TZipCryptPkware = class(TZipCrypt)\n     procedure Encrypt(Data: PByteArray; Len: PtrInt); override;\r\n     function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n       Header: PByteArray): boolean; override;\r\n-    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt; AuthOnly: boolean); override;\r\n   end;\r\n \r\n \r\n@@ -85,7 +85,7 @@   TZipCryptAes = class(TZipCrypt)\n     function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n       Header: PByteArray): boolean; override;\r\n     /// in-place AES-CTR decryption with HMAC-SHA1 authentication\r\n-    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt; AuthOnly: boolean); override;\r\n     /// validate the 80-bit HMAC-SHA1 authentication code\r\n     function DecryptDone(Trailer: PByteArray): boolean; override;\r\n   end;\r\n@@ -154,11 +154,15 @@ procedure TZipCryptPkware.Crypt(Data: PByteArray; Len: PtrInt;\n \r\n procedure TZipCryptPkware.EncryptInit(const Password: RawByteString;\r\n   Crc: cardinal; Header: PByteArray);\r\n+var\r\n+  rnd: TAesBlock;\r\n begin\r\n   Init(Password);\r\n   // appnote: 11 random bytes, then the high byte of the crc32 as check byte\r\n-  RandomBytes(Header, ZIP_CRYPTHEAD - 1);\r\n-  Header[ZIP_CRYPTHEAD - 1] := Crc shr 24;\r\n+  Random128(@rnd);\r\n+  MoveFast(rnd, Header^, ZIP_CRYPTHEAD - 1);\r\n+  FillZero(rnd);\r\n+  Header^[ZIP_CRYPTHEAD - 1] := Crc shr 24;\r\n   Encrypt(Header, ZIP_CRYPTHEAD);\r\n end;\r\n \r\n@@ -175,7 +179,7 @@ function TZipCryptPkware.DecryptInit(const Password: RawByteString;\n begin\r\n   Init(Password);\r\n   MoveFast(Header^, h, ZIP_CRYPTHEAD);\r\n-  Decrypt(@h, ZIP_CRYPTHEAD);\r\n+  Decrypt(@h, ZIP_CRYPTHEAD, {AuthOnly=}false);\r\n   // appnote: high byte of the crc32, or of the DOS time with a data descriptor\r\n   if Info.flags and FLAG_DATADESCRIPTOR <> 0 then\r\n     check := (cardinal(Info.zlastMod) shr 8) and $ff\r\n@@ -184,7 +188,7 @@ function TZipCryptPkware.DecryptInit(const Password: RawByteString;\n   result := h[ZIP_CRYPTHEAD - 1] = check;\r\n end;\r\n \r\n-procedure TZipCryptPkware.Decrypt(Data: PByteArray; Len: PtrInt);\r\n+procedure TZipCryptPkware.Decrypt(Data: PByteArray; Len: PtrInt; AuthOnly: boolean);\r\n begin\r\n   Crypt(Data, Len, {decrypting=}true);\r\n end;\r\n@@ -200,7 +204,7 @@ procedure TZipCryptPkware.Decrypt(Data: PByteArray; Len: PtrInt);\n constructor TZipCryptAes.Create(AesStrength: integer);\r\n begin\r\n   inherited Create(AesStrength);\r\n-  fKeyLen := 8 + AesStrength * 8;            // 16/24/32 bytes\r\n+  fKeyLen := 8 + AesStrength shl 3;          // 16/24/32 bytes\r\n   fHeaderLen := fKeyLen shr 1 + AES_PWV;     // salt is 8/12/16 bytes\r\n   fTrailerLen := AES_MAC;\r\n end;\r\n@@ -216,16 +220,17 @@ destructor TZipCryptAes.Destroy;\n function TZipCryptAes.Setup(const Password: RawByteString;\r\n   Salt: PByteArray): cardinal;\r\n var\r\n-  s: RawUtf8;\r\n-  k: RawByteString;\r\n+  klen: PtrInt;\r\n+  s, k: RawByteString;\r\n begin\r\n   // derivate AES key + HMAC key + password verification value from the salt\r\n-  FastSetString(s, Salt, fHeaderLen - AES_PWV);\r\n-  k := fHmac.Pbkdf2(saSha1, RawUtf8(Password), s, AES_ROUNDS,\r\n-    fKeyLen * 2 + AES_PWV);\r\n-  if length(k) <> fKeyLen * 2 + AES_PWV then\r\n+  FastSetRawByteString(s, Salt, fHeaderLen - AES_PWV);\r\n+  klen := fKeyLen * 2 + AES_PWV;\r\n+  k := fHmac.Pbkdf2(saSha1, Password, s, AES_ROUNDS, klen);\r\n+  FillZero(s);\r\n+  if length(k) <> klen then\r\n     ESynZip.RaiseUtf8('%.Setup: PBKDF2 failed', [self]);\r\n-  fAes.EncryptInit(pointer(k)^, fKeyLen * 8);\r\n+  fAes.EncryptInit(pointer(k)^, {bits=}fKeyLen shl 3);\r\n   fHmac.Init(saSha1, @PByteArray(k)[fKeyLen], fKeyLen);\r\n   result := PWord(@PByteArray(k)[fKeyLen * 2])^;\r\n   FillZero(k);\r\n@@ -263,9 +268,17 @@ procedure TZipCryptAes.Crypt(Data: PByteArray; Len: PtrInt);\n \r\n procedure TZipCryptAes.EncryptInit(const Password: RawByteString;\r\n   Crc: cardinal; Header: PByteArray);\r\n+var\r\n+  rnd: TAesBlock;\r\n+  saltlen: PtrInt;\n... [truncated, 1343 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18097\n+18098",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18097'\r\n+'2.4.18098'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Crypto",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.zip",
+        "mormot.crypt.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "99109b0b78d09807ade5471fa8565933844adffd",
+      "short_sha": "99109b0b",
+      "subject": "core: follow WinZip 11 and use AE-1 with crc storage",
+      "body": "- seems a better approach than the original #730 encoding using AE-2",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T13:01:20Z",
+      "url": "https://github.com/synopse/mORMot2/commit/99109b0b78d09807ade5471fa8565933844adffd",
+      "parents": [
+        "fb77cfeecf9db030b5650ea11d0fe698e8759f86"
+      ],
+      "stats": {
+        "additions": 110,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 27,
+          "deletions": 5,
+          "patch": "@@ -2280,12 +2280,19 @@ function TZipWrite.WriteHeaderDest(const zipName: TFileName;\n   begin\r\n     e^.aes.id := AES_EXTRA_ID;\r\n     e^.aes.size := SizeOf(e^.aes) - 4;\r\n-    e^.aes.version := 2; // AE-2: no crc32 stored, rely on the HMAC-SHA1\r\n+    if e^.h64.zfullSize >= 20 then\r\n+      // follow WinZip 11: use AE-1 for files >= 20 bytes\r\n+      e^.aes.version := 1\r\n+    else\r\n+    begin\r\n+      // AE-2 prevents CRC-based plaintext disclosure on tiny files\r\n+      e^.aes.version := 2;\r\n+      e^.h32.fileInfo.zcrc32 := 0;\r\n+    end;\r\n     e^.aes.vendor := AES_VENDOR;\r\n     e^.aes.strength := c.AesStrength;\r\n     e^.aes.method := e^.h32.fileInfo.zzipMethod;\r\n     e^.h32.fileInfo.zzipMethod := Z_AES;\r\n-    e^.h32.fileInfo.zcrc32 := 0;\r\n     include(e^.flags, zweAes);\r\n   end;\r\n   WriteHeader(zipName);\r\n@@ -2507,7 +2514,10 @@ procedure TZipWrite.AddDeflated(const aFileName: TFileName;\n           begin\r\n             WriteTrailer(dest);\r\n             if zweAes in flags then\r\n-              h32.fileInfo.zcrc32 := 0 // AE-2\r\n+            begin\r\n+              if aes.version = 2 then // default AE-1 retains the computed CRC32\r\n+                h32.fileInfo.zcrc32 := 0;\r\n+            end\r\n             else if h32.fileInfo.zcrc32 <> crc then\r\n               ESynZip.RaiseUtf8('%.AddDeflated: % modified during process',\r\n                 [self, aFileName]);\r\n@@ -2565,7 +2575,19 @@ destructor TZipWriteCompressor.Destroy;\n       h32.fileInfo.zfullSize := fSizeIn; // zip64 store ZIP32_MAXSIZE here\r\n       h32.fileInfo.zzipSize  := fSizeOut;\r\n     end;\r\n-    if not (zweAes in flags) then // AE-2 stores no crc32\r\n+    if zweAes in flags then\r\n+      // follow WinZip 11 behavior: favor AE-1 with crc\r\n+      if fSizeIn >= 20 then\r\n+      begin\r\n+        aes.version := 1; // AE-1\r\n+        h32.fileInfo.zcrc32 := fCrc;\r\n+      end\r\n+      else\r\n+      begin\r\n+        aes.version := 2; // AE-2 for smallest files\r\n+        h32.fileInfo.zcrc32 := 0;\r\n+      end\r\n+    else\r\n       h32.fileInfo.zcrc32 := fCrc;\r\n     h64.zfullSize := fSizeIn; // h64 is always set\r\n     h64.zzipSize := fSizeOut;\r\n@@ -3783,7 +3805,7 @@ function TZipRead.UnZip(aIndex: integer; const DestDir: TFileName;\n     finally\r\n       FS.Free;\r\n       if not result then\r\n-        DeleteFile(Dest);\r\n+        DeleteFile(Dest); // remove incomplete/invalid files\r\n     end;\r\n   end;\r\n   if result then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18096\n+18097",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18096'\r\n+'2.4.18097'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 81,
+          "deletions": 0,
+          "patch": "@@ -12108,6 +12108,80 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n+  procedure CheckAesWritePolicy(const Plain: RawByteString;\r\n+    Mode: integer);\r\n+  var\r\n+    s: TRawByteStringStream;\r\n+    w: TZipWrite;\r\n+    z: TZipRead;\r\n+    st: TStream;\r\n+    zip: RawByteString;\r\n+    fn: TFileName;\r\n+    expected: integer;\r\n+    crc: cardinal;\r\n+  begin\r\n+    fn := WorkDir + 'zip-ae-test-input.bin';\r\n+    s := TRawByteStringStream.Create;\r\n+    try\r\n+      w := TZipWrite.Create(s);\r\n+      try\r\n+        w.Password := 'mORMot';\r\n+        case Mode of\r\n+          0:\r\n+            w.AddStored('data', pointer(Plain), length(Plain));\r\n+          1:\r\n+            begin\r\n+              Check(FileFromString(Plain, fn));\r\n+              w.AddStored(fn, true, 'data');\r\n+            end;\r\n+          2:\r\n+            begin\r\n+              st := w.AddDeflatedStream('data', 0, 0);\r\n+              try\r\n+                st.WriteBuffer(pointer(Plain)^, length(Plain));\r\n+              finally\r\n+                st.Free;\r\n+              end;\r\n+            end;\r\n+          3:\r\n+            w.AddDeflated('data', pointer(Plain), length(Plain));\r\n+        end;\r\n+      finally\r\n+        w.Free;\r\n+      end;\r\n+      zip := s.DataString;\r\n+    finally\r\n+      s.Free;\r\n+      if Mode = 1 then\r\n+        DeleteFile(fn);\r\n+    end;\r\n+    z := TZipRead.Create(pointer(zip), length(zip));\r\n+    try\r\n+      CheckEqual(z.Count, 1, 'AE count');\r\n+      Check(z.Entry[0].aes <> nil, 'AE extra');\r\n+      if length(Plain) < 20 then\r\n+        expected := 2\r\n+      else\r\n+        expected := 1;\r\n+      CheckEqual(z.Entry[0].aes^.version, expected,\r\n+        'AE version');\r\n+      crc := 0;\r\n+      if expected = 1 then\r\n+        crc := mormot.lib.z.crc32(0, pointer(Plain), length(Plain));\r\n+      CheckEqual(z.Entry[0].dir^.fileInfo.zcrc32, crc, 'AE CRC');\r\n+      z.Password := 'mORMot';\r\n+      CheckEqual(z.UnZip(0), Plain, 'AE roundtrip');\r\n+      // Verify that the reader actually checks AE-1 CRC.\r\n+      if expected = 1 then\r\n+      begin\r\n+        z.Entry[0].dir^.fileInfo.zcrc32 := z.Entry[0].dir^.fileInfo.zcrc32 xor 1;\r\n+        Check(not z.TestAll, 'AE-1 CRC mismatch');\r\n+      end;\r\n+    finally\r\n+      z.Free;\r\n+    end;\r\n+  end;\r\n+\r\n   procedure ZipEncryption;\r\n   const\r\n     INFOZIP: array[0..151] of byte = (\r\n@@ -12141,6 +12215,7 @@ procedure TTestCoreCompression.ZipFormat;\n   var\r\n     z: TZipRead;\r\n     w: TZipWrite;\r\n+    mode: integer;\r\n     zip: RawByteString;\r\n     zipfn: TFileName;\r\n     S: TRawByteStringStream;\r\n@@ -12278,6 +12353,12 @@ procedure TTestCoreCompression.ZipFormat;\n       TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n     end;\r\n     Check(DeleteFile(zipfn));\r\n+    for mode := 0 to 3 do\r\n+    begin\r\n+      CheckAesWritePolicy(RawUtf8OfChar('x', 19), mode);\r\n+      CheckAesWritePolicy(RawUtf8OfChar('x', 20), mode);\r\n+      CheckAesWritePolicy(RawUtf8OfChar('x', 300), mode);\r\n+    end;\r\n   end;\r\n \r\n var\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fb77cfeecf9db030b5650ea11d0fe698e8759f86",
+      "short_sha": "fb77cfee",
+      "subject": "core: TZipRead.UnZip delete aborted/invalid files",
+      "body": "- discovered after #730 merge",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T12:33:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fb77cfeecf9db030b5650ea11d0fe698e8759f86",
+      "parents": [
+        "ca2e7ad2a115042aa511734a4e3946a8a11150ad"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -3782,9 +3782,12 @@ function TZipRead.UnZip(aIndex: integer; const DestDir: TFileName;\n       result := UnZipStream(aIndex, info, FS); // use libdeflate if possible\r\n     finally\r\n       FS.Free;\r\n+      if not result then\r\n+        DeleteFile(Dest);\r\n     end;\r\n   end;\r\n-  FileSetDateFromWindowsTime(Dest, info.f32.zlastMod);\r\n+  if result then\r\n+    FileSetDateFromWindowsTime(Dest, info.f32.zlastMod);\r\n end;\r\n \r\n function TZipRead.UnZipAll(DestDir: TFileName): integer;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18095\n+18096",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18095'\r\n+'2.4.18096'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ca2e7ad2a115042aa511734a4e3946a8a11150ad",
+      "short_sha": "ca2e7ad2",
+      "subject": "core: add pre-authentication for file-backed ZIP AES streaming",
+      "body": "- after #730",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T12:31:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ca2e7ad2a115042aa511734a4e3946a8a11150ad",
+      "parents": [
+        "dbdfeb8391a21dcbe108b254d83fbe8ad13afad9"
+      ],
+      "stats": {
+        "additions": 58,
+        "deletions": 11,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 56,
+          "deletions": 9,
+          "patch": "@@ -655,6 +655,9 @@   TZipRead = class(TZipAbstract)\n     // - returns the plain data, or nil on authentication failure\r\n     function CryptLoad(c: TZipCrypt; e: PZipReadEntry;\r\n       const info: TFileInfoFull; out tmp: RawByteString): pointer;\r\n+    // verifies the ciphertext before UnZipStream writes plaintext\r\n+    function CryptAuthenticate(c: TZipCrypt; e: PZipReadEntry;\r\n+      const info: TFileInfoFull): boolean;\r\n   public\r\n     /// open a .zip archive file as Read Only\r\n     // - if the .zip content has been appended to the file, search for its\r\n@@ -1708,7 +1711,7 @@ function TZipCryptWriter.Write(const Buffer; Count: Longint): Longint;\n var\r\n   p: PByteArray;\r\n   n: PtrInt;\r\n-  tmp: array[0 .. 16383] of byte; // encrypt by chunks with no heap allocation\r\n+  tmp: TBuffer32K; // encrypt by chunks with no heap allocation\r\n begin\r\n   result := Count;\r\n   inc(fPosition, Count);\r\n@@ -2261,7 +2264,7 @@ function TZipWrite.WriteHeaderDest(const zipName: TFileName;\n var\r\n   c: TZipCrypt;\r\n   e: PZipWriteEntry;\r\n-  head: array[0 .. 63] of byte;\r\n+  head: TTemp64;\r\n begin\r\n   result := fDest;\r\n   if fPassword = '' then\r\n@@ -2297,7 +2300,7 @@ function TZipWrite.WriteHeaderDest(const zipName: TFileName;\n \r\n procedure TZipWrite.WriteTrailer(Dest: TStream);\r\n var\r\n-  trailer: array[0 .. 63] of byte;\r\n+  trailer: TTemp64;\r\n begin\r\n   if (Dest = fDest) or\r\n      (fCrypt.TrailerLen = 0) then\r\n@@ -3467,6 +3470,40 @@ function TZipRead.CryptLoad(c: TZipCrypt; e: PZipReadEntry;\n     result := nil;\r\n end;\r\n \r\n+\r\n+function TZipRead.CryptAuthenticate(c: TZipCrypt;\r\n+  e: PZipReadEntry; const info: TFileInfoFull): boolean;\r\n+var\r\n+  local: TLocalFileHeader;\r\n+  head: TTemp64;\r\n+  tmp: TBuffer32K;\r\n+  remaining: Int64;\r\n+  n: PtrInt;\r\n+begin\r\n+  result := false;\r\n+  // only called for file-backed entries, after CryptPrepare\r\n+  if info.f64.zzipSize > High(Int64) then\r\n+    ESynZip.RaiseUtf8('%.UnZip: entry too large for %',\r\n+      [self, e^.zipName]);\r\n+  local.LoadAndDataSeek(fSource, e^.fileinfo.offset + fSourceOffset);\r\n+  fSource.ReadBuffer(head, c.HeaderLen);\r\n+  CryptHeader(c, e, info, @head);\r\n+  remaining := Int64(info.f64.zzipSize) -\r\n+    c.HeaderLen - c.TrailerLen;\r\n+  while remaining > 0 do\r\n+  begin\r\n+    n := SizeOf(tmp);\r\n+    if remaining < n then\r\n+      n := remaining;\r\n+    fSource.ReadBuffer(tmp, n);\r\n+    c.Decrypt(@tmp, n);\r\n+    dec(remaining, n);\r\n+  end;\r\n+  if c.TrailerLen <> 0 then\r\n+    fSource.ReadBuffer(head, c.TrailerLen);\r\n+  result := c.DecryptDone(@head);\r\n+end; // caller calls CryptHeader() again to reset state\r\n+\r\n function TZipRead.UnZip(aIndex: integer; aMaxSize: Int64): RawByteString;\r\n var\r\n   e: PZipReadEntry;\r\n@@ -3542,20 +3579,30 @@ function TZipRead.UnZipStream(aIndex: integer; const aInfo: TFileInfoFull;\n   method: integer;\r\n   local: TLocalFileHeader;\r\n   c: TZipCrypt;\r\n-  buf: array[0 .. 63] of byte; // encryption header or trailer\r\n+  buf: TTemp64; // encryption header or trailer\r\n begin\r\n   result := false;\r\n   if (self = nil) or\r\n      (cardinal(aIndex) >= cardinal(Count)) then\r\n     exit;\r\n+  e := @Entry[aIndex];\r\n+  c := CryptPrepare(e, aInfo, method);\r\n   len := aInfo.f64.zfullsize;\r\n   if len = 0 then\r\n   begin\r\n-    result := true;\r\n+    if c = nil then\r\n+      result := true\r\n+    else if e^.local <> nil then\r\n+      result := CryptLoad(c, e, aInfo, plain) <> nil\r\n+    else\r\n+      result := CryptAuthenticate(c, e, aInfo);\r\n     exit;\r\n   end;\r\n-  e := @Entry[aIndex];\r\n-  c := CryptPrepare(e, aInfo, method);\r\n+  // verify file-backed AES before exposing plaintext\r\n+  if c <> nil then\r\n+    if (e^.local = nil) and (c.TrailerLen <> 0) then\r\n+      if not CryptAuthenticate(c, e, aInfo) then\r\n+        exit;\r\n   InfoStart(len, 'UnZip ', e^.zipName);\r\n   ziplen := aInfo.f64.zzipSize;\r\n   if c <> nil then\r\n@@ -3974,7 +4021,7 @@ procedure InternalFileAppend(const ctxt: ShortString;\n   parsePEheader: boolean;\r\n   certoffs, certlenoffs, certlen, certlen2: cardinal;\r\n   zip: TZipWrite;\r\n-  buf: arr\n... [truncated, 563 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18094\n+18095",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18094'\r\n+'2.4.18095'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "dbdfeb8391a21dcbe108b254d83fbe8ad13afad9",
+      "short_sha": "dbdfeb83",
+      "subject": "core: validate Zip AES extra-field boundaries and values",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T12:22:29Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dbdfeb8391a21dcbe108b254d83fbe8ad13afad9",
+      "parents": [
+        "fb976187869d2783cacc6ec961d92060e9925188"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 5,
+          "patch": "@@ -1671,6 +1671,7 @@ function GZFile(buf: pointer; len: PtrInt; const destgz: TFileName;\n   // WinZip AES encryption method, with its AES_EXTRA_ID extra information\r\n   Z_AES = 99;\r\n   AES_EXTRA_ID = $9901;\r\n+  AES_EXTRA_SIZE = 7;\r\n   AES_VENDOR = ord('A') + ord('E') shl 8;\r\n   AES_STRENGTH: array[TZipEncryption] of byte = (3, 0);\r\n   ENCRYPTION_NAME: array[TZipEncryption] of RawUtf8 = (\r\n@@ -1785,16 +1786,19 @@ function TFileHeader.LocateExtra(aID: word): pointer;\n   if remaining = 0 then\r\n     exit;\r\n   p := pointer(PAnsiChar(@self) + sizeof(self) + fileInfo.NameLen);\r\n-  repeat\r\n+  while remaining >= SizeOf(TFileInfoExtra) do\r\n+  begin\r\n+    len := SizeOf(TFileInfoExtra) + p^.size;\r\n+    if len > remaining then\r\n+      exit; // malformed extra field\r\n     if p^.id = aID then\r\n     begin\r\n       result := p; // we found it\r\n       exit;\r\n     end;\r\n-    len := p^.size + SizeOf(p^);\r\n     inc(PByte(p), len);\r\n     dec(remaining, len);\r\n-  until remaining <= 0;\r\n+  end;\r\n end;\r\n \r\n \r\n@@ -3026,11 +3030,18 @@ constructor TZipRead.Create(BufZip: PByteArray; Size: PtrInt; Offset: Int64);\n       // WinZip AES encryption: actual method is stored in the extra field\r\n       e^.aes := h^.LocateExtra(AES_EXTRA_ID);\r\n       if (e^.aes = nil) or\r\n+         (h^.fileInfo.flags and FLAG_ENCRYPTED = 0) then\r\n+        ESynZip.RaiseUtf8('%.Create: invalid AES header for %',\r\n+          [self, e^.zipName]);\r\n+      if e^.aes^.size <> AES_EXTRA_SIZE then\r\n+        ESynZip.RaiseUtf8('%.Create: invalid AES extra size for %',\r\n+          [self, e^.zipName]);\r\n+      if not (e^.aes^.version in [1, 2]) or\r\n          (e^.aes^.vendor <> AES_VENDOR) or\r\n          not (e^.aes^.strength in [1 .. 3]) or\r\n          not (e^.aes^.method in [Z_STORED, Z_DEFLATED]) then\r\n-        ESynZip.RaiseUtf8('%.Create: Unsupported AES format for % in %',\r\n-          [self, e^.zipName, fFileName]);\r\n+        ESynZip.RaiseUtf8('%.Create: unsupported AES format for %',\r\n+          [self, e^.zipName]);\r\n     end\r\n     else if not (h^.fileInfo.zZipMethod in [Z_STORED, Z_DEFLATED]) and\r\n        not IsFolder(e^.zipName) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18090\n+18094",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18090'\r\n+'2.4.18094'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -12230,6 +12230,7 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n \r\n   begin\r\n+    CheckEqual(SizeOf(TFileInfoExtraAes), 11, 'AES extra size');\r\n     Vector(@INFOZIP, SizeOf(INFOZIP), 'mORMot ZipCrypto');\r\n     Vector(@SEVENZIP, SizeOf(SEVENZIP), 'mORMot AES-256');\r\n     zipfn := WorkDir + 'zipcrypt.zip';\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "fb976187869d2783cacc6ec961d92060e9925188",
+      "short_sha": "fb976187",
+      "subject": "Merge pull request #730 from tobfel/feat-zip-crypto-support",
+      "body": "core: ZipCrypto and WinZip AES-256 password support (new mormot.crypt.zip)",
+      "author": "ab",
+      "date": "2026-11-16T11:07:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/fb976187869d2783cacc6ec961d92060e9925188",
+      "parents": [
+        "4a3fafff0083cb291d3ad38dc950b1b542c31fa2",
+        "de4e4b8a7ec8086fb34f94bbc0476920cac522c7"
+      ],
+      "stats": {
+        "additions": 1078,
+        "deletions": 97,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "packages/lazarus/mormot2.lpk",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -49,7 +49,7 @@\n     <Description Value=\"mORMot 2 ORM/SOA/MVC framework\"/>\n     <License Value=\"MPL, GPL or LGPL\"/>\n     <Version Major=\"2\" Minor=\"4\"/>\n-    <Files Count=\"131\">\n+    <Files Count=\"132\">\n       <Item1>\n         <Filename Value=\"../../src/app/mormot.app.console.pas\"/>\n         <UnitName Value=\"mormot.app.console\"/>\n@@ -575,6 +575,10 @@\n         <Filename Value=\"../../src/net/mormot.net.proxy.pas\"/>\n         <UnitName Value=\"mormot.net.proxy\"/>\n       </Item131>\n+      <Item132>\n+        <Filename Value=\"../../src/crypt/mormot.crypt.zip.pas\"/>\n+        <UnitName Value=\"mormot.crypt.zip\"/>\n+      </Item132>\n     </Files>\n     <CompatibilityMode Value=\"True\"/>\n     <UsageOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "packages/lazarus/mormot2.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -44,7 +44,8 @@ interface\n   mormot.net.openapi, mormot.core.os.security, mormot.tools.mget, \n   mormot.core.mvc, mormot.crypt.other, mormot.net.dhcp, mormot.core.fmt, \n   mormot.core.os.delphi, mormot.core.i18n, mormot.lib.uniscribe, \n-  mormot.crypt.win, mormot.db.raw.duckdb, mormot.db.sql.duckdb;\n+  mormot.crypt.win, mormot.db.raw.duckdb, mormot.db.sql.duckdb, \n+  mormot.crypt.zip;\n \n implementation\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 582,
+          "deletions": 95,
+          "patch": "@@ -305,6 +305,24 @@   TFileInfoExtraName = record\n   end;\r\n   PFileInfoExtraName = ^TFileInfoExtraName;\r\n \r\n+  //// extra file information structure, as used by WinZip AES encryption\r\n+  // - see https://www.winzip.com/en/support/aes-encryption\r\n+  TFileInfoExtraAes = record\r\n+    /// contains AES_EXTRA_ID = $9901\r\n+    id: word;\r\n+    /// block size = 7\r\n+    size: word;\r\n+    /// 1 for AE-1 (with crc32), or 2 for AE-2 (crc32 = 0)\r\n+    version: word;\r\n+    /// 'AE' as vendor ID\r\n+    vendor: word;\r\n+    /// 1 = AES-128, 2 = AES-192, 3 = AES-256\r\n+    strength: byte;\r\n+    /// the actual compression method, e.g. Z_STORED or Z_DEFLATED\r\n+    method: word;\r\n+  end;\r\n+  PFileInfoExtraAes = ^TFileInfoExtraAes;\r\n+\r\n   /// information returned by RetrieveFileInfo()\r\n   TFileInfoFull = record\r\n     /// standard zip file information, as written on disk\r\n@@ -447,7 +465,12 @@   TLocator64 = record\n \r\n type\r\n   /// used internally by TZipRead to store the zip entries\r\n+  {$ifdef USERECORDWITHMETHODS}\r\n   TZipReadEntry = record\r\n+  {$else}\r\n+  TZipReadEntry = object\r\n+  {$endif USERECORDWITHMETHODS}\r\n+  public\r\n     /// the information of this file, as stored at the end of the .zip archive\r\n     // - may differ from local^ content, depending of the zipper tool used\r\n     dir: PFileHeader;\r\n@@ -474,24 +497,99 @@   TZipReadEntry = record\n     /// offset to the next local file header in the .zip archive\r\n     // - only used for FLAG_DATADESCRIPTOR files (MacOS)\r\n     nextlocaloffs: QWord;\r\n+    /// the WinZip AES information of this file, as stored just after dir\r\n+    // - nil if this file is not AES encrypted\r\n+    aes: PFileInfoExtraAes;\r\n+    /// false if no crc32 is stored for this entry, i.e. for WinZip AE-2\r\n+    function HasCrc: boolean;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n   end;\r\n   PZipReadEntry = ^TZipReadEntry;\r\n   TZipReadEntryDynArray = array of TZipReadEntry;\r\n \r\n+const\r\n+  // from PKware appnote, Bit 3: sizes and crc are 0 and a data descriptor\r\n+  // follows the compressed data - generated by some tools, mainly MacOS itself\r\n+  FLAG_DATADESCRIPTOR = 1 shl 3;\r\n+\r\n+type\r\n+  /// abstract encryption algorithm of .zip entries, as used by TZipWrite/TZipRead\r\n+  // - both the traditional PKWARE encryption (ZipCrypto) and the WinZip AES\r\n+  // encryption are implemented in the mormot.crypt.zip unit, and registered\r\n+  // into the global ZipCryptClass[] variable\r\n+  TZipCrypt = class\r\n+  protected\r\n+    fHeaderLen, fTrailerLen, fAesStrength: byte;\r\n+  public\r\n+    /// initialize this encryption instance\r\n+    // - AesStrength is 0 for ZipCrypto, or 1/2/3 for AES-128/AES-192/AES-256\r\n+    constructor Create(AesStrength: integer); virtual;\r\n+    /// initialize the encryption of a new entry\r\n+    // - fill HeaderLen bytes into Header, to be written before the data\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); virtual; abstract;\r\n+    /// in-place encryption of some entry data\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); virtual; abstract;\r\n+    /// fill TrailerLen bytes into Trailer, to be written after the data\r\n+    // - this default implementation does nothing\r\n+    procedure EncryptDone(Trailer: PByteArray); virtual;\r\n+    /// initialize the decryption of an entry from its HeaderLen stored bytes\r\n+    // - returns false if Password is incorrect\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; virtual; abstract;\r\n+    /// in-place decryption of some entry data\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); virtual; abstract;\r\n+    /// validate the TrailerLen bytes stored after the entry data\r\n+    // - this default implementation returns true\r\n+    function DecryptDone(Trailer: PByteArray): boolean; virtual;\r\n+    /// number of bytes stored before the encrypted data\r\n+    property HeaderLen: byte\r\n+      read fHeaderLen;\r\n+    /// number of bytes stored after the encrypted data\n... [truncated, 39096 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/README.md",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -137,3 +137,9 @@ Deprecated or Seldom Used Cryptographic Features\n - BCrypt Password-Hashing Function\r\n - SCrypt Password-Hashing Function\r\n \r\n+### mormot.crypt.zip\r\n+\r\n+Password Encryption for `mormot.core.zip` `TZipWrite`/`TZipRead`\r\n+- `TZipCryptPkware` Class Implementing the Traditional PKWARE ZipCrypto\r\n+- `TZipCryptAes` Class Implementing the WinZip AE-1/AE-2 Format\r\n+\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.zip.pas",
+          "status": "added",
+          "additions": 310,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,310 @@\n+/// Framework Core ZipCrypto and WinZip AES Encryption for .zip Archives\r\n+// - this unit is a part of the Open Source Synopse mORMot framework 2,\r\n+// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\r\n+unit mormot.crypt.zip;\r\n+\r\n+{\r\n+  *****************************************************************************\r\n+\r\n+   Password Encryption for mormot.core.zip TZipWrite/TZipRead\r\n+    - TZipCryptPkware Class Implementing the Traditional PKWARE ZipCrypto\r\n+    - TZipCryptAes Class Implementing the WinZip AE-1/AE-2 Format\r\n+\r\n+   Just include this unit in your project to enable the zeAes256 (default)\r\n+   and zeZipCrypto algorithms of TZipWrite.Encryption, and the decryption of\r\n+   any encrypted TZipRead entry.\r\n+\r\n+  *****************************************************************************\r\n+}\r\n+\r\n+interface\r\n+\r\n+{$I ..\\mormot.defines.inc}\r\n+\r\n+uses\r\n+  sysutils,\r\n+  mormot.core.base,\r\n+  mormot.core.os,\r\n+  mormot.core.zip,\r\n+  mormot.crypt.core,\r\n+  mormot.crypt.secure;\r\n+\r\n+\r\n+{ ************ TZipCryptPkware Class Implementing the Traditional ZipCrypto }\r\n+\r\n+type\r\n+  /// traditional PKWARE encryption (ZipCrypto) - see PKware appnote 6.1\r\n+  TZipCryptPkware = class(TZipCrypt)\r\n+  protected\r\n+    fKey0, fKey1, fKey2: cardinal;\r\n+    fTab: PCrc32tab;\r\n+    procedure Init(const Password: RawByteString);\r\n+    procedure Crypt(Data: PByteArray; Len: PtrInt; Decrypting: boolean);\r\n+  public\r\n+    constructor Create(AesStrength: integer); override;\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); override;\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; override;\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+  end;\r\n+\r\n+\r\n+{ ************ TZipCryptAes Class Implementing the WinZip AE-1/AE-2 Format }\r\n+\r\n+type\r\n+  /// WinZip AES encryption (AE-1/AE-2) of .zip entries\r\n+  // - registered by this unit into the mormot.core.zip ZipCryptClass[] variable\r\n+  // - key derivation is PBKDF2-HMAC-SHA1 with 1000 rounds over a random salt,\r\n+  // data is encrypted using AES-CTR with a little-endian counter, then\r\n+  // authenticated with the first 80-bit of its HMAC-SHA1\r\n+  // - see https://www.winzip.com/en/support/aes-encryption\r\n+  TZipCryptAes = class(TZipCrypt)\r\n+  protected\r\n+    fAes: TAes;\r\n+    fHmac: TSynSigner;\r\n+    fCtr: QWord;\r\n+    fKeyLen, fKeyStreamPos: PtrInt;\r\n+    fKeyStream: array[0 .. 63] of TAesBlock; // pre-computed AES-CTR blocks\r\n+    function Setup(const Password: RawByteString; Salt: PByteArray): cardinal;\r\n+    procedure Crypt(Data: PByteArray; Len: PtrInt);\r\n+  public\r\n+    /// initialize the AES-128/AES-192/AES-256 engine (AesStrength=1/2/3)\r\n+    constructor Create(AesStrength: integer); override;\r\n+    /// finalize this instance, and its sensitive information\r\n+    destructor Destroy; override;\r\n+    /// generate a random salt and the password verification value\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); override;\r\n+    /// in-place AES-CTR encryption with HMAC-SHA1 authentication\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    /// write the 80-bit HMAC-SHA1 authentication code\r\n+    procedure EncryptDone(Trailer: PByteArray); override;\r\n+    /// derivate the keys from the stored salt and check the password\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; override;\r\n+    /// in-place AES-CTR decryption with HMAC-SHA1 authentication\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    /// validate the 80-bit HMAC-SHA1 authentication code\r\n+    function DecryptDone(Trailer: PByteArray): boolean; override;\r\n+  end;\r\n+\r\n+\r\n+implementation\r\n+\r\n+\r\n+{ ************ TZipCryptPkware Class Implementing the Tra\n... [truncated, 6429 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 173,
+          "deletions": 0,
+          "patch": "@@ -98,6 +98,7 @@ interface\n   mormot.core.threads,\r\n   mormot.core.log,\r\n   mormot.core.zip,\r\n+  mormot.crypt.zip,\r\n   mormot.core.test,\r\n   mormot.lib.z,\r\n   mormot.lib.lizard,\r\n@@ -12107,6 +12108,177 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n+  procedure ZipEncryption;\r\n+  const\r\n+    INFOZIP: array[0..151] of byte = (\r\n+      $50, $4b, $03, $04, $0a, $00, $09, $00, $00, $00, $26, $a3, $5f, $5d,\r\n+      $15, $3f, $91, $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $05, $00,\r\n+      $00, $00, $61, $2e, $74, $78, $74, $01, $4d, $91, $b2, $a2, $9e, $8c,\r\n+      $23, $5d, $b5, $18, $64, $ea, $89, $3b, $ec, $c5, $f6, $b7, $c1, $78,\r\n+      $e8, $6c, $0e, $91, $41, $b7, $5b, $50, $4b, $07, $08, $15, $3f, $91,\r\n+      $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $50, $4b, $01, $02, $1e,\r\n+      $03, $0a, $00, $09, $00, $00, $00, $26, $a3, $5f, $5d, $15, $3f, $91,\r\n+      $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $05, $00, $00, $00, $00,\r\n+      $00, $00, $00, $00, $00, $00, $00, $a4, $81, $00, $00, $00, $00, $61,\r\n+      $2e, $74, $78, $74, $50, $4b, $05, $06, $00, $00, $00, $00, $01, $00,\r\n+      $01, $00, $33, $00, $00, $00, $4f, $00, $00, $00, $00, $00);\r\n+    // 'mORMot AES-256' encrypted by 7-Zip \"7z a -tzip -mem=AES256 -mx=0\r\n+    // -mtm=off -mtc=off -mta=off -pmormot v7.zip b.txt\"\r\n+    SEVENZIP: array[0..171] of byte = (\r\n+      $50, $4b, $03, $04, $33, $00, $01, $00, $63, $00, $00, $00, $21, $00,\r\n+      $00, $00, $00, $00, $2a, $00, $00, $00, $0e, $00, $00, $00, $05, $00,\r\n+      $0b, $00, $62, $2e, $74, $78, $74, $01, $99, $07, $00, $02, $00, $41,\r\n+      $45, $03, $00, $00, $50, $2d, $ad, $63, $1a, $e4, $1d, $ef, $61, $49,\r\n+      $c4, $bd, $84, $36, $dc, $32, $cb, $3f, $d7, $8b, $17, $b3, $ba, $81,\r\n+      $0a, $4c, $4e, $61, $16, $4d, $d3, $42, $b6, $ab, $c2, $d3, $fb, $18,\r\n+      $9a, $d9, $9a, $6b, $50, $4b, $01, $02, $3f, $03, $33, $00, $01, $00,\r\n+      $63, $00, $00, $00, $21, $00, $00, $00, $00, $00, $2a, $00, $00, $00,\r\n+      $0e, $00, $00, $00, $05, $00, $0b, $00, $00, $00, $00, $00, $00, $00,\r\n+      $20, $80, $a4, $81, $00, $00, $00, $00, $62, $2e, $74, $78, $74, $01,\r\n+      $99, $07, $00, $02, $00, $41, $45, $03, $00, $00, $50, $4b, $05, $06,\r\n+      $00, $00, $00, $00, $01, $00, $01, $00, $3e, $00, $00, $00, $58, $00,\r\n+      $00, $00, $00, $00);\r\n+  var\r\n+    z: TZipRead;\r\n+    w: TZipWrite;\r\n+    zip: RawByteString;\r\n+    zipfn: TFileName;\r\n+   \n... [truncated, 4940 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Crypto",
+        "Packages",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip",
+        "mormot.crypt.zip"
+      ],
+      "pr": 730,
+      "is_merge": true
+    },
+    {
+      "sha": "de4e4b8a7ec8086fb34f94bbc0476920cac522c7",
+      "short_sha": "de4e4b8a",
+      "subject": "Merge branch 'master' into feat-zip-crypto-support",
+      "body": "",
+      "author": "ab",
+      "date": "2026-11-16T11:07:19Z",
+      "url": "https://github.com/synopse/mORMot2/commit/de4e4b8a7ec8086fb34f94bbc0476920cac522c7",
+      "parents": [
+        "e5f68ef278b3fa609913f0e31c47c8d83b451d71",
+        "4a3fafff0083cb291d3ad38dc950b1b542c31fa2"
+      ],
+      "stats": {
+        "additions": 20020,
+        "deletions": 13723,
+        "files": 97
+      },
+      "files": [
+        {
+          "path": "CHANGELOG.md",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 6,
+          "patch": "@@ -7,18 +7,24 @@ Details are available [on out GitHub repository](https://github.com/synopse/mORM\n ### Added \n - Preliminary compatibility with Delphi 13.1+ Linux MacOS Android iOS\n - Native CNG support on Windows via `mormot.crypt.win.pas`\n-- new `mormot.core.fmt.pas` and `mormot.core.i18n.pas` units\n+- new `mormot.core.fmt.pas` `mormot.crypt.factory.pas` `mormot.net.peercache.pas` `mormot.net.server.win.pas` `mormot.net.proxy.pas` extracted units\n+- Text resources translation via the new `mormot.core.i18n.pas` unit\n - XML pull/SAX/DOM Parser\n - YAML 1.2 Read and Write Support\n - HTTP Proxy Cache\n - HTTP over TFTP proxy\n - SChannel rewrite with full server-side support\n-- DuckDB support (`mormot.db.sql.duckdb.pas`), including a native client of the DuckDB Quack protocol\n-### Changed\n+- DuckDB support (`mormot.db.sql.duckdb.pas`), including ORM integration and a native client of the DuckDB Quack protocol\n+### Breaking Changes\n - refactored main units to reduce their size: you may need to explicitly add `mormot.core.fmt`, `mormot.core.datetime` or `mormot.core.search` to your uses clause now\n-- refactored cross-platform and cross-cpu conditionals (e.g. new internal `ASM*` definitions)\n-- breaking change: deprecated GetExecutableVersion and TSynLog format as RawUtf8\n-- Lots of bug fixes, optimisations and enhancements.\n+- extracted the `ICrypt*` / `TCrypt*` high-level factories from `mormot.crypt.secure.pas` into the new `mormot.crypt.factory.pas` unit: add it to your `uses` clause if you call `Rnd()` `Hash()` `Sign()` `Cipher()` `Asym()` `Cert()` `Store()` or use `ICryptCert` / `ICryptStore`\n+- extracted `THttpPeerCache` from `mormot.net.server.pas` into the new `mormot.net.peercache.pas` unit: add it to your `uses` clause if you use the peer-to-peer cache\n+- extracted `THttpApiServer` and `THttpApiWebSocketServer` from `mormot.net.server.pas` into the new `mormot.net.server.win.pas` unit: add it to your `uses` clause if you use the Windows http.sys servers\n+- extracted `THttpProxyServer` from `mormot.net.async.pas` into the new `mormot.net.proxy.pas` unit: add it to your `uses` clause if you use the HTTP proxy cache\n+- deprecated GetExecutableVersion and TSynLog format as RawUtf8\n+- refined cross-platform and cross-cpu conditionals (e.g. new internal `ASM*` definitions)\n+### Changed\n+- Numerous bug fixes, optimisations and enhancements\n \n ## [2.4.stable] - 2026-01-13\n This is the latest stable release of *mORMot* v2.",
+          "patch_truncated": false
+        },
+        {
+          "path": "CLAUDE.md",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -46,6 +46,11 @@ the code was correct and well tested and *looked* like mORMot, but on closer loo\n - Respect the unit layering in `src/FOLDER-DEPENDENCIES.md` (core -> lib/crypt -> net -> db ->\n   orm/rest/soa -> app/ui/...). Conditional defines come only from `src/mormot.defines.inc`.\n - Diagnostics via `TSynLog`, never `WriteLn`. No swallowed exceptions / bare `except`.\n+- Interfaces are reference-counted: never `Free` them. An interface depending on an\n+  object (e.g. `ISqlDBRows`/`ISqlDBStatement` on their `TSqlDBConnectionProperties`)\n+  must be released before that object; `:= nil` does not cover the hidden temporaries\n+  of function results, so use them in a separate method or nested procedure - see\n+  \"Release Order\" in `src/db/CLAUDE.md`.\n - Match the neighbouring code: `///` documentation comments on public API, existing\n   naming, existing helper functions. Read recent upstream commits on the same unit to see\n   how Arnaud refactors - that is the target style.",
+          "patch_truncated": false
+        },
+        {
+          "path": "doc/security/mormot.net.tunnel.md",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 8,
+          "patch": "@@ -1,8 +1,8 @@\n # `mormot.net.tunnel` — End-to-End Tunnel Security and Deployment Guidance\n \n-**Scope:** mORMot2 local TCP forwarding through `ITunnelTransmit`, including `TTunnelLocalServer`, `TTunnelLocalClient`, the relay interfaces, the `tlmVersion2` handshake, and authenticated encrypted TCP payloads. The principal example is administrator-to-agent remote assistance carrying VNC/RFB through a relay.\n+**Scope:** mORMot2 local TCP forwarding through `ITunnelTransmit`, including `TTunnelLocalServer`, `TTunnelLocalClient`, the relay interfaces, the `tlmVersion2` handshake, and authenticated encrypted TCP payloads. The principal example is administrator-to-agent remote assistance carrying VNC/RFB through a relay. Direct in-process tunneling without local TCP forwarding is also possible with `OpenDirect`.\n \n-**Implementation:** [`src/net/mormot.net.tunnel.pas`](../../src/net/mormot.net.tunnel.pas).  \n+**Implementation:** [`src/net/mormot.net.tunnel.pas`](../../src/net/mormot.net.tunnel.pas).\n **Cryptographic dependencies:** [`mormot.crypt.ecc256r1.pas`](../../src/crypt/mormot.crypt.ecc256r1.pas), [`mormot.crypt.core.pas`](../../src/crypt/mormot.crypt.core.pas), and `ICryptCert` in [`mormot.crypt.secure.pas`](../../src/crypt/mormot.crypt.secure.pas).  \n **Related tests:** [`test/test.net.proto.pas`](../../test/test.net.proto.pas) (`TNetworkProtocols.Tunnel`, `TunnelTest`, `TunnelRelay`, `TunnelDeferred`) and [`test/test.core.ecc.pas`](../../test/test.core.ecc.pas).\n \n@@ -34,6 +34,7 @@ The endpoint cryptographic server/client roles can be reversed, and the relay tr\n | Session association | Handshake session value and GCM additional authenticated data | A session number is a public routing identifier, not a credential |\n | Diagnostic metadata | Optional AES-CTR obfuscation; certificate-signature coverage when enabled | `InfoNameValue` must not contain secrets or authorization assertions |\n | Availability | Frame-size and pending-queue bounds limit local resource use | The relay can still prevent service or terminate a connection |\n+| Direct payload confidentiality and integrity | AES-128-GCM of in-process tunnelling | No local TCP forwarding involved with `OpenDirect` |\n \n The expected production security model assumes uncompromised endpoints, trustworthy randomness, suitably protected long-term credentials, correctly implemented cryptographic primitives, and an appropriate application authorization flow. Neither the tunnel nor its cryptography protects a device already controlled by an attacker.\n \n@@ -47,7 +48,9 @@ The expected production security model assumes uncompromised endpoints, trustwor\n | `TTunnelLocal.Open` | Bind/connect a local TCP socket and open the tunnel | Accepts `AppSecret`, `SignCert`, and `VerifyCert` |\n | `TTunnelLocal.OpenSocket` | Transfer ownership of an already connected/accepted socket | The caller must validate its local socket peer |\n | `TTunnelLocal.WaitForHandshake` | Wait for a queued peer handshake | Useful for demand-driven connections; does not consume the frame |\n-| `TTunnelLocalThread` | Forward TCP data | Owns directional GCM objects, IV state, and socket I/O |\n+| `TTunnelLocal.OpenDirect` | Connect an in-process plaintext endpoint without TCP | Uses the same handshake and optional AES-GCM as TCP mode |\n+| `TTunnelLocal.SendData` | Send application plaintext to the remote endpoint | Preserves outbound AES-GCM IV and frame order |\n+| `TTunnelSocketTransmit` / `TTunnelLocalThread` | Forward local TCP data | Adapter owns the worker; AES-GCM keys and IVs belong to `TTunnelLocal` |\n | `Ecc256r1MakeKey` / `Ecc256r1SharedSecret` | Establish a P-256 shared secret | Native implementation validates peer points and private scalar ranges |\n \n The defined tunnel options are `toEcdhe`, `toEncrypt`, `toClientSigned`, `toServerSigned`, and `toAcceptNonLocal`.\n@@ -67,7 +70,7 @@ Both endpoints must agree on the session number, effective options, and `AppSecr\n | --- | --- | --- |\n | `toEcdhe` | Fresh P-256 ECDH\n... [truncated, 6408 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "docs/mORMot2-SAD-Chapter-03.md",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -180,12 +180,13 @@ end;\n \n ### Cryptography (mormot.crypt.*)\n \n-**10 units** for cryptographic operations:\n+**11 units** for cryptographic operations:\n \n | Unit | Purpose |\n |------|---------|\n | `mormot.crypt.core` | AES, SHA-2, SHA-3, HMAC, PBKDF2 |\n-| `mormot.crypt.secure` | High-level factories, password hashing |\n+| `mormot.crypt.secure` | Authentication, password hashing, PEM/DER encoding |\n+| `mormot.crypt.factory` | High-level `ICrypt*` / `TCrypt*` factories |\n | `mormot.crypt.ecc` | Elliptic Curve Cryptography |\n | `mormot.crypt.ecc256r1` | secp256r1 curve implementation |\n | `mormot.crypt.rsa` | RSA encryption/signatures |\n@@ -199,7 +200,8 @@ end;\n \n ```pascal\n uses\n-  mormot.crypt.secure;\n+  mormot.crypt.secure,\n+  mormot.crypt.factory;\n \n // High-level factories (recommended)\n var\n@@ -220,7 +222,7 @@ end;\n \n ## 3.5. Layer 2: Networking (mormot.net.*)\n \n-**19 units** for network communication:\n+**22 units** for network communication:\n \n ### Socket & HTTP\n \n@@ -229,8 +231,11 @@ end;\n | `mormot.net.sock` | Cross-platform socket abstraction |\n | `mormot.net.http` | HTTP protocol state machine |\n | `mormot.net.client` | HTTP clients (Socket, WinHTTP, curl) |\n-| `mormot.net.server` | HTTP servers (threaded, http.sys) |\n+| `mormot.net.server` | HTTP servers (threaded) |\n+| `mormot.net.server.win` | HTTP and WebSockets servers over Windows http.sys |\n+| `mormot.net.peercache` | Local peer-to-peer HTTP cache |\n | `mormot.net.async` | Event-driven async I/O |\n+| `mormot.net.proxy` | HTTP server with proxy and cache |\n \n ### WebSockets\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "ex/http-server-files/httpServerMain.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -17,7 +17,7 @@ interface\n   mormot.net.sock,\n   mormot.net.http,\n   mormot.net.server,\n-  mormot.net.async,\n+  mormot.net.proxy,\n   mormot.lib.openssl11,\n   mormot.crypt.openssl;\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "packages/lazarus/mormot2.lpk",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 2,
+          "patch": "@@ -49,7 +49,7 @@\n     <Description Value=\"mORMot 2 ORM/SOA/MVC framework\"/>\n     <License Value=\"MPL, GPL or LGPL\"/>\n     <Version Major=\"2\" Minor=\"4\"/>\n-    <Files Count=\"128\">\n+    <Files Count=\"132\">\n       <Item1>\n         <Filename Value=\"../../src/app/mormot.app.console.pas\"/>\n         <UnitName Value=\"mormot.app.console\"/>\n@@ -560,9 +560,25 @@\n         <UnitName Value=\"mormot.db.sql.duckdb\"/>\n       </Item127>\n       <Item128>\n+        <Filename Value=\"../../src/crypt/mormot.crypt.factory.pas\"/>\n+        <UnitName Value=\"mormot.crypt.factory\"/>\n+      </Item128>\n+      <Item129>\n+        <Filename Value=\"../../src/net/mormot.net.peercache.pas\"/>\n+        <UnitName Value=\"mormot.net.peercache\"/>\n+      </Item129>\n+      <Item130>\n+        <Filename Value=\"../../src/net/mormot.net.server.win.pas\"/>\n+        <UnitName Value=\"mormot.net.server.win\"/>\n+      </Item130>\n+      <Item131>\n+        <Filename Value=\"../../src/net/mormot.net.proxy.pas\"/>\n+        <UnitName Value=\"mormot.net.proxy\"/>\n+      </Item131>\n+      <Item132>\n         <Filename Value=\"../../src/crypt/mormot.crypt.zip.pas\"/>\n         <UnitName Value=\"mormot.crypt.zip\"/>\n-      </Item128>\n+      </Item132>\n     </Files>\n     <CompatibilityMode Value=\"True\"/>\n     <UsageOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "packages/lazarus/mormot2.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -16,7 +16,7 @@ interface\n   mormot.core.text, mormot.core.threads, mormot.core.unicode, \n   mormot.core.variants, mormot.core.zip, mormot.crypt.core, mormot.crypt.ecc, \n   mormot.crypt.ecc256r1, mormot.crypt.jwt, mormot.crypt.openssl, \n-  mormot.crypt.secure, mormot.db.core, mormot.db.nosql.bson, \n+  mormot.crypt.secure, mormot.crypt.factory, mormot.db.core, mormot.db.nosql.bson, \n   mormot.db.nosql.mongodb, mormot.db.proxy, mormot.db.rad, mormot.db.rad.bde, \n   mormot.db.rad.firedac, mormot.db.rad.nexusdb, mormot.db.rad.unidac, \n   mormot.db.raw.odbc, mormot.db.raw.oledb, mormot.db.raw.oracle, \n@@ -27,7 +27,7 @@ interface\n   mormot.lib.openssl11, mormot.lib.quickjs, mormot.lib.sspi, \n   mormot.lib.static, mormot.lib.winhttp, mormot.lib.z, mormot.net.async, \n   mormot.net.client, mormot.net.http, mormot.net.relay, mormot.net.rtsphttp, \n-  mormot.net.server, mormot.net.sock, mormot.net.tunnel, mormot.net.ws.client, \n+  mormot.net.server, mormot.net.server.win, mormot.net.peercache, mormot.net.proxy, mormot.net.sock, mormot.net.tunnel, mormot.net.ws.client, \n   mormot.net.ws.core, mormot.net.ws.server, mormot.orm.base, \n   mormot.orm.client, mormot.orm.core, mormot.orm.mongodb, mormot.orm.rest, \n   mormot.orm.server, mormot.orm.sql, mormot.orm.sqlite3, mormot.orm.storage, ",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/FOLDER-DEPENDENCIES.md",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -150,6 +150,7 @@ mORMot2 follows a **strict layered architecture** with 14 source folders organiz\n - **Key Units:**\n   - `mormot.crypt.core` - AES, SHA-2, SHA-3, HMAC, PBKDF2\n   - `mormot.crypt.secure` - S\n... [truncated, 1088 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/app/mormot.app.agl.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 8,
+          "patch": "\n... [truncated, 2614 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/app/mormot.app.console.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 14,
+          "patch": "\n... [truncated, 1916 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/app/mormot.app.daemon.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "\n... [truncated, 317 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.base.asmx86.inc",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 16,
+          "patch": "\n... [truncated, 3819 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.buffers.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 3,
+          "patch": "\n... [truncated, 1834 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.datetime.pas",
+          "status": "modified",
+          "additions": 205,
+          "deletions": 149,
+          "patch": "\n... [truncated, 18193 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.fmt.pas",
+          "status": "modified",
+          "additions": 213,
+          "deletions": 116,
+          "patch": "\n... [truncated, 22066 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.interfaces.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "\n... [truncated, 841 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.json.pas",
+          "status": "modified",
+          "additions": 66,
+          "deletions": 18,
+          "patch": "\n... [truncated, 8038 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 35,
+          "deletions": 1,
+          "patch": "\n... [truncated, 3369 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.mustache.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 6,
+          "patch": "\n... [truncated, 1047 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.delphi.pas",
+          "status": "modified",
+          "additions": 93,
+          "deletions": 1,
+          "patch": "\n... [truncated, 4980 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 639,
+          "deletions": 79,
+          "patch": "\n... [truncated, 42161 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 648,
+          "deletions": 136,
+          "patch": "\n... [truncated, 27486 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 496,
+          "deletions": 18,
+          "patch": "\n... [truncated, 19904 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 3,
+          "patch": "\n... [truncated, 1432 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.text.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "\n... [truncated, 1110 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.threads.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "\n... [truncated, 392 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/core/mormot.core.variants.pas",
+          "status": "modified",
+          "additions": 22,
+          "deletions": 4,
+          "patch": "\n... [truncated, 1877 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/CLAUDE.md",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "\n... [truncated, 1429 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/README.md",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 2,
+          "patch": "\n... [truncated, 2126 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.ecc.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "\n... [truncated, 720 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.factory.pas",
+          "status": "added",
+          "additions": 5110,
+          "deletions": 0,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.jwt.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 194 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.openssl.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 245 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.pkcs11.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 201 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.rsa.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 2,
+          "patch": "\n... [truncated, 646 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.secure.pas",
+          "status": "modified",
+          "additions": 132,
+          "deletions": 5166,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.win.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 15,
+          "patch": "\n... [truncated, 5470 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/mormot.crypt.x509.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 194 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/CLAUDE.md",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 6,
+          "patch": "\n... [truncated, 2800 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.core.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "\n... [truncated, 844 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.nosql.bson.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 377 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.nosql.mongodb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "\n... [truncated, 544 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.proxy.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "\n... [truncated, 196 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.rad.firedac.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "\n... [truncated, 4330 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.rad.ui.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 224 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.rad.unidac.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 12,
+          "patch": "\n... [truncated, 4460 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.duckdb.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 5,
+          "patch": "\n... [truncated, 823 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.odbc.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "\n... [truncated, 1023 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.raw.oledb.pas",
+          "status": "modified",
+          "additions": 40,
+          "deletions": 36,
+          "patch": "\n... [truncated, 5940 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.duckdb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 352 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.ibx.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 360 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.odbc.pas",
+          "status": "modified",
+          "additions": 32,
+          "deletions": 18,
+          "patch": "\n... [truncated, 3523 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.oledb.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 340 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.oracle.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 436 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 9,
+          "patch": "\n... [truncated, 3029 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.postgres.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 5,
+          "patch": "\n... [truncated, 1554 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/db/mormot.db.sql.zeos.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "\n... [truncated, 684 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/lib/mormot.lib.openssl11.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "\n... [truncated, 673 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/lib/mormot.lib.sspi.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 9,
+          "patch": "\n... [truncated, 4206 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 25 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 39 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/mormot.defines.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 1,
+          "patch": "\n... [truncated, 994 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/CLAUDE.md",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 2,
+          "patch": "\n... [truncated, 1597 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/README.md",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 2,
+          "patch": "\n... [truncated, 1615 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.acme.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 236 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 33,
+          "deletions": 1593,
+          "patch": "\n... [truncated, 71116 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.dhcp.pas",
+          "status": "modified",
+          "additions": 216,
+          "deletions": 53,
+          "patch": "\n... [truncated, 18576 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 36,
+          "deletions": 34,
+          "patch": "\n... [truncated, 5089 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.openapi.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 459 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.peercache.pas",
+          "status": "added",
+          "additions": 2696,
+          "deletions": 0,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.proxy.pas",
+          "status": "added",
+          "additions": 1654,
+          "deletions": 0,
+          "patch": "\n... [truncated, 64931 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.server.pas",
+          "status": "modified",
+          "additions": 102,
+          "deletions": 5249,
+          "patch": "",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.server.win.pas",
+          "status": "added",
+          "additions": 2570,
+          "deletions": 0,
+          "patch": "\n... [truncated, 97193 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 66,
+          "deletions": 2,
+          "patch": "\n... [truncated, 5374 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 178,
+          "deletions": 0,
+          "patch": "\n... [truncated, 5269 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "\n... [truncated, 495 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.tunnel.pas",
+          "status": "modified",
+          "additions": 394,
+          "deletions": 208,
+          "patch": "\n... [truncated, 42719 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.ws.client.pas",
+          "status": "modified",
+          "additions": 70,
+          "deletions": 23,
+          "patch": "\n... [truncated, 7249 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/rest/mormot.rest.client.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 7,
+          "patch": "\n... [truncated, 1897 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/rest/mormot.rest.http.server.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "\n... [truncated, 239 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/soa/mormot.soa.codegen.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "\n... [truncated, 811 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/soa/mormot.soa.server.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 319 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/CLAUDE.md",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "\n... [truncated, 741 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/ecc/ecc.dpr",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "\n... [truncated, 305 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/mab/mab.dpr",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "\n... [truncated, 514 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/mget/README.md",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "\n... [truncated, 870 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/mget/mget.dpr",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 189 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/tools/mget/mormot.tools.mget.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "\n... [truncated, 179 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/ui/mormot.ui.pdf.pas",
+          "status": "modified",
+          "additions": 43,
+          "deletions": 6,
+          "patch": "\n... [truncated, 5285 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/mormot2tests.lpi",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 1,
+          "patch": "\n... [truncated, 996 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 1304,
+          "deletions": 21,
+          "patch": "\n... [truncated, 52020 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.crypt.pas",
+          "status": "modified",
+          "additions": 65,
+          "deletions": 11,
+          "patch": "\n... [truncated, 6393 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 727,
+          "deletions": 219,
+          "patch": "\n... [truncated, 38594 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.ecc.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "\n... [truncated, 195 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.db.duckdb.pas",
+          "status": "modified",
+          "additions": 619,
+          "deletions": 336,
+          "patch": "\n... [truncated, 40639 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 963,
+          "deletions": 12,
+          "patch": "\n... [truncated, 48543 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.orm.network.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 4,
+          "patch": "\n... [truncated, 1185 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.orm.threads.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 4,
+          "patch": "\n... [truncated, 904 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.ui.pdf.pas",
+          "status": "modified",
+          "additions": 186,
+          "deletions": 1,
+          "patch": "\n... [truncated, 7547 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "App",
+        "Core",
+        "Crypto",
+        "Database",
+        "Docs",
+        "External libs",
+        "Network",
+        "Other",
+        "Packages",
+        "REST",
+        "SOA",
+        "Samples",
+        "Tests",
+        "Tools",
+        "UI"
+      ],
+      "units": [
+        "mormot.app.agl",
+        "mormot.app.console",
+        "mormot.app.daemon",
+        "mormot.core.base.asmx86",
+        "mormot.core.buffers",
+        "mormot.core.datetime",
+        "mormot.core.fmt",
+        "mormot.core.interfaces",
+        "mormot.core.json",
+        "mormot.core.log",
+        "mormot.core.mustache",
+        "mormot.core.os",
+        "mormot.core.os.delphi",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows",
+        "mormot.core.test",
+        "mormot.core.text",
+        "mormot.core.threads",
+        "mormot.core.variants",
+        "mormot.crypt.ecc",
+        "mormot.crypt.factory",
+        "mormot.crypt.jwt",
+        "mormot.crypt.openssl",
+        "mormot.crypt.pkcs11",
+        "mormot.crypt.rsa",
+        "mormot.crypt.secure",
+        "mormot.crypt.win",
+        "mormot.crypt.x509",
+        "mormot.db.core",
+        "mormot.db.nosql.bson",
+        "mormot.db.nosql.mongodb",
+        "mormot.db.proxy",
+        "mormot.db.rad.firedac",
+        "mormot.db.rad.ui",
+        "mormot.db.rad.unidac",
+        "mormot.db.raw.duckdb",
+        "mormot.db.raw.odbc",
+        "mormot.db.raw.oledb",
+        "mormot.db.sql",
+        "mormot.db.sql.duckdb",
+        "mormot.db.sql.ibx",
+        "mormot.db.sql.odbc",
+        "mormot.db.sql.oledb",
+        "mormot.db.sql.oracle",
+        "mormot.db.sql.postgres",
+        "mormot.db.sql.zeos",
+        "mormot.defines",
+        "mormot.lib.openssl11",
+        "mormot.lib.sspi",
+        "mormot.net.acme",
+        "mormot.net.async",
+        "mormot.net.dhcp",
+        "mormot.net.http",
+        "mormot.net.openapi",
+        "mormot.net.peercache",
+        "mormot.net.proxy",
+        "mormot.net.server",
+        "mormot.net.server.win",
+        "mormot.net.sock",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows",
+        "mormot.net.tunnel",
+        "mormot.net.ws.client",
+        "mormot.rest.client",
+        "mormot.rest.http.server",
+        "mormot.soa.codegen",
+        "mormot.soa.server",
+        "mormot.tools.mget",
+        "mormot.ui.pdf"
+      ],
+      "pr": null,
+      "is_merge": true
+    },
+    {
+      "sha": "4a3fafff0083cb291d3ad38dc950b1b542c31fa2",
+      "short_sha": "4a3fafff",
+      "subject": "test: fixed unexpected YAML exception logging",
+      "body": "- in TTestCoreProcess.YamlErrorCases",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T11:00:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4a3fafff0083cb291d3ad38dc950b1b542c31fa2",
+      "parents": [
+        "ea166467f04ff13793ec8f0dc5c421aec78db5e9"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 1,
+          "patch": "@@ -1050,7 +1050,9 @@ function TSynTestCase.CheckRaised(const Method: TOnTestCheck;\n   const Params: array of const; Raised: ExceptionClass; const Context: RawUtf8): boolean;\r\n var\r\n   msg: string;\r\n+  bak: boolean;\r\n begin\r\n+  bak := TSynLog.Family.ExceptionIgnoreCurrentThread;\r\n   TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n   try\r\n     Method(Params);\r\n@@ -1069,7 +1071,7 @@ function TSynTestCase.CheckRaised(const Method: TOnTestCheck;\n         FormatString('% instead of %%', [E, Raised, Context], msg);\r\n     end;\r\n   end;\r\n-  TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := bak;\r\n   Check(result, msg);\r\n end;\r\n \r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18089\n+18090",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18089'\r\n+'2.4.18090'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 8,
+          "patch": "@@ -9835,14 +9835,19 @@ procedure TTestCoreProcess.YamlErrorCases;\n   for i := low(ERRORS) to high(ERRORS) do\r\n   with ERRORS[i] do\r\n   begin\r\n-    YamlExpectRaise(Join([' for ', Name]), Yaml);\r\n-    if not IdemPChar(pointer(Name), 'NUL-') then\r\n-      continue;\r\n-    CheckNotEqual(StrLen(pointer(Yaml)), length(Yaml), Name);\r\n-    json := SmallUInt32Utf8[i];\r\n-    CheckUtf8(not TryYamlToJson(Yaml, json), // specific call to detect #0\r\n-      'YamlToJson should reject %', [Name]);\r\n-    CheckEqual(json, '');\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n+    try\r\n+      YamlExpectRaise(Join([' for ', Name]), Yaml);\r\n+      if not IdemPChar(pointer(Name), 'NUL-') then\r\n+        continue;\r\n+      CheckNotEqual(StrLen(pointer(Yaml)), length(Yaml), Name);\r\n+      json := SmallUInt32Utf8[i];\r\n+      CheckUtf8(not TryYamlToJson(Yaml, json), // specific call to detect #0\r\n+        'YamlToJson should reject %', [Name]);\r\n+      CheckEqual(json, '');\r\n+    finally\r\n+      TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n+    end;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ea166467f04ff13793ec8f0dc5c421aec78db5e9",
+      "short_sha": "ea166467",
+      "subject": "core: fixed JOP recognize // comments after unquoted include filenames",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T11:00:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ea166467f04ff13793ec8f0dc5c421aec78db5e9",
+      "parents": [
+        "58df124344ea95f46af78aab834e9e97119c4509"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.fmt.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 2,
+          "patch": "@@ -6945,14 +6945,21 @@ procedure TPreproc.DoInclude(P: PUtf8Char; Verbatim: boolean);\n   v: PUtf8Char;\r\n   vlen: PtrInt;     // @vlen = PPtrInt\r\n   c: AnsiChar;\r\n+  quoted: boolean;\r\n   txt: RawUtf8;     // UTF-8 file name\r\n   fn: TFileName;    // RTL file name\r\n begin\r\n   tmp[0] := #0;\r\n-  if P^ in ['\"', ''''] then\r\n-    inc(P); // allow quoted \"<filename>\", but with no quotes support\r\n+  quoted := P^ in ['\"', ''''];\r\n+  if quoted then\r\n+    inc(P); // allow quoted \"<filename>\"\r\n   while not (P^ in [#0, '\"', '''', '#', #13, #10]) do\r\n   begin\r\n+    if (not quoted) and\r\n+       (P^ = '/') and\r\n+       (P[1] = '/') and\r\n+       (P[-1] <= ' ') then\r\n+      break;\r\n     if P^ = '$' then\r\n     begin\r\n       P := Expand(P, v, vlen, {KeepMarker=}false);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18088\n+18089",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18088'\r\n+'2.4.18089'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 1,
+          "patch": "@@ -1346,7 +1346,6 @@ procedure TTestCoreProcess.TestJopProcess;\n         'raw=$(answer)'#10 +\r\n         '$if answer$verbatim$endif$'#10,\r\n         rawFile));\r\n-\r\n       Check(FileFromString(\r\n         '$$'#10 +\r\n         'answer = 42'#10 +\r\n@@ -1491,6 +1490,14 @@ procedure TTestCoreProcess.TestJopProcess;\n       CheckEqual(TextPreprocess(src),\r\n         'done',\r\n         'absolute include rejected');\r\n+      // Recognize // comments after unquoted include filenames\r\n+      CheckEqual(TextPreprocess(\r\n+        '$$'#10 +\r\n+        'include jop-p1-include.txt // comment'#10 +\r\n+        '$$'#10 +\r\n+        'done', [], WorkDir),\r\n+        'included'#10'done',\r\n+        'include with // comment');\r\n     finally\r\n       DeleteFile(fn);\r\n     end;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.fmt"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "58df124344ea95f46af78aab834e9e97119c4509",
+      "short_sha": "58df1243",
+      "subject": "test: Peer cache fallback to plain HTTP instead of HTTPS on PRISM",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T09:15:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/58df124344ea95f46af78aab834e9e97119c4509",
+      "parents": [
+        "3608a03c0bfed874d2ff610e960c6c8ce4e2b0f0"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 0,
+          "deletions": 1,
+          "patch": "@@ -5349,7 +5349,6 @@ begin\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n   if roCloseChildren in options then\r\n-    \r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n       {allowSilentBreakaway=}false) // false: children should stay in the job\r\n   else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18085\n+18088",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18085'\r\n+'2.4.18088'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -5431,6 +5431,13 @@ procedure TNetworkProtocols._THttpPeerCache;\n     hps.Port := 8008; // don't use default 8099\r\n     hps.Options := [pcoHttpDirect, pcoCacheTempNoCheckSize,\r\n       pcoVerboseLog, pcoHttpReprDigest {}, pcoSelfSignedHttps{}];\r\n+    {$ifdef OSWINDOWS}\r\n+    if wsPrism in WindowsSpecs then\r\n+    begin\r\n+      hps.Options := hps.Options - [pcoSelfSignedHttps];\r\n+      AddConsole('Peer cache: HTTP instead of HTTPS on PRISM');\r\n+    end;\r\n+    {$endif OSWINDOWS}\r\n     err := hps.GuessInterface(mac);\r\n     if err <> '' then\r\n     begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests",
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "3608a03c0bfed874d2ff610e960c6c8ce4e2b0f0",
+      "short_sha": "3608a03c",
+      "subject": "Merge pull request #790 from zen010101/core-run-option-close-children",
+      "body": "core: renamed roWinJobCloseChildren as roCloseChildren",
+      "author": "ab",
+      "date": "2026-11-16T07:38:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/3608a03c0bfed874d2ff610e960c6c8ce4e2b0f0",
+      "parents": [
+        "8054ced601dc70fb6925a3ef5fa317ad2b70a2cc",
+        "07689a2cb5e3072758739103902719434db1c3df"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 18,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/app/mormot.app.agl.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -557,7 +557,7 @@ constructor TSynAngelizeRunner.Create(aSender: TSynAngelize; aLog: TSynLog;\n   fWrkDir := aWrkDir;\r\n   // fRunOptions=[] without roWinNoProcessDetach to detach from main console\r\n   if soWinJobCloseChildren in aService.StartOptions then\r\n-    include(fRunOptions, roWinJobCloseChildren); // just ignored on POSIX\r\n+    include(fRunOptions, roCloseChildren); // just ignored on POSIX\r\n   if not (soReplaceEnv in aService.StartOptions) then\r\n     include(fRunOptions, roEnvAddExisting);\r\n   fRedirect := aRedirect;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 4,
+          "patch": "@@ -6415,10 +6415,12 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   /// define how RunCommand() and RunRedirect() run their sub-process\r\n   // - roEnvAddExisting is used when the env pairs should be added to the\r\n   // existing system environment variable\r\n-  // - roWinJobCloseChildren will use the CREATE_BREAKAWAY_FROM_JOB flag and\r\n+  // - roCloseChildren will use the CREATE_BREAKAWAY_FROM_JOB flag and\r\n   // run CreateJobToClose(allowSilentBreakaway=true) and AssignJobToProcess()\r\n   // on the new process so that any of its future children would be\r\n-  // synchronized and closed with their father, in a relaxed way\r\n+  // synchronized and closed with their father, in a relaxed way - on Windows\r\n+  // only for RunCommand() and RunRedirect(), but also on POSIX and in a\r\n+  // strict way for TExternalProcess\r\n   // - on Windows, will create its own console and its own execution group, unless\r\n   // roWinNoProcessDetach is defined - e.g. as RUN_CMD for RunCommand/RunRedirect\r\n   // - roWinNewConsole won't inherit the parent console, but have its own console\r\n@@ -6431,7 +6433,7 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   // - RunRedirect() ignores roStdinPipe and roStderrPipe\r\n   TRunOptions = set of (\r\n     roEnvAddExisting,\r\n-    roWinJobCloseChildren,\r\n+    roCloseChildren,\r\n     roWinNoProcessDetach,\r\n     roWinNewConsole,\r\n     roWinKeepProcessOnTimeout,\r\n@@ -6450,6 +6452,12 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   /// the default options for TExternalProcess.Start\r\n   // - with the same behavior on all systems: no stdin, and stderr in stdout\r\n   RUN_PROCESS = [roWinNoProcessDetach, roStdinNull, roStderrMerge];\r\n+\r\n+{$ifndef PUREMORMOT2}\r\n+  /// deprecated name: use roCloseChildren instead\r\n+  roWinJobCloseChildren = roCloseChildren;\r\n+{$endif PUREMORMOT2}\r\n+\r\n type\r\n   /// the low-level OS API type for executing processes arguments\r\n   TRunArg = {$ifdef OSPOSIX} RawUtf8 {$else} TFileName {$endif};\r\n@@ -6568,7 +6576,7 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - on Windows, the command line is given to CreateProcessW() as such - so use\r\n   // e.g. 'cmd /c ...' for a shell built-in - and the process is created in its\r\n   // own process group and job, so that Terminate/Kill also stop its children\r\n-  // - roWinJobCloseChildren also kills any child still running when this\r\n+  // - roCloseChildren also kills any child still running when this\r\n   // instance is released - and on Windows, when the current process ends:\r\n   // on Linux, FreeBSD and MacOS, the ended process is then not reaped\r\n   // before this instance is released, so that its process group is kept\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -6025,7 +6025,7 @@ begin\n   try\r\n     {$ifdef HASWAITID}\r\n     if (fState = epsRunning) and\r\n-       (roWinJobCloseChildren in fOptions) then\r\n+       (roCloseChildren in fOptions) then\r\n     begin\r\n       // don't reap yet: DoClose will kill the process group of this zombie\r\n       r := ChildEndedNoReap(fPid, fExitCode);\r\n@@ -6173,7 +6173,7 @@ procedure TExternalProcess.DoClose;\n begin\r\n   if IsSet(fZombie) then\r\n   begin\r\n-    // roWinJobCloseChildren: the zombie kept its process group number\r\n+    // roCloseChildren: the zombie kept its process group number\r\n     SetFlag(fZombie, false);\r\n     fpkill(-cint(fPid), SIGKILL); // kill any child still running\r\n     repeat\r\n@@ -6209,7 +6209,7 @@ begin\n   try\r\n     p.fOnOutput := onoutput;\r\n     if p.DoStart(cmd, [], env, wrkdir,\r\n-         options - [roStdinPipe, roStderrPipe, roWinJobCloseChildren],\r\n+         options - [roStdinPipe, roStderrPipe, roCloseChildren],\r\n          {withthread=}false) then\r\n       result := p.Redirect(waitfordelayms, setresult, exitcode);\r\n   finally\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -5005,7 +5005,7 @@ begin\n     flags := (flags or CREATE_NEW_CONSOLE) and not DETACHED_PROCESS;\r\n     exclude(ram, ramCtrlC); // not compatible with stand-alone console\r\n   end;\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     flags := flags or CREATE_BREAKAWAY_FROM_JOB; // child process in a new job\r\n   // actually create the new process\r\n   created := CreateProcessW(nil, pointer(wcmd), @procsec, @procsec, true,\r\n@@ -5026,7 +5026,7 @@ begin\n     // setup the newly created process\r\n     if flags and CREATE_BREAKAWAY_FROM_JOB <> 0 then\r\n     begin\r\n-      // roWinJobCloseChildren = run the new process in its own Job\r\n+      // roCloseChildren = run the new process in its own Job\r\n       job := CreateJobToClose(processinfo.dwProcessID, 'CloseChildren',\r\n         {allowSilentBreakaway:}true);\r\n       if (job <> 0) and\r\n@@ -5275,7 +5275,7 @@ begin\n     flags := flags or DETACHED_PROCESS;\r\n   if roWinNewConsole in options then\r\n     flags := (flags or CREATE_NEW_CONSOLE) and not DETACHED_PROCESS;\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     flags := flags or CREATE_BREAKAWAY_FROM_JOB;\r\n   FillCharFast(si, SizeOf(si), 0);\r\n   si.StartupInfo.cb := SizeOf(si.StartupInfo);\r\n@@ -5348,7 +5348,7 @@ begin\n     exit;\r\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     \r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n       {allowSilentBreakaway=}false) // false: children should stay in the job\r\n@@ -5509,7 +5509,7 @@ begin\n   CloseValid(fStderr);\r\n   CloseValid(fWakeUpRead);\r\n   CloseValid(fProcess);\r\n-  CloseValid(fJob); // with roWinJobCloseChildren, kill any remaining child\r\n+  CloseValid(fJob); // with roCloseChildren, kill any remaining child\r\n end;\r\n \r\n procedure TExternalProcess.DoWakeUp;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -4145,12 +4145,12 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   fpkill(bg, SIGKILL);\r\n   Check(ProcessEnded(bg), 'background');\r\n   {$if defined(OSLINUX) or defined(OSDARWIN) or defined(OSFREEBSD)}\r\n-  // roWinJobCloseChildren closes at Destroy a child left by an ended process\r\n+  // roCloseChildren closes at Destroy a child left by an ended process\r\n   bg := 0;\r\n   p := TExternalProcess.Create;\r\n   try\r\n     Check(p.Start('sleep 30 >/dev/null 2>&1 & echo $!; exit 3', '', '',\r\n-      RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren');\r\n+      RUN_PROCESS + [roCloseChildren]), 'closechildren');\r\n     bg := ReadFirstLinePid(p);\r\n     CheckEqual(p.WaitFor(5000), 3, 'closechildren exitcode');\r\n     Check(ProcessExists(bg), 'closechildren alive');\r\n@@ -4165,7 +4165,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   p := TExternalProcess.Create;\r\n   try\r\n     Check(p.Start('kill -9 $$', '', '',\r\n-      RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren9');\r\n+      RUN_PROCESS + [roCloseChildren]), 'closechildren9');\r\n     CheckEqual(p.WaitFor(10000), -SIGKILL, 'closechildren signal');\r\n     pid := p.Pid;\r\n     Check(ProcessExists(pid), 'closechildren zombie'); // not reaped yet\r\n@@ -4488,12 +4488,12 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     finally\r\n       p.Free;\r\n     end;\r\n-    // roWinJobCloseChildren closes at Destroy a child left by an ended process\r\n+    // roCloseChildren closes at Destroy a child left by an ended process\r\n     fn := WorkDir + 'closechildren.tmp';\r\n     p := TExternalProcess.Create;\r\n     try\r\n       Check(p.Start('cmd /c start /b ping -n 30 127.0.0.1 >\"' + fn + '\"',\r\n-        '', '', RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren');\r\n+        '', '', RUN_PROCESS + [roCloseChildren]), 'closechildren');\r\n       for i := 1 to 500 do\r\n         if p.Running then\r\n           SleepHiRes(10)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "App",
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.app.agl",
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": 790,
+      "is_merge": true
+    },
+    {
+      "sha": "8054ced601dc70fb6925a3ef5fa317ad2b70a2cc",
+      "short_sha": "8054ced6",
+      "subject": "core: minor #789 refactoring",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-16T07:35:30Z",
+      "url": "https://github.com/synopse/mORMot2/commit/8054ced601dc70fb6925a3ef5fa317ad2b70a2cc",
+      "parents": [
+        "17034eeb38b8fe36470c6933157255e9e2682773"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 25,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 7,
+          "patch": "@@ -1375,7 +1375,7 @@   TSynLog = class(TObject, ISynLog)\n     // in a situation where no other logging may occur from this thread any more\n     // - it will release all thread-specific resource used by this TSynLog\n     // - called e.g. by TRest.EndCurrentThread, via TSynLogFamily.OnThreadEnded\n-    class procedure NotifyThreadEnded; {$ifdef HASINLINE} static; {$endif}\n+    class procedure NotifyThreadEnded;\n     /// handle generic method enter / auto-leave tracing\n     // - returning a ISynLog interface will allow you to have an automated\n     // sllLeave log created when the method is left (thanks to the hidden\n@@ -6480,11 +6480,6 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n     InternalSetCurrentThreadName(name);\n end;\n \n-procedure _NotifyThreadEnded;\n-begin\n-  TSynLog.NotifyThreadEnded;\n-end;\n-\n function _GetCurrentThreadName: RawUtf8;\n var\n   ndx: PtrInt;\n@@ -9333,7 +9328,7 @@ procedure InitializeUnit;\n   GetEnumTrimmedNames(TypeInfo(TAppLogLevel), @_LogAppText);\n   SetThreadName := _SetThreadName;\n   GetCurrentThreadName := _GetCurrentThreadName;\n-  NotifyThreadEnded := _NotifyThreadEnded;\n+  NotifyThreadEnded := TSynLog.NotifyThreadEnded;\n   SetCurrentThreadName('MainThread');\n   GetExecutableLocation := _GetExecutableLocation; // use FindLocationShort()\n   LogCompressAlgo := AlgoSynLZ; // very fast and efficient on logs",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 12,
+          "patch": "@@ -5684,10 +5684,9 @@ procedure SetCurrentThreadName(const Name: RawUtf8); overload;\n   // the full thread name as set via mormot.core.log's SetThreadName()\r\n   GetCurrentThreadName: function: RawUtf8;\r\n   /// to be called when a thread is ended, if SetThreadName() was also made\r\n-  // - default implementation does nothing, unless mormot.core.log is included,\r\n-  // to redirect to TSynLog.NotifyThreadEnded and release its thread number\r\n-  // - e.g. for a TThread of this unit, which can't inherit from TThreadAbstract\r\n-  NotifyThreadEnded: procedure;\r\n+  // - default implementation is nil, mormot.core.log set TSynLog.NotifyThreadEnded\r\n+  // - it is easier to inherit from TThreadAbstract instead of plain TThread\r\n+  NotifyThreadEnded: TThreadMethod;\r\n \r\n /// low-level access to the thread name, as set by SetThreadName()\r\n // - since threadvar can't contain managed strings, it is defined as TShort31,\r\n@@ -13515,11 +13514,6 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n   // do nothing - properly implemented in mormot.core.log using FormatUtf8()\r\n end;\r\n \r\n-procedure _NotifyThreadEnded;\r\n-begin\r\n-  // do nothing - properly implemented in mormot.core.log\r\n-end;\r\n-\r\n procedure SetCurrentThreadName(const Format: RawUtf8; const Args: array of const);\r\n begin\r\n   SetThreadName(GetCurrentThreadId, Format, Args);\r\n@@ -13813,7 +13807,7 @@ function ParseCommandArgs(const cmd: RawUtf8; argv: PParseCommandsArgs;\n   TExternalProcessThread = class(TThread)\r\n   protected\r\n     fOwner: TExternalProcess;\r\n-    procedure Execute; override;\r\n+    procedure Execute; override; // redirect to fOwner.Pump\r\n   public\r\n     constructor Create(owner: TExternalProcess); reintroduce;\r\n   end;\r\n@@ -13834,7 +13828,8 @@ procedure TExternalProcessThread.Execute;\n       SetCurrentThreadName('process %', [fOwner.fPid]); // may raise\r\n       fOwner.Pump;\r\n     finally\r\n-      NotifyThreadEnded; // release the TSynLog thread number\r\n+      if Assigned(NotifyThreadEnded) then\r\n+        NotifyThreadEnded(); // release the TSynLog thread number\r\n     end;\r\n   finally\r\n     fOwner.SetFlag(fOutputEof); // e.g. on OnOutput exception: don't WaitFor EOF\r\n@@ -14188,7 +14183,6 @@ procedure InitializeUnit;\n   GetExecutableLocation := _GetExecutableLocation; // mormot.core.log\r\n   SetThreadName         := _SetThreadName;\r\n   GetCurrentThreadName  := _GetCurrentThreadName;\r\n-  NotifyThreadEnded     := _NotifyThreadEnded;\r\n end;\r\n \r\n procedure FinalizeUnit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -5994,7 +5994,7 @@ end;\n // - returns 1 if ended, 0 if still running, -1 on error\r\n function ChildEndedNoReap(pid: cint; var exitcode: integer): integer;\r\n var\r\n-  info: array[0..31] of cint; // siginfo_t is up to 128 bytes\r\n+  info: array[0 .. 31] of cint; // siginfo_t is up to 128 bytes\r\n begin\r\n   FillCharFast(info, SizeOf(info), 0);\r\n   repeat\r\n@@ -6079,7 +6079,7 @@ end;\n \r\n function TExternalProcess.DoPump(timeoutms: integer): integer;\r\n var\r\n-  p: array[0..2] of TPollFD;\r\n+  p: array[0 .. 2] of TPollFD;\r\n   n, i: PtrInt;\r\n   r: ssize_t;\r\n   fd: cint;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18082\n+18085",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18082'\r\n+'2.4.18085'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -3728,7 +3728,7 @@ function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): bo\n \r\n type\r\n   // send SIGUSR1 to a given thread every 20 ms\r\n-  TSignalSender = class(TThread)\r\n+  TSignalSender = class(TThreadAbstract)\r\n   protected\r\n     fTarget: TThreadID;\r\n     procedure Execute; override;\r\n@@ -3752,7 +3752,7 @@ procedure TSignalSender.Execute;\n   begin\r\n     if pthread_kill(fTarget, SIGUSR1) = 0 then\r\n       inc(Sent);\r\n-    SleepHiRes(20);\r\n+    SleepHiRes(10);\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "refactor",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os",
+        "mormot.core.os.posix"
+      ],
+      "pr": 789,
+      "is_merge": false
+    },
+    {
+      "sha": "17034eeb38b8fe36470c6933157255e9e2682773",
+      "short_sha": "17034eeb",
+      "subject": "Merge pull request #788 from zen010101/fix-external-process-thread-number",
+      "body": "core: TExternalProcess thread releases its TSynLog thread number",
+      "author": "ab",
+      "date": "2026-11-16T07:17:58Z",
+      "url": "https://github.com/synopse/mORMot2/commit/17034eeb38b8fe36470c6933157255e9e2682773",
+      "parents": [
+        "ac9d6c2db0056d23ee34c2ccb5f3039df3f59c7d",
+        "dadb7a01583eab2c11d22be77077b8d724c0cf52"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 2,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -6480,6 +6480,11 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n     InternalSetCurrentThreadName(name);\n end;\n \n+procedure _NotifyThreadEnded;\n+begin\n+  TSynLog.NotifyThreadEnded;\n+end;\n+\n function _GetCurrentThreadName: RawUtf8;\n var\n   ndx: PtrInt;\n@@ -9328,6 +9333,7 @@ procedure InitializeUnit;\n   GetEnumTrimmedNames(TypeInfo(TAppLogLevel), @_LogAppText);\n   SetThreadName := _SetThreadName;\n   GetCurrentThreadName := _GetCurrentThreadName;\n+  NotifyThreadEnded := _NotifyThreadEnded;\n   SetCurrentThreadName('MainThread');\n   GetExecutableLocation := _GetExecutableLocation; // use FindLocationShort()\n   LogCompressAlgo := AlgoSynLZ; // very fast and efficient on logs",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 2,
+          "patch": "@@ -5683,6 +5683,11 @@ procedure SetCurrentThreadName(const Name: RawUtf8); overload;\n   // - will return the CurrentThreadNameShort^ threadvar 31 chars value or\r\n   // the full thread name as set via mormot.core.log's SetThreadName()\r\n   GetCurrentThreadName: function: RawUtf8;\r\n+  /// to be called when a thread is ended, if SetThreadName() was also made\r\n+  // - default implementation does nothing, unless mormot.core.log is included,\r\n+  // to redirect to TSynLog.NotifyThreadEnded and release its thread number\r\n+  // - e.g. for a TThread of this unit, which can't inherit from TThreadAbstract\r\n+  NotifyThreadEnded: procedure;\r\n \r\n /// low-level access to the thread name, as set by SetThreadName()\r\n // - since threadvar can't contain managed strings, it is defined as TShort31,\r\n@@ -13510,6 +13515,11 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n   // do nothing - properly implemented in mormot.core.log using FormatUtf8()\r\n end;\r\n \r\n+procedure _NotifyThreadEnded;\r\n+begin\r\n+  // do nothing - properly implemented in mormot.core.log\r\n+end;\r\n+\r\n procedure SetCurrentThreadName(const Format: RawUtf8; const Args: array of const);\r\n begin\r\n   SetThreadName(GetCurrentThreadId, Format, Args);\r\n@@ -13819,9 +13829,13 @@ constructor TExternalProcessThread.Create(owner: TExternalProcess);\n \r\n procedure TExternalProcessThread.Execute;\r\n begin\r\n-  SetCurrentThreadName('process %', [fOwner.fPid]);\r\n   try\r\n-    fOwner.Pump;\r\n+    try\r\n+      SetCurrentThreadName('process %', [fOwner.fPid]); // may raise\r\n+      fOwner.Pump;\r\n+    finally\r\n+      NotifyThreadEnded; // release the TSynLog thread number\r\n+    end;\r\n   finally\r\n     fOwner.SetFlag(fOutputEof); // e.g. on OnOutput exception: don't WaitFor EOF\r\n     LockedInc32(@fOwner.fThreadDone); // with a barrier: last access to fOwner\r\n@@ -14174,6 +14188,7 @@ procedure InitializeUnit;\n   GetExecutableLocation := _GetExecutableLocation; // mormot.core.log\r\n   SetThreadName         := _SetThreadName;\r\n   GetCurrentThreadName  := _GetCurrentThreadName;\r\n+  NotifyThreadEnded     := _NotifyThreadEnded;\r\n end;\r\n \r\n procedure FinalizeUnit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -3706,6 +3706,7 @@   TRunRedirectTest = class\n     Calls: integer;\r\n     FirstCallEmpty, AbortOnText: boolean;\r\n     SeenPid: cardinal;\r\n+    ThreadIndex: PtrInt;\r\n     function OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n   end;\r\n \r\n@@ -3715,6 +3716,7 @@ function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): bo\n     FirstCallEmpty := text = '';\r\n   inc(Calls);\r\n   SeenPid := pid;\r\n+  ThreadIndex := TSynLog.ThreadIndex;\r\n   Output := Output + text;\r\n   result := AbortOnText and\r\n             (text <> '');\r\n@@ -3918,6 +3920,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   bg, pid, hfd: cint;\r\n   fds: TFilDes;\r\n   files, i: integer;\r\n+  ndx: PtrInt;\r\n begin\r\n   // basic execution with stdout and exit code\r\n   p := TExternalProcess.Create;\r\n@@ -4009,6 +4012,27 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     p.Free;\r\n     r.Free;\r\n   end;\r\n+  // the background thread releases its TSynLog thread number when it ends\r\n+  r := TRunRedirectTest.Create;\r\n+  try\r\n+    ndx := 0;\r\n+    for i := 0 to 19 do\r\n+    begin\r\n+      p := TExternalProcess.Create;\r\n+      try\r\n+        p.OnOutput := r.OnOutput;\r\n+        Check(p.Start('echo hi'), 'threadnumber');\r\n+        CheckEqual(p.WaitFor(10000), 0, 'threadnumber');\r\n+      finally\r\n+        p.Free;\r\n+      end;\r\n+      if i = 0 then\r\n+        ndx := r.ThreadIndex;\r\n+    end;\r\n+    Check(r.ThreadIndex < ndx + 10, 'threadnumber reused');\r\n+  finally\r\n+    r.Free;\r\n+  end;\r\n   // explicit arguments are neither parsed nor given to the shell\r\n   p := TExternalProcess.Create;\r\n   try\r\n@@ -4306,6 +4330,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   start: Int64;\r\n   pid: cardinal;\r\n   files, i, timeout: integer;\r\n+  ndx: PtrInt;\r\n   sec: TPipeSecurity;\r\n   rd, wr: THandle;\r\n begin\r\n@@ -4387,6 +4412,27 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     p.Free;\r\n     r.Free;\r\n   end;\r\n+  // the background thread releases its TSynLog thread number when it ends\r\n+  r := TRunRedirectTest.Create;\r\n+  try\r\n+    ndx := 0;\r\n+    for i := 0 to 19 do\r\n+    begin\r\n+      p := TExternalProcess.Create;\r\n+      try\r\n+        p.OnOutput := r.OnOutput;\r\n+        Check(p.Start('cmd /c echo hi'), 'threadnumber');\r\n+        CheckEqual(p.WaitFor(10000), 0, 'threadnumber');\r\n+      finally\r\n+        p.Free;\r\n+      end;\r\n+      if i = 0 then\r\n+        ndx := r.ThreadIndex;\r\n+    end;\r\n+    Check(r.ThreadIndex < ndx + 10, 'threadnumber reused');\r\n+  finally\r\n+    r.Free;\r\n+  end;\r\n   // explicit arguments are quoted as CommandLineToArgvW() expects: cmd\r\n   // \"echo\" shows the command line as it was received\r\n   p := TExternalProcess.Create;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os"
+      ],
+      "pr": 788,
+      "is_merge": true
+    },
+    {
+      "sha": "dadb7a01583eab2c11d22be77077b8d724c0cf52",
+      "short_sha": "dadb7a01",
+      "subject": "core: TExternalProcess thread releases its TSynLog thread number",
+      "body": "- each Start() leaked one of the 65500 TSynLog thread numbers, with its\n  name: new NotifyThreadEnded hook in mormot.core.os, redirected by\n  mormot.core.log to TSynLog.NotifyThreadEnded\n- SetCurrentThreadName() is now within the try..finally block, so that\n  an exception could not let Destroy wait for ever",
+      "author": "zen010101",
+      "date": "2026-11-15T04:59:06Z",
+      "url": "https://github.com/synopse/mORMot2/commit/dadb7a01583eab2c11d22be77077b8d724c0cf52",
+      "parents": [
+        "01ca62ea7220191bd84f92816e8d0ea18300884b"
+      ],
+      "stats": {
+        "additions": 69,
+        "deletions": 2,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.log.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -6480,6 +6480,11 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n     InternalSetCurrentThreadName(name);\n end;\n \n+procedure _NotifyThreadEnded;\n+begin\n+  TSynLog.NotifyThreadEnded;\n+end;\n+\n function _GetCurrentThreadName: RawUtf8;\n var\n   ndx: PtrInt;\n@@ -9328,6 +9333,7 @@ procedure InitializeUnit;\n   GetEnumTrimmedNames(TypeInfo(TAppLogLevel), @_LogAppText);\n   SetThreadName := _SetThreadName;\n   GetCurrentThreadName := _GetCurrentThreadName;\n+  NotifyThreadEnded := _NotifyThreadEnded;\n   SetCurrentThreadName('MainThread');\n   GetExecutableLocation := _GetExecutableLocation; // use FindLocationShort()\n   LogCompressAlgo := AlgoSynLZ; // very fast and efficient on logs",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 17,
+          "deletions": 2,
+          "patch": "@@ -5683,6 +5683,11 @@ procedure SetCurrentThreadName(const Name: RawUtf8); overload;\n   // - will return the CurrentThreadNameShort^ threadvar 31 chars value or\r\n   // the full thread name as set via mormot.core.log's SetThreadName()\r\n   GetCurrentThreadName: function: RawUtf8;\r\n+  /// to be called when a thread is ended, if SetThreadName() was also made\r\n+  // - default implementation does nothing, unless mormot.core.log is included,\r\n+  // to redirect to TSynLog.NotifyThreadEnded and release its thread number\r\n+  // - e.g. for a TThread of this unit, which can't inherit from TThreadAbstract\r\n+  NotifyThreadEnded: procedure;\r\n \r\n /// low-level access to the thread name, as set by SetThreadName()\r\n // - since threadvar can't contain managed strings, it is defined as TShort31,\r\n@@ -13510,6 +13515,11 @@ procedure _SetThreadName(ThreadID: TThreadID; const Format: RawUtf8;\n   // do nothing - properly implemented in mormot.core.log using FormatUtf8()\r\n end;\r\n \r\n+procedure _NotifyThreadEnded;\r\n+begin\r\n+  // do nothing - properly implemented in mormot.core.log\r\n+end;\r\n+\r\n procedure SetCurrentThreadName(const Format: RawUtf8; const Args: array of const);\r\n begin\r\n   SetThreadName(GetCurrentThreadId, Format, Args);\r\n@@ -13819,9 +13829,13 @@ constructor TExternalProcessThread.Create(owner: TExternalProcess);\n \r\n procedure TExternalProcessThread.Execute;\r\n begin\r\n-  SetCurrentThreadName('process %', [fOwner.fPid]);\r\n   try\r\n-    fOwner.Pump;\r\n+    try\r\n+      SetCurrentThreadName('process %', [fOwner.fPid]); // may raise\r\n+      fOwner.Pump;\r\n+    finally\r\n+      NotifyThreadEnded; // release the TSynLog thread number\r\n+    end;\r\n   finally\r\n     fOwner.SetFlag(fOutputEof); // e.g. on OnOutput exception: don't WaitFor EOF\r\n     LockedInc32(@fOwner.fThreadDone); // with a barrier: last access to fOwner\r\n@@ -14174,6 +14188,7 @@ procedure InitializeUnit;\n   GetExecutableLocation := _GetExecutableLocation; // mormot.core.log\r\n   SetThreadName         := _SetThreadName;\r\n   GetCurrentThreadName  := _GetCurrentThreadName;\r\n+  NotifyThreadEnded     := _NotifyThreadEnded;\r\n end;\r\n \r\n procedure FinalizeUnit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 46,
+          "deletions": 0,
+          "patch": "@@ -3706,6 +3706,7 @@   TRunRedirectTest = class\n     Calls: integer;\r\n     FirstCallEmpty, AbortOnText: boolean;\r\n     SeenPid: cardinal;\r\n+    ThreadIndex: PtrInt;\r\n     function OnOutput(const text: RawByteString; pid: cardinal): boolean;\r\n   end;\r\n \r\n@@ -3715,6 +3716,7 @@ function TRunRedirectTest.OnOutput(const text: RawByteString; pid: cardinal): bo\n     FirstCallEmpty := text = '';\r\n   inc(Calls);\r\n   SeenPid := pid;\r\n+  ThreadIndex := TSynLog.ThreadIndex;\r\n   Output := Output + text;\r\n   result := AbortOnText and\r\n             (text <> '');\r\n@@ -3918,6 +3920,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   bg, pid, hfd: cint;\r\n   fds: TFilDes;\r\n   files, i: integer;\r\n+  ndx: PtrInt;\r\n begin\r\n   // basic execution with stdout and exit code\r\n   p := TExternalProcess.Create;\r\n@@ -4009,6 +4012,27 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     p.Free;\r\n     r.Free;\r\n   end;\r\n+  // the background thread releases its TSynLog thread number when it ends\r\n+  r := TRunRedirectTest.Create;\r\n+  try\r\n+    ndx := 0;\r\n+    for i := 0 to 19 do\r\n+    begin\r\n+      p := TExternalProcess.Create;\r\n+      try\r\n+        p.OnOutput := r.OnOutput;\r\n+        Check(p.Start('echo hi'), 'threadnumber');\r\n+        CheckEqual(p.WaitFor(10000), 0, 'threadnumber');\r\n+      finally\r\n+        p.Free;\r\n+      end;\r\n+      if i = 0 then\r\n+        ndx := r.ThreadIndex;\r\n+    end;\r\n+    Check(r.ThreadIndex < ndx + 10, 'threadnumber reused');\r\n+  finally\r\n+    r.Free;\r\n+  end;\r\n   // explicit arguments are neither parsed nor given to the shell\r\n   p := TExternalProcess.Create;\r\n   try\r\n@@ -4306,6 +4330,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   start: Int64;\r\n   pid: cardinal;\r\n   files, i, timeout: integer;\r\n+  ndx: PtrInt;\r\n   sec: TPipeSecurity;\r\n   rd, wr: THandle;\r\n begin\r\n@@ -4387,6 +4412,27 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     p.Free;\r\n     r.Free;\r\n   end;\r\n+  // the background thread releases its TSynLog thread number when it ends\r\n+  r := TRunRedirectTest.Create;\r\n+  try\r\n+    ndx := 0;\r\n+    for i := 0 to 19 do\r\n+    begin\r\n+      p := TExternalProcess.Create;\r\n+      try\r\n+        p.OnOutput := r.OnOutput;\r\n+        Check(p.Start('cmd /c echo hi'), 'threadnumber');\r\n+        CheckEqual(p.WaitFor(10000), 0, 'threadnumber');\r\n+      finally\r\n+        p.Free;\r\n+      end;\r\n+      if i = 0 then\r\n+        ndx := r.ThreadIndex;\r\n+    end;\r\n+    Check(r.ThreadIndex < ndx + 10, 'threadnumber reused');\r\n+  finally\r\n+    r.Free;\r\n+  end;\r\n   // explicit arguments are quoted as CommandLineToArgvW() expects: cmd\r\n   // \"echo\" shows the command line as it was received\r\n   p := TExternalProcess.Create;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.log",
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "07689a2cb5e3072758739103902719434db1c3df",
+      "short_sha": "07689a2c",
+      "subject": "core: renamed roWinJobCloseChildren as roCloseChildren",
+      "body": "TExternalProcess supports this option on Linux, FreeBSD and MacOS since #779.\nThe previous name is kept as a deprecated constant.",
+      "author": "zen010101",
+      "date": "2026-11-14T06:15:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/07689a2cb5e3072758739103902719434db1c3df",
+      "parents": [
+        "ac9d6c2db0056d23ee34c2ccb5f3039df3f59c7d"
+      ],
+      "stats": {
+        "additions": 26,
+        "deletions": 18,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/app/mormot.app.agl.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -557,7 +557,7 @@ constructor TSynAngelizeRunner.Create(aSender: TSynAngelize; aLog: TSynLog;\n   fWrkDir := aWrkDir;\r\n   // fRunOptions=[] without roWinNoProcessDetach to detach from main console\r\n   if soWinJobCloseChildren in aService.StartOptions then\r\n-    include(fRunOptions, roWinJobCloseChildren); // just ignored on POSIX\r\n+    include(fRunOptions, roCloseChildren); // just ignored on POSIX\r\n   if not (soReplaceEnv in aService.StartOptions) then\r\n     include(fRunOptions, roEnvAddExisting);\r\n   fRedirect := aRedirect;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 4,
+          "patch": "@@ -6411,10 +6411,12 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   /// define how RunCommand() and RunRedirect() run their sub-process\r\n   // - roEnvAddExisting is used when the env pairs should be added to the\r\n   // existing system environment variable\r\n-  // - roWinJobCloseChildren will use the CREATE_BREAKAWAY_FROM_JOB flag and\r\n+  // - roCloseChildren will use the CREATE_BREAKAWAY_FROM_JOB flag and\r\n   // run CreateJobToClose(allowSilentBreakaway=true) and AssignJobToProcess()\r\n   // on the new process so that any of its future children would be\r\n-  // synchronized and closed with their father, in a relaxed way\r\n+  // synchronized and closed with their father, in a relaxed way - on Windows\r\n+  // only for RunCommand() and RunRedirect(), but also on POSIX and in a\r\n+  // strict way for TExternalProcess\r\n   // - on Windows, will create its own console and its own execution group, unless\r\n   // roWinNoProcessDetach is defined - e.g. as RUN_CMD for RunCommand/RunRedirect\r\n   // - roWinNewConsole won't inherit the parent console, but have its own console\r\n@@ -6427,7 +6429,7 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   // - RunRedirect() ignores roStdinPipe and roStderrPipe\r\n   TRunOptions = set of (\r\n     roEnvAddExisting,\r\n-    roWinJobCloseChildren,\r\n+    roCloseChildren,\r\n     roWinNoProcessDetach,\r\n     roWinNewConsole,\r\n     roWinKeepProcessOnTimeout,\r\n@@ -6446,6 +6448,12 @@ function ExtractCommandArgs(const cmd: RawUtf8; out param: TRawUtf8DynArray;\n   /// the default options for TExternalProcess.Start\r\n   // - with the same behavior on all systems: no stdin, and stderr in stdout\r\n   RUN_PROCESS = [roWinNoProcessDetach, roStdinNull, roStderrMerge];\r\n+\r\n+{$ifndef PUREMORMOT2}\r\n+  /// deprecated name: use roCloseChildren instead\r\n+  roWinJobCloseChildren = roCloseChildren;\r\n+{$endif PUREMORMOT2}\r\n+\r\n type\r\n   /// the low-level OS API type for executing processes arguments\r\n   TRunArg = {$ifdef OSPOSIX} RawUtf8 {$else} TFileName {$endif};\r\n@@ -6564,7 +6572,7 @@ function RunCommandWin(const cmd: TFileName; waitfor: boolean;\n   // - on Windows, the command line is given to CreateProcessW() as such - so use\r\n   // e.g. 'cmd /c ...' for a shell built-in - and the process is created in its\r\n   // own process group and job, so that Terminate/Kill also stop its children\r\n-  // - roWinJobCloseChildren also kills any child still running when this\r\n+  // - roCloseChildren also kills any child still running when this\r\n   // instance is released - and on Windows, when the current process ends:\r\n   // on Linux, FreeBSD and MacOS, the ended process is then not reaped\r\n   // before this instance is released, so that its process group is kept\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 3,
+          "patch": "@@ -6025,7 +6025,7 @@ begin\n   try\r\n     {$ifdef HASWAITID}\r\n     if (fState = epsRunning) and\r\n-       (roWinJobCloseChildren in fOptions) then\r\n+       (roCloseChildren in fOptions) then\r\n     begin\r\n       // don't reap yet: DoClose will kill the process group of this zombie\r\n       r := ChildEndedNoReap(fPid, fExitCode);\r\n@@ -6173,7 +6173,7 @@ procedure TExternalProcess.DoClose;\n begin\r\n   if IsSet(fZombie) then\r\n   begin\r\n-    // roWinJobCloseChildren: the zombie kept its process group number\r\n+    // roCloseChildren: the zombie kept its process group number\r\n     SetFlag(fZombie, false);\r\n     fpkill(-cint(fPid), SIGKILL); // kill any child still running\r\n     repeat\r\n@@ -6209,7 +6209,7 @@ begin\n   try\r\n     p.fOnOutput := onoutput;\r\n     if p.DoStart(cmd, [], env, wrkdir,\r\n-         options - [roStdinPipe, roStderrPipe, roWinJobCloseChildren],\r\n+         options - [roStdinPipe, roStderrPipe, roCloseChildren],\r\n          {withthread=}false) then\r\n       result := p.Redirect(waitfordelayms, setresult, exitcode);\r\n   finally\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -5005,7 +5005,7 @@ begin\n     flags := (flags or CREATE_NEW_CONSOLE) and not DETACHED_PROCESS;\r\n     exclude(ram, ramCtrlC); // not compatible with stand-alone console\r\n   end;\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     flags := flags or CREATE_BREAKAWAY_FROM_JOB; // child process in a new job\r\n   // actually create the new process\r\n   created := CreateProcessW(nil, pointer(wcmd), @procsec, @procsec, true,\r\n@@ -5026,7 +5026,7 @@ begin\n     // setup the newly created process\r\n     if flags and CREATE_BREAKAWAY_FROM_JOB <> 0 then\r\n     begin\r\n-      // roWinJobCloseChildren = run the new process in its own Job\r\n+      // roCloseChildren = run the new process in its own Job\r\n       job := CreateJobToClose(processinfo.dwProcessID, 'CloseChildren',\r\n         {allowSilentBreakaway:}true);\r\n       if (job <> 0) and\r\n@@ -5275,7 +5275,7 @@ begin\n     flags := flags or DETACHED_PROCESS;\r\n   if roWinNewConsole in options then\r\n     flags := (flags or CREATE_NEW_CONSOLE) and not DETACHED_PROCESS;\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     flags := flags or CREATE_BREAKAWAY_FROM_JOB;\r\n   FillCharFast(si, SizeOf(si), 0);\r\n   si.StartupInfo.cb := SizeOf(si.StartupInfo);\r\n@@ -5348,7 +5348,7 @@ begin\n     exit;\r\n   end;\r\n   // put the process in its own job, to terminate it with its children\r\n-  if roWinJobCloseChildren in options then\r\n+  if roCloseChildren in options then\r\n     \r\n     fJob := CreateJobToClose(pi.dwProcessId, 'ExternalProcess',\r\n       {allowSilentBreakaway=}false) // false: children should stay in the job\r\n@@ -5509,7 +5509,7 @@ begin\n   CloseValid(fStderr);\r\n   CloseValid(fWakeUpRead);\r\n   CloseValid(fProcess);\r\n-  CloseValid(fJob); // with roWinJobCloseChildren, kill any remaining child\r\n+  CloseValid(fJob); // with roCloseChildren, kill any remaining child\r\n end;\r\n \r\n procedure TExternalProcess.DoWakeUp;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -4121,12 +4121,12 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   fpkill(bg, SIGKILL);\r\n   Check(ProcessEnded(bg), 'background');\r\n   {$if defined(OSLINUX) or defined(OSDARWIN) or defined(OSFREEBSD)}\r\n-  // roWinJobCloseChildren closes at Destroy a child left by an ended process\r\n+  // roCloseChildren closes at Destroy a child left by an ended process\r\n   bg := 0;\r\n   p := TExternalProcess.Create;\r\n   try\r\n     Check(p.Start('sleep 30 >/dev/null 2>&1 & echo $!; exit 3', '', '',\r\n-      RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren');\r\n+      RUN_PROCESS + [roCloseChildren]), 'closechildren');\r\n     bg := ReadFirstLinePid(p);\r\n     CheckEqual(p.WaitFor(5000), 3, 'closechildren exitcode');\r\n     Check(ProcessExists(bg), 'closechildren alive');\r\n@@ -4141,7 +4141,7 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   p := TExternalProcess.Create;\r\n   try\r\n     Check(p.Start('kill -9 $$', '', '',\r\n-      RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren9');\r\n+      RUN_PROCESS + [roCloseChildren]), 'closechildren9');\r\n     CheckEqual(p.WaitFor(10000), -SIGKILL, 'closechildren signal');\r\n     pid := p.Pid;\r\n     Check(ProcessExists(pid), 'closechildren zombie'); // not reaped yet\r\n@@ -4442,12 +4442,12 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n     finally\r\n       p.Free;\r\n     end;\r\n-    // roWinJobCloseChildren closes at Destroy a child left by an ended process\r\n+    // roCloseChildren closes at Destroy a child left by an ended process\r\n     fn := WorkDir + 'closechildren.tmp';\r\n     p := TExternalProcess.Create;\r\n     try\r\n       Check(p.Start('cmd /c start /b ping -n 30 127.0.0.1 >\"' + fn + '\"',\r\n-        '', '', RUN_PROCESS + [roWinJobCloseChildren]), 'closechildren');\r\n+        '', '', RUN_PROCESS + [roCloseChildren]), 'closechildren');\r\n       for i := 1 to 500 do\r\n         if p.Running then\r\n           SleepHiRes(10)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "deprecation",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "App",
+        "Tests"
+      ],
+      "units": [
+        "mormot.app.agl",
+        "mormot.core.os",
+        "mormot.core.os.posix",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e5f68ef278b3fa609913f0e31c47c8d83b451d71",
+      "short_sha": "e5f68ef2",
+      "subject": "mormot.core.zip: add ZipCrypto and WinZip AES-256 password support",
+      "body": "- TZipWrite/TZipRead Password property, with TZipWrite.Encryption selecting\n  the algorithm: zeAes256 (WinZip AE-2, default) or zeZipCrypto (traditional\n  PKWARE, the only one supported by the Windows Explorer)\n- mormot.core.zip only defines the abstract TZipCrypt class and the\n  ZipCryptClass[] registration: no dependency on the crypt units\n- new mormot.crypt.zip unit implementing both algorithms - just include it\n  in the project to enable them:\n  - TZipCryptAes: PBKDF2-HMAC-SHA1 key derivation, AES-CTR with a\n    little-endian counter, 80-bit HMAC-SHA1 authentication (AE-1/AE-2)\n  - TZipCryptPkware: ZipCrypto with the keys held in local variables\n- encrypted entries are supported by UnZip, UnZipStream and TestAll, from\n  memory or from a file\n- AddDeflatedStream works with AES; ZipCrypto raises an ESynZip since its\n  header needs the crc32 before any data is written\n- tests: Info-ZIP (ZipCrypto) and 7-Zip (AES-256) interoperability vectors,\n  round trips for both algorithms, wrong/missing password, tampered content\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "tf",
+      "date": "2026-10-31T21:08:35Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e5f68ef278b3fa609913f0e31c47c8d83b451d71",
+      "parents": [
+        "5df7dc803073b59d037470aa29dc3b8adca9e65f"
+      ],
+      "stats": {
+        "additions": 1078,
+        "deletions": 97,
+        "files": 6
+      },
+      "files": [
+        {
+          "path": "packages/lazarus/mormot2.lpk",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 1,
+          "patch": "@@ -49,7 +49,7 @@\n     <Description Value=\"mORMot 2 ORM/SOA/MVC framework\"/>\n     <License Value=\"MPL, GPL or LGPL\"/>\n     <Version Major=\"2\" Minor=\"4\"/>\n-    <Files Count=\"127\">\n+    <Files Count=\"128\">\n       <Item1>\n         <Filename Value=\"../../src/app/mormot.app.console.pas\"/>\n         <UnitName Value=\"mormot.app.console\"/>\n@@ -559,6 +559,10 @@\n         <Filename Value=\"../../src/db/mormot.db.sql.duckdb.pas\"/>\n         <UnitName Value=\"mormot.db.sql.duckdb\"/>\n       </Item127>\n+      <Item128>\n+        <Filename Value=\"../../src/crypt/mormot.crypt.zip.pas\"/>\n+        <UnitName Value=\"mormot.crypt.zip\"/>\n+      </Item128>\n     </Files>\n     <CompatibilityMode Value=\"True\"/>\n     <UsageOptions>",
+          "patch_truncated": false
+        },
+        {
+          "path": "packages/lazarus/mormot2.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 1,
+          "patch": "@@ -44,7 +44,8 @@ interface\n   mormot.net.openapi, mormot.core.os.security, mormot.tools.mget, \n   mormot.core.mvc, mormot.crypt.other, mormot.net.dhcp, mormot.core.fmt, \n   mormot.core.os.delphi, mormot.core.i18n, mormot.lib.uniscribe, \n-  mormot.crypt.win, mormot.db.raw.duckdb, mormot.db.sql.duckdb;\n+  mormot.crypt.win, mormot.db.raw.duckdb, mormot.db.sql.duckdb, \n+  mormot.crypt.zip;\n \n implementation\n ",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.zip.pas",
+          "status": "modified",
+          "additions": 582,
+          "deletions": 95,
+          "patch": "@@ -305,6 +305,24 @@   TFileInfoExtraName = record\n   end;\r\n   PFileInfoExtraName = ^TFileInfoExtraName;\r\n \r\n+  //// extra file information structure, as used by WinZip AES encryption\r\n+  // - see https://www.winzip.com/en/support/aes-encryption\r\n+  TFileInfoExtraAes = record\r\n+    /// contains AES_EXTRA_ID = $9901\r\n+    id: word;\r\n+    /// block size = 7\r\n+    size: word;\r\n+    /// 1 for AE-1 (with crc32), or 2 for AE-2 (crc32 = 0)\r\n+    version: word;\r\n+    /// 'AE' as vendor ID\r\n+    vendor: word;\r\n+    /// 1 = AES-128, 2 = AES-192, 3 = AES-256\r\n+    strength: byte;\r\n+    /// the actual compression method, e.g. Z_STORED or Z_DEFLATED\r\n+    method: word;\r\n+  end;\r\n+  PFileInfoExtraAes = ^TFileInfoExtraAes;\r\n+\r\n   /// information returned by RetrieveFileInfo()\r\n   TFileInfoFull = record\r\n     /// standard zip file information, as written on disk\r\n@@ -447,7 +465,12 @@   TLocator64 = record\n \r\n type\r\n   /// used internally by TZipRead to store the zip entries\r\n+  {$ifdef USERECORDWITHMETHODS}\r\n   TZipReadEntry = record\r\n+  {$else}\r\n+  TZipReadEntry = object\r\n+  {$endif USERECORDWITHMETHODS}\r\n+  public\r\n     /// the information of this file, as stored at the end of the .zip archive\r\n     // - may differ from local^ content, depending of the zipper tool used\r\n     dir: PFileHeader;\r\n@@ -474,24 +497,99 @@   TZipReadEntry = record\n     /// offset to the next local file header in the .zip archive\r\n     // - only used for FLAG_DATADESCRIPTOR files (MacOS)\r\n     nextlocaloffs: QWord;\r\n+    /// the WinZip AES information of this file, as stored just after dir\r\n+    // - nil if this file is not AES encrypted\r\n+    aes: PFileInfoExtraAes;\r\n+    /// false if no crc32 is stored for this entry, i.e. for WinZip AE-2\r\n+    function HasCrc: boolean;\r\n+      {$ifdef HASINLINE} inline; {$endif}\r\n   end;\r\n   PZipReadEntry = ^TZipReadEntry;\r\n   TZipReadEntryDynArray = array of TZipReadEntry;\r\n \r\n+const\r\n+  // from PKware appnote, Bit 3: sizes and crc are 0 and a data descriptor\r\n+  // follows the compressed data - generated by some tools, mainly MacOS itself\r\n+  FLAG_DATADESCRIPTOR = 1 shl 3;\r\n+\r\n+type\r\n+  /// abstract encryption algorithm of .zip entries, as used by TZipWrite/TZipRead\r\n+  // - both the traditional PKWARE encryption (ZipCrypto) and the WinZip AES\r\n+  // encryption are implemented in the mormot.crypt.zip unit, and registered\r\n+  // into the global ZipCryptClass[] variable\r\n+  TZipCrypt = class\r\n+  protected\r\n+    fHeaderLen, fTrailerLen, fAesStrength: byte;\r\n+  public\r\n+    /// initialize this encryption instance\r\n+    // - AesStrength is 0 for ZipCrypto, or 1/2/3 for AES-128/AES-192/AES-256\r\n+    constructor Create(AesStrength: integer); virtual;\r\n+    /// initialize the encryption of a new entry\r\n+    // - fill HeaderLen bytes into Header, to be written before the data\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); virtual; abstract;\r\n+    /// in-place encryption of some entry data\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); virtual; abstract;\r\n+    /// fill TrailerLen bytes into Trailer, to be written after the data\r\n+    // - this default implementation does nothing\r\n+    procedure EncryptDone(Trailer: PByteArray); virtual;\r\n+    /// initialize the decryption of an entry from its HeaderLen stored bytes\r\n+    // - returns false if Password is incorrect\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; virtual; abstract;\r\n+    /// in-place decryption of some entry data\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); virtual; abstract;\r\n+    /// validate the TrailerLen bytes stored after the entry data\r\n+    // - this default implementation returns true\r\n+    function DecryptDone(Trailer: PByteArray): boolean; virtual;\r\n+    /// number of bytes stored before the encrypted data\r\n+    property HeaderLen: byte\r\n+      read fHeaderLen;\r\n+    /// number of bytes stored after the encrypted data\n... [truncated, 39096 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/crypt/README.md",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 0,
+          "patch": "@@ -129,3 +129,9 @@ Deprecated or Seldom Used Cryptographic Features\n - BCrypt Password-Hashing Function\r\n - SCrypt Password-Hashing Function\r\n \r\n+### mormot.crypt.zip\r\n+\r\n+Password Encryption for `mormot.core.zip` `TZipWrite`/`TZipRead`\r\n+- `TZipCryptPkware` Class Implementing the Traditional PKWARE ZipCrypto\r\n+- `TZipCryptAes` Class Implementing the WinZip AE-1/AE-2 Format\r\n+\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/crypt/mormot.crypt.zip.pas",
+          "status": "added",
+          "additions": 310,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,310 @@\n+/// Framework Core ZipCrypto and WinZip AES Encryption for .zip Archives\r\n+// - this unit is a part of the Open Source Synopse mORMot framework 2,\r\n+// licensed under a MPL/GPL/LGPL three license - see LICENSE.md\r\n+unit mormot.crypt.zip;\r\n+\r\n+{\r\n+  *****************************************************************************\r\n+\r\n+   Password Encryption for mormot.core.zip TZipWrite/TZipRead\r\n+    - TZipCryptPkware Class Implementing the Traditional PKWARE ZipCrypto\r\n+    - TZipCryptAes Class Implementing the WinZip AE-1/AE-2 Format\r\n+\r\n+   Just include this unit in your project to enable the zeAes256 (default)\r\n+   and zeZipCrypto algorithms of TZipWrite.Encryption, and the decryption of\r\n+   any encrypted TZipRead entry.\r\n+\r\n+  *****************************************************************************\r\n+}\r\n+\r\n+interface\r\n+\r\n+{$I ..\\mormot.defines.inc}\r\n+\r\n+uses\r\n+  sysutils,\r\n+  mormot.core.base,\r\n+  mormot.core.os,\r\n+  mormot.core.zip,\r\n+  mormot.crypt.core,\r\n+  mormot.crypt.secure;\r\n+\r\n+\r\n+{ ************ TZipCryptPkware Class Implementing the Traditional ZipCrypto }\r\n+\r\n+type\r\n+  /// traditional PKWARE encryption (ZipCrypto) - see PKware appnote 6.1\r\n+  TZipCryptPkware = class(TZipCrypt)\r\n+  protected\r\n+    fKey0, fKey1, fKey2: cardinal;\r\n+    fTab: PCrc32tab;\r\n+    procedure Init(const Password: RawByteString);\r\n+    procedure Crypt(Data: PByteArray; Len: PtrInt; Decrypting: boolean);\r\n+  public\r\n+    constructor Create(AesStrength: integer); override;\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); override;\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; override;\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+  end;\r\n+\r\n+\r\n+{ ************ TZipCryptAes Class Implementing the WinZip AE-1/AE-2 Format }\r\n+\r\n+type\r\n+  /// WinZip AES encryption (AE-1/AE-2) of .zip entries\r\n+  // - registered by this unit into the mormot.core.zip ZipCryptClass[] variable\r\n+  // - key derivation is PBKDF2-HMAC-SHA1 with 1000 rounds over a random salt,\r\n+  // data is encrypted using AES-CTR with a little-endian counter, then\r\n+  // authenticated with the first 80-bit of its HMAC-SHA1\r\n+  // - see https://www.winzip.com/en/support/aes-encryption\r\n+  TZipCryptAes = class(TZipCrypt)\r\n+  protected\r\n+    fAes: TAes;\r\n+    fHmac: TSynSigner;\r\n+    fCtr: QWord;\r\n+    fKeyLen, fKeyStreamPos: PtrInt;\r\n+    fKeyStream: array[0 .. 63] of TAesBlock; // pre-computed AES-CTR blocks\r\n+    function Setup(const Password: RawByteString; Salt: PByteArray): cardinal;\r\n+    procedure Crypt(Data: PByteArray; Len: PtrInt);\r\n+  public\r\n+    /// initialize the AES-128/AES-192/AES-256 engine (AesStrength=1/2/3)\r\n+    constructor Create(AesStrength: integer); override;\r\n+    /// finalize this instance, and its sensitive information\r\n+    destructor Destroy; override;\r\n+    /// generate a random salt and the password verification value\r\n+    procedure EncryptInit(const Password: RawByteString; Crc: cardinal;\r\n+      Header: PByteArray); override;\r\n+    /// in-place AES-CTR encryption with HMAC-SHA1 authentication\r\n+    procedure Encrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    /// write the 80-bit HMAC-SHA1 authentication code\r\n+    procedure EncryptDone(Trailer: PByteArray); override;\r\n+    /// derivate the keys from the stored salt and check the password\r\n+    function DecryptInit(const Password: RawByteString; const Info: TFileInfo;\r\n+      Header: PByteArray): boolean; override;\r\n+    /// in-place AES-CTR decryption with HMAC-SHA1 authentication\r\n+    procedure Decrypt(Data: PByteArray; Len: PtrInt); override;\r\n+    /// validate the 80-bit HMAC-SHA1 authentication code\r\n+    function DecryptDone(Trailer: PByteArray): boolean; override;\r\n+  end;\r\n+\r\n+\r\n+implementation\r\n+\r\n+\r\n+{ ************ TZipCryptPkware Class Implementing the Tra\n... [truncated, 6429 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.core.data.pas",
+          "status": "modified",
+          "additions": 173,
+          "deletions": 0,
+          "patch": "@@ -98,6 +98,7 @@ interface\n   mormot.core.threads,\r\n   mormot.core.log,\r\n   mormot.core.zip,\r\n+  mormot.crypt.zip,\r\n   mormot.core.test,\r\n   mormot.lib.z,\r\n   mormot.lib.lizard,\r\n@@ -11599,6 +11600,177 @@ procedure TTestCoreCompression.ZipFormat;\n     end;\r\n   end;\r\n \r\n+  procedure ZipEncryption;\r\n+  const\r\n+    INFOZIP: array[0..151] of byte = (\r\n+      $50, $4b, $03, $04, $0a, $00, $09, $00, $00, $00, $26, $a3, $5f, $5d,\r\n+      $15, $3f, $91, $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $05, $00,\r\n+      $00, $00, $61, $2e, $74, $78, $74, $01, $4d, $91, $b2, $a2, $9e, $8c,\r\n+      $23, $5d, $b5, $18, $64, $ea, $89, $3b, $ec, $c5, $f6, $b7, $c1, $78,\r\n+      $e8, $6c, $0e, $91, $41, $b7, $5b, $50, $4b, $07, $08, $15, $3f, $91,\r\n+      $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $50, $4b, $01, $02, $1e,\r\n+      $03, $0a, $00, $09, $00, $00, $00, $26, $a3, $5f, $5d, $15, $3f, $91,\r\n+      $3f, $1c, $00, $00, $00, $10, $00, $00, $00, $05, $00, $00, $00, $00,\r\n+      $00, $00, $00, $00, $00, $00, $00, $a4, $81, $00, $00, $00, $00, $61,\r\n+      $2e, $74, $78, $74, $50, $4b, $05, $06, $00, $00, $00, $00, $01, $00,\r\n+      $01, $00, $33, $00, $00, $00, $4f, $00, $00, $00, $00, $00);\r\n+    // 'mORMot AES-256' encrypted by 7-Zip \"7z a -tzip -mem=AES256 -mx=0\r\n+    // -mtm=off -mtc=off -mta=off -pmormot v7.zip b.txt\"\r\n+    SEVENZIP: array[0..171] of byte = (\r\n+      $50, $4b, $03, $04, $33, $00, $01, $00, $63, $00, $00, $00, $21, $00,\r\n+      $00, $00, $00, $00, $2a, $00, $00, $00, $0e, $00, $00, $00, $05, $00,\r\n+      $0b, $00, $62, $2e, $74, $78, $74, $01, $99, $07, $00, $02, $00, $41,\r\n+      $45, $03, $00, $00, $50, $2d, $ad, $63, $1a, $e4, $1d, $ef, $61, $49,\r\n+      $c4, $bd, $84, $36, $dc, $32, $cb, $3f, $d7, $8b, $17, $b3, $ba, $81,\r\n+      $0a, $4c, $4e, $61, $16, $4d, $d3, $42, $b6, $ab, $c2, $d3, $fb, $18,\r\n+      $9a, $d9, $9a, $6b, $50, $4b, $01, $02, $3f, $03, $33, $00, $01, $00,\r\n+      $63, $00, $00, $00, $21, $00, $00, $00, $00, $00, $2a, $00, $00, $00,\r\n+      $0e, $00, $00, $00, $05, $00, $0b, $00, $00, $00, $00, $00, $00, $00,\r\n+      $20, $80, $a4, $81, $00, $00, $00, $00, $62, $2e, $74, $78, $74, $01,\r\n+      $99, $07, $00, $02, $00, $41, $45, $03, $00, $00, $50, $4b, $05, $06,\r\n+      $00, $00, $00, $00, $01, $00, $01, $00, $3e, $00, $00, $00, $58, $00,\r\n+      $00, $00, $00, $00);\r\n+  var\r\n+    z: TZipRead;\r\n+    w: TZipWrite;\r\n+    zip: RawByteString;\r\n+    zipfn: TFileName\n... [truncated, 4947 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Crypto",
+        "Packages",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.zip",
+        "mormot.crypt.zip"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
