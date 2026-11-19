@@ -1,0 +1,2143 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-18",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-19T03:32:29Z",
+  "range": {
+    "since": "2026-11-17T23:00:00Z",
+    "until": "2026-11-18T23:00:00Z",
+    "base_sha": "b86a57394b4e70e627683eede9f5aa1aaf4b9068",
+    "head_sha": "d31fc4db41c3609796a34c78e0041f0e729abf05"
+  },
+  "version": {
+    "after": "2.4.18170",
+    "before": "2.4.18132"
+  },
+  "totals": {
+    "commits": 37,
+    "additions": 1857,
+    "deletions": 648
+  },
+  "commits": [
+    {
+      "sha": "d31fc4db41c3609796a34c78e0041f0e729abf05",
+      "short_sha": "d31fc4db",
+      "subject": "test: cover #743 and #750 issues",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T20:55:04Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d31fc4db41c3609796a34c78e0041f0e729abf05",
+      "parents": [
+        "b6b3ce97011b8e9d13663b382e186828a8ee1583"
+      ],
+      "stats": {
+        "additions": 242,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18169\n+18170",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18169'\r\n+'2.4.18170'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 240,
+          "deletions": 0,
+          "patch": "@@ -191,6 +191,8 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoTWebSocketAsyncServer(Sender: TObject);\r\n     /// validate that THttpAsyncServer shutdown does close all its connections\r\n     procedure DoHttpAsyncShutdown(Sender: TObject);\r\n+    /// regressions #743 and #750: early async replies and failed sends\r\n+    procedure DoHttpAsyncResponses(Sender: TObject);\r\n     /// validate that hsoHeadersUnfiltered applies to kept-alive requests\r\n     procedure DoHttpKeepAliveOptions(Sender: TObject);\r\n     function DoKeepAliveOptionsRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n@@ -667,6 +669,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoTFTPServer, self, 'TFTPServer', true, false);\r\n   Run(DoTWebSocketAsyncServer, self, 'WSBroadcast', true, false);\r\n   Run(DoHttpAsyncShutdown, self, 'HttpAsyncShutdown', true, false);\r\n+  Run(DoHttpAsyncResponses, self, 'HttpAsyncResponses', true, false);\r\n   Run(DoHttpKeepAliveOptions, self, 'HttpKeepAliveOptions', true, false);\r\n   Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   Run(DoHttpReadMaxBytes, self, 'HttpReadMaxBytes', true, false);\r\n@@ -1383,6 +1386,243 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n   end;\r\n end;\r\n \r\n+// Regression tests for #743 and #750: early async replies and reset peers.\r\n+type\r\n+  THttpAsyncResponseRegression = class\r\n+  public\r\n+    Server: THttpAsyncServer;\r\n+    Worker: TLoggedWorkThread;\r\n+    ReadStarted, AnswerStarted, ReleaseRead, ReleaseAnswer, AnswerDone: TSynEvent;\r\n+    Handle: TConnectionAsyncHandle;\r\n+    DelayMS: integer;\r\n+    ResetPeer: boolean;\r\n+    BigBody, RequestError, AnswerError: RawUtf8;\r\n+    constructor Create;\r\n+    destructor Destroy; override;\r\n+    procedure Reset;\r\n+    function OnRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    procedure Answer(Sender: TObject);\r\n+  end;\r\n+\r\n+constructor THttpAsyncResponseRegression.Create;\r\n+begin\r\n+  inherited Create;\r\n+  ReadStarted := TSynEvent.Create;\r\n+  AnswerStarted := TSynEvent.Create;\r\n+  ReleaseRead := TSynEvent.Create;\r\n+  ReleaseAnswer := TSynEvent.Create;\r\n+  AnswerDone := TSynEvent.Create;\r\n+end;\r\n+\r\n+destructor THttpAsyncResponseRegression.Destroy;\r\n+begin\r\n+  // The caller has joined and freed Worker before destroying this context.\r\n+  AnswerDone.Free;\r\n+  ReleaseAnswer.Free;\r\n+  ReleaseRead.Free;\r\n+  AnswerStarted.Free;\r\n+  ReadStarted.Free;\r\n+  inherited Destroy;\r\n+end;\r\n+\r\n+procedure THttpAsyncResponseRegression.Reset;\r\n+begin\r\n+  ReadStarted.ResetEvent;\r\n+  AnswerStarted.ResetEvent;\r\n+  ReleaseRead.ResetEvent;\r\n+  ReleaseAnswer.ResetEvent;\r\n+  AnswerDone.ResetEvent;\r\n+  RequestError := '';\r\n+  AnswerError := '';\r\n+end;\r\n+\r\n+procedure THttpAsyncResponseRegression.Answer(Sender: TObject);\r\n+begin\r\n+  try\r\n+    AnswerStarted.SetEvent;\r\n+    if ResetPeer and\r\n+       not ReleaseAnswer.WaitFor(5000) then\r\n+      raise Exception.Create('reset was not signaled to answer worker');\r\n+    if ResetPeer then\r\n+      Server.AsyncResponse(Handle, BigBody, BINARY_CONTENT_TYPE)\r\n+    else\r\n+      Server.AsyncResponse(Handle, 'early', TEXT_CONTENT_TYPE);\r\n+  except\r\n+    on E: Exception do\r\n+      StringToUtf8(E.Message, AnswerError);\r\n+  end;\r\n+  AnswerDone.SetEvent;\r\n+end;\r\n+\r\n+function THttpAsyncResponseRegression.OnRequest(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  result := HTTP_SUCCESS;\r\n+  if Ctxt.Url = '/alive' then\r\n+  begin\r\n+    Ctxt.OutContent := 'alive';\r\n+    exit;\r\n+  end;\r\n+  Handle := (Ctxt as THttpServerRequest).AsyncHandle;\r\n+  Worker := TLoggedWorkThread.Create(TSynLog, 'async-response-regression',\r\n+    self, Answer, {suspended=}false, {ManualWaitForAndFree=}true);\r\n+  // The read lock is still held throughout this handler. Make sure the\r\n+  // answering worker was actually scheduled before holding it for > 40ms.\r\n+  if not AnswerStarted.WaitFor(5000) then\r\n+    RequestError := 'answer worker did not start';\r\n+  ReadStarted.SetEvent;\r\n+  if ResetPeer and\r\n+     not ReleaseRead.W\n... [truncated, 5074 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": 743,
+      "is_merge": false
+    },
+    {
+      "sha": "b6b3ce97011b8e9d13663b382e186828a8ee1583",
+      "short_sha": "b6b3ce97",
+      "subject": "net: fixed THttpClientSocket unexpected retry",
+      "body": "- as reported by #807",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T20:42:48Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b6b3ce97011b8e9d13663b382e186828a8ee1583",
+      "parents": [
+        "bc1c1f06e2521d0a126f232572e4d96f7465cdfd"
+      ],
+      "stats": {
+        "additions": 9,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18168\n+18169",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18168'\r\n+'2.4.18169'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.client.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 0,
+          "patch": "@@ -4168,6 +4168,13 @@ procedure THttpClientSocket.RequestInternal(var ctxt: THttpClientRequest);\n          [msg, fSock.Socket, FatalErrorCode, BOOL_STR[rMain in ctxt.Retry]], self);\r\n     if Aborted then\r\n       ctxt.Status := HTTP_CLIENTERROR\r\n+    else if (ctxt.OutStream <> nil) and\r\n+            (ctxt.OutStream.Position <> ctxt.OutStreamInitialPos) then\r\n+    begin\r\n+      // partial response already written: retry would corrupt the stream\r\n+      Close;\r\n+      ctxt.Status := FatalErrorCode;\r\n+    end\r\n     else if rMain in ctxt.Retry then\r\n       // we should retry once -> return error only if failed twice\r\n       ctxt.Status := FatalErrorCode\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.client"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "bc1c1f06e2521d0a126f232572e4d96f7465cdfd",
+      "short_sha": "bc1c1f06",
+      "subject": "net: fixed THttpAsyncServer.AsyncResponse lock contention",
+      "body": "- as reported by #743",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T20:34:54Z",
+      "url": "https://github.com/synopse/mORMot2/commit/bc1c1f06e2521d0a126f232572e4d96f7465cdfd",
+      "parents": [
+        "e97d75447123792759ae69a86db02d2f2b16a69f"
+      ],
+      "stats": {
+        "additions": 22,
+        "deletions": 7,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18167\n+18168",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18167'\r\n+'2.4.18168'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 5,
+          "patch": "@@ -5341,10 +5341,27 @@ procedure THttpAsyncServer.AsyncResponse(Handle: TConnectionAsyncHandle;\n   const CustomHeaders: RawUtf8);\r\n var\r\n   c: THttpAsyncServerConnection;\r\n+  tix, endtix: cardinal;\r\n begin\r\n   // thread-safe locate the connection using O(log(n)) Handle binary search\r\n-  c := fAsync.ConnectionFindAndWaitLock(Handle, {LockWrite=}false, {ms=}40);\r\n-  if c <> nil then\r\n+  endtix := 0;\r\n+  repeat\r\n+    c := fAsync.ConnectionFindAndWaitLock(Handle, {LockWrite=}false, {ms=}40);\r\n+    if c <> nil then\r\n+      break;\r\n+    if acoVerboseLog in fAsync.fOptions then\r\n+      fAsync.DoLog(sllTrace, 'AsyncResponse on locked #%', [Handle], self);\r\n+    if fAsync.ConnectionFind(Handle) = nil then\r\n+    begin\r\n+      fAsync.DoLog(sllWarning, 'AsyncResponse on closed #%', [Handle], self);\r\n+      exit;\r\n+    end;\r\n+    tix := GetTickSec;\r\n+    if endtix = 0 then\r\n+      endtix := tix + 5 // never retry forever\r\n+    else if tix > endtix then\r\n+      EHttpAsyncConnections.RaiseUtf8('%.AsyncResponse lock timeout', [self]);\r\n+  until false;\r\n   // process within the read lock, since may respond before state is set\r\n   try\r\n     // verify expected connection state\r\n@@ -5370,9 +5387,7 @@ procedure THttpAsyncServer.AsyncResponse(Handle: TConnectionAsyncHandle;\n     end;\r\n   finally\r\n     c.UnLock({LockWrite=}false); // unless CloseConnection set c := nil\r\n-  end\r\n-  else if acoVerboseLog in fAsync.fOptions then\r\n-    fAsync.DoLog(sllTrace, 'late AsyncResponse on closed #%', [Handle], self);\r\n+  end;\r\n end;\r\n \r\n function THttpAsyncServer.Clients: THttpAsyncClientConnections;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "e97d75447123792759ae69a86db02d2f2b16a69f",
+      "short_sha": "e97d7544",
+      "subject": "net: clean Write() closure of THttpAsyncServer.AsyncResponse",
+      "body": "- as reported by #750\n- prevent Write() from autonomously closing the connection when called inside DoResponse(): instead, propagate its failure as soClose and let the existing outer OnRead() or AsyncResponse() path perform the closure",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T20:20:31Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e97d75447123792759ae69a86db02d2f2b16a69f",
+      "parents": [
+        "c23d64b34241736a83ce291b20293e48749db8ef"
+      ],
+      "stats": {
+        "additions": 42,
+        "deletions": 11,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18164\n+18167",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18164'\r\n+'2.4.18167'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 39,
+          "deletions": 8,
+          "patch": "@@ -306,6 +306,9 @@   TPollAsyncSockets = class\n       const caller: ShortString); // set connection:=nil and close+GC\r\n     function RawWrite(connection: TPollAsyncConnection;\r\n       var data: PByte; var datalen: integer): boolean;\r\n+    function WriteCore(connection: TPollAsyncConnection;\r\n+      data: pointer; datalen: integer; timeout: integer;\r\n+      closeOnFailure: boolean): boolean;\r\n     function DoAfterWrite(const caller: ShortString;\r\n       connection: TPollAsyncConnection): TPollAsyncSocketOnReadWrite;\r\n     procedure ProcessWaitingWrite; // pending soWaitWrite\r\n@@ -483,6 +486,9 @@   TAsyncConnectionsSockets = class(TPollAsyncSockets)\n     function OnError(connection: TPollAsyncConnection;\r\n       events: TPollSocketEvents): boolean; override;\r\n     procedure OnClosed(connection: TPollAsyncConnection); override;\r\n+    // caller (OnRead/AsyncResponse) owns closing on failure\r\n+    function WriteNoClose(connection: TPollAsyncConnection;\r\n+      data: pointer; datalen: integer; timeout: integer): boolean;\r\n   public\r\n     /// add some data to the asynchronous output buffer of a given connection\r\n     // - this overriden method will also log the write operation if needed\r\n@@ -1693,6 +1699,13 @@ function TPollAsyncSockets.RawWrite(connection: TPollAsyncConnection;\n \r\n function TPollAsyncSockets.Write(connection: TPollAsyncConnection;\r\n   data: pointer; datalen: integer; timeout: integer): boolean;\r\n+begin\r\n+  result := WriteCore(connection, data, datalen, timeout, {closeOnFailure=}true);\r\n+end;\r\n+\r\n+function TPollAsyncSockets.WriteCore(connection: TPollAsyncConnection;\r\n+  data: pointer; datalen: integer; timeout: integer;\r\n+  closeOnFailure: boolean): boolean;\r\n var // warning: datalen parameter should be defined as integer, not PtrInt\r\n   P: PByte;\r\n   previous: integer;\r\n@@ -1742,10 +1755,11 @@ function TPollAsyncSockets.Write(connection: TPollAsyncConnection;\n     end;\r\n   finally\r\n     //DoLog('Write: finally fProcessingWrite=%', [fProcessingWrite]);\r\n-    if result then\r\n+    if result or\r\n+       not closeOnFailure then\r\n       connection.UnLock({writer=}true)\r\n     else\r\n-      // sending or subscription error -> abort\r\n+      // ordinary Write() still closes, nested HTTP response writes do not\r\n       CloseConnection(connection, 'Write() failure');\r\n     LockedDec32(@fProcessingWrite);\r\n   end\r\n@@ -1965,7 +1979,7 @@ function TPollAsyncSockets.ProcessRead(Sender: TSynThread;\n           if res <> nrOk then\r\n             if (res = nrClosed) and\r\n                (added <> 0) then\r\n-              break // first process what was received before the peer closed\r\n+              break // first return received bytes before closing the peer\r\n             else\r\n             begin\r\n               // socket closed gracefully or unrecoverable error -> abort\r\n@@ -2311,6 +2325,15 @@ function TAsyncConnectionsSockets.Write(connection: TPollAsyncConnection;\n   result := inherited Write(connection, data, datalen, timeout);\r\n end;\r\n \r\n+function TAsyncConnectionsSockets.WriteNoClose(connection: TPollAsyncConnection;\r\n+  data: pointer; datalen: integer; timeout: integer): boolean;\r\n+begin\r\n+  if (acoVerboseLog in fOwner.Options) and\r\n+     not (acoNoLogWrite in fOwner.Options) then\r\n+    fOwner.fLogClass.Add.LogEscape(sllTrace, 'Write', [], data, datalen, connection);\r\n+  result := WriteCore(connection, data, datalen, timeout, false);\r\n+end;\r\n+\r\n function TAsyncConnectionsSockets.GetTotal: integer;\r\n begin\r\n   result := fOwner.fLastHandle; // handles are a plain integer sequence\r\n@@ -4990,9 +5013,9 @@ function THttpAsyncServerConnection.DoHeaders: TPollAsyncSocketOnReadWrite;\n       exit;\r\n     end;\r\n     if (len <> 0) and // OS buffer was full (paranoid): finish in ProcessWrite\r\n-       not fServer.fAsync.fSockets.Write(self, p, len, {timeout=}1000) then\r\n+       not fServer.fAsync.fSockets.WriteNoClose(self, p, len, {timeout=}1000) then\r\n     begin\r\n-      result := soClose; // the connection was already closed on write error\r\n+ \n... [truncated, 1672 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -9110,7 +9110,7 @@ procedure TNetworkProtocols.DoHttpFastCgi(Sender: TObject);\n     CheckEqual(length(clt.Content), length(fcgibig), 'big length');\r\n     CheckEqual(crc32cHash(clt.Content), crc32cHash(fcgibig), 'big');\r\n     // a response which fills exactly the 32KB reading buffer of the proxy\r\n-    // just before the application closes the connection\r\n+    // just before the application closes the connection - see #804\r\n     for i := 1 to 3 do\r\n     begin\r\n       Expect('GET', '/app/eof.php?32768', HTTP_SUCCESS);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "c23d64b34241736a83ce291b20293e48749db8ef",
+      "short_sha": "c23d64b3",
+      "subject": "Merge pull request #804 from zen010101/core-async-eof",
+      "body": "net: TPollAsyncSockets.ProcessRead processes the data received just before the peer closed",
+      "author": "ab",
+      "date": "2026-11-18T18:53:15Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c23d64b34241736a83ce291b20293e48749db8ef",
+      "parents": [
+        "2a686f7463e630209c20554cbffc3cc203a10af3",
+        "e07bbc6debc69953ade93a7dcf2c456768c8c44d"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 5,
+          "patch": "@@ -1963,11 +1963,15 @@ function TPollAsyncSockets.ProcessRead(Sender: TSynThread;\n           if res = nrRetry then\r\n             break; // may block, try later\r\n           if res <> nrOk then\r\n-          begin\r\n-            // socket closed gracefully or unrecoverable error -> abort\r\n-            CloseConnection(connection, _NR[res]);\r\n-            exit;\r\n-          end;\r\n+            if (res = nrClosed) and\r\n+               (added <> 0) then\r\n+              break // first process what was received before the peer closed\r\n+            else\r\n+            begin\r\n+              // socket closed gracefully or unrecoverable error -> abort\r\n+              CloseConnection(connection, _NR[res]);\r\n+              exit;\r\n+            end;\r\n           if (recved < 1024) and\r\n              (connection.fRd.Len = 0) then\r\n             connection.fRd.Reserve(1024); // minimal reusable fRd.Buffer\r\n@@ -1990,6 +1994,10 @@ function TPollAsyncSockets.ProcessRead(Sender: TSynThread;\n         end\r\n         else\r\n           result := false; // retry later\r\n+        if (res = nrClosed) and\r\n+           (connection <> nil) then\r\n+          // the peer closed the socket once its data was processed above\r\n+          CloseConnection(connection, _NR[res]);\r\n         // ensure this connection will be tracked for next recv()\r\n         if connection <> nil then // CloseConnection() set connection := nil\r\n         begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 0,
+          "patch": "@@ -8820,6 +8820,15 @@ procedure TNetworkProtocols.DoFastCgiApp(Sender: TObject);\n             text := 'Location: /other'#13#10#13#10\r\n           else if script = '/app/nohead.php' then\r\n             text := 'no header at all'\r\n+          else if script = '/app/eof.php' then\r\n+          begin\r\n+            // the whole FastCGI stream is ?total bytes: 28 bytes of headers,\r\n+            // then the body, one stdout record and the void one (2 x 8 bytes)\r\n+            // and the end request record (16 bytes)\r\n+            text := 'Content-Type: text/plain'#13#10#13#10;\r\n+            Append(text, RawUtf8OfChar('x',\r\n+              GetInteger(pointer(Param('QUERY_STRING'))) - 28 - 32));\r\n+          end\r\n           else if script = '/app/big.php' then\r\n           begin\r\n             text := 'Content-Type: application/octet-stream'#13#10#13#10;\r\n@@ -9100,6 +9109,15 @@ procedure TNetworkProtocols.DoHttpFastCgi(Sender: TObject);\n     Expect('GET', '/app/big.php', HTTP_SUCCESS);\r\n     CheckEqual(length(clt.Content), length(fcgibig), 'big length');\r\n     CheckEqual(crc32cHash(clt.Content), crc32cHash(fcgibig), 'big');\r\n+    // a response which fills exactly the 32KB reading buffer of the proxy\r\n+    // just before the application closes the connection\r\n+    for i := 1 to 3 do\r\n+    begin\r\n+      Expect('GET', '/app/eof.php?32768', HTTP_SUCCESS);\r\n+      CheckEqual(length(clt.Content), 32768 - 28 - 32, 'eof 32KB');\r\n+      Expect('GET', '/app/eof.php?65536', HTTP_SUCCESS);\r\n+      CheckEqual(length(clt.Content), 65536 - 28 - 32, 'eof 64KB');\r\n+    end;\r\n     // the output is sent back whatever the application exit code or stderr is\r\n     Expect('GET', '/app/exit.php', HTTP_SUCCESS);\r\n     CheckEqual(Field(0), 'GET', 'exit code');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 804,
+      "is_merge": true
+    },
+    {
+      "sha": "2a686f7463e630209c20554cbffc3cc203a10af3",
+      "short_sha": "2a686f74",
+      "subject": "test: fixed logic and reallow fast --multithread run",
+      "body": "- so #806 should be stable",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T18:50:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2a686f7463e630209c20554cbffc3cc203a10af3",
+      "parents": [
+        "56a182aeff79aca15bfcc9c4ac5cc53b5ce49723"
+      ],
+      "stats": {
+        "additions": 73,
+        "deletions": 42,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18161\n+18164",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18161'\r\n+'2.4.18164'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -4350,6 +4350,7 @@ function THttpAsyncClientConnection.AfterWrite: TPollAsyncSocketOnReadWrite;\n   fOwner.DoLog(sllWarning, 'AfterWrite=%: state=%',\r\n     [ToText(result)^, HTTP_STATE[fHttp.State]], self);\r\n   NotifyStateChange(hcsFailed);\r\n+  result := soClose; // mandatory: let ProcessWrite close the connection\r\n end;\r\n \r\n function THttpAsyncClientConnection.NotifyStateChange(\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "patch": "@@ -4234,6 +4234,8 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   finally\r\n     p.Free;\r\n   end;\r\n+  if IsDebuggerPresent then\r\n+    exit; // those last tests are not debugger friendly\r\n   // writing to an ended process returns false, and raises no SIGPIPE\r\n   p := TExternalProcess.Create;\r\n   try\r\n@@ -4248,6 +4250,8 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   finally\r\n     p.Free;\r\n   end;\r\n+  if fOwner.MultiThread then\r\n+    exit; // another thread is likely to open handles\r\n   // no handle nor zombie leak\r\n   files := OpenedHandles;\r\n   pid := 0;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 66,
+          "deletions": 40,
+          "patch": "@@ -85,6 +85,7 @@ interface\n   /// this test case will validate several low-level protocols\r\n   TNetworkProtocols = class(TSynTestCase)\r\n   protected\r\n+    safe: TLightLock;\r\n     TempDir: TFileName;\r\n     // for DNSAndLDAP\r\n     synopsednsip: RawUtf8;\r\n@@ -5355,10 +5356,10 @@ procedure TNetworkProtocols.RunPeerCacheDirect(Sender: TObject);\n     end;\r\n   finally\r\n     WaitNotProcessing('hpcStateFinal');\r\n+    localserver.Free;\r\n     peercachedirect := nil;\r\n     hpc.Settings.Free;\r\n     hpc.Free;\r\n-    localserver.Free;\r\n   end;\r\n end;\r\n \r\n@@ -6878,7 +6879,7 @@ function TNetworkProtocols.DoBodyDownload(const aUrl, aMethod, aInHeaders,\n     else\r\n       result := TFileStreamEx.Create(bodyfile, fmCreate or fmShareRead);\r\n   end;\r\n-  inc(bodystreamed); // increment last: the tests poll on this counter\r\n+  LockedInc32(@bodystreamed); // increment last: the tests poll on this counter\r\n end;\r\n \r\n function TNetworkProtocols.DoBodyRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n@@ -7779,9 +7780,11 @@ function TNetworkProtocols.DoHttpAsyncClientState(Sender: TObject;\n   State: TOnHttpClientState; Connection: THttpAsyncClientConnection): TPollAsyncSocketOnReadWrite;\r\n begin\r\n   // called from the threads of the THttpAsyncServer\r\n+  safe.Lock;\r\n   if State in [hcsFinished, hcsFailed] then\r\n     asyncstatus := Connection.ResponseStatus;\r\n   include(asyncstates, State); // last, since the test thread waits for it\r\n+  safe.UnLock;\r\n   result := soContinue;\r\n end;\r\n \r\n@@ -7791,7 +7794,23 @@ procedure TNetworkProtocols.DoHttpAsyncClient(Sender: TObject);\n   async: THttpAsyncServer;\r\n   uri: TUri;\r\n   i: integer;\r\n-  endtix: Int64;\r\n+  st: TOnHttpClientStates;\r\n+\r\n+  procedure SetSt;\r\n+  var\r\n+    endtix: Int64;\r\n+  begin\r\n+    endtix := GetTickCount64 + 5000;\r\n+    repeat\r\n+      safe.Lock;\r\n+      st := asyncstates;\r\n+      safe.UnLock;\r\n+      if [hcsFinished, hcsFailed] * st <> [] then\r\n+        break;\r\n+      SleepHiRes(1);\r\n+    until GetTickCount64 > endtix;\r\n+  end;\r\n+\r\n begin\r\n   // THttpAsyncServer.Clients.StartRequest() to a THttpServer on the same host\r\n   origin := THttpServer.Create('8876', nil, nil, 'origin', 2);\r\n@@ -7802,33 +7821,29 @@ procedure TNetworkProtocols.DoHttpAsyncClient(Sender: TObject);\n     async.WaitStarted;\r\n     for i := 1 to 3 do\r\n     begin\r\n+      st := [];\r\n       asyncstates := [];\r\n       asyncstatus := 0;\r\n       CheckUtf8(uri.From('http://127.0.0.1:8876/x'), 'uri');\r\n       Check(async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n         DoHttpAsyncClientState) = nrOk, 'start');\r\n-      endtix := GetTickCount64 + 5000;\r\n-      while ([hcsFinished, hcsFailed] * asyncstates = []) and\r\n-            (GetTickCount64 < endtix) do\r\n-        SleepHiRes(1);\r\n-      Check(hcsBeforeSendHeaders in asyncstates, 'request sent');\r\n-      Check(hcsHeadersReceived in asyncstates, 'headers received');\r\n-      Check(hcsFinished in asyncstates, 'finished');\r\n-      Check(not (hcsFailed in asyncstates), 'not failed');\r\n+      SetSt;\r\n+      Check(hcsBeforeSendHeaders in st, 'request sent');\r\n+      Check(hcsHeadersReceived in st, 'headers received');\r\n+      Check(hcsFinished in st, 'finished');\r\n+      Check(not (hcsFailed in st), 'not failed');\r\n       CheckEqual(asyncstatus, HTTP_SUCCESS, 'status');\r\n     end;\r\n     // nobody listens on this port: the request should be notified as failed\r\n+    st := [];\r\n     asyncstates := [];\r\n     CheckUtf8(uri.From('http://127.0.0.1:8875/x'), 'uri');\r\n     if async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n          DoHttpAsyncClientState) = nrOk then\r\n     begin\r\n-      endtix := GetTickCount64 + 5000;\r\n-      while ([hcsFinished, hcsFailed] * asyncstates = []) and\r\n-            (GetTickCount64 < endtix) do\r\n-        SleepHiRes(1);\r\n-      Check(hcsFailed in asyncstates, 'refused is failed');\r\n-      Check(not (hcsFinished in asyncstates), 'refused is not finished');\r\n+      SetSt;\r\n+      Check(hcsFailed in st, 'refused is failed');\r\n+      Check(not (hcsF\n... [truncated, 3216 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "56a182aeff79aca15bfcc9c4ac5cc53b5ce49723",
+      "short_sha": "56a182ae",
+      "subject": "Merge pull request #806 from zen010101/net-async-client-connect",
+      "body": "net: THttpAsyncClientConnections.StartRequest sends its request once connected",
+      "author": "ab",
+      "date": "2026-11-18T18:06:43Z",
+      "url": "https://github.com/synopse/mORMot2/commit/56a182aeff79aca15bfcc9c4ac5cc53b5ce49723",
+      "parents": [
+        "7b39e9a54f42a0262dcf59e6d82b522334251224",
+        "2e275a98ae05a8f6f877abf8dc2bc971f2d29fa2"
+      ],
+      "stats": {
+        "additions": 93,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 4,
+          "patch": "@@ -2044,8 +2044,9 @@ procedure TPollAsyncSockets.ProcessWrite(const notif: TPollSocketResult;\n   connection := TPollAsyncConnection(ResToTag(notif));\r\n   if (self = nil) or\r\n      fTerminated or\r\n-     (ResToEvents(notif) <> [pseWrite]) or\r\n-     connection.IsClosed then\r\n+     connection.IsClosed or\r\n+     ((ResToEvents(notif) <> [pseWrite]) and // e.g. pseError or pseClosed\r\n+      not (ifWriteWait in connection.fInternalFlags)) then // failed connect()\r\n     exit;\r\n   // we are now sure that the socket is writable and safe\r\n   //DoLog('ProcessWrite: fProcessingWrite=%', [fProcessingWrite]);\r\n@@ -2065,7 +2066,18 @@ procedure TPollAsyncSockets.ProcessWrite(const notif: TPollSocketResult;\n       repeat\r\n         buflen := connection.fWr.Len;\r\n         if buflen = 0 then\r\n-          exit;\r\n+          if ifWriteWait in connection.fInternalFlags then\r\n+          begin\r\n+            // connect() of an outbound connection did complete: let its\r\n+            // AfterWrite() send the request, e.g. THttpAsyncClientConnection\r\n+            res := DoAfterWrite('ProcessWrite', connection);\r\n+            if (res <> soContinue) or\r\n+               (connection.fWr.Len = 0) then\r\n+              break;\r\n+            continue; // send what AfterWrite() did append to fWr\r\n+          end\r\n+          else\r\n+            exit;\r\n         buf := connection.fWr.Buffer;\r\n         if sent > 0 then // e.g. after IOCP wieSend\r\n         begin\r\n@@ -4477,8 +4489,8 @@ function THttpAsyncClientConnections.StartRequest(aSender: TObject;\n       c.fSecureHost := aUrl.Server; // no port involved in SNI\r\n     end;\r\n     // start async events subscription and connection\r\n+    include(c.fInternalFlags, ifWriteWait); // until AfterWrite is connected\r\n     {$ifdef USE_WINIOCP}\r\n-    include(c.fInternalFlags, ifWriteWait);\r\n     if c.fIocpSub = nil then\r\n       c.fIocpSub := fOwner.fIocpAccept.Subscribe(c.fSocket, tag);\r\n     if fOwner.fIocpAccept.PrepareNext('client', c.fIocpSub, wieConnect) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 0,
+          "patch": "@@ -105,6 +105,9 @@   TNetworkProtocols = class(TSynTestCase)\n     // for HttpFastCgi\r\n     fcgibig: RawByteString;\r\n     fcgirequests: integer;\r\n+    // for HttpAsyncClient\r\n+    asyncstates: TOnHttpClientStates;\r\n+    asyncstatus: integer;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -194,6 +197,10 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoHttpLongLine(Sender: TObject);\r\n     /// validate that THttpAsyncServer streams a big body by ReadMaxBytes blocks\r\n     procedure DoHttpReadMaxBytes(Sender: TObject);\r\n+    procedure DoHttpAsyncClient(Sender: TObject);\r\n+    function DoHttpAsyncClientOrigin(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoHttpAsyncClientState(Sender: TObject; State: TOnHttpClientState;\r\n+      Connection: THttpAsyncClientConnection): TPollAsyncSocketOnReadWrite;\r\n     function DoReadMaxBytesRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n     function DoReadMaxBytesDownload(const aUrl, aMethod, aInHeaders,\r\n       aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n@@ -663,6 +670,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   Run(DoHttpReadMaxBytes, self, 'HttpReadMaxBytes', true, false);\r\n   {$ifdef OSPOSIX}\r\n+  Run(DoHttpAsyncClient, self, 'HttpAsyncClient', true, false); // not on IOCP yet\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$else}\r\n   Run(WinIocpUnsubscribe, self, 'iocp', true, false);\r\n@@ -7759,6 +7767,75 @@ function TNetworkProtocols.DoReadMaxBytesRequest(\n   result := HTTP_SUCCESS;\r\n end;\r\n \r\n+function TNetworkProtocols.DoHttpAsyncClientOrigin(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  Ctxt.OutContent := 'async client';\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoHttpAsyncClientState(Sender: TObject;\r\n+  State: TOnHttpClientState; Connection: THttpAsyncClientConnection): TPollAsyncSocketOnReadWrite;\r\n+begin\r\n+  // called from the threads of the THttpAsyncServer\r\n+  if State in [hcsFinished, hcsFailed] then\r\n+    asyncstatus := Connection.ResponseStatus;\r\n+  include(asyncstates, State); // last, since the test thread waits for it\r\n+  result := soContinue;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpAsyncClient(Sender: TObject);\r\n+var\r\n+  origin: THttpServer;\r\n+  async: THttpAsyncServer;\r\n+  uri: TUri;\r\n+  i: integer;\r\n+  endtix: Int64;\r\n+begin\r\n+  // THttpAsyncServer.Clients.StartRequest() to a THttpServer on the same host\r\n+  origin := THttpServer.Create('8876', nil, nil, 'origin', 2);\r\n+  async := THttpAsyncServer.Create('8877', nil, nil, 'async', 2);\r\n+  try\r\n+    origin.OnRequest := DoHttpAsyncClientOrigin;\r\n+    origin.WaitStarted;\r\n+    async.WaitStarted;\r\n+    for i := 1 to 3 do\r\n+    begin\r\n+      asyncstates := [];\r\n+      asyncstatus := 0;\r\n+      CheckUtf8(uri.From('http://127.0.0.1:8876/x'), 'uri');\r\n+      Check(async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n+        DoHttpAsyncClientState) = nrOk, 'start');\r\n+      endtix := GetTickCount64 + 5000;\r\n+      while ([hcsFinished, hcsFailed] * asyncstates = []) and\r\n+            (GetTickCount64 < endtix) do\r\n+        SleepHiRes(1);\r\n+      Check(hcsBeforeSendHeaders in asyncstates, 'request sent');\r\n+      Check(hcsHeadersReceived in asyncstates, 'headers received');\r\n+      Check(hcsFinished in asyncstates, 'finished');\r\n+      Check(not (hcsFailed in asyncstates), 'not failed');\r\n+      CheckEqual(asyncstatus, HTTP_SUCCESS, 'status');\r\n+    end;\r\n+    // nobody listens on this port: the request should be notified as failed\r\n+    asyncstates := [];\r\n+    CheckUtf8(uri.From('http://127.0.0.1:8875/x'), 'uri');\r\n+    if async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n+         DoHttpAsyncClientState) = nrOk then\r\n+    begin\r\n+      endtix := GetTickCount64 + 5000;\r\n+      while ([hcsFinished, hcsFailed\n... [truncated, 430 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 806,
+      "is_merge": true
+    },
+    {
+      "sha": "7b39e9a54f42a0262dcf59e6d82b522334251224",
+      "short_sha": "7b39e9a5",
+      "subject": "test: fixed FastCGI fake server slow socket process",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T17:18:36Z",
+      "url": "https://github.com/synopse/mORMot2/commit/7b39e9a54f42a0262dcf59e6d82b522334251224",
+      "parents": [
+        "ee731ce189611c61369380ba7fe272c34a61bd80"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 12,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18160\n+18161",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18160'\r\n+'2.4.18161'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -8501,6 +8501,8 @@ function TCrtSocket.AcceptIncoming(\n     exit;\r\n   if fSock.Accept(client, addr, Async) <> nrOK then\r\n     exit;\r\n+  if Assigned(OnLog) then\r\n+    OnLog(sllTrace, 'AcceptIncoming %', [client], self);\r\n   if ResultClass = nil then\r\n     ResultClass := TCrtSocket;\r\n   result := ResultClass.Create(0);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 19,
+          "deletions": 10,
+          "patch": "@@ -1104,7 +1104,7 @@ procedure RtspRegressionTests(proxy: TRtspOverHttpServer; test: TSynTestCase;\n             test.Check(false);\r\n             exit;\r\n           end;\r\n-          stream.Sock.SetLinger(0); // otherwise shutdown takes 40ms with epoll\r\n+          stream.Sock.SetLinger(-1); // otherwise shutdown takes 40ms with epoll\r\n           test.Check(get.SockConnected);\r\n           test.Check(post.SockConnected);\r\n         end;\r\n@@ -1344,9 +1344,9 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n         if not Check(client.SockReceivePending(1000) = cspDataAvailable,\r\n             'broadcast received') then\r\n           break;\r\n-        // Leave the WebSocket frame unread and force an RST. The next\r\n+        // Leave the WebSocket frame unread and force a RST. The next\r\n         // WebSocketBroadcast() should survive an eventual failed Write().\r\n-        client.Sock.SetLinger(0);\r\n+        client.Sock.SetLinger(0); // 0 = abortive close (TCP RST)\r\n       finally\r\n         client.Free;\r\n       end;\r\n@@ -8621,6 +8621,8 @@ procedure TNetworkProtocols.DoFastCgiApp(Sender: TObject);\n   len, stdinrecs, appstatus, protstatus: integer;\r\n   pad: array[byte] of byte;\r\n   endreq: array[0..15] of byte;\r\n+  log: TSynLog;\r\n+  ilog: ISynLog;\r\n \r\n   function Param(const name: RawUtf8): RawUtf8;\r\n   var\r\n@@ -8664,12 +8666,16 @@ procedure TNetworkProtocols.DoFastCgiApp(Sender: TObject);\n   srv := Sender as TCrtSocket;\r\n   slow := nil;\r\n   try\r\n+    log := TSynLogTestLog.EnterLocal(ilog, self, 'DoFastCgiApp');\r\n     repeat\r\n+      log.Log(sllTrace, 'before AcceptIncoming', self);\r\n       cli := srv.AcceptIncoming(nil, {async=}false);\r\n       if cli = nil then\r\n         break; // the listening socket has been closed\r\n+      cli.Sock.SetLinger(-1); // disable blocking SO_LINGER especially on Windows\r\n       resp.Init;\r\n       try\r\n+        log.Log(sllTrace, 'AcceptIncoming=%', [cli], self);\r\n         try\r\n           // read the whole request\r\n           params := '';\r\n@@ -8755,13 +8761,15 @@ procedure TNetworkProtocols.DoFastCgiApp(Sender: TObject);\n           endreq[11] := appstatus;\r\n           endreq[12] := protstatus;\r\n           resp.Add(@endreq, SizeOf(endreq));\r\n+          log.Log(sllTrace, 'SendLow=%', [resp.Size], self);\r\n           cli.SndLow(resp.Buffer, resp.Size);\r\n         except\r\n           // e.g. on connection closed by the client: accept the next one\r\n         end;\r\n       finally\r\n         resp.Store.Done;\r\n         cli.Free;\r\n+        log.Log(sllTrace, 'after cli.Free', self);\r\n       end;\r\n     until false;\r\n   finally\r\n@@ -8849,18 +8857,18 @@ procedure TNetworkProtocols.DoHttpFastCgi(Sender: TObject);\n     'responder role with no flag');\r\n   // decode a response sent byte by byte, with padding and an unknown record\r\n   buf.Size := 0;\r\n-  buf.Add(#1#6#0#1#0#5#3#0'hello'#0#0#0);                   // stdout + padding\r\n-  buf.Add(#1#11#0#1#0#2#0#0'??');                           // unknown type\r\n-  buf.Add(#1#7#0#1#0#3#0#0'err');                           // stderr\r\n-  buf.Add(#1#6#0#1#0#0#0#0);                                // end of stdout\r\n-  buf.Add(#1#3#0#1#0#8#0#0#1#2#3#4#0#0#0#0);                // end request\r\n-  buf.Add('trailing');                                      // never consumed\r\n+  buf.AddHex('010600010005030068656C6C6F000000'); // stdout 'hello' + padding\r\n+  buf.AddHex('010B0001000200003F3F');             // unknowntype '??'\r\n+  buf.AddHex('0107000100030000657272');           // stderr 'err'\r\n+  buf.AddHex('0106000100000000');                 // endofstdout\r\n+  buf.AddHex('01030001000800000102030400000000'); // endrequest\r\n+  buf.AddShort('trailing');                       // never consumed\r\n   resp.Init;\r\n   s := '';\r\n   n := 0;\r\n   for i := 0 to buf.Size - 1 do\r\n   begin\r\n-    Append(s, @PAnsiChar(buf.Buffer)[i], 1);\r\n+    Append(s, PAnsiChar(buf.Buffer) + i, 1);\r\n     status := resp.Parse(pointer(s), length(s));\r\n     if not CheckFailed(status >= 0, 'parse') then\r\n     begin\r\n@@\n... [truncated, 474 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests",
+        "Network"
+      ],
+      "units": [
+        "mormot.net.sock"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "ee731ce189611c61369380ba7fe272c34a61bd80",
+      "short_sha": "ee731ce1",
+      "subject": "core: define -d as shortcut for --multithread command line switch",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T17:16:48Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ee731ce189611c61369380ba7fe272c34a61bd80",
+      "parents": [
+        "d07f24e385e36c84cc4837f92579cf2935646c63"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 4,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -1561,7 +1561,7 @@ function TSynTests.Run: boolean;\n   log: IUnknown;\r\n begin\r\n   result := true;\r\n-  if Executable.Command.Option('multithread')\r\n+  if Executable.Command.Option('multithrea&d')\r\n      {$ifdef OSWINDOWS} and not (wsFavorFewThreads in WindowsSpecs) {$endif} then\r\n     fMultiThread := SystemInfo.dwNumberOfProcessors > 2; // enabled with 3 cores\r\n   if Executable.Command.Option('&methods') then\r\n@@ -1868,7 +1868,7 @@ class procedure TSynTests.RunAsConsole(const CustomIdent: string;\n     'list all class name(s) as expected by --test');\r\n   Executable.Command.Option('&methods',\r\n     'list all method name(s) of #class as specified to --test');\r\n-  Executable.Command.Option('multithread',\r\n+  Executable.Command.Option('multithrea&d',\r\n     'parallelize tests execution on multi-core CPU');\r\n   if Executable.Command.Option('&verbose',\r\n        'run logs in verbose mode: enabled only with --test') and\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18159\n+18160",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18159'\r\n+'2.4.18160'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d07f24e385e36c84cc4837f92579cf2935646c63",
+      "short_sha": "d07f24e3",
+      "subject": "core: new TSynTempAdder.AddHex method",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T16:18:25Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d07f24e385e36c84cc4837f92579cf2935646c63",
+      "parents": [
+        "9283fc1779fc8c30b9966a9336dafe2ca998fd64"
+      ],
+      "stats": {
+        "additions": 27,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.base.pas",
+          "status": "modified",
+          "additions": 15,
+          "deletions": 0,
+          "patch": "@@ -3862,6 +3862,8 @@   TSynTempAdder = record\n     /// add one AnsiChar to the internal buffer\r\n     procedure Add(c: AnsiChar); overload;\r\n       {$ifdef HASINLINE}inline;{$endif}\r\n+    /// append some bytes encoded as hexadecimal to the internal buffer\r\n+    procedure AddHex(const hex: RawUtf8);\r\n     /// add one repeated AnsiChar to the internal buffer\r\n     procedure AddChars(c: AnsiChar; n: PtrInt);\r\n     /// append some bytes to the internal buffer\r\n@@ -12973,6 +12975,19 @@ procedure TSynTempAdder.AddShort(const s: ShortString);\n     MoveFast(s[1], Add(ord(s[0]))^, ord(s[0]));\r\n end;\r\n \r\n+procedure TSynTempAdder.AddHex(const hex: RawUtf8);\r\n+var\r\n+  n: PtrInt;\r\n+  p: pointer;\r\n+begin\r\n+  n := length(hex);\r\n+  if (n = 0) or\r\n+     ((n and 1) <> 0) then\r\n+    exit;\r\n+  p := Prepare(n shr 1);\r\n+  inc(Store.added, (ParseHex(pointer(hex), p, n) - pointer(hex)) shr 1);\r\n+end;\r\n+\r\n procedure TSynTempAdder.AddDirect(c: AnsiChar);\r\n begin\r\n   PUtf8Char(Store.buf)[Store.added] := c;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18158\n+18159",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18158'\r\n+'2.4.18159'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 5,
+          "patch": "@@ -5889,7 +5889,7 @@ procedure TTestCoreBase.Integers;\n     w: TBufferWriter;\r\n     tmp, buf: TTemp16;\r\n   begin\r\n-    bin := HexToBin(hex);\r\n+    bin := mormot.core.text.HexToBin(hex);\r\n     CheckEqual(length(bin), length(hex) shr 1, 'HexToBin');\r\n     // standard signed LEB128: compare with known encoding\r\n     p := ToVarLeb64(expected, @tmp[0]);\r\n@@ -5927,7 +5927,7 @@ procedure TTestCoreBase.Integers;\n     r: TFastReader;\r\n     failed: boolean;\r\n   begin\r\n-    bin := HexToBin(hex);\r\n+    bin := mormot.core.text.HexToBin(hex);\r\n     r.Init(bin);\r\n     failed := false;\r\n     // TSynLog.Family.ExceptionIgnoreCurrentThread := true; made by caller\r\n@@ -7847,10 +7847,15 @@ procedure TTestCoreBase.Utf8Slow(Context: TObject);\n \r\n   procedure CheckUtf8Hex(const Hex: RawUtf8; ValidUtf8, HasZero: boolean);\r\n   var\r\n-    s: RawByteString;\r\n+    s, s2: RawByteString;\r\n     expectedText, expectedBuffer: boolean;\r\n+    a: TSynTempAdder;\r\n   begin\r\n-    s := HexToBin(Hex);\r\n+    s := mormot.core.text.HexToBin(Hex);\r\n+    a.Init;\r\n+    a.AddHex(hex);\r\n+    a.Done(s2);\r\n+    CheckEqual(s, s2, 'a.AddHex');\r\n     CheckEqual(length(s), length(Hex) shr 1);\r\n     // Pascal and NotVoid always reject #0\r\n     expectedText := ValidUtf8 and not HasZero;\r\n@@ -8965,7 +8970,7 @@ procedure TTestCoreBase.Utf8Slow(Context: TObject);\n   PB := pointer(res);\r\n   FromVarString(PB, U2);\r\n   check(U2 = U);\r\n-  U := HexTobin('2800541D251D541D2900'); // a nice Unicode mORMot glyph\r\n+  U := mormot.core.text.HexTobin('2800541D251D541D2900'); // Unicode mORMot glyph\r\n   {$ifdef HASCODEPAGE}\r\n   CheckEqual(GetCodePage(U), CP_RAWBYTESTRING);\r\n   {$endif HASCODEPAGE}\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.base"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "9283fc1779fc8c30b9966a9336dafe2ca998fd64",
+      "short_sha": "9283fc17",
+      "subject": "test: optimized TNetworkProtocols coverage",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T15:59:56Z",
+      "url": "https://github.com/synopse/mORMot2/commit/9283fc1779fc8c30b9966a9336dafe2ca998fd64",
+      "parents": [
+        "df127cf7fdd9281494e6cdf5914ab5ced4cca8c1"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 10,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18157\n+18158",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18157'\r\n+'2.4.18158'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 8,
+          "patch": "@@ -212,7 +212,7 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure CrtSocketAbortRecv(Sender: TObject);\r\n     {$ifdef OSWINDOWS}\r\n     /// validate that TWinIocp won't call closesocket() twice on Unsubscribe\r\n-    procedure WinIocpUnsubscribe;\r\n+    procedure WinIocpUnsubscribe(Sender: TObject);\r\n     procedure WinIocpWorker(Sender: TObject);\r\n     procedure WinIocpLog(Level: TSynLogLevel; const Format: RawUtf8;\r\n       const Args: array of const; Instance: TObject = nil);\r\n@@ -664,6 +664,8 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoHttpReadMaxBytes, self, 'HttpReadMaxBytes', true, false);\r\n   {$ifdef OSPOSIX}\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n+  {$else}\r\n+  Run(WinIocpUnsubscribe, self, 'iocp', true, false);\r\n   {$endif OSPOSIX}\r\n end;\r\n \r\n@@ -1188,7 +1190,7 @@ procedure TNetworkProtocols.DoRtspOverHttp(options: TAsyncConnectionsOptions;\n \r\n procedure TNetworkProtocols.RTSPOverHTTP;\r\n begin\r\n-  RunWait; // let the Tunnel stuff close down\r\n+  //RunWait; // let the Tunnel stuff close down\r\n   DoRtspOverHttp(ASYNC_OPTION, '3997', '3996');\r\n end;\r\n \r\n@@ -6431,9 +6433,6 @@ procedure TNetworkProtocols.HTTP;\n     ms.Free;\r\n   end;\r\n   CrtSocketAbort;\r\n-  {$ifdef OSWINDOWS}\r\n-  WinIocpUnsubscribe;\r\n-  {$endif OSWINDOWS}\r\n end;\r\n \r\n procedure TNetworkProtocols.CrtSocketAbortRecv(Sender: TObject);\r\n@@ -6546,6 +6545,7 @@ procedure TNetworkProtocols.WinIocpLog(Level: TSynLogLevel;\n begin\r\n   if PosEx('unsub closesocket=', Format) > 0 then\r\n     LockedInc32(@iocpclosed); // one logged close from FinishNext()\r\n+  //TSynLogTestLog.Add.Log(Level, Format, Args, Instance);\r\n end;\r\n \r\n procedure TNetworkProtocols.WinIocpWorker(Sender: TObject);\r\n@@ -6564,7 +6564,7 @@ procedure TNetworkProtocols.WinIocpWorker(Sender: TObject);\n   end;\r\n end;\r\n \r\n-procedure TNetworkProtocols.WinIocpUnsubscribe;\r\n+procedure TNetworkProtocols.WinIocpUnsubscribe(Sender: TObject);\r\n const\r\n   LOOPS = 1000;\r\n   WORKERS = 4;\r\n@@ -6593,8 +6593,9 @@ procedure TNetworkProtocols.WinIocpUnsubscribe;\n       n := 0;\r\n       for i := 0 to LOOPS - 1 do\r\n       begin\r\n+        fOwner.DoLog(sllDebug, 'WinIocpUnsubscribe #%', [i]);\r\n         if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n-              1000, 1000, 1000, 0, cli) <> nrOk) or\r\n+              0, 1000, 1000, 0, cli) <> nrOk) or\r\n            (srv.Sock.Accept(acc, addr, {async=}false) <> nrOk) then\r\n           break;\r\n         // as mormot.net.async: a 'next' wieRecv is pending after ProcessRead,\r\n@@ -6606,7 +6607,7 @@ procedure TNetworkProtocols.WinIocpUnsubscribe;\n         cli.Close; // both wieRecv complete, maybe on two threads at once\r\n         // a new connection may reuse the handle: it should never be closed\r\n         if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n-              1000, 1000, 1000, 0, next) <> nrOk) or\r\n+              0, 1000, 1000, 0, next) <> nrOk) or\r\n            (srv.Sock.Accept(kept[n], addr, {async=}false) <> nrOk) then\r\n           break;\r\n         inc(n);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "medium"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "df127cf7fdd9281494e6cdf5914ab5ced4cca8c1",
+      "short_sha": "df127cf7",
+      "subject": "net: much faster TFastCgiAsyncConnections local connections",
+      "body": "- no timeout is needed to the FastCgi server\n- ConnectTimeOut makes a blocking/async transition which takes 15ms on Windows!",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T15:53:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/df127cf7fdd9281494e6cdf5914ab5ced4cca8c1",
+      "parents": [
+        "2977f73b69f87bc97869e59adf1b4ac89b9759fe"
+      ],
+      "stats": {
+        "additions": 11,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18156\n+18157",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18156'\r\n+'2.4.18157'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.proxy.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 6,
+          "patch": "@@ -1213,7 +1213,7 @@ constructor TFastCgiAsyncConnections.Create(aHttpServer: THttpServerGeneric;\n   fHttpServer := aHttpServer;\r\n   fLayer := aUri.Layer;\r\n   fTimeoutSec := aTimeoutSec;\r\n-  inherited Create(aUri.Server, aUri.Port, {clients=}0, aTimeoutSec, nil, nil,\r\n+  inherited Create(aUri.Server, aUri.Port, {clients=}0, nil, nil,\r\n     TFastCgiAsyncConnection, 'fastcgi', aLog, ASYNC_OPTION_PROD, {threads=}1);\r\n   fSockets.ReadMaxBytes := 128 shl 10; // parse 64KB records as they come\r\n end;\r\n@@ -1243,10 +1243,11 @@ function TFastCgiAsyncConnections.Send(aHttpHandle: TConnectionAsyncHandle;\n   result := false;\r\n   if Terminated then\r\n     exit;\r\n-  // blocking connection, since the application is likely to be local\r\n+  // connect as blocking connection, since the application is likely to be local,\r\n+  // but with all timeout=0 to speed up the process especially on Windows\r\n   with fThreadClients do\r\n-    if NewSocket(Address, Port, fLayer, {dobind=}false, Timeout, Timeout,\r\n-         Timeout, {retry=}0, sock, @addr) <> nrOk then\r\n+    if NewSocket(Address, Port, fLayer, {dobind=}false, {timeout=}0, 0, 0,\r\n+         {retry=}0, sock, @addr) <> nrOk then\r\n       exit;\r\n   if (sock.MakeAsync <> nrOk) or\r\n      not ConnectionCreate(sock, addr, c) then\r\n@@ -2400,8 +2401,10 @@ function THttpProxyServer.OnFastCgi(Ctxt: THttpServerRequest;\n var\r\n   one: THttpProxyUrl;\r\n   len: integer;\r\n+  start: Int64;\r\n   params, request: TSynTempAdder; // no heap allocation for most GET requests\r\n begin\r\n+  QueryPerformanceMicroSeconds(start);\r\n   // compute the CGI variables from this request\r\n   result := HTTP_NOTFOUND; // unsafe path or no script\r\n   len := 0;\r\n@@ -2423,8 +2426,8 @@ function THttpProxyServer.OnFastCgi(Ctxt: THttpServerRequest;\n   end;\r\n   params.Store.Done;\r\n   if fHasLog in fFlags then\r\n-    fLog.Add.Log(sllDebug, 'OnFastCgi: % % status=% len=%',\r\n-      [Ctxt.Method, Ctxt.Url, result, len], self);\r\n+    fLog.Add.Log(sllDebug, 'OnFastCgi: % % status=% len=% in %',\r\n+      [Ctxt.Method, Ctxt.Url, result, len, MicroSecFrom(start)], self);\r\n end;\r\n \r\n function THttpProxyServer.OnExecute(Ctxt: THttpServerRequestAbstract): cardinal;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "performance",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2977f73b69f87bc97869e59adf1b4ac89b9759fe",
+      "short_sha": "2977f73b",
+      "subject": "net: fixed TAsyncClient uneeded connection TimeOut parameter",
+      "body": "- client sockets are in fact used async so the socket itself needs to timeout and would just use the standard system default by now (fine for localhost)",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T15:51:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2977f73b69f87bc97869e59adf1b4ac89b9759fe",
+      "parents": [
+        "91b1756e577da8a783eb2130f47c37de7e566d13"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 15,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18155\n+18156",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18155'\r\n+'2.4.18156'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 13,
+          "patch": "@@ -639,8 +639,8 @@   TAsyncConnections = class(TLoggedThread)\n     fGCLast, fGCTix1, fGCTix2: integer;\r\n     fOnIdle: array of TOnPollSocketsIdle;\r\n     fThreadClients: record // used by TAsyncClient\r\n-      Count, Timeout: integer;\r\n-      Address, Port: RawUtf8;\r\n+      Count: integer;         // how many clients should be created at startup\r\n+      Address, Port: RawUtf8; // the remote server to connect to\r\n     end;\r\n     function AllThreadsStarted: boolean; virtual;\r\n     procedure AddGC(aConnection: TPollAsyncConnection; const aContext: ShortString);\r\n@@ -880,20 +880,19 @@   TAsyncServer = class(TAsyncConnections)\n       read fMaxPending write fMaxPending;\r\n   end;\r\n \r\n-  /// implements thread-pooled high-performance TCP multiple clients\r\n-  // - e.g. to run some load stress tests with optimized resource use\r\n+  /// thread-pooled high-performance multiple TCP clients to a single server\r\n+  // - e.g. to run some load stress tests with optimized resource use, or to\r\n+  // connect to a FastCgi server on localhost (as TFastCgiAsyncConnections)\r\n   // - will use a TAsyncConnection inherited class to maintain connection state\r\n   // of each connected client\r\n   TAsyncClient = class(TAsyncConnections)\r\n   protected\r\n     procedure DoExecute; override;\r\n   public\r\n     /// start the TCP client connections, connecting to the supplied IP server\r\n-    constructor Create(const aServer, aPort: RawUtf8;\r\n-      aClientsCount, aClientsTimeoutSecs: integer;\r\n-      const OnStart, OnStop: TOnNotifyThread;\r\n-      aConnectionClass: TAsyncConnectionClass; const ProcessName: RawUtf8;\r\n-      aLog: TSynLogClass; aOptions: TAsyncConnectionsOptions;\r\n+    constructor Create(const aServer, aPort: RawUtf8; aClientsCount: integer;\r\n+      const OnStart, OnStop: TOnNotifyThread; aConnectionClass: TAsyncConnectionClass;\r\n+      const ProcessName: RawUtf8; aLog: TSynLogClass; aOptions: TAsyncConnectionsOptions;\r\n       aThreadPoolCount: integer = 1); reintroduce; virtual;\r\n   published\r\n     /// server IP address\r\n@@ -2909,7 +2908,8 @@ function TAsyncConnections.ThreadClientsConnect: TAsyncConnection;\n   if Terminated then\r\n     exit;\r\n   with fThreadClients do\r\n-    res := NewTcpClientSocket(Address, Port, Timeout, client, @addr);\r\n+    // connect to the server with no timeout specified\r\n+    res := NewTcpClientSocket(Address, Port, {timeout=}0, client, @addr);\r\n   if res = nrOk then\r\n     res := client.MakeAsync;\r\n   if res <> nrOK then\r\n@@ -4111,14 +4111,12 @@ procedure TAsyncServer.DoExecute;\n \r\n { TAsyncClient }\r\n \r\n-constructor TAsyncClient.Create(const aServer, aPort: RawUtf8;\r\n-  aClientsCount, aClientsTimeoutSecs: integer;\r\n+constructor TAsyncClient.Create(const aServer, aPort: RawUtf8; aClientsCount: integer;\r\n   const OnStart, OnStop: TOnNotifyThread; aConnectionClass: TAsyncConnectionClass;\r\n   const ProcessName: RawUtf8; aLog: TSynLogClass;\r\n   aOptions: TAsyncConnectionsOptions; aThreadPoolCount: integer);\r\n begin\r\n   fThreadClients.Count := aClientsCount;\r\n-  fThreadClients.Timeout := aClientsTimeoutSecs * 1000;\r\n   fThreadClients.Address := aServer;\r\n   fThreadClients.Port := aPort;\r\n   fProcessName := Join(['=W:', ProcessName]); // for DoExecute main thread\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "91b1756e577da8a783eb2130f47c37de7e566d13",
+      "short_sha": "91b1756e",
+      "subject": "core: refined TSynTestCase.Run() console and log output",
+      "body": "- now contains proper timing for further investigation",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T15:48:02Z",
+      "url": "https://github.com/synopse/mORMot2/commit/91b1756e577da8a783eb2130f47c37de7e566d13",
+      "parents": [
+        "0cf6088e95d2c403d0e54cb1f9698823f81d59d4"
+      ],
+      "stats": {
+        "additions": 14,
+        "deletions": 3,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.test.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 1,
+          "patch": "@@ -1155,20 +1155,31 @@ procedure TSynTestCase.OnBeforeEachBackgroundTask(Sender: TObject);\n \r\n procedure TSynTestCase.Run(const OnTask: TNotifyEvent; Sender: TObject;\r\n   const TaskName: RawUtf8; Threaded, NotifyTask, ForcedThreaded: boolean);\r\n+var\r\n+  start: int64;\r\n+  log: ISynLog;\r\n begin\r\n   if NotifyTask or\r\n      ((not fOwner.fMultiThread) and\r\n       (not ForcedThreaded)) or\r\n      not Threaded then\r\n+  begin\r\n     NotifyProgress([TaskName]);\r\n+    NotifyTask := true;\r\n+  end;\r\n   if not Assigned(OnTask) then\r\n     exit;\r\n   if ((not fOwner.fMultiThread) or // avoid timeout e.g. on slow VMs\r\n       (not Threaded)) and\r\n      not ForcedThreaded then\r\n   begin\r\n-    fOwner.DoLog(sllDebug, 'Run [%]', [TaskName]);\r\n+    TSynLogTestLog.EnterLocal(log, 'Run [%] direct', [TaskName], self);\r\n+    if NotifyTask then\r\n+      QueryPerformanceMicroSeconds(start);\r\n     OnTask(Sender); // run in main thread\r\n+    if NotifyTask then\r\n+      NotifyProgress([MicroSecFrom(start)]);\r\n+    log := nil;\r\n   end\r\n   else\r\n   begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18154\n+18155",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18154'\r\n+'2.4.18155'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.test"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "0cf6088e95d2c403d0e54cb1f9698823f81d59d4",
+      "short_sha": "0cf6088e",
+      "subject": "net: fixed IOCP regressions and some comments/documentation",
+      "body": "- hope it is enough to merge #806",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T14:33:11Z",
+      "url": "https://github.com/synopse/mORMot2/commit/0cf6088e95d2c403d0e54cb1f9698823f81d59d4",
+      "parents": [
+        "149c0304736d19bed0367761dee22bbda29b6705"
+      ],
+      "stats": {
+        "additions": 89,
+        "deletions": 129,
+        "files": 5
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18153\n+18154",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18153'\r\n+'2.4.18154'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 5,
+          "patch": "@@ -2871,7 +2871,7 @@ destructor TAsyncConnections.Destroy;\n   Shutdown;\r\n   inherited Destroy;\r\n   // fIocpAccept was already drained and freed during Shutdown,\r\n-  // before the forwarded-event owner fSockets.fIocpRecvSend.\r\n+  // before the forwarded-event owner fSockets.fIocpRecvSend\r\n   if (acoNoConnectionTrack in fOptions) or\r\n      (fConnectionCount = 0) then\r\n     exit;\r\n@@ -3743,9 +3743,10 @@ procedure TAsyncServer.Shutdown;\n   if fFlag2 <> 0 then\r\n     exit; // use this counter to avoid duplicated calls\r\n   inc(fFlag2);\r\n-  inherited Shutdown;\r\n+  Terminate; // prevent rearming AcceptEx\r\n   if fServer <> nil then\r\n     fServer.Close; // shutdown the socket to unlock Accept() in Execute\r\n+  inherited Shutdown; // eventually release all associated threads and sockets\r\n end;\r\n {$else}\r\n procedure TAsyncServer.Shutdown;\r\n@@ -3974,8 +3975,8 @@ procedure TAsyncServer.DoExecute;\n                 raise;\r\n               end;\r\n             end;\r\n-            // Prepare the accepted client only if initialization succeeded.\r\n-            // TLS connections remain blocking until TLS setup is finished.\r\n+            // prepare the accepted client only if initialization succeeded\r\n+            // (TLS connections remain blocking until TLS setup is finished)\r\n             if (res = nrOk) and\r\n                not (acoEnableTls in fOptions) then\r\n             begin\r\n@@ -4387,7 +4388,7 @@ function THttpAsyncClientConnections.StartRequest(aSender: TObject;\n         [aMethod, aUrl.Server, aUrl.Address, ToText(result)^], self);\r\n     finally\r\n       {$ifdef USE_WINIOCP}\r\n-      // ConnectEx was prepared on the accept queue, not the recv/send queue.\r\n+      // ConnectEx was prepared on the accept queue, not the recv/send queue\r\n       if c.fIocpSub <> nil then\r\n       begin\r\n         fOwner.fIocpAccept.Unsubscribe(c.fIocpSub);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1315,7 +1315,7 @@   THttpAcceptBan = class(TObjectOSLightLock)\n   // - flags used e.g. by TWebServerLocal, or mORMot 2 Boilerplate project\r\n   TWebServerBehavior = (\r\n \r\n-    /// Allow cross-origin requests.\r\n+    /// Allow cross-origin requests\r\n     // - see https://enable-cors.org https://www.w3.org/TR/cors\r\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS\r\n     // - Warning: Do not use this without understanding the consequences.\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.posix.inc",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -747,8 +747,8 @@ begin\n       sent := mormot.net.sock.send(TSocket(@self), Buf, len, MSG_NOSIGNAL);\r\n     until (sent >= 0) or\r\n           (cerrno <> ESysEINTR); // retry on SIG received\r\n-    // man send: Upon success, send() returns the number of bytes sent.\r\n-    // Otherwise, -1 is returned and errno set to indicate the error.\r\n+    // man send: Upon success, send() returns the number of bytes sent\r\n+    // - otherwise, -1 is returned and errno set to indicate the error\r\n     len := sent;\r\n     if len < 0 then\r\n       result := NetLastError(NO_ERROR, rawError)\r\n@@ -773,9 +773,9 @@ begin\n           (cerrno <> ESysEINTR); // retry on SIG received\r\n     // man recv: Upon successful completion, recv() shall return the length of\r\n     // the message in bytes. If no messages are available to be received and the\r\n-    // peer has performed an orderly shutdown, recv() shall return 0.\r\n-    // Otherwise, -1 shall be returned and errno set to indicate the error,\r\n-    // which may be nrRetry if no data is available.\r\n+    // peer has performed an orderly shutdown, recv() shall return 0\r\n+    // - otherwise, -1 shall be returned and errno set to indicate the error,\r\n+    // which may be nrRetry if no data is available\r\n     len := received;\r\n     if len <= 0 then\r\n       if len = 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 64,
+          "deletions": 108,
+          "patch": "@@ -223,7 +223,7 @@ type\n   end;\r\n \r\n const\r\n-  // Flags used in \"hints\" argument to getaddrinfo().\r\n+  // Flags used in \"hints\" argument to getaddrinfo()\r\n   AI_PASSIVE     = $1;  // Socket address will be used in bind() call\r\n   AI_CANONNAME   = $2;  // Return canonical name in first ai_canonname\r\n   AI_NUMERICHOST = $4;  // Nodename must be a numeric address AnsiString\r\n@@ -683,8 +683,8 @@ begin\n   else\r\n   begin\r\n     len := mormot.net.sock.send(TSocket(@self), Buf, len, MSG_NOSIGNAL);\r\n-    // man send: Upon success, send() returns the number of bytes sent.\r\n-    // Otherwise, -1 is returned and errno set to indicate the error.\r\n+    // man send: Upon success, send() returns the number of bytes sent\r\n+    // - otherwise, -1 is returned and errno set to indicate the error\r\n     if len < 0 then\r\n       result := NetLastError(NO_ERROR, rawError)\r\n     else\r\n@@ -702,9 +702,9 @@ begin\n     len := mormot.net.sock.recv(TSocket(@self), Buf, len, 0);\r\n     // man recv: Upon successful completion, recv() shall return the length of\r\n     // the message in bytes. If no messages are available to be received and the\r\n-    // peer has performed an orderly shutdown, recv() shall return 0.\r\n-    // Otherwise, -1 shall be returned and errno set to indicate the error,\r\n-    // which may be nrRetry if no data is available.\r\n+    // peer has performed an orderly shutdown, recv() shall return 0\r\n+    // - otherwise, -1 shall be returned and errno set to indicate the error,\r\n+    // which may be nrRetry if no data is available\r\n     if len <= 0 then\r\n       if len = 0 then\r\n         result := nrClosed\r\n@@ -1645,7 +1645,7 @@ end;\n { TWinIocp }\r\n \r\n // discard an IOCP completion without invoking the application callback\r\n-// - used when GetNext() races Terminate and when Destroy drains the queue\r\n+// - used when GetNext() races Terminate\r\n // - for Enqueue(), ov is directly the subscription. For Winsock completions,\r\n // ov points to an embedded TOverlapped, as decoded in GetNext()\r\n function IocpFinishDiscarded(ov, completionkey: pointer): boolean;\r\n@@ -1698,127 +1698,83 @@ begin\n     IocpPostQueuedStatus(fIocp, 0, nil, nil); // notify threads/queue\r\n end;\r\n \r\n-var // resolve dynamically to preserve compatibility with XP\r\n-  CancelIoEx: function(hFile: THandle; lpOverlapped: POverlapped): BOOL; stdcall;\r\n-\r\n destructor TWinIocp.Destroy;\r\n var\r\n-  tix, endtix, tmp, err, bytes: cardinal;\r\n+  tix, endtix, tmp, err: cardinal;\r\n   tmplen: integer;\r\n   res: TNetResult;\r\n   txt: PAnsiChar;\r\n   sub: PIocpSubscription;\r\n-  ov, completionkey: pointer;\r\n begin\r\n   if Assigned(fOnLog) then\r\n     fOnLog(sllDebug, 'Destroy count=% posted=%', [fOne.Count, fPosted], self);\r\n+  // notify the queue we are about to close\r\n   if not fTerminated then\r\n     Terminate;\r\n-  // mormot.net.async joins all GetNext()/FinishNext() workers before Free.\r\n-  // Other callers must ensure the same: fWaiting only counts blocked waits,\r\n-  // not callbacks already returned by GetNext(). Do not free a live waiter.\r\n-  endtix := GetTickSec + 5;\r\n-  while fWaiting <> 0 do\r\n-  begin\r\n-    IocpPostQueuedStatus(fIocp, 0, nil, nil);\r\n-    SleepHiRes(10);\r\n-    tix := GetTickSec;\r\n-    if tix >= endtix then\r\n-    begin\r\n+  // wait for all pending GetNext() termination\r\n+  endtix := 0;\r\n+  if fWaiting <> 0 then\r\n+    repeat\r\n       if Assigned(fOnLog) then\r\n-        fOnLog(sllWarning, 'Destroy waiting=%', [fWaiting], self);\r\n-      endtix := tix + 5;\r\n-    end;\r\n-  end;\r\n-  // stop kernel I/O *before* closing the IOCP or releasing OVERLAPPED memory\r\n-  // - CancelIoEx is needed for non-owning queues (e.g. fIocpAccept): they must\r\n-  // not call closesocket() on the listening socket or a client-owned socket\r\n-  if not Assigned(CancelIoEx) then\r\n-    CancelIoEx := LibraryResolve(kernelHandle, 'CancelIoEx');\r\n-  sub := fOne.Head;\r\n-  while sub <> nil do\r\n+        fOnLog(sllDebug, 'Destroy waiting=%', [fWaiting], self);\r\n+      IocpPostQueuedStatus(fIocp, 0, nil, nil); // notify again (paranoi\n... [truncated, 6042 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 11,
+          "deletions": 8,
+          "patch": "@@ -516,7 +516,7 @@ procedure TNetworkProtocols._HttpApiWebSocketServer;\n   if (mode <> CHILD_CONSTRUCTOR) and\r\n      (mode <> CHILD_PARALLEL) then\r\n   begin\r\n-    // Each path needs a fresh process because the API state is process-global.\r\n+    // each path needs a fresh process because the API state is process-global\r\n     cmd := QuoteFileName(Executable.ProgramFileName) +\r\n       ' /test TNetworkProtocols._HttpApiWebSocketServer /noenter';\r\n     RunChild(CHILD_CONSTRUCTOR);\r\n@@ -529,7 +529,7 @@ procedure TNetworkProtocols._HttpApiWebSocketServer;\n     'websocket.dll should initially be loaded lazily');\r\n   if mode = CHILD_CONSTRUCTOR then\r\n   begin\r\n-    // Regression for #418: server creation itself is the very first API use.\r\n+    // regression for #418: server creation itself is the very first API use\r\n     server := THttpApiWebSocketServer.Create;\r\n     try\r\n       Check(WebSocketApi.WebSocketEnabled,\r\n@@ -555,7 +555,7 @@ procedure TNetworkProtocols._HttpApiWebSocketServer;\n       'WinHTTP initialization should preserve the server WebSocket API');\r\n     exit;\r\n   end;\r\n-  // Exercise concurrent first use: no thread may observe a partially bound API.\r\n+  // Exercise concurrent first use: no thread may observe a partially bound API\r\n   ready := 0;\r\n   start := 0;\r\n   FillCharFast(threads, SizeOf(threads), 0);\r\n@@ -1481,8 +1481,9 @@ procedure TNetworkProtocols.DoHttpAsyncShutdown(Sender: TObject);\n           end;\r\n           endtix := GetTickCount64 + 5000; // a fresh deadline for each state\r\n           case i of\r\n-            0: Check(neRead in client[i].Sock.WaitFor(5000, [neRead, neError]),\r\n-                 'idle response');\r\n+            0:\r\n+              Check(neRead in client[i].Sock.WaitFor(5000, [neRead, neError]),\r\n+                'idle response');\r\n             {$ifndef USE_WINIOCP}\r\n             1, 2:\r\n               begin\r\n@@ -1501,8 +1502,9 @@ procedure TNetworkProtocols.DoHttpAsyncShutdown(Sender: TObject);\n                   'large response subscribed');\r\n               end;\r\n             {$else}\r\n-            3: Check(neRead in client[i].Sock.WaitFor(5000, [neRead, neError]),\r\n-                 'large response started');\r\n+            3:\r\n+              Check(neRead in client[i].Sock.WaitFor(5000, [neRead, neError]),\r\n+                'large response started');\r\n             {$endif USE_WINIOCP}\r\n             4:\r\n               begin\r\n@@ -2697,7 +2699,7 @@ procedure TNetworkProtocols.DoDhcpServerShutdown;\n     scope := settings.AddScope;\r\n     if not scope.From(mac) then\r\n     begin\r\n-      Check(false, 'DHCP scope from interface');\r\n+      AddConsole('DHCP socket test skipped: no scope from interface');\r\n       exit;\r\n     end;\r\n     scope.ServerPort := addr.Port;\r\n@@ -8383,6 +8385,7 @@ procedure TNetworkProtocols.DoHttpProxyServer(Sender: TObject);\n     url.Methods := [urmGet, urmPost];\r\n     proxy := THttpProxyServer.Create(settings);\r\n     proxy.Start;\r\n+    //settings.Server.Options := settings.Server.Options + [psoLogVerbose];\r\n     clt := THttpClientSocket.Open('127.0.0.1', '8883');\r\n     // local folder: a small file is returned, then from the memory cache\r\n     Expect('GET', '/static/hello.txt', HTTP_SUCCESS);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "high"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.http",
+        "mormot.net.sock.posix",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "149c0304736d19bed0367761dee22bbda29b6705",
+      "short_sha": "149c0304",
+      "subject": "core: new kernelHandle and ntHandle globals for Windows",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T13:17:06Z",
+      "url": "https://github.com/synopse/mORMot2/commit/149c0304736d19bed0367761dee22bbda29b6705",
+      "parents": [
+        "5f4992a19061acc2dd56ba7584b68136cc7b6b2e"
+      ],
+      "stats": {
+        "additions": 19,
+        "deletions": 18,
+        "files": 3
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -2587,6 +2587,7 @@ function LinuxSetProcessName(const NewName: RawUtf8): boolean;\n function IsExtendedPathName(const Name: TFileName): boolean;\r\n \r\n var\r\n+  kernelHandle, ntHandle: THandle;\r\n   // Slim Reader/Writer (SRW) API exclusive mode - fallback to TLightLock on XP\r\n   InitializeSRWLock,\r\n   AcquireSRWLockExclusive,\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.security.pas",
+          "status": "modified",
+          "additions": 7,
+          "deletions": 8,
+          "patch": "@@ -8144,8 +8144,8 @@ procedure SetSystemTimeZone(const info: TDynamicTimeZoneInformation);\n   ok: BOOL;\r\n   err: integer;\r\n begin\r\n-  SetDynamicTimeZoneInformation := LibraryResolve(\r\n-    GetModuleHandle(kernel32), 'SetDynamicTimeZoneInformation');\r\n+  SetDynamicTimeZoneInformation :=\r\n+    LibraryResolve(kernelHandle, 'SetDynamicTimeZoneInformation');\r\n   privileges.Init(wttProcess);\r\n   try\r\n     privileges.Enable(wspTimeZone); // ensure has SE_TIME_ZONE_NAME\r\n@@ -8591,6 +8591,7 @@ function TSynWindowsPrivileges.SetPrivilege(\n   NtQueryInformationProcess: function(ProcessHandle: THandle;\r\n     ProcessInformationClass: PROCESSINFOCLASS; ProcessInformation: pointer;\r\n     ProcessInformationLength: ULONG; ReturnLength: PULONG): integer; stdcall;\r\n+  // late-binding is safer for anti-virus heuristics\r\n   ReadProcessMemory: function (hProcess: THandle; lpBaseAddress, lpBuffer: pointer;\r\n     nSize: PtrUInt; var lpNumberOfBytesRead: PtrUInt): BOOL; stdcall;\r\n   NtQueryInformationProcessChecked: boolean;\r\n@@ -8602,16 +8603,14 @@ function InternalGetProcessInfo(aPID: DWord; out aInfo: TWinProcessInfo): boolea\n   pbi: MS_PROCESS_BASIC_INFORMATION;\r\n   peb: MS_PEB;\r\n   peb_upp: MS_RTL_USER_PROCESS_PARAMETERS;\r\n-  prochandle, nt: THandle;\r\n+  prochandle: THandle;\r\n begin\r\n   if not NtQueryInformationProcessChecked then\r\n   begin\r\n     NtQueryInformationProcessChecked := true;\r\n-    nt := GetModuleHandle(ntdll);\r\n-    if nt > 0 then\r\n-      NtQueryInformationProcess := LibraryResolve(nt, 'NtQueryInformationProcess');\r\n-    ReadProcessMemory := // late-binding is safer for anti-virus heuristics\r\n-      LibraryResolve(GetModuleHandle(kernel32), 'ReadProcessMemory');\r\n+    if ntHandle > 0 then\r\n+      NtQueryInformationProcess := LibraryResolve(ntHandle, 'NtQueryInformationProcess');\r\n+    ReadProcessMemory := LibraryResolve(kernelHandle, 'ReadProcessMemory');\r\n   end;\r\n   result := false;\r\n   Finalize(aInfo);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 8,
+          "patch": "@@ -3624,20 +3624,19 @@ function ReadSystemMemory(address, size: PtrUInt): RawByteString;\n var\r\n   memfile: UNICODE_STRING;\r\n   att: OBJECT_ATTRIBUTES;\r\n-  mem, nt: THandle;\r\n+  mem: THandle;\r\n   add: TLargeInteger;\r\n   virt: pointer;\r\n begin\r\n   if NtDllChecked = lsUnTested then\r\n   begin // late-binding until really needed to circumvent antivirus heuristic\r\n     NtDllChecked := lsNotAvailable;\r\n-    nt := GetModuleHandle(ntdll);\r\n-    if nt > 0 then\r\n+    if ntHandle > 0 then\r\n     begin\r\n-      RtlInitUnicodeString := LibraryResolve(nt, 'RtlInitUnicodeString');\r\n-      NtOpenSection        := LibraryResolve(nt, 'NtOpenSection');\r\n-      NtMapViewOfSection   := LibraryResolve(nt, 'NtMapViewOfSection');\r\n-      NtUnmapViewOfSection := LibraryResolve(nt, 'NtUnmapViewOfSection');\r\n+      RtlInitUnicodeString := LibraryResolve(ntHandle, 'RtlInitUnicodeString');\r\n+      NtOpenSection        := LibraryResolve(ntHandle, 'NtOpenSection');\r\n+      NtMapViewOfSection   := LibraryResolve(ntHandle, 'NtMapViewOfSection');\r\n+      NtUnmapViewOfSection := LibraryResolve(ntHandle, 'NtUnmapViewOfSection');\r\n       if Assigned(RtlInitUnicodeString) and\r\n          Assigned(NtOpenSection) and\r\n          Assigned(NtMapViewOfSection) and\r\n@@ -3706,7 +3705,7 @@ var\n   get: function(sig, id: DWord; buf: pointer; siz: DWord): PtrUInt; stdcall;\r\n begin\r\n   // first try to use Vista+ API which supports EFI (even on aarch64-win64!)\r\n-  get := LibraryResolve(GetModuleHandle(kernel32), 'GetSystemFirmwareTable');\r\n+  get := LibraryResolve(kernelHandle, 'GetSystemFirmwareTable');\r\n   if Assigned(get) then\r\n   begin\r\n     siz := get(_RSMB_, 0, nil, 0); // first call to retrieve the full size\r\n@@ -5641,6 +5640,7 @@ begin\n   {$endif ASMX86}\r\n   // 2. late-binding of newest Windows APIs\r\n   h := GetModuleHandle(kernel32);\r\n+  kernelHandle := h;\r\n   GetSystemTimePreciseAsFileTime :=\r\n     LibraryResolve(h, 'GetSystemTimePreciseAsFileTime'); // Win8+\r\n   if not Assigned(GetSystemTimePreciseAsFileTime) then\r\n@@ -5811,6 +5811,7 @@ begin\n   h := GetModuleHandle(ntdll); // late binding over unstable / altered API\r\n   if h > 0 then\r\n   begin\r\n+    ntHandle := h;\r\n     wine_get_version := LibraryResolve(h, 'wine_get_version');\r\n     if Assigned(wine_get_version) then\r\n     begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18152\n+18153",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18152'\r\n+'2.4.18153'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.security",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "5f4992a19061acc2dd56ba7584b68136cc7b6b2e",
+      "short_sha": "5f4992a1",
+      "subject": "net: reworked IOCP shutdown",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T13:16:16Z",
+      "url": "https://github.com/synopse/mORMot2/commit/5f4992a19061acc2dd56ba7584b68136cc7b6b2e",
+      "parents": [
+        "4ffac49a383434d936b06080e492a68f981263cb"
+      ],
+      "stats": {
+        "additions": 169,
+        "deletions": 68,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18151\n+18152",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18151'\r\n+'2.4.18152'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 10,
+          "patch": "@@ -2797,12 +2797,12 @@ procedure TAsyncConnections.Shutdown;\n   if fFlag1 <> 0 then // fFlag2 used by TAsyncServer.Shutdown\r\n     exit;             // use this counter to avoid duplicated calls\r\n   inc(fFlag1);\r\n+  Terminate; // mark the accept thread as terminating BEFORE waking its IOCP\r\n   {$ifdef USE_WINIOCP}\r\n   fIocpAccept.Terminate;  // notify the IOCP queue - no Unsubscribe(fIocpAcceptSub)\r\n   {$endif USE_WINIOCP}\r\n   if fSockets <> nil then\r\n     fSockets.fTerminated := true; // shutdown ASAP\r\n-  Terminate;\r\n   // terminate the main clients asynchronous logic\r\n   if fSockets <> nil then\r\n   begin\r\n@@ -2850,7 +2850,11 @@ procedure TAsyncConnections.Shutdown;\n   if (GetCurrentThreadId <> ThreadID) and\r\n      not Suspended then\r\n     WaitFor;                   // eventual end of main accept/connect loop\r\n-  {$ifndef USE_WINIOCP}\r\n+  {$ifdef USE_WINIOCP}\r\n+  // fIocpAccept may still contain Enqueue() events owning references into\r\n+  // fSockets.fIocpRecvSend: drain it while their original owner is alive\r\n+  FreeAndNil(fIocpAccept);\r\n+  {$else}\r\n   if fSockets <> nil then\r\n     fSockets.ClosePendingRead; // purge fRead.fPending[]\r\n   {$endif USE_WINIOCP}\r\n@@ -2866,9 +2870,8 @@ destructor TAsyncConnections.Destroy;\n begin\r\n   Shutdown;\r\n   inherited Destroy;\r\n-  {$ifdef USE_WINIOCP}\r\n-  FreeAndNil(fIocpAccept);\r\n-  {$endif USE_WINIOCP}\r\n+  // fIocpAccept was already drained and freed during Shutdown,\r\n+  // before the forwarded-event owner fSockets.fIocpRecvSend.\r\n   if (acoNoConnectionTrack in fOptions) or\r\n      (fConnectionCount = 0) then\r\n     exit;\r\n@@ -3791,9 +3794,9 @@ procedure TAsyncServer.Shutdown;\n       end;\r\n       touchandgo.ShutdownAndClose(false);  // release the AW thread\r\n     end;\r\n-    fServer.Close; // shutdown the socket to unlock Accept() in Execute\r\n+    fServer.Close;    // shutdown the socket to unlock Accept() in Execute\r\n   end;\r\n-  inherited Shutdown;\r\n+  inherited Shutdown; // eventually release all associated threads and sockets\r\n end;\r\n {$endif USE_WINIOCP}\r\n \r\n@@ -3929,9 +3932,16 @@ procedure TAsyncServer.DoExecute;\n             // retrieve the completed accept\r\n             if fIocpAccept.GetNextAccept(sub, client, sin) then\r\n               res := nrOk;\r\n-            // always re-arm AcceptEx after consuming its completion\r\n+            // do not re-arm if shutdown started after GetNext() returned\r\n             if not Terminated then\r\n             begin\r\n+              if fIocpAccept.Terminated then\r\n+              begin\r\n+                if client <> nil then\r\n+                  client.Close;\r\n+                break; // outer finally releases sub via FinishNext()\r\n+              end;\r\n+              // always re-arm AcceptEx after consuming its completion\r\n               s := nil; // allocate in PrepareNext()\r\n               {$ifdef IOCP_ACCEPT_PREALLOCATE_SOCKETS}\r\n               if socketsalloc <= high(sockets) then\r\n@@ -3943,8 +3953,17 @@ procedure TAsyncServer.DoExecute;\n               try\r\n                 if not fIocpAccept.PrepareNext(\r\n                          'next', sub, wieAccept, nil, 0, s) then\r\n-                  raise EWinIocp.Create(\r\n-                    'TAsyncServer.Execute: rearming AcceptEx failed');\r\n+                  if Terminated or\r\n+                     fIocpAccept.Terminated then\r\n+                  begin\r\n+                    // a rejected re-arm during shutdown is not an I/O error\r\n+                    if client <> nil then\r\n+                      client.Close;\r\n+                    break; // outer finally releases sub via FinishNext()\r\n+                  end\r\n+                  else\r\n+                    raise EWinIocp.Create(\r\n+                      'TAsyncServer.Execute: rearming AcceptEx failed');\r\n               except\r\n                 // cannot continue accepting: release any client socket\r\n                 if client <> nil then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 138,
+          "deletions": 56,
+          "patch": "@@ -1644,6 +1644,35 @@ end;\n \r\n { TWinIocp }\r\n \r\n+// discard an IOCP completion without invoking the application callback\r\n+// - used when GetNext() races Terminate and when Destroy drains the queue\r\n+// - for Enqueue(), ov is directly the subscription. For Winsock completions,\r\n+// ov points to an embedded TOverlapped, as decoded in GetNext()\r\n+function IocpFinishDiscarded(ov, completionkey: pointer): boolean;\r\n+var\r\n+  one: PIocpSubscription;\r\n+  event: TWinIocpEvent;\r\n+begin\r\n+  result := false;\r\n+  if (ov = nil) or\r\n+     (completionkey = nil) then\r\n+    exit; // timeout or Terminate() notification: no owned reference\r\n+  one := ov;\r\n+  if (PtrUInt(completionkey) - 1) > PtrUInt(high(TWinIocpEvent)) then\r\n+  begin\r\n+    inc(POverlapped(one));\r\n+    event := wieRecv;\r\n+    PByte(@event)^ := PByte(one)^;\r\n+    if event > wieConnect then\r\n+      exit; // corrupt overlapped structure: never release an unknown slot\r\n+    dec(PByte(one), PtrUInt(@PIocpSubscription(nil)^.over[event].event));\r\n+    if pointer(one^.head.sequence) <> completionkey then\r\n+      exit; // stale completion: do not release a recycled slot\r\n+  end;\r\n+  one^.owner.FinishNext(pointer(one)); // may be forwarded to another IOCP\r\n+  result := true;\r\n+end;\r\n+\r\n constructor TWinIocp.Create(processing: integer; options: TWinIocpOptions);\r\n begin\r\n   if processing = 0 then\r\n@@ -1669,83 +1698,127 @@ begin\n     IocpPostQueuedStatus(fIocp, 0, nil, nil); // notify threads/queue\r\n end;\r\n \r\n+var // resolve dynamically to preserve compatibility with XP\r\n+  CancelIoEx: function(hFile: THandle; lpOverlapped: POverlapped): BOOL; stdcall;\r\n+\r\n destructor TWinIocp.Destroy;\r\n var\r\n-  tix, endtix, tmp, err: cardinal;\r\n+  tix, endtix, tmp, err, bytes: cardinal;\r\n   tmplen: integer;\r\n   res: TNetResult;\r\n   txt: PAnsiChar;\r\n   sub: PIocpSubscription;\r\n+  ov, completionkey: pointer;\r\n begin\r\n   if Assigned(fOnLog) then\r\n-    fOnLog(sllDebug, 'Destroy count=%', [fOne.Count], self);\r\n-  // notify the queue we are about to close\r\n+    fOnLog(sllDebug, 'Destroy count=% posted=%', [fOne.Count, fPosted], self);\r\n   if not fTerminated then\r\n     Terminate;\r\n-  // wait for all pending GetNext() termination\r\n-  endtix := 0;\r\n-  if fWaiting <> 0 then\r\n-    repeat\r\n-      if Assigned(fOnLog) then\r\n-        fOnLog(sllDebug, 'Destroy waiting=%', [fWaiting], self);\r\n-      IocpPostQueuedStatus(fIocp, 0, nil, nil); // notify again (paranoid)\r\n-      SleepHiRes(10);\r\n-      tix := GetTickSec;\r\n-      if endtix = 0 then\r\n-        endtix := tix + 5\r\n-      else if tix > endtix then\r\n-        break; // never wait forever\r\n-    until fWaiting = 0;\r\n-  // delete the queue\r\n-  if fIocp <> 0 then\r\n-    CloseHandle(fIocp);\r\n-  // close and/or log remainining sockets\r\n-  if Assigned(fOnLog) or\r\n-     (wioUnsubscribeShutdownSocket in fOptions) then\r\n+  // mormot.net.async joins all GetNext()/FinishNext() workers before Free.\r\n+  // Other callers must ensure the same: fWaiting only counts blocked waits,\r\n+  // not callbacks already returned by GetNext(). Do not free a live waiter.\r\n+  endtix := GetTickSec + 5;\r\n+  while fWaiting <> 0 do\r\n   begin\r\n-    sub := fOne.Head;\r\n-    while sub <> nil do\r\n+    IocpPostQueuedStatus(fIocp, 0, nil, nil);\r\n+    SleepHiRes(10);\r\n+    tix := GetTickSec;\r\n+    if tix >= endtix then\r\n     begin\r\n       if Assigned(fOnLog) then\r\n+        fOnLog(sllWarning, 'Destroy waiting=%', [fWaiting], self);\r\n+      endtix := tix + 5;\r\n+    end;\r\n+  end;\r\n+  // stop kernel I/O *before* closing the IOCP or releasing OVERLAPPED memory\r\n+  // - CancelIoEx is needed for non-owning queues (e.g. fIocpAccept): they must\r\n+  // not call closesocket() on the listening socket or a client-owned socket\r\n+  if not Assigned(CancelIoEx) then\r\n+    CancelIoEx := LibraryResolve(kernelHandle, 'CancelIoEx');\r\n+  sub := fOne.Head;\r\n+  while sub <> nil do\r\n+  begin\r\n+    if Assigned(fOnLog) then\r\n+    begin\r\n+      tmplen := 0;\r\n+      err := NO_ERROR;\r\n+      if sub^.recvclosing then\r\n+        txt := 'eventu\n... [truncated, 5207 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2e275a98ae05a8f6f877abf8dc2bc971f2d29fa2",
+      "short_sha": "2e275a98",
+      "subject": "net: THttpAsyncClientConnections.StartRequest sends its request once connected",
+      "body": "",
+      "author": "zen010101",
+      "date": "2026-11-18T11:24:10Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2e275a98ae05a8f6f877abf8dc2bc971f2d29fa2",
+      "parents": [
+        "4ffac49a383434d936b06080e492a68f981263cb"
+      ],
+      "stats": {
+        "additions": 93,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 16,
+          "deletions": 4,
+          "patch": "@@ -2045,8 +2045,9 @@ procedure TPollAsyncSockets.ProcessWrite(const notif: TPollSocketResult;\n   connection := TPollAsyncConnection(ResToTag(notif));\r\n   if (self = nil) or\r\n      fTerminated or\r\n-     (ResToEvents(notif) <> [pseWrite]) or\r\n-     connection.IsClosed then\r\n+     connection.IsClosed or\r\n+     ((ResToEvents(notif) <> [pseWrite]) and // e.g. pseError or pseClosed\r\n+      not (ifWriteWait in connection.fInternalFlags)) then // failed connect()\r\n     exit;\r\n   // we are now sure that the socket is writable and safe\r\n   //DoLog('ProcessWrite: fProcessingWrite=%', [fProcessingWrite]);\r\n@@ -2066,7 +2067,18 @@ procedure TPollAsyncSockets.ProcessWrite(const notif: TPollSocketResult;\n       repeat\r\n         buflen := connection.fWr.Len;\r\n         if buflen = 0 then\r\n-          exit;\r\n+          if ifWriteWait in connection.fInternalFlags then\r\n+          begin\r\n+            // connect() of an outbound connection did complete: let its\r\n+            // AfterWrite() send the request, e.g. THttpAsyncClientConnection\r\n+            res := DoAfterWrite('ProcessWrite', connection);\r\n+            if (res <> soContinue) or\r\n+               (connection.fWr.Len = 0) then\r\n+              break;\r\n+            continue; // send what AfterWrite() did append to fWr\r\n+          end\r\n+          else\r\n+            exit;\r\n         buf := connection.fWr.Buffer;\r\n         if sent > 0 then // e.g. after IOCP wieSend\r\n         begin\r\n@@ -4459,8 +4471,8 @@ function THttpAsyncClientConnections.StartRequest(aSender: TObject;\n       c.fSecureHost := aUrl.Server; // no port involved in SNI\r\n     end;\r\n     // start async events subscription and connection\r\n+    include(c.fInternalFlags, ifWriteWait); // until AfterWrite is connected\r\n     {$ifdef USE_WINIOCP}\r\n-    include(c.fInternalFlags, ifWriteWait);\r\n     if c.fIocpSub = nil then\r\n       c.fIocpSub := fOwner.fIocpAccept.Subscribe(c.fSocket, tag);\r\n     if fOwner.fIocpAccept.PrepareNext('client', c.fIocpSub, wieConnect) then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 77,
+          "deletions": 0,
+          "patch": "@@ -105,6 +105,9 @@   TNetworkProtocols = class(TSynTestCase)\n     // for HttpFastCgi\r\n     fcgibig: RawByteString;\r\n     fcgirequests: integer;\r\n+    // for HttpAsyncClient\r\n+    asyncstates: TOnHttpClientStates;\r\n+    asyncstatus: integer;\r\n     // for OutStream\r\n     outdata: RawByteString;\r\n     outkept: TRawByteStringStream; // supplied with aOwned=false\r\n@@ -194,6 +197,10 @@   TNetworkProtocols = class(TSynTestCase)\n     procedure DoHttpLongLine(Sender: TObject);\r\n     /// validate that THttpAsyncServer streams a big body by ReadMaxBytes blocks\r\n     procedure DoHttpReadMaxBytes(Sender: TObject);\r\n+    procedure DoHttpAsyncClient(Sender: TObject);\r\n+    function DoHttpAsyncClientOrigin(Ctxt: THttpServerRequestAbstract): cardinal;\r\n+    function DoHttpAsyncClientState(Sender: TObject; State: TOnHttpClientState;\r\n+      Connection: THttpAsyncClientConnection): TPollAsyncSocketOnReadWrite;\r\n     function DoReadMaxBytesRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n     function DoReadMaxBytesDownload(const aUrl, aMethod, aInHeaders,\r\n       aInContentType, aRemoteIP: RawUtf8; aContentLength: Int64): TStream;\r\n@@ -663,6 +670,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoHttpLongLine, self, 'HttpLongLine', true, false);\r\n   Run(DoHttpReadMaxBytes, self, 'HttpReadMaxBytes', true, false);\r\n   {$ifdef OSPOSIX}\r\n+  Run(DoHttpAsyncClient, self, 'HttpAsyncClient', true, false); // not on IOCP yet\r\n   Run(DoUnixDomainSocket, self, 'UnixDomainSocket', true, false);\r\n   {$endif OSPOSIX}\r\n end;\r\n@@ -7756,6 +7764,75 @@ function TNetworkProtocols.DoReadMaxBytesRequest(\n   result := HTTP_SUCCESS;\r\n end;\r\n \r\n+function TNetworkProtocols.DoHttpAsyncClientOrigin(\r\n+  Ctxt: THttpServerRequestAbstract): cardinal;\r\n+begin\r\n+  Ctxt.OutContent := 'async client';\r\n+  Ctxt.OutContentType := TEXT_CONTENT_TYPE;\r\n+  result := HTTP_SUCCESS;\r\n+end;\r\n+\r\n+function TNetworkProtocols.DoHttpAsyncClientState(Sender: TObject;\r\n+  State: TOnHttpClientState; Connection: THttpAsyncClientConnection): TPollAsyncSocketOnReadWrite;\r\n+begin\r\n+  // called from the threads of the THttpAsyncServer\r\n+  if State in [hcsFinished, hcsFailed] then\r\n+    asyncstatus := Connection.ResponseStatus;\r\n+  include(asyncstates, State); // last, since the test thread waits for it\r\n+  result := soContinue;\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.DoHttpAsyncClient(Sender: TObject);\r\n+var\r\n+  origin: THttpServer;\r\n+  async: THttpAsyncServer;\r\n+  uri: TUri;\r\n+  i: integer;\r\n+  endtix: Int64;\r\n+begin\r\n+  // THttpAsyncServer.Clients.StartRequest() to a THttpServer on the same host\r\n+  origin := THttpServer.Create('8876', nil, nil, 'origin', 2);\r\n+  async := THttpAsyncServer.Create('8877', nil, nil, 'async', 2);\r\n+  try\r\n+    origin.OnRequest := DoHttpAsyncClientOrigin;\r\n+    origin.WaitStarted;\r\n+    async.WaitStarted;\r\n+    for i := 1 to 3 do\r\n+    begin\r\n+      asyncstates := [];\r\n+      asyncstatus := 0;\r\n+      CheckUtf8(uri.From('http://127.0.0.1:8876/x'), 'uri');\r\n+      Check(async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n+        DoHttpAsyncClientState) = nrOk, 'start');\r\n+      endtix := GetTickCount64 + 5000;\r\n+      while ([hcsFinished, hcsFailed] * asyncstates = []) and\r\n+            (GetTickCount64 < endtix) do\r\n+        SleepHiRes(1);\r\n+      Check(hcsBeforeSendHeaders in asyncstates, 'request sent');\r\n+      Check(hcsHeadersReceived in asyncstates, 'headers received');\r\n+      Check(hcsFinished in asyncstates, 'finished');\r\n+      Check(not (hcsFailed in asyncstates), 'not failed');\r\n+      CheckEqual(asyncstatus, HTTP_SUCCESS, 'status');\r\n+    end;\r\n+    // nobody listens on this port: the request should be notified as failed\r\n+    asyncstates := [];\r\n+    CheckUtf8(uri.From('http://127.0.0.1:8875/x'), 'uri');\r\n+    if async.Clients.StartRequest(self, uri, 'GET', '', '', nil,\r\n+         DoHttpAsyncClientState) = nrOk then\r\n+    begin\r\n+      endtix := GetTickCount64 + 5000;\r\n+      while ([hcsFinished, hcsFailed] * asyncstates = []) and\r\n+            \n... [truncated, 390 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "4ffac49a383434d936b06080e492a68f981263cb",
+      "short_sha": "4ffac49a",
+      "subject": "core: small fix after https://github.com/synopse/mORMot2/commit/2e7477980",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T11:09:40Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4ffac49a383434d936b06080e492a68f981263cb",
+      "parents": [
+        "559f2dae098434cdb3a50dd295d3cf6c7a8e3303"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 3,
+          "patch": "@@ -6986,11 +6986,10 @@ procedure AppendOsBuild(const osv: TOperatingSystemVersion; dest: PAnsiChar;\n   case osv.win of\r\n     wTen, wTen_64, wEleven, wEleven_64: // desktop versions\r\n       txt4 := FindOsBuild(txt4, high(DESKTOP_INT), @DESKTOP_INT, @DESKTOP_TXT);\r\n-    wServer2016, wServer2016_64, wServer2019_64, wServer2022_64, wServer2025_64,\r\n-    wServer2028_64:\r\n+    wServer2016, wServer2016_64, wServer2019_64, wServer2022_64, wServer2025_64:\r\n       txt4 := FindOsBuild(txt4, high(SERVER_INT), @SERVER_INT, @SERVER_TXT);\r\n   else\r\n-    exit;\r\n+    exit; // wServer2028_64 has no confirmed feature-release designation\r\n   end;\r\n   if txt4 = 0 then\r\n     exit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18150\n+18151",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18150'\r\n+'2.4.18151'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "559f2dae098434cdb3a50dd295d3cf6c7a8e3303",
+      "short_sha": "559f2dae",
+      "subject": "core: another minor IsValidUtf8Pas() code cleaning",
+      "body": "- goto is evil they said",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T11:04:39Z",
+      "url": "https://github.com/synopse/mORMot2/commit/559f2dae098434cdb3a50dd295d3cf6c7a8e3303",
+      "parents": [
+        "2e74779805fa264363718afb29017be1a70471ee"
+      ],
+      "stats": {
+        "additions": 8,
+        "deletions": 8,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 6,
+          "deletions": 6,
+          "patch": "@@ -3596,25 +3596,25 @@ function IsValidUtf8Pas(source: PUtf8Char; len: PtrInt): boolean;\n       continue // last 1..3 chars\r\n     else if (c > UTF8_MAX) or // over RFC 3629 / Unicode range\r\n             (source + c > PUtf8Char(len) + 4) then\r\n-    begin // UTF8_ZERO or does not follows RFC 3629 or truncated\r\n+    begin // early UTF8_ZERO or does not follows RFC 3629 or truncated\r\n       source := nil; // force result = false\r\n       break;\r\n     end;\r\n     case byte(source[-1]) of // match RFC 3629 restrictions enforced by AVX2\r\n       $c0, $c1, $f5 .. $f7:\r\n-        goto done;\r\n+        break;\r\n       $e0:\r\n         if byte(source^) < $a0 then\r\n-          goto done;\r\n+          break;\r\n       $ed:\r\n         if byte(source^) >= $a0 then\r\n-          goto done;\r\n+          break;\r\n       $f0:\r\n         if byte(source^) < $90 then\r\n-          goto done;\r\n+          break;\r\n       $f4:\r\n         if byte(source^) >= $90 then\r\n-          goto done;\r\n+          break;\r\n     end;\r\n     repeat\r\n       if byte(source^) and $c0 <> $80 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18149\n+18150",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18149'\r\n+'2.4.18150'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "2e74779805fa264363718afb29017be1a70471ee",
+      "short_sha": "2e747798",
+      "subject": "core: detect Windows Server 2028 preview and Windows 11 26H1 builds",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T11:02:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/2e74779805fa264363718afb29017be1a70471ee",
+      "parents": [
+        "05f7339bf7dfb207e8f8f14281a6ca292be88936"
+      ],
+      "stats": {
+        "additions": 18,
+        "deletions": 12,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 12,
+          "deletions": 9,
+          "patch": "@@ -451,7 +451,8 @@   EOSException = class(ExceptionWithProps);\n     wEleven_64,\r\n     wServer2019_64,\r\n     wServer2022_64,\r\n-    wServer2025_64);\r\n+    wServer2025_64,\r\n+    wServer2028_64);\r\n \r\n   /// the running Operating System, encoded as a 32-bit integer\r\n   TOperatingSystemVersion = packed record\r\n@@ -536,7 +537,8 @@   EOSException = class(ExceptionWithProps);\n     '11 64bit',             // wEleven_64\r\n     'Server 2019 64bit',    // wServer2019_64\r\n     'Server 2022 64bit',    // wServer2022_64\r\n-    'Server 2025 64bit');   // wServer2025_64\r\n+    'Server 2025 64bit',    // wServer2025_64\r\n+    'Server 2028 64bit');   // wServer2028_64\r\n \r\n   /// the recognized Windows versions which are 32-bit\r\n   WINDOWS_32 = [\r\n@@ -6945,20 +6947,20 @@ function {%H-}_RawToBase64(Bin: pointer; Bytes: PtrInt; Base64Uri: boolean): Raw\n { ****************** Gather Operating System Information }\r\n \r\n const // cf https://preview.changewindows.org/platforms/pc\r\n-  DESKTOP_INT: array[0 .. 20] of cardinal = (\r\n+  DESKTOP_INT: array[0 .. 21] of cardinal = (\r\n      10240,  10586,  14393,  15063,  16299,  17134,  17763,  18362,  18363,\r\n      19041,  19042,  19043,  19044,  19045,  22000,  22621,  22631,  26100,\r\n-     26200,  26300, 29570); // detect 27H2 Canary builds since 17/4/2026\r\n+     26200,  26300,  28000,  29570);\r\n   DESKTOP_TXT: array[0 .. high(DESKTOP_INT)] of TTemp4  = (\r\n     '1507', '1511', '1607', '1703', '1709', '1803', '1809', '1903', '1909',\r\n     '2004', '20H2', '21H1', '21H2', '22H2', '21H2', '22H2', '23H2', '24H2',\r\n-    '25H2', '26H2', '27H2'); // stored as 32-bit cardinal = TTemp4\r\n-  SERVER_INT: array[0 .. 11] of cardinal = (\r\n+    '25H2', '26H2', '26H1', '27H2'); // stored as 32-bit cardinal = TTemp4\r\n+  SERVER_INT: array[0 .. 12] of cardinal = (\r\n     14393,  16299,  17134,  17763,  18362,  18363,  19041,  19042,  20348,\r\n-    25398,  26100, 29651);   // detect 26H2 Canary builds since 24/8/2026\r\n+    25398,  26100,  29651,  29706);\r\n   SERVER_TXT: array[0 .. high(SERVER_INT), 0 .. 3] of AnsiChar = (\r\n     '1607', '1709', '1803', '1809', '1903', '1909', '2004', '20H2', '21H2',\r\n-    '23H2', '24H2', '26H2');\r\n+    '23H2', '24H2', '26H2', '27H2');\r\n \r\n function FindOsBuild(c: cardinal; hi: PtrInt; b, t: PCardinalArray): cardinal;\r\n begin\r\n@@ -6984,7 +6986,8 @@ procedure AppendOsBuild(const osv: TOperatingSystemVersion; dest: PAnsiChar;\n   case osv.win of\r\n     wTen, wTen_64, wEleven, wEleven_64: // desktop versions\r\n       txt4 := FindOsBuild(txt4, high(DESKTOP_INT), @DESKTOP_INT, @DESKTOP_TXT);\r\n-    wServer2016, wServer2016_64, wServer2019_64, wServer2022_64, wServer2025_64:\r\n+    wServer2016, wServer2016_64, wServer2019_64, wServer2022_64, wServer2025_64,\r\n+    wServer2028_64:\r\n       txt4 := FindOsBuild(txt4, high(SERVER_INT), @SERVER_INT, @SERVER_TXT);\r\n   else\r\n     exit;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.windows.inc",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 1,
+          "patch": "@@ -5763,7 +5763,10 @@ begin\n         if OSVersionInfo.dwBuildNumber >= 17609 then     // up to 17763 RTM\r\n           if OSVersionInfo.dwBuildNumber >= 19504 then   // up to 20348 Preview\r\n             if OSVersionInfo.dwBuildNumber >= 25871 then // up to 26100 Preview\r\n-              Vers := wServer2025_64\r\n+              if OSVersionInfo.dwBuildNumber >= 29531 then\r\n+                Vers := wServer2028_64\r\n+              else\r\n+                Vers := wServer2025_64\r\n             else\r\n               Vers := wServer2022_64\r\n           else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18148\n+18149",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18148'\r\n+'2.4.18149'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "compat",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "05f7339bf7dfb207e8f8f14281a6ca292be88936",
+      "short_sha": "05f7339b",
+      "subject": "net: completed #805 IOCP fixes",
+      "body": "- especialy about errors handing and shutdown process\n- breaking change of the TWinIocp process: the new TWinIocp.FinishNext method is now mandatory to be called after GetNext",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T10:38:55Z",
+      "url": "https://github.com/synopse/mORMot2/commit/05f7339bf7dfb207e8f8f14281a6ca292be88936",
+      "parents": [
+        "6aa7f211ba1fa9ab72abdef27405f7af51c6e303"
+      ],
+      "stats": {
+        "additions": 265,
+        "deletions": 188,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18145\n+18148",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18145'\r\n+'2.4.18148'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 44,
+          "deletions": 29,
+          "patch": "@@ -2408,31 +2408,35 @@ procedure TAsyncConnectionsThread.DoExecute;\n       sub := fOwner.fSockets.fIocpRecvSend.GetNext(INFINITE, e, bytes);\r\n       if sub = nil then\r\n         break; // Terminated\r\n-      case e of\r\n-        wieRecv:\r\n-          begin\r\n-            if sub^.Tag <> 0 then // not needed outside IOCP\r\n-              TPollAsyncConnection(sub^.Tag).BeforeProcessRead;\r\n-            SetRes(notif, sub^.Tag, [pseRead]);\r\n-            fOwner.fSockets.ProcessRead(self, notif);\r\n-          end;\r\n-        wieSend:\r\n-          if acoIocpWriteDirect in fOwner.fOptions then\r\n-          begin\r\n-            // use this thread of the poll to try to lock and send with no delay\r\n-            SetRes(notif, sub^.Tag, [pseWrite]);\r\n-            fOwner.fSockets.ProcessWrite(notif, bytes, {waitms=}0);\r\n-          end\r\n-          else\r\n-            // writes are done in the single (and main) fOwner.Execute thread\r\n-            // -> just relay this event to the IOCP queue handling acceptex()\r\n-            // process, i.e. TAsyncServer.DoExecute\r\n-            fOwner.fIocpAccept.Enqueue(sub, e, bytes);\r\n-        wieConnect: // from THttpAsyncClientConnections.StartRequest\r\n-          begin\r\n-            SetRes(notif, sub^.Tag, [pseWrite]);\r\n-            fOwner.fSockets.ProcessWrite(notif, {sent=}0, {waitms=}0);\r\n-          end;\r\n+      try\r\n+        case e of\r\n+          wieRecv:\r\n+            begin\r\n+              if sub^.Tag <> 0 then // not needed outside IOCP\r\n+                TPollAsyncConnection(sub^.Tag).BeforeProcessRead;\r\n+              SetRes(notif, sub^.Tag, [pseRead]);\r\n+              fOwner.fSockets.ProcessRead(self, notif);\r\n+            end;\r\n+          wieSend:\r\n+            if acoIocpWriteDirect in fOwner.fOptions then\r\n+            begin\r\n+              // use this thread of the poll to try to lock and send with no delay\r\n+              SetRes(notif, sub^.Tag, [pseWrite]);\r\n+              fOwner.fSockets.ProcessWrite(notif, bytes, {waitms=}0);\r\n+            end\r\n+            else\r\n+              // writes are done in the single (and main) fOwner.Execute thread\r\n+              // -> just relay this event to the IOCP queue handling acceptex()\r\n+              // process, i.e. TAsyncServer.DoExecute\r\n+              fOwner.fIocpAccept.Enqueue(sub, e, bytes);\r\n+          wieConnect: // from THttpAsyncClientConnections.StartRequest\r\n+            begin\r\n+              SetRes(notif, sub^.Tag, [pseWrite]);\r\n+              fOwner.fSockets.ProcessWrite(notif, {sent=}0, {waitms=}0);\r\n+            end;\r\n+        end;\r\n+      finally\r\n+        fOwner.fSockets.fIocpRecvSend.FinishNext(sub);\r\n       end;\r\n     end;\r\n     {$else}\r\n@@ -3916,6 +3920,7 @@ procedure TAsyncServer.DoExecute;\n       sub := fIocpAccept.GetNext(INFINITE, e, bytes);\r\n       if sub = nil then\r\n         break; // terminated\r\n+      try\r\n       res := nrFatalError;\r\n       case e of\r\n         wieAccept:\r\n@@ -4063,6 +4068,11 @@ procedure TAsyncServer.DoExecute;\n         // here connection = TObject(notif.tag)\r\n         // - never executed if fExecuteAcceptOnly=true (POSIX THttpAsyncServer)\r\n         fSockets.ProcessWrite(notif, bytes);\r\n+      {$ifdef USE_WINIOCP}\r\n+      finally\r\n+        fIocpAccept.FinishNext(sub);\r\n+      end;\r\n+      {$endif USE_WINIOCP}\r\n     end;\r\n   except\r\n     on E: Exception do\r\n@@ -4116,15 +4126,20 @@ procedure TAsyncClient.DoExecute;\n       sub := fIocpAccept.GetNext(INFINITE, e, bytes);\r\n       if sub = nil then\r\n         break; // terminated\r\n-      if e <> wieSend then\r\n-        continue;\r\n-      SetRes(notif, sub^.Tag, [pseWrite]);\r\n+      try\r\n+        if e <> wieSend then\r\n+          continue;\r\n+        SetRes(notif, sub^.Tag, [pseWrite]);\r\n+        fSockets.ProcessWrite(notif, bytes);\r\n+      finally\r\n+        fIocpAccept.FinishNext(sub);\r\n+      end;\r\n       {$else}\r\n       bytes := 0;\r\n       if fSockets.fWrite.GetOne(1000, 'W', notif) and\r\n          not Terminated then\r\n-      {$endif USE_WINIOCP}\r\n         fSockets.ProcessWrite\n... [truncated, 132 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "src/net/mormot.net.sock.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 0,
+          "patch": "@@ -1765,8 +1765,12 @@   TWinIocp = class\n     // - for wieAccept, call then GetNextAccept() and PrepareNext()\r\n     // - for wieConnect, start using the socket, e.g. with wieRecv/wieSend events\r\n     // - for wieCustom*, it depends on your own custom logic\r\n+    // - every non-nil result owns an active reference until FinishNext()\r\n     function GetNext(timeoutms: cardinal;\r\n       out event: TWinIocpEvent; out bytes: cardinal): PWinIocpSubscription;\r\n+    /// release a non-nil GetNext() result exactly once, in a finally block\r\n+    // - also required for direct Enqueue events, possibly on another IOCP\r\n+    procedure FinishNext(one: PWinIocpSubscription);\r\n     /// retrieve the new socket and remote address after a GetNext(wieAccept)\r\n     function GetNextAccept(one: PWinIocpSubscription;\r\n       out Socket: TNetSocket; out Remote: TNetAddr): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 206,
+          "deletions": 155,
+          "patch": "@@ -1588,9 +1588,11 @@ type\n     over: array[wieRecv .. wieConnect] of TOverlappedEvent;\r\n     tag: TPollSocketTag;\r\n     socket: TSocket;\r\n+    owner: TWinIocp; // owns fOne, including events forwarded to another IOCP\r\n+    pending: integer; // active I/O, posting calls and dispatched callbacks\r\n     recvclosing: boolean;\r\n+    retired: boolean; // Unsubscribe() accepted; don't dispatch new callbacks\r\n     closed: boolean;  // closesocket() already done in Unsubscribe()\r\n-    pending: integer; // overlapped operations not yet returned by GetNext()\r\n   end;\r\n \r\n \r\n@@ -1729,7 +1731,8 @@ begin\n           fOnLog(sllWarning, 'Destroy: % sock=% unexpected recv=% %', [txt,\r\n             pointer(sub^.socket), tmplen, WinErrorShort(err)], self);\r\n       end;\r\n-      if wioUnsubscribeShutdownSocket in fOptions then\r\n+      if (wioUnsubscribeShutdownSocket in fOptions) and\r\n+         not sub^.closed then\r\n       begin\r\n         res := TNetSocket(sub^.socket).Close;\r\n         if Assigned(fOnLog) and\r\n@@ -1767,6 +1770,7 @@ begin\n   if setsockopt(TSocket(socket), SOL_SOCKET, SO_LINGER, @lg, SizeOf(lg)) <> NO_ERROR then\r\n     raise EWinIocp.Create('TWinIocp.Subscribe: SO_LINGER reset failed');\r\n   o := fOne.New; // returned o^ is filled with zeros\r\n+  o^.owner := self; // Enqueue() can forward between different IOCP queues\r\n   o^.tag := tag;\r\n   o^.socket := TSocket(socket);\r\n   for e := low(o^.over) to high(o^.over) do\r\n@@ -1788,8 +1792,7 @@ const\n   ACCEPTEX_SIZE = SOCKADDR_SIZE + 16;\r\n \r\n function TWinIocp.PrepareNext(const ctxt: ShortString; one: PWinIocpSubscription;\r\n-  event: TWinIocpEvent; buf: pointer; buflen: integer;\r\n-  netsock: TNetSocket): boolean;\r\n+  event: TWinIocpEvent; buf: pointer; buflen: integer; netsock: TNetSocket): boolean;\r\n var\r\n   bytes, flags, err: cardinal;\r\n   o: PIocpSubscription absolute one;\r\n@@ -1813,106 +1816,127 @@ begin\n      (one = nil) or\r\n      fTerminated then\r\n     exit;\r\n-  if event > high(o^.over) then\r\n-    raise EWinIocp.CreateFmt('TWinIocp.PrepareNext: unexpected %s on %x',\r\n-      [IOCP_EVENT[event], integer(o^.socket)]); // fatal logic error\r\n-  oe := @o^.over[event]; // each event has its own TOverlappedEvent buffer\r\n-  if (wioLockEvent in fOptions) and\r\n-     not oe^.prepared.TryLock then\r\n-    raise EWinIocp.CreateFmt('TWinIocp.PrepareNext: concurrent %s on %x',\r\n-      [IOCP_EVENT[event], integer(o^.socket)]);\r\n-  err := NO_ERROR;\r\n-  fatal := nil;\r\n-  bytes := 0;\r\n-  flags := 0;\r\n-  if buflen <= 0 then\r\n-  begin\r\n-    buf := nil; // ensure consistent TWsaBuf\r\n-    buflen := 0;\r\n-  end;\r\n-  oe^.buf.pBuffer := buf;\r\n-  oe^.buf.cLength := buflen;\r\n-  LockedInc32(@o^.pending); // before the call - may complete at once\r\n-  case event of\r\n-    wieRecv:\r\n-      // from mormot.net.async: overlapped read with buflen=0 to avoid WSAENOBUFS\r\n-      // and work with regular sockets recv() calls like TPollSocketAbstract\r\n-      DoCheck(WSARecv(o^.socket, oe^.buf, 1, bytes, flags, @oe^.overlapped) = NO_ERROR);\r\n-    wieSend:\r\n-      // from mormot.net.async: overlapped write with buf/buflen = connection.fWr\r\n-      // to avoid GetNext returning with no delay (and save a syscall)\r\n-      DoCheck(WSASend(o^.socket, oe^.buf, 1, bytes, 0, @oe^.overlapped) = NO_ERROR);\r\n-    wieAccept:\r\n-      // overlapped AcceptEx() to be followed by GetNextAcceptAndPrepare()\r\n-      // from mormot.net.async: not used, unless IOCP_ACCEPTEX is defined\r\n-      if Assigned(acceptex) and\r\n-         Assigned(getacceptexsockaddrs) then\r\n-        if (fAcceptSocket = nil) and\r\n-           fAcceptExUsed.TryLock then // a single AcceptEx() at a time\r\n-        begin\r\n-          if fAcceptExBuf = nil then\r\n-            SetLength(fAcceptExBuf, ACCEPTEX_SIZE * 2);\r\n-          if netsock = nil then\r\n-            netsock := TNetSocket(socket(AF_INET, SOCK_STREAM, IPPROTO_IP));\r\n-          fAcceptSocket := netsock;\r\n-          DoCheck(acceptex(o^.Socket, TSocket(netsock), pointer(fAcceptExBuf),\r\n-            0, ACCEPTEX_SIZE, ACCEPTEX_SI\n... [truncated, 15768 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 9,
+          "deletions": 2,
+          "patch": "@@ -6543,16 +6543,23 @@ procedure TNetworkProtocols.WinIocpLog(Level: TSynLogLevel;\n   const Format: RawUtf8; const Args: array of const; Instance: TObject);\r\n begin\r\n   if PosEx('unsub closesocket=', Format) > 0 then\r\n-    LockedInc32(@iocpclosed); // one per actual closesocket() in GetNext()\r\n+    LockedInc32(@iocpclosed); // one logged close from FinishNext()\r\n end;\r\n \r\n procedure TNetworkProtocols.WinIocpWorker(Sender: TObject);\r\n var\r\n   ev: TWinIocpEvent;\r\n   bytes: cardinal;\r\n+  iocp: TWinIocp;\r\n+  sub: PWinIocpSubscription;\r\n begin\r\n+  iocp := TWinIocp(Sender);\r\n   while not iocpstop do\r\n-    TWinIocp(Sender).GetNext(50, ev, bytes);\r\n+  begin\r\n+    sub := iocp.GetNext(50, ev, bytes);\r\n+    if sub <> nil then\r\n+      iocp.FinishNext(sub);\r\n+  end;\r\n end;\r\n \r\n procedure TNetworkProtocols.WinIocpUnsubscribe;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "breaking",
+        "severity": "critical"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock",
+        "mormot.net.sock.windows"
+      ],
+      "pr": 805,
+      "is_merge": false
+    },
+    {
+      "sha": "6aa7f211ba1fa9ab72abdef27405f7af51c6e303",
+      "short_sha": "6aa7f211",
+      "subject": "Merge pull request #805 from SDiestelmann/fix/winiocp-double-closesocket",
+      "body": "net: TWinIocp did call closesocket() twice on Unsubscribe with a pending wieRecv",
+      "author": "ab",
+      "date": "2026-11-18T09:44:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6aa7f211ba1fa9ab72abdef27405f7af51c6e303",
+      "parents": [
+        "06c573a9ff9eb07db0e620150e4fc1596f74d6d2",
+        "62968036999c0069b10afcf30ca83431012f82dd"
+      ],
+      "stats": {
+        "additions": 156,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 17,
+          "patch": "@@ -1589,6 +1589,8 @@ type\n     tag: TPollSocketTag;\r\n     socket: TSocket;\r\n     recvclosing: boolean;\r\n+    closed: boolean;  // closesocket() already done in Unsubscribe()\r\n+    pending: integer; // overlapped operations not yet returned by GetNext()\r\n   end;\r\n \r\n \r\n@@ -1830,6 +1832,7 @@ begin\n   end;\r\n   oe^.buf.pBuffer := buf;\r\n   oe^.buf.cLength := buflen;\r\n+  LockedInc32(@o^.pending); // before the call - may complete at once\r\n   case event of\r\n     wieRecv:\r\n       // from mormot.net.async: overlapped read with buflen=0 to avoid WSAENOBUFS\r\n@@ -1883,8 +1886,12 @@ begin\n     end;\r\n   if result then\r\n     LockedInc32(@fPosted)\r\n-  else if wioLockEvent in fOptions then // release lock on failure\r\n-    oe^.prepared.UnLock;\r\n+  else\r\n+  begin\r\n+    LockedDec32(@o^.pending); // no completion will come\r\n+    if wioLockEvent in fOptions then // release lock on failure\r\n+      oe^.prepared.UnLock;\r\n+  end;\r\n   if fatal <> nil then // logic error: need to fix the code -> raise EWinIocp\r\n     raise EWinIocp.CreateFmt('TWinIocp.PrepareNext(%s) %s: %s on %x',\r\n       [IOCP_EVENT[event], ctxt, fatal, integer(o^.socket)]);\r\n@@ -1996,23 +2003,29 @@ begin\n         else\r\n           sll := sllError; // this TOverlappedEvent should be locked/prepared\r\n       end;\r\n+      // a 'next' wieRecv may still be pending when Unsubscribe()\r\n+      // posts its 'unsub' wieRecv - both complete, possibly on two threads at once\r\n+      if (InterlockedDecrement(one^.pending) > 0) and\r\n+         one^.recvclosing then\r\n+      begin\r\n+        if Assigned(fOnLog) then\r\n+          fOnLog(sllTrace, 'GetNext=%% unsub pending=%',\r\n+            [IOCP_EVENT[event], sock, one^.pending], self);\r\n+        continue; // closesocket() + Free() on the very last completion only\r\n+      end;\r\n       if one^.recvclosing then\r\n       begin\r\n         // delayed wioUnsubscribeShutdownSocket clean closing\r\n         // - documented pattern: shutdown(SD_SEND) + WSARecv()=0 + closesocket\r\n         res := nrOk;\r\n-        if event = wieRecv then\r\n+        if not one^.closed and\r\n+           (closesocket(one^.socket) <> NOERROR) then\r\n         begin\r\n-          if closesocket(one^.socket) <> NOERROR then\r\n-          begin\r\n-            sll := sllError;\r\n-            res := NetLastError;\r\n-          end;\r\n-          if not fOne.Free(one) then // eventually release this slot\r\n-            sll := sllWarning;\r\n-        end\r\n-        else\r\n-          sll := sllWarning; // continue: closesocket() on very last wieRecv\r\n+          sll := sllError;\r\n+          res := NetLastError;\r\n+        end;\r\n+        if not fOne.Free(one) then // eventually release this slot\r\n+          sll := sllWarning;\r\n         if Assigned(fOnLog) then\r\n           fOnLog(sll, 'GetNext=%% unsub closesocket=%',\r\n             [IOCP_EVENT[event], sock, _NR[res]], self);\r\n@@ -2136,15 +2149,27 @@ begin\n     // - user code may call send() directly without wieSend IOCP (e.g.\r\n     // mormot.net.async) so we need more than a flag\r\n     // - follow documented pattern: shutdown(SD_SEND) + recv()=0 + closesocket\r\n+    // - hold a reference so that a pending 'next' wieRecv\r\n+    // completing meanwhile won't close and free the slot under our feet\r\n+    LockedInc32(@o^.pending);\r\n     shutdown(o^.socket, SHUT_WR); // = SD_SEND\r\n     o^.recvclosing := true; // flag for GetNext() to call closesocket()\r\n     if PrepareNext('unsub', pointer(o), wieRecv) then\r\n-    begin\r\n       // started async WSARecv() until the function completes with success\r\n-      result := true;\r\n+      result := true\r\n+    else\r\n+    begin\r\n+      // if failed, graceful disconnect is not possible (already closed)\r\n+      closesocket(o^.socket); // aborts any pending overlapped operation\r\n+      o^.closed := true;\r\n+    end;\r\n+    if InterlockedDecrement(o^.pending) > 0 then\r\n+    begin\r\n+      result := true; // GetNext() will Free() on the very last completion\r\n       exit;\r\n-    end\r\n-    else // if failed, graceful disconnect is not possible (already close\n... [truncated, 240 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 114,
+          "deletions": 0,
+          "patch": "@@ -118,6 +118,9 @@   TNetworkProtocols = class(TSynTestCase)\n     // for AsyncShutdown\r\n     shutdownsrv: THttpAsyncServer;\r\n     shutdownslow, shutdownrequests: integer;\r\n+    // for WinIocpUnsubscribe\r\n+    iocpclosed: integer;\r\n+    iocpstop: boolean;\r\n     // for _TTunnelLocal\r\n     tunnelappsec: RawUtf8;\r\n     tunneloptions: TTunnelOptions;\r\n@@ -207,6 +210,13 @@   TNetworkProtocols = class(TSynTestCase)\n     /// validate that TCrtSocket.Close won't touch a handle closed by Abort\r\n     procedure CrtSocketAbort;\r\n     procedure CrtSocketAbortRecv(Sender: TObject);\r\n+    {$ifdef OSWINDOWS}\r\n+    /// validate that TWinIocp won't call closesocket() twice on Unsubscribe\r\n+    procedure WinIocpUnsubscribe;\r\n+    procedure WinIocpWorker(Sender: TObject);\r\n+    procedure WinIocpLog(Level: TSynLogLevel; const Format: RawUtf8;\r\n+      const Args: array of const; Instance: TObject = nil);\r\n+    {$endif OSWINDOWS}\r\n   published\r\n     {$ifdef USEWININET}\r\n     {$ifdef USEHTTPSYS}\r\n@@ -6419,6 +6429,9 @@ procedure TNetworkProtocols.HTTP;\n     ms.Free;\r\n   end;\r\n   CrtSocketAbort;\r\n+  {$ifdef OSWINDOWS}\r\n+  WinIocpUnsubscribe;\r\n+  {$endif OSWINDOWS}\r\n end;\r\n \r\n procedure TNetworkProtocols.CrtSocketAbortRecv(Sender: TObject);\r\n@@ -6524,6 +6537,107 @@ procedure TNetworkProtocols.CrtSocketAbort;\n   end;\r\n end;\r\n \r\n+{$ifdef OSWINDOWS}\r\n+\r\n+procedure TNetworkProtocols.WinIocpLog(Level: TSynLogLevel;\r\n+  const Format: RawUtf8; const Args: array of const; Instance: TObject);\r\n+begin\r\n+  if PosEx('unsub closesocket=', Format) > 0 then\r\n+    LockedInc32(@iocpclosed); // one per actual closesocket() in GetNext()\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.WinIocpWorker(Sender: TObject);\r\n+var\r\n+  ev: TWinIocpEvent;\r\n+  bytes: cardinal;\r\n+begin\r\n+  while not iocpstop do\r\n+    TWinIocp(Sender).GetNext(50, ev, bytes);\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.WinIocpUnsubscribe;\r\n+const\r\n+  LOOPS = 1000;\r\n+  WORKERS = 4;\r\n+var\r\n+  srv: TCrtSocket;\r\n+  iocp: TWinIocp;\r\n+  th: array[0 .. WORKERS - 1] of TLoggedWorkThread;\r\n+  kept: array of TNetSocket;\r\n+  cli, acc, next: TNetSocket;\r\n+  sub: PWinIocpSubscription;\r\n+  addr: TNetAddr;\r\n+  i, n, alive: PtrInt;\r\n+begin\r\n+  srv := TCrtSocket.Bind('127.0.0.1:0'); // ephemeral port\r\n+  try\r\n+    iocpclosed := 0;\r\n+    iocpstop := false;\r\n+    FillCharFast(th, SizeOf(th), 0);\r\n+    iocp := TWinIocp.Create(WORKERS, [wioUnsubscribeShutdownSocket]);\r\n+    try\r\n+      iocp.OnLog := WinIocpLog;\r\n+      for i := 0 to high(th) do\r\n+        th[i] := TLoggedWorkThread.Create(TSynLog, 'iocp', iocp,\r\n+          WinIocpWorker, {suspended=}false, {ManualWaitForAndFree=}true);\r\n+      SetLength(kept, LOOPS);\r\n+      n := 0;\r\n+      for i := 0 to LOOPS - 1 do\r\n+      begin\r\n+        if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n+              1000, 1000, 1000, 0, cli) <> nrOk) or\r\n+           (srv.Sock.Accept(acc, addr, {async=}false) <> nrOk) then\r\n+          break;\r\n+        // as mormot.net.async: a 'next' wieRecv is pending after ProcessRead,\r\n+        // then the server closes the connection and Unsubscribe() posts its\r\n+        // own 'unsub' wieRecv on the very same subscription\r\n+        sub := iocp.Subscribe(acc, 1);\r\n+        iocp.PrepareNext('next', sub, wieRecv);\r\n+        iocp.Unsubscribe(sub);\r\n+        cli.Close; // both wieRecv complete, maybe on two threads at once\r\n+        // a new connection may reuse the handle: it should never be closed\r\n+        if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n+              1000, 1000, 1000, 0, next) <> nrOk) or\r\n+           (srv.Sock.Accept(kept[n], addr, {async=}false) <> nrOk) then\r\n+          break;\r\n+        inc(n);\r\n+        next.Close;\r\n+      end;\r\n+      CheckEqual(n, LOOPS, 'connections');\r\n+      i := 0;\r\n+      while (iocpclosed < n) and\r\n+            (i < 500) do\r\n+      begin\r\n+        SleepHiRes(10); // wait for all closesocket() in GetNext()\r\n+        inc(i);\r\n+      end;\r\n+      SleepHiRes(100); // a second closesocket() would happen n\n... [truncated, 762 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": 805,
+      "is_merge": true
+    },
+    {
+      "sha": "06c573a9ff9eb07db0e620150e4fc1596f74d6d2",
+      "short_sha": "06c573a9",
+      "subject": "core: minor IsValidUtf8Pas() simplification",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T09:30:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/06c573a9ff9eb07db0e620150e4fc1596f74d6d2",
+      "parents": [
+        "698a5e94165816275d5fa3bc6948dd23f05bf6c6"
+      ],
+      "stats": {
+        "additions": 5,
+        "deletions": 9,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 7,
+          "patch": "@@ -3594,16 +3594,12 @@ function IsValidUtf8Pas(source: PUtf8Char; len: PtrInt): boolean;\n     inc(source);\r\n     if c = UTF8_ASCII then\r\n       continue // last 1..3 chars\r\n-    else if c > UTF8_MAX then // RFC 3629 requirements as IsValidUtf8Avx2()\r\n-    begin // UTF8_ZERO or does not follows RFC 3629\r\n+    else if (c > UTF8_MAX) or // over RFC 3629 / Unicode range\r\n+            (source + c > PUtf8Char(len) + 4) then\r\n+    begin // UTF8_ZERO or does not follows RFC 3629 or truncated\r\n       source := nil; // force result = false\r\n       break;\r\n     end;\r\n-    if source + c > PUtf8Char(len) + 4 then\r\n-    begin\r\n-      source := nil;\r\n-      break; // truncated UTF-8 sequence\r\n-    end;\r\n     case byte(source[-1]) of // match RFC 3629 restrictions enforced by AVX2\r\n       $c0, $c1, $f5 .. $f7:\r\n         goto done;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18144\n+18145",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18144'\r\n+'2.4.18145'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "698a5e94165816275d5fa3bc6948dd23f05bf6c6",
+      "short_sha": "698a5e94",
+      "subject": "db: fixed TSqlDBConnection.IsOutdated",
+      "body": "- as reported by #799",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T09:29:47Z",
+      "url": "https://github.com/synopse/mORMot2/commit/698a5e94165816275d5fa3bc6948dd23f05bf6c6",
+      "parents": [
+        "65d30d1ea01f345eb081ece4b1c7389b8d4b552a"
+      ],
+      "stats": {
+        "additions": 6,
+        "deletions": 5,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 3,
+          "patch": "@@ -7520,9 +7520,10 @@ function TSqlDBConnection.IsOutdated(secs: integer): boolean;\n   last: integer;\r\n begin // caller ensured self <> nil and secs <> 0 and timeout <> 0\r\n   last := fLastAccessTickSec;\r\n-  result := (last < 0) or       // -1 = deprecated by ClearConnectionPool\r\n-            ((last <> 0) and    //  0 = new connection\r\n-             (secs - last >= fProperties.fConnectionTimeOutSecs)); // too idle\r\n+  result := (last < 0) or           // -1 = deprecated by ClearConnectionPool\r\n+            ((last <> 0) and        //  0 = new connection\r\n+             (secs - last >= fProperties.fConnectionTimeOutSecs) and // idle\r\n+             not GetInTransaction); // virtual method\r\n end;\r\n \r\n function TSqlDBConnection.GetInTransaction: boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18143\n+18144",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18143'\r\n+'2.4.18144'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "65d30d1ea01f345eb081ece4b1c7389b8d4b552a",
+      "short_sha": "65d30d1e",
+      "subject": "tests: cover UTF-8 validation expectations",
+      "body": "- for each function, according to their documented behavior\n- check #801",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T08:57:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/65d30d1ea01f345eb081ece4b1c7389b8d4b552a",
+      "parents": [
+        "6770fe3669d03712aa0501a23c5216b54b01bea4"
+      ],
+      "stats": {
+        "additions": 82,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18142\n+18143",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18142'\r\n+'2.4.18143'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 80,
+          "deletions": 0,
+          "patch": "@@ -7845,6 +7845,37 @@ procedure TTestCoreBase.Utf8Slow(Context: TObject);\n     CheckEqual(s, exp);\r\n   end;\r\n \r\n+  procedure CheckUtf8Hex(const Hex: RawUtf8; ValidUtf8, HasZero: boolean);\r\n+  var\r\n+    s: RawByteString;\r\n+    expectedText, expectedBuffer: boolean;\r\n+  begin\r\n+    s := HexToBin(Hex);\r\n+    CheckEqual(length(s), length(Hex) shr 1);\r\n+    // Pascal and NotVoid always reject #0\r\n+    expectedText := ValidUtf8 and not HasZero;\r\n+    // IsValidUtf8Buffer uses AVX2 when available,\r\n+    // which deliberately accepts #0\r\n+    expectedBuffer := ValidUtf8 and\r\n+      (HasValidUtf8Avx2 or not HasZero);\r\n+    CheckUtf8(IsValidUtf8Pas(pointer(s), length(s)) = expectedText,\r\n+      'IsValidUtf8Pas(%)', [Hex]);\r\n+    CheckUtf8(IsValidUtf8Small(s) = expectedText,\r\n+      'IsValidUtf8Small(%)', [Hex]);\r\n+    CheckUtf8(IsValidUtf8NotVoid(s) = expectedText,\r\n+      'IsValidUtf8NotVoid(%)', [Hex]);\r\n+    CheckUtf8(IsValidUtf8NotVoid(pointer(s), length(s)) = expectedText,\r\n+      'IsValidUtf8NotVoid(ptr,%)', [Hex]);\r\n+    CheckUtf8(IsValidUtf8Buffer(pointer(s), length(s)) = expectedBuffer,\r\n+      'IsValidUtf8Buffer(%)', [Hex]);\r\n+    CheckUtf8(IsValidUtf8(s) = expectedBuffer,\r\n+      'IsValidUtf8(%)', [Hex]);\r\n+    // IsValidUtf8Ptr uses StrLen(), so exclude embedded #0\r\n+    if (s <> '') and not HasZero then\r\n+      CheckUtf8(IsValidUtf8Ptr(pointer(s)) = ValidUtf8,\r\n+        'IsValidUtf8Ptr(%)', [Hex]);\r\n+  end;\r\n+\r\n var\r\n   i, j, k, len, len120, lenup100, CP, L, lcid: integer;\r\n   bak, bakj: AnsiChar;\r\n@@ -9262,6 +9293,55 @@ procedure TTestCoreBase.Utf8Slow(Context: TObject);\n   Check(GotoNextLine(P) = nil);\r\n   P := 'to'#3#0'po';\r\n   Check(GotoNextLine(P) = nil);\r\n+  // validate UTF-8 validation\r\n+  CheckUtf8Hex('', {ValidUtf8=}true, {HasZero=}false);\r\n+  CheckUtf8Hex('61', true, false);\r\n+  CheckUtf8Hex('61626364', true, false);\r\n+  CheckUtf8Hex('C280', true, false);\r\n+  CheckUtf8Hex('DFBF', true, false);\r\n+  CheckUtf8Hex('E0A080', true, false);\r\n+  CheckUtf8Hex('ED9FBF', true, false);\r\n+  CheckUtf8Hex('EE8080', true, false);\r\n+  CheckUtf8Hex('EFBFBF', true, false);\r\n+  CheckUtf8Hex('F0908080', true, false);\r\n+  CheckUtf8Hex('F48FBFBF', true, false);\r\n+  // Truncated sequences\r\n+  CheckUtf8Hex('C3', false, false);\r\n+  CheckUtf8Hex('E2', false, false);\r\n+  CheckUtf8Hex('E282', false, false);\r\n+  CheckUtf8Hex('F0', false, false);\r\n+  CheckUtf8Hex('F09F', false, false);\r\n+  CheckUtf8Hex('F09F98', false, false);\r\n+  CheckUtf8Hex('6162C3', false, false);\r\n+  CheckUtf8Hex('616263E282', false, false);\r\n+  CheckUtf8Hex('61626364F09F98', false, false);\r\n+  // Invalid continuation bytes\r\n+  CheckUtf8Hex('80', false, false);\r\n+  CheckUtf8Hex('BF', false, false);\r\n+  CheckUtf8Hex('C341', false, false);\r\n+  CheckUtf8Hex('E28241', false, false);\r\n+  CheckUtf8Hex('F09F9841', false, false);\r\n+  // Overlong sequences\r\n+  CheckUtf8Hex('C080', false, false);\r\n+  CheckUtf8Hex('C180', false, false);\r\n+  CheckUtf8Hex('E08080', false, false);\r\n+  CheckUtf8Hex('F0808080', false, false);\r\n+  // UTF-16 surrogates\r\n+  CheckUtf8Hex('EDA080', false, false);\r\n+  CheckUtf8Hex('EDBFBF', false, false);\r\n+  // Above U+10FFFF and invalid leading bytes\r\n+  CheckUtf8Hex('F4908080', false, false);\r\n+  CheckUtf8Hex('F5808080', false, false);\r\n+  CheckUtf8Hex('F8', false, false);\r\n+  CheckUtf8Hex('FE', false, false);\r\n+  CheckUtf8Hex('FF', false, false);\r\n+  // #0: valid UTF-8 but forbidden in NotVoid/Pascal\r\n+  CheckUtf8Hex('00', true, true);\r\n+  CheckUtf8Hex('616200', true, true);\r\n+  CheckUtf8Hex('610062', true, true);\r\n+  // Invalid UTF-8 even though it contains #0\r\n+  CheckUtf8Hex('C300', false, true);\r\n+  CheckUtf8Hex('6162C300', false, true);\r\n end;\r\n \r\n procedure TTestCoreBase.Charsets;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "tests",
+        "severity": "low"
+      },
+      "areas": [
+        "Tests"
+      ],
+      "units": [],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "6770fe3669d03712aa0501a23c5216b54b01bea4",
+      "short_sha": "6770fe36",
+      "subject": "core: fixed IsValidUtf8Pas() RFC 3629 compliance",
+      "body": "- as reported by #801",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T08:53:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/6770fe3669d03712aa0501a23c5216b54b01bea4",
+      "parents": [
+        "d1e9ab32bf9879053971a0f641f5ef99f7ac00d6"
+      ],
+      "stats": {
+        "additions": 30,
+        "deletions": 12,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.unicode.pas",
+          "status": "modified",
+          "additions": 28,
+          "deletions": 10,
+          "patch": "@@ -3566,7 +3566,7 @@ function IsValidUtf8Pas(source: PUtf8Char; len: PtrInt): boolean;\n label\r\n   done;\r\n begin\r\n-  inc(PtrUInt(len), PtrUInt(source) - 4);\r\n+  inc(PtrUInt(len), PtrUInt(source) - 4); // prepare fast by-four loop\r\n   if source = nil then\r\n     goto done;\r\n   utf8 := @UTF8_TABLE.Lookup;\r\n@@ -3595,18 +3595,36 @@ function IsValidUtf8Pas(source: PUtf8Char; len: PtrInt): boolean;\n     if c = UTF8_ASCII then\r\n       continue // last 1..3 chars\r\n     else if c > UTF8_MAX then // RFC 3629 requirements as IsValidUtf8Avx2()\r\n-      if c = UTF8_ZERO then\r\n-        break // end of input - may be unexpected if not at source[len]\r\n-      else\r\n-      begin\r\n-        source := nil; // force result = false if does not follows RFC 3629\r\n-        break;\r\n-      end;\r\n+    begin // UTF8_ZERO or does not follows RFC 3629\r\n+      source := nil; // force result = false\r\n+      break;\r\n+    end;\r\n+    if source + c > PUtf8Char(len) + 4 then\r\n+    begin\r\n+      source := nil;\r\n+      break; // truncated UTF-8 sequence\r\n+    end;\r\n+    case byte(source[-1]) of // match RFC 3629 restrictions enforced by AVX2\r\n+      $c0, $c1, $f5 .. $f7:\r\n+        goto done;\r\n+      $e0:\r\n+        if byte(source^) < $a0 then\r\n+          goto done;\r\n+      $ed:\r\n+        if byte(source^) >= $a0 then\r\n+          goto done;\r\n+      $f0:\r\n+        if byte(source^) < $90 then\r\n+          goto done;\r\n+      $f4:\r\n+        if byte(source^) >= $90 then\r\n+          goto done;\r\n+    end;\r\n     repeat\r\n       if byte(source^) and $c0 <> $80 then\r\n         goto done; // stop at invalid input content\r\n-      inc(source); // length check is done below - may read after source[len]\r\n-      dec(c);\r\n+      inc(source);\r\n+      dec(c); // c = 1..3\r\n     until c = 0;\r\n   until false;\r\n done:\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18141\n+18142",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18141'\r\n+'2.4.18142'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "62968036999c0069b10afcf30ca83431012f82dd",
+      "short_sha": "62968036",
+      "subject": "net: TWinIocp did call closesocket() twice on Unsubscribe with a pending wieRecv",
+      "body": "mormot.net.async posts a zero-byte wieRecv ('next') after each ProcessRead.\nIf the server closes the connection afterwards, Unsubscribe() posts a second\nwieRecv ('unsub') on the same subscription. When the client closes, both\ncomplete, and two worker threads may call closesocket() + fOne.Free() at the\nsame time. If Windows already reused the handle for a new connection, the\nsecond closesocket() closes this unrelated connection.\n\nTWinIocpSubscription now counts its pending overlapped operations: closesocket()\nand Free() happen on the very last completion only. Unsubscribe() holds its own\nreference meanwhile.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "Stefan Diestelmann",
+      "date": "2026-11-18T08:41:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/62968036999c0069b10afcf30ca83431012f82dd",
+      "parents": [
+        "d1e9ab32bf9879053971a0f641f5ef99f7ac00d6"
+      ],
+      "stats": {
+        "additions": 156,
+        "deletions": 17,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.sock.windows.inc",
+          "status": "modified",
+          "additions": 42,
+          "deletions": 17,
+          "patch": "@@ -1589,6 +1589,8 @@ type\n     tag: TPollSocketTag;\r\n     socket: TSocket;\r\n     recvclosing: boolean;\r\n+    closed: boolean;  // closesocket() already done in Unsubscribe()\r\n+    pending: integer; // overlapped operations not yet returned by GetNext()\r\n   end;\r\n \r\n \r\n@@ -1830,6 +1832,7 @@ begin\n   end;\r\n   oe^.buf.pBuffer := buf;\r\n   oe^.buf.cLength := buflen;\r\n+  LockedInc32(@o^.pending); // before the call - may complete at once\r\n   case event of\r\n     wieRecv:\r\n       // from mormot.net.async: overlapped read with buflen=0 to avoid WSAENOBUFS\r\n@@ -1883,8 +1886,12 @@ begin\n     end;\r\n   if result then\r\n     LockedInc32(@fPosted)\r\n-  else if wioLockEvent in fOptions then // release lock on failure\r\n-    oe^.prepared.UnLock;\r\n+  else\r\n+  begin\r\n+    LockedDec32(@o^.pending); // no completion will come\r\n+    if wioLockEvent in fOptions then // release lock on failure\r\n+      oe^.prepared.UnLock;\r\n+  end;\r\n   if fatal <> nil then // logic error: need to fix the code -> raise EWinIocp\r\n     raise EWinIocp.CreateFmt('TWinIocp.PrepareNext(%s) %s: %s on %x',\r\n       [IOCP_EVENT[event], ctxt, fatal, integer(o^.socket)]);\r\n@@ -1996,23 +2003,29 @@ begin\n         else\r\n           sll := sllError; // this TOverlappedEvent should be locked/prepared\r\n       end;\r\n+      // a 'next' wieRecv may still be pending when Unsubscribe()\r\n+      // posts its 'unsub' wieRecv - both complete, possibly on two threads at once\r\n+      if (InterlockedDecrement(one^.pending) > 0) and\r\n+         one^.recvclosing then\r\n+      begin\r\n+        if Assigned(fOnLog) then\r\n+          fOnLog(sllTrace, 'GetNext=%% unsub pending=%',\r\n+            [IOCP_EVENT[event], sock, one^.pending], self);\r\n+        continue; // closesocket() + Free() on the very last completion only\r\n+      end;\r\n       if one^.recvclosing then\r\n       begin\r\n         // delayed wioUnsubscribeShutdownSocket clean closing\r\n         // - documented pattern: shutdown(SD_SEND) + WSARecv()=0 + closesocket\r\n         res := nrOk;\r\n-        if event = wieRecv then\r\n+        if not one^.closed and\r\n+           (closesocket(one^.socket) <> NOERROR) then\r\n         begin\r\n-          if closesocket(one^.socket) <> NOERROR then\r\n-          begin\r\n-            sll := sllError;\r\n-            res := NetLastError;\r\n-          end;\r\n-          if not fOne.Free(one) then // eventually release this slot\r\n-            sll := sllWarning;\r\n-        end\r\n-        else\r\n-          sll := sllWarning; // continue: closesocket() on very last wieRecv\r\n+          sll := sllError;\r\n+          res := NetLastError;\r\n+        end;\r\n+        if not fOne.Free(one) then // eventually release this slot\r\n+          sll := sllWarning;\r\n         if Assigned(fOnLog) then\r\n           fOnLog(sll, 'GetNext=%% unsub closesocket=%',\r\n             [IOCP_EVENT[event], sock, _NR[res]], self);\r\n@@ -2136,15 +2149,27 @@ begin\n     // - user code may call send() directly without wieSend IOCP (e.g.\r\n     // mormot.net.async) so we need more than a flag\r\n     // - follow documented pattern: shutdown(SD_SEND) + recv()=0 + closesocket\r\n+    // - hold a reference so that a pending 'next' wieRecv\r\n+    // completing meanwhile won't close and free the slot under our feet\r\n+    LockedInc32(@o^.pending);\r\n     shutdown(o^.socket, SHUT_WR); // = SD_SEND\r\n     o^.recvclosing := true; // flag for GetNext() to call closesocket()\r\n     if PrepareNext('unsub', pointer(o), wieRecv) then\r\n-    begin\r\n       // started async WSARecv() until the function completes with success\r\n-      result := true;\r\n+      result := true\r\n+    else\r\n+    begin\r\n+      // if failed, graceful disconnect is not possible (already closed)\r\n+      closesocket(o^.socket); // aborts any pending overlapped operation\r\n+      o^.closed := true;\r\n+    end;\r\n+    if InterlockedDecrement(o^.pending) > 0 then\r\n+    begin\r\n+      result := true; // GetNext() will Free() on the very last completion\r\n       exit;\r\n-    end\r\n-    else // if failed, graceful disconnect is not possible (already close\n... [truncated, 240 more chars]",
+          "patch_truncated": true
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 114,
+          "deletions": 0,
+          "patch": "@@ -118,6 +118,9 @@   TNetworkProtocols = class(TSynTestCase)\n     // for AsyncShutdown\r\n     shutdownsrv: THttpAsyncServer;\r\n     shutdownslow, shutdownrequests: integer;\r\n+    // for WinIocpUnsubscribe\r\n+    iocpclosed: integer;\r\n+    iocpstop: boolean;\r\n     // for _TTunnelLocal\r\n     tunnelappsec: RawUtf8;\r\n     tunneloptions: TTunnelOptions;\r\n@@ -207,6 +210,13 @@   TNetworkProtocols = class(TSynTestCase)\n     /// validate that TCrtSocket.Close won't touch a handle closed by Abort\r\n     procedure CrtSocketAbort;\r\n     procedure CrtSocketAbortRecv(Sender: TObject);\r\n+    {$ifdef OSWINDOWS}\r\n+    /// validate that TWinIocp won't call closesocket() twice on Unsubscribe\r\n+    procedure WinIocpUnsubscribe;\r\n+    procedure WinIocpWorker(Sender: TObject);\r\n+    procedure WinIocpLog(Level: TSynLogLevel; const Format: RawUtf8;\r\n+      const Args: array of const; Instance: TObject = nil);\r\n+    {$endif OSWINDOWS}\r\n   published\r\n     {$ifdef USEWININET}\r\n     {$ifdef USEHTTPSYS}\r\n@@ -6419,6 +6429,9 @@ procedure TNetworkProtocols.HTTP;\n     ms.Free;\r\n   end;\r\n   CrtSocketAbort;\r\n+  {$ifdef OSWINDOWS}\r\n+  WinIocpUnsubscribe;\r\n+  {$endif OSWINDOWS}\r\n end;\r\n \r\n procedure TNetworkProtocols.CrtSocketAbortRecv(Sender: TObject);\r\n@@ -6524,6 +6537,107 @@ procedure TNetworkProtocols.CrtSocketAbort;\n   end;\r\n end;\r\n \r\n+{$ifdef OSWINDOWS}\r\n+\r\n+procedure TNetworkProtocols.WinIocpLog(Level: TSynLogLevel;\r\n+  const Format: RawUtf8; const Args: array of const; Instance: TObject);\r\n+begin\r\n+  if PosEx('unsub closesocket=', Format) > 0 then\r\n+    LockedInc32(@iocpclosed); // one per actual closesocket() in GetNext()\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.WinIocpWorker(Sender: TObject);\r\n+var\r\n+  ev: TWinIocpEvent;\r\n+  bytes: cardinal;\r\n+begin\r\n+  while not iocpstop do\r\n+    TWinIocp(Sender).GetNext(50, ev, bytes);\r\n+end;\r\n+\r\n+procedure TNetworkProtocols.WinIocpUnsubscribe;\r\n+const\r\n+  LOOPS = 1000;\r\n+  WORKERS = 4;\r\n+var\r\n+  srv: TCrtSocket;\r\n+  iocp: TWinIocp;\r\n+  th: array[0 .. WORKERS - 1] of TLoggedWorkThread;\r\n+  kept: array of TNetSocket;\r\n+  cli, acc, next: TNetSocket;\r\n+  sub: PWinIocpSubscription;\r\n+  addr: TNetAddr;\r\n+  i, n, alive: PtrInt;\r\n+begin\r\n+  srv := TCrtSocket.Bind('127.0.0.1:0'); // ephemeral port\r\n+  try\r\n+    iocpclosed := 0;\r\n+    iocpstop := false;\r\n+    FillCharFast(th, SizeOf(th), 0);\r\n+    iocp := TWinIocp.Create(WORKERS, [wioUnsubscribeShutdownSocket]);\r\n+    try\r\n+      iocp.OnLog := WinIocpLog;\r\n+      for i := 0 to high(th) do\r\n+        th[i] := TLoggedWorkThread.Create(TSynLog, 'iocp', iocp,\r\n+          WinIocpWorker, {suspended=}false, {ManualWaitForAndFree=}true);\r\n+      SetLength(kept, LOOPS);\r\n+      n := 0;\r\n+      for i := 0 to LOOPS - 1 do\r\n+      begin\r\n+        if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n+              1000, 1000, 1000, 0, cli) <> nrOk) or\r\n+           (srv.Sock.Accept(acc, addr, {async=}false) <> nrOk) then\r\n+          break;\r\n+        // as mormot.net.async: a 'next' wieRecv is pending after ProcessRead,\r\n+        // then the server closes the connection and Unsubscribe() posts its\r\n+        // own 'unsub' wieRecv on the very same subscription\r\n+        sub := iocp.Subscribe(acc, 1);\r\n+        iocp.PrepareNext('next', sub, wieRecv);\r\n+        iocp.Unsubscribe(sub);\r\n+        cli.Close; // both wieRecv complete, maybe on two threads at once\r\n+        // a new connection may reuse the handle: it should never be closed\r\n+        if (NewSocket(cLocalHost, srv.Port, nlTcp, {bind=}false,\r\n+              1000, 1000, 1000, 0, next) <> nrOk) or\r\n+           (srv.Sock.Accept(kept[n], addr, {async=}false) <> nrOk) then\r\n+          break;\r\n+        inc(n);\r\n+        next.Close;\r\n+      end;\r\n+      CheckEqual(n, LOOPS, 'connections');\r\n+      i := 0;\r\n+      while (iocpclosed < n) and\r\n+            (i < 500) do\r\n+      begin\r\n+        SleepHiRes(10); // wait for all closesocket() in GetNext()\r\n+        inc(i);\r\n+      end;\r\n+      SleepHiRes(100); // a second closesocket() would happen n\n... [truncated, 762 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.sock.windows"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d1e9ab32bf9879053971a0f641f5ef99f7ac00d6",
+      "short_sha": "d1e9ab32",
+      "subject": "db: fixed unexpected exception class change during propagation",
+      "body": "- as reported by #802",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T08:21:52Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d1e9ab32bf9879053971a0f641f5ef99f7ac00d6",
+      "parents": [
+        "865966d1d939cbfd9c9d71e0f541a8879f6c9822"
+      ],
+      "stats": {
+        "additions": 23,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/db/mormot.db.sql.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -7748,7 +7748,7 @@ function TSqlDBConnection.NewStatementPrepared(const aSql: RawUtf8;\n             (fErrorException <> nil) then\r\n       // propagate error not related to connection (e.g. SQL syntax error)\r\n       if fErrorException.InheritsFrom(ESynException) then\r\n-        ECoreDBException.RaiseU(fErrorMessage)\r\n+        ESynExceptionClass(fErrorException).RaiseU(fErrorMessage) // keep class\r\n       else\r\n         raise fErrorException.Create(Utf8ToString(fErrorMessage));\r\n   end\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18140\n+18141",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18140'\r\n+'2.4.18141'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.orm.extdb.pas",
+          "status": "modified",
+          "additions": 20,
+          "deletions": 0,
+          "patch": "@@ -1288,6 +1288,7 @@ procedure TTestExternalDatabase.NewStatementFailure;\n   SynDBLog.Family.Level := level + [sllError]; // force the logging branch\r\n   props := TSqlDBSQLite3ConnectionPropertiesNoStatement.Create(\r\n     SQLITE_MEMORY_DATABASE_NAME, '', '', '');\r\n+  TSynLog.Family.ExceptionIgnoreCurrentThread := true;\r\n   try\r\n     conn := props.NewConnection;\r\n     try\r\n@@ -1302,12 +1303,31 @@ procedure TTestExternalDatabase.NewStatementFailure;\n           raised := E.ClassType;\r\n       end;\r\n       Check(raised = ESynLogSilent, 'original exception re-raised');\r\n+      // Regression test for issue #802:\r\n+      // enabling reconnection must not change the exception class\r\n+      // when the error is unrelated to the connection.\r\n+      props.ReconnectAfterConnectionError := true;\r\n+      raised := nil;\r\n+      try\r\n+        conn.NewStatementPrepared('select 1', true, true);\r\n+      except\r\n+        on E: Exception do\r\n+          raised := E.ClassType;\r\n+      end;\r\n+      Check(raised = ESynLogSilent,\r\n+        'original exception class with reconnection');\r\n+      Check(conn.LastErrorException = ESynLogSilent,\r\n+        'LastErrorException with reconnection');\r\n+      Check(PosEx('NewStatement failed',\r\n+        conn.LastErrorMessage) > 0,\r\n+        'LastErrorMessage with reconnection');\r\n     finally\r\n       conn.Free;\r\n     end;\r\n   finally\r\n     props.Free;\r\n     SynDBLog.Family.Level := level;\r\n+    TSynLog.Family.ExceptionIgnoreCurrentThread := false;\r\n   end;\r\n end;\r\n \r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "Database",
+        "Tests"
+      ],
+      "units": [
+        "mormot.db.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "865966d1d939cbfd9c9d71e0f541a8879f6c9822",
+      "short_sha": "865966d1",
+      "subject": "orm: fixed TRestStorageExternal.EngineUpdateBlob",
+      "body": "- as reported by #798",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-18T08:16:14Z",
+      "url": "https://github.com/synopse/mORMot2/commit/865966d1d939cbfd9c9d71e0f541a8879f6c9822",
+      "parents": [
+        "d789644df9371f4a026c5a2674ebb6dddb7330ce"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18133\n+18140",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18133'\r\n+'2.4.18140'\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/orm/mormot.orm.sql.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -1715,6 +1715,7 @@ function TRestStorageExternal.EngineUpdateBlob(TableModelIndex: integer;\n         stmt.BindBlob(1, BlobData); // fast explicit BindBlob() call\r\n       stmt.Bind(2, aID);\r\n       stmt.ExecutePrepared;\r\n+      stmt.ReleaseRows;\r\n       if Owner <> nil then\r\n       begin\r\n         fStoredClassRecordProps.FieldBitsFromBlobField(BlobField, modfields);\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "fix",
+        "severity": "medium"
+      },
+      "areas": [
+        "ORM"
+      ],
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d789644df9371f4a026c5a2674ebb6dddb7330ce",
+      "short_sha": "d789644d",
+      "subject": "Merge pull request #803 from zen010101/core-sigpipe-delphi",
+      "body": "core: SigPipeIntercept ignores SIGPIPE on Delphi POSIX",
+      "author": "ab",
+      "date": "2026-11-18T07:30:00Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d789644df9371f4a026c5a2674ebb6dddb7330ce",
+      "parents": [
+        "e71f19b415a3abc7785b5ee9194a8caa854dfba6",
+        "077621bb2fb222343f44fd5305f27e7cb89efda4"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 3,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.delphi.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -299,6 +299,8 @@ function wexitstatus(status: cint): cint;\n function fpsigemptyset(var nset: TSigSet): cint;\r\n function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+/// ignore a signal for the whole process, i.e. set it to SIG_IGN\r\n+function fpsigignore(sig: cint): cint;\r\n \r\n {$ifdef OSLINUX}\r\n function pipe2(fd: pcint; flags: cint): cint; cdecl;\r\n@@ -876,6 +878,14 @@ function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\n   result := sigaction(sig, act, oact);\r\n end;\r\n \r\n+function fpsigignore(sig: cint): cint;\r\n+var\r\n+  prev: TSignalHandler;\r\n+begin\r\n+  prev := signal(sig, TSignalHandler(pointer(1))); // SIG_IGN = 1 on all POSIX\r\n+  result := -ord(PtrInt(@prev) = -1); // SIG_ERR = -1\r\n+end;\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n begin\r\n   result := mmap(start, len, prot, flags, fd, offst);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -6655,8 +6655,7 @@   TExternalProcess = class(TSynPersistent)\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     // - returns false on error, e.g. if the process ended\r\n     // - on POSIX, Start() with roStdinPipe calls SigPipeIntercept, so that\r\n-    // writing to an ended process does not raise SIGPIPE - but SigPipeIntercept\r\n-    // does nothing yet on Delphi POSIX\r\n+    // writing to an ended process does not raise SIGPIPE\r\n     function Write(const data: RawByteString): boolean; overload;\r\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     function Write(p: pointer; len: PtrInt): boolean; overload;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 1,
+          "patch": "@@ -5145,7 +5145,16 @@ end;\n \r\n procedure SigPipeIntercept;\r\n begin\r\n-  // do nothing by now\r\n+  if fSigPipeDisabled in _F1 then\r\n+    exit; // quickly return if already done\r\n+  OSSafe.Lock;\r\n+  try\r\n+    if not (fSigPipeDisabled in _F1) and\r\n+       (fpsigignore(SIGPIPE) = 0) then\r\n+      include(_F1, fSigPipeDisabled); // set once AFTER disabling it\r\n+  finally\r\n+    OSSafe.UnLock;\r\n+  end;\r\n end;\r\n \r\n {$endif FPC}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 0,
+          "patch": "@@ -4234,6 +4234,20 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   finally\r\n     p.Free;\r\n   end;\r\n+  // writing to an ended process returns false, and raises no SIGPIPE\r\n+  p := TExternalProcess.Create;\r\n+  try\r\n+    Check(p.Start('true', '', '', RUN_PROCESS - [roStdinNull] + [roStdinPipe]), 'epipe');\r\n+    start := GetTickCount64 + 10000;\r\n+    while p.Running and\r\n+          (GetTickCount64 < start) do\r\n+      SleepHiRes(10);\r\n+    Check(not p.Running, 'epipe');\r\n+    Check(not p.Write(data), 'epipe'); // bigger than any pipe buffer\r\n+    CheckEqual(p.WaitFor(10000), 0, 'epipe');\r\n+  finally\r\n+    p.Free;\r\n+  end;\r\n   // no handle nor zombie leak\r\n   files := OpenedHandles;\r\n   pid := 0;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.delphi",
+        "mormot.core.os.posix"
+      ],
+      "pr": 803,
+      "is_merge": true
+    },
+    {
+      "sha": "e71f19b415a3abc7785b5ee9194a8caa854dfba6",
+      "short_sha": "e71f19b4",
+      "subject": "Merge pull request #797 from tobfel/ccr-698097fd-544c0t",
+      "body": "net: release FastCGI connection buffers on close",
+      "author": "ab",
+      "date": "2026-11-18T07:27:53Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e71f19b415a3abc7785b5ee9194a8caa854dfba6",
+      "parents": [
+        "29524c261f6741ba9d52dc372f320311d1f3efdb",
+        "b86a57394b4e70e627683eede9f5aa1aaf4b9068"
+      ],
+      "stats": {
+        "additions": 3,
+        "deletions": 0,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.proxy.pas",
+          "status": "modified",
+          "additions": 3,
+          "deletions": 0,
+          "patch": "@@ -1190,6 +1190,8 @@ function TFastCgiAsyncConnection.OnRead: TPollAsyncSocketOnReadWrite;\n procedure TFastCgiAsyncConnection.OnClose;\r\n begin\r\n   HttpResponse(HTTP_BADGATEWAY); // closed with no frtEndRequest\r\n+  fRd.Clear; // one request per connection: don't keep this buffer in the GC\r\n+  fResponse.Init;\r\n end;\r\n \r\n function TFastCgiAsyncConnection.OnLastOperationIdle(\r\n@@ -1213,6 +1215,7 @@ constructor TFastCgiAsyncConnections.Create(aHttpServer: THttpServerGeneric;\n   fTimeoutSec := aTimeoutSec;\r\n   inherited Create(aUri.Server, aUri.Port, {clients=}0, aTimeoutSec, nil, nil,\r\n     TFastCgiAsyncConnection, 'fastcgi', aLog, ASYNC_OPTION_PROD, {threads=}1);\r\n+  fSockets.ReadMaxBytes := 128 shl 10; // parse 64KB records as they come\r\n end;\r\n \r\n function TFastCgiAsyncConnections.GetLastOperationIdleSeconds: cardinal;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network"
+      ],
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "pr": 797,
+      "is_merge": true
+    },
+    {
+      "sha": "29524c261f6741ba9d52dc372f320311d1f3efdb",
+      "short_sha": "29524c26",
+      "subject": "Merge pull request #800 from vennexTSE/fix/w1029-createwrite",
+      "body": "core: TFileStreamEx.CreateWrite aShareMode is an integer (W1029 follow-up to #796)",
+      "author": "ab",
+      "date": "2026-11-18T07:23:57Z",
+      "url": "https://github.com/synopse/mORMot2/commit/29524c261f6741ba9d52dc372f320311d1f3efdb",
+      "parents": [
+        "d0e3974519d04715cd260e4aed1ac7995a3d9a0e",
+        "a16690fc29df44deceaf7b8455c1e57045addfc5"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -3461,8 +3461,10 @@   TFileStreamEx = class(THandleStream)\n     // - aShareMode is applied in both cases, and defaults to fmShareRead\r\n     // - the additional parameter also makes this signature distinct from\r\n     // CreateRead(), so that C++Builder can reach both (avoid Delphi W1029)\r\n+    // - aShareMode is an integer, as for FileOpen/FileCreate, and not a\r\n+    // cardinal, which would collide with Create(aFileName, Mode) instead\r\n     constructor CreateWrite(const aFileName: TFileName;\r\n-      aShareMode: cardinal = fmShareRead);\r\n+      aShareMode: integer = fmShareRead);\r\n     /// explictely close the handle if needed\r\n     destructor Destroy; override;\r\n     /// overriden to use our FileSeek64() function\r\n@@ -8216,7 +8218,7 @@ constructor TFileStreamEx.CreateRead(const aFileName: TFileName);\n end;\r\n \r\n constructor TFileStreamEx.CreateWrite(const aFileName: TFileName;\r\n-  aShareMode: cardinal);\r\n+  aShareMode: integer);\r\n var\r\n   h: THandle;\r\n begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": 800,
+      "is_merge": true
+    },
+    {
+      "sha": "e07bbc6debc69953ade93a7dcf2c456768c8c44d",
+      "short_sha": "e07bbc6d",
+      "subject": "net: TPollAsyncSockets.ProcessRead processes the data received just before the peer closed",
+      "body": "",
+      "author": "zen010101",
+      "date": "2026-11-18T04:52:21Z",
+      "url": "https://github.com/synopse/mORMot2/commit/e07bbc6debc69953ade93a7dcf2c456768c8c44d",
+      "parents": [
+        "d0e3974519d04715cd260e4aed1ac7995a3d9a0e"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 5,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 13,
+          "deletions": 5,
+          "patch": "@@ -1964,11 +1964,15 @@ function TPollAsyncSockets.ProcessRead(Sender: TSynThread;\n           if res = nrRetry then\r\n             break; // may block, try later\r\n           if res <> nrOk then\r\n-          begin\r\n-            // socket closed gracefully or unrecoverable error -> abort\r\n-            CloseConnection(connection, _NR[res]);\r\n-            exit;\r\n-          end;\r\n+            if (res = nrClosed) and\r\n+               (added <> 0) then\r\n+              break // first process what was received before the peer closed\r\n+            else\r\n+            begin\r\n+              // socket closed gracefully or unrecoverable error -> abort\r\n+              CloseConnection(connection, _NR[res]);\r\n+              exit;\r\n+            end;\r\n           if (recved < 1024) and\r\n              (connection.fRd.Len = 0) then\r\n             connection.fRd.Reserve(1024); // minimal reusable fRd.Buffer\r\n@@ -1991,6 +1995,10 @@ function TPollAsyncSockets.ProcessRead(Sender: TSynThread;\n         end\r\n         else\r\n           result := false; // retry later\r\n+        if (res = nrClosed) and\r\n+           (connection <> nil) then\r\n+          // the peer closed the socket once its data was processed above\r\n+          CloseConnection(connection, _NR[res]);\r\n         // ensure this connection will be tracked for next recv()\r\n         if connection <> nil then // CloseConnection() set connection := nil\r\n         begin\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 18,
+          "deletions": 0,
+          "patch": "@@ -8594,6 +8594,15 @@ procedure TNetworkProtocols.DoFastCgiApp(Sender: TObject);\n             text := 'Location: /other'#13#10#13#10\r\n           else if script = '/app/nohead.php' then\r\n             text := 'no header at all'\r\n+          else if script = '/app/eof.php' then\r\n+          begin\r\n+            // the whole FastCGI stream is ?total bytes: 28 bytes of headers,\r\n+            // then the body, one stdout record and the void one (2 x 8 bytes)\r\n+            // and the end request record (16 bytes)\r\n+            text := 'Content-Type: text/plain'#13#10#13#10;\r\n+            Append(text, RawUtf8OfChar('x',\r\n+              GetInteger(pointer(Param('QUERY_STRING'))) - 28 - 32));\r\n+          end\r\n           else if script = '/app/big.php' then\r\n           begin\r\n             text := 'Content-Type: application/octet-stream'#13#10#13#10;\r\n@@ -8871,6 +8880,15 @@ procedure TNetworkProtocols.DoHttpFastCgi(Sender: TObject);\n     Expect('GET', '/app/big.php', HTTP_SUCCESS);\r\n     CheckEqual(length(clt.Content), length(fcgibig), 'big length');\r\n     CheckEqual(crc32cHash(clt.Content), crc32cHash(fcgibig), 'big');\r\n+    // a response which fills exactly the 32KB reading buffer of the proxy\r\n+    // just before the application closes the connection\r\n+    for i := 1 to 3 do\r\n+    begin\r\n+      Expect('GET', '/app/eof.php?32768', HTTP_SUCCESS);\r\n+      CheckEqual(length(clt.Content), 32768 - 28 - 32, 'eof 32KB');\r\n+      Expect('GET', '/app/eof.php?65536', HTTP_SUCCESS);\r\n+      CheckEqual(length(clt.Content), 65536 - 28 - 32, 'eof 64KB');\r\n+    end;\r\n     // the output is sent back whatever the application exit code or stderr is\r\n     Expect('GET', '/app/exit.php', HTTP_SUCCESS);\r\n     CheckEqual(Field(0), 'GET', 'exit code');\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "d0e3974519d04715cd260e4aed1ac7995a3d9a0e",
+      "short_sha": "d0e39745",
+      "subject": "core: minimal LinuxEventFDWrite() implementation on all compilers",
+      "body": "",
+      "author": "Arnaud Bouchez",
+      "date": "2026-11-17T20:15:01Z",
+      "url": "https://github.com/synopse/mORMot2/commit/d0e3974519d04715cd260e4aed1ac7995a3d9a0e",
+      "parents": [
+        "bbbb264b215d35f641b41204d85662c121793d38"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -2788,6 +2788,8 @@ end;\n \r\n procedure LinuxEventFDWrite(fd: integer; count: QWord);\r\n begin\r\n+  if fd > 0 then\r\n+    FpWrite(fd, @count, SizeOf(count)); // minimal implementation\r\n end;\r\n \r\n function LinuxEventFDWait(fd: integer; ms: integer): boolean;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit-num.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-18132\n+18133",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/mormot.commit.inc",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -1 +1 @@\n-'2.4.18132'\r\n+'2.4.18133'\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "low"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "a16690fc29df44deceaf7b8455c1e57045addfc5",
+      "short_sha": "a16690fc",
+      "subject": "core: TFileStreamEx.CreateWrite aShareMode is an integer, not a cardinal",
+      "body": "#796 made CreateWrite(aFileName, aShareMode: cardinal) distinct from\nCreateRead(aFileName), but the new signature then matched\nCreate(aFileName, Mode: cardinal) instead, so Delphi still reports W1029\nfor TFileStreamEx.CreateWrite when the unit is compiled into a package.\n\naShareMode is now an integer, the same type as the aMode parameter of\nFileOpen() and FileCreate() it is passed to. Callers are unaffected, and\nthe fmShare* constants fit both types.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+      "author": "vennexTSE",
+      "date": "2026-11-17T16:58:28Z",
+      "url": "https://github.com/synopse/mORMot2/commit/a16690fc29df44deceaf7b8455c1e57045addfc5",
+      "parents": [
+        "aa6f4307f9b5801f2d7ac666e81794e5bc041586"
+      ],
+      "stats": {
+        "additions": 4,
+        "deletions": 2,
+        "files": 1
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 4,
+          "deletions": 2,
+          "patch": "@@ -3461,8 +3461,10 @@   TFileStreamEx = class(THandleStream)\n     // - aShareMode is applied in both cases, and defaults to fmShareRead\r\n     // - the additional parameter also makes this signature distinct from\r\n     // CreateRead(), so that C++Builder can reach both (avoid Delphi W1029)\r\n+    // - aShareMode is an integer, as for FileOpen/FileCreate, and not a\r\n+    // cardinal, which would collide with Create(aFileName, Mode) instead\r\n     constructor CreateWrite(const aFileName: TFileName;\r\n-      aShareMode: cardinal = fmShareRead);\r\n+      aShareMode: integer = fmShareRead);\r\n     /// explictely close the handle if needed\r\n     destructor Destroy; override;\r\n     /// overriden to use our FileSeek64() function\r\n@@ -8216,7 +8218,7 @@ constructor TFileStreamEx.CreateRead(const aFileName: TFileName);\n end;\r\n \r\n constructor TFileStreamEx.CreateWrite(const aFileName: TFileName;\r\n-  aShareMode: cardinal);\r\n+  aShareMode: integer);\r\n var\r\n   h: THandle;\r\n begin\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "feature",
+        "severity": "medium"
+      },
+      "areas": [
+        "Core"
+      ],
+      "units": [
+        "mormot.core.os"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "077621bb2fb222343f44fd5305f27e7cb89efda4",
+      "short_sha": "077621bb",
+      "subject": "core: SigPipeIntercept ignores SIGPIPE on Delphi POSIX",
+      "body": "",
+      "author": "zen010101",
+      "date": "2026-11-17T16:19:59Z",
+      "url": "https://github.com/synopse/mORMot2/commit/077621bb2fb222343f44fd5305f27e7cb89efda4",
+      "parents": [
+        "d0e3974519d04715cd260e4aed1ac7995a3d9a0e"
+      ],
+      "stats": {
+        "additions": 35,
+        "deletions": 3,
+        "files": 4
+      },
+      "files": [
+        {
+          "path": "src/core/mormot.core.os.delphi.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 0,
+          "patch": "@@ -299,6 +299,8 @@ function wexitstatus(status: cint): cint;\n function fpsigemptyset(var nset: TSigSet): cint;\r\n function fpsigprocmask(how: cint; nset, oset: PSigSet): cint;\r\n function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\r\n+/// ignore a signal for the whole process, i.e. set it to SIG_IGN\r\n+function fpsigignore(sig: cint): cint;\r\n \r\n {$ifdef OSLINUX}\r\n function pipe2(fd: pcint; flags: cint): cint; cdecl;\r\n@@ -876,6 +878,14 @@ function fpsigaction(sig: cint; act, oact: PSigactionRec): cint;\n   result := sigaction(sig, act, oact);\r\n end;\r\n \r\n+function fpsigignore(sig: cint): cint;\r\n+var\r\n+  prev: TSignalHandler;\r\n+begin\r\n+  prev := signal(sig, TSignalHandler(pointer(1))); // SIG_IGN = 1 on all POSIX\r\n+  result := -ord(PtrInt(@prev) = -1); // SIG_ERR = -1\r\n+end;\r\n+\r\n function fpmmap(start: pointer; len: PtrUInt; prot, flags, fd: cint; offst: Int64): pointer;\r\n begin\r\n   result := mmap(start, len, prot, flags, fd, offst);\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.pas",
+          "status": "modified",
+          "additions": 1,
+          "deletions": 2,
+          "patch": "@@ -6653,8 +6653,7 @@   TExternalProcess = class(TSynPersistent)\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     // - returns false on error, e.g. if the process ended\r\n     // - on POSIX, Start() with roStdinPipe calls SigPipeIntercept, so that\r\n-    // writing to an ended process does not raise SIGPIPE - but SigPipeIntercept\r\n-    // does nothing yet on Delphi POSIX\r\n+    // writing to an ended process does not raise SIGPIPE\r\n     function Write(const data: RawByteString): boolean; overload;\r\n     /// send some data to the process stdin, with the roStdinPipe option\r\n     function Write(p: pointer; len: PtrInt): boolean; overload;\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "src/core/mormot.core.os.posix.inc",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 1,
+          "patch": "@@ -5145,7 +5145,16 @@ end;\n \r\n procedure SigPipeIntercept;\r\n begin\r\n-  // do nothing by now\r\n+  if fSigPipeDisabled in _F1 then\r\n+    exit; // quickly return if already done\r\n+  OSSafe.Lock;\r\n+  try\r\n+    if not (fSigPipeDisabled in _F1) and\r\n+       (fpsigignore(SIGPIPE) = 0) then\r\n+      include(_F1, fSigPipeDisabled); // set once AFTER disabling it\r\n+  finally\r\n+    OSSafe.UnLock;\r\n+  end;\r\n end;\r\n \r\n {$endif FPC}\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.core.base.pas",
+          "status": "modified",
+          "additions": 14,
+          "deletions": 0,
+          "patch": "@@ -4234,6 +4234,20 @@ procedure TTestCoreBase.DoTExternalProcess(Sender: TObject);\n   finally\r\n     p.Free;\r\n   end;\r\n+  // writing to an ended process returns false, and raises no SIGPIPE\r\n+  p := TExternalProcess.Create;\r\n+  try\r\n+    Check(p.Start('true', '', '', RUN_PROCESS - [roStdinNull] + [roStdinPipe]), 'epipe');\r\n+    start := GetTickCount64 + 10000;\r\n+    while p.Running and\r\n+          (GetTickCount64 < start) do\r\n+      SleepHiRes(10);\r\n+    Check(not p.Running, 'epipe');\r\n+    Check(not p.Write(data), 'epipe'); // bigger than any pipe buffer\r\n+    CheckEqual(p.WaitFor(10000), 0, 'epipe');\r\n+  finally\r\n+    p.Free;\r\n+  end;\r\n   // no handle nor zombie leak\r\n   files := OpenedHandles;\r\n   pid := 0;\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Core",
+        "Tests"
+      ],
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.delphi",
+        "mormot.core.os.posix"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
