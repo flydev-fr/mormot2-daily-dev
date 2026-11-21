@@ -1,0 +1,1068 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-18",
+  "edition_title": {
+    "en": "Async HTTP and Windows IOCP fix connection and response handling",
+    "fr": "HTTP async et IOCP Windows corrigent connexions et réponses",
+    "zh": "异步 HTTP 与 Windows IOCP 修复连接和响应处理",
+    "ru": "Async HTTP и Windows IOCP исправляют соединения и ответы"
+  },
+  "intro": {
+    "en": "Windows IOCP changes how subscriptions survive outstanding work. Async HTTP replies and streaming downloads get fixes for timing and partial writes. The edition also corrects Pascal UTF-8 validation and protects active SQL transactions from idle expiry.",
+    "fr": "IOCP Windows change la durée de vie des abonnements. Les réponses HTTP async et les téléchargements en flux corrigent des problèmes de synchronisation et d’écriture partielle. La validation UTF-8 Pascal et l’expiration SQL sont aussi corrigées.",
+    "zh": "Windows IOCP 调整订阅在待处理任务期间的生命周期。异步 HTTP 回复与流式下载修复时序和部分写入问题。本期还纠正 Pascal UTF-8 校验，避免活动 SQL 事务因空闲而过期。",
+    "ru": "Windows IOCP меняет время жизни подписок. Исправлены ранние ответы async HTTP и частичные загрузки, проверка UTF-8 на Pascal и истечение простоя для открытых SQL-транзакций."
+  },
+  "tldr": {
+    "en": [
+      "Direct TWinIocp.GetNext users must release each returned reference with FinishNext.",
+      "THttpClientSocket does not retry after advancing the output stream.",
+      "Async responses retry lock acquisition and defer failed-write closure to their outer handler.",
+      "Idle SQL expiry skips connections reporting an active transaction."
+    ],
+    "fr": [
+      "Les appels directs à TWinIocp.GetNext doivent libérer chaque référence avec FinishNext.",
+      "THttpClientSocket ne retente pas après avoir avancé dans le flux de sortie.",
+      "Les réponses async retentent le verrou et laissent leur gestionnaire externe fermer après un échec.",
+      "L’expiration SQL épargne les connexions signalant une transaction active."
+    ],
+    "zh": [
+      "直接使用 TWinIocp.GetNext 时须用 FinishNext 释放每个返回引用。",
+      "输出流位置已前移时，THttpClientSocket 不会重试。",
+      "异步回复重试加锁，写入失败后由外层处理器关闭连接。",
+      "SQL 空闲过期会跳过报告有活动事务的连接。"
+    ],
+    "ru": [
+      "Прямые вызовы TWinIocp.GetNext должны освобождать каждую полученную ссылку через FinishNext.",
+      "THttpClientSocket не повторяет запрос после записи в поток.",
+      "Async-ответ повторяет захват блокировки; при ошибке записи соединение закрывает внешний обработчик.",
+      "Истечение SQL-соединения по простою не затрагивает активные транзакции."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "For this historical snapshot, evaluate the complete 2.4.18170 batch rather than any intermediate IOCP rewrite. Update custom IOCP loops and TAsyncClient constructors, then verify response streaming and service shutdown. The payload has no superseded_by records; the build is an edition reference, not a claim that it is the latest safe revision.",
+    "fr": "Pour cet instantané historique, évaluez le lot complet 2.4.18170, pas une refonte IOCP intermédiaire. Adaptez les boucles IOCP et constructeurs TAsyncClient, puis vérifiez le streaming et l’arrêt. Aucun superseded_by ne désigne un successeur.",
+    "zh": "此历史快照请评估完整的 2.4.18170 批次，不要停在 IOCP 中间版本。更新自定义 IOCP 循环及 TAsyncClient 构造器，再检查流式响应与服务关闭。原始数据无 superseded_by 记录。",
+    "ru": "Для исторического среза берите весь набор 2.4.18170, а не промежуточную переработку IOCP. Обновите циклы IOCP и конструкторы TAsyncClient, проверьте потоковые ответы и остановку. В исходных данных нет superseded_by."
+  },
+  "entries": [
+    {
+      "sha": "d31fc4db41c3609796a34c78e0041f0e729abf05",
+      "headline": {
+        "en": "Async response regressions gain dedicated tests",
+        "fr": "Les réponses async gagnent des tests dédiés",
+        "zh": "异步响应新增专项回归测试",
+        "ru": "Добавлены тесты асинхронных ответов"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "DoHttpAsyncResponses registers coverage for early asynchronous replies and failed sends.",
+        "fr": "DoHttpAsyncResponses couvre les réponses asynchrones précoces et les échecs d’envoi.",
+        "zh": "DoHttpAsyncResponses 覆盖提前异步回复与发送失败。",
+        "ru": "DoHttpAsyncResponses проверяет ранние ответы и ошибки отправки."
+      },
+      "impact": {
+        "en": "The test suite changes; there is no production API or runtime change.",
+        "fr": "Seule la suite de tests change ; aucun effet en production.",
+        "zh": "仅测试套件变化，生产 API 和运行行为不变。",
+        "ru": "Меняются только тесты, не рабочий API или поведение."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "b6b3ce97011b8e9d13663b382e186828a8ee1583",
+      "headline": {
+        "en": "Partial HTTP downloads are no longer retried into the same stream",
+        "fr": "Les téléchargements HTTP partiels ne sont plus relancés dans le même flux",
+        "zh": "部分 HTTP 下载不再写入同一流重试",
+        "ru": "Частичная HTTP-загрузка больше не повторяется в тот же поток"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpClientSocket.RequestInternal closes the socket and returns the fatal status if the output stream position has advanced since the request began.",
+        "fr": "THttpClientSocket.RequestInternal ferme la socket et renvoie le statut d’échec si la position du flux de sortie a avancé.",
+        "zh": "若输出流位置已前移，THttpClientSocket.RequestInternal 关闭套接字并返回失败状态。",
+        "ru": "THttpClientSocket.RequestInternal закрывает сокет и возвращает ошибку, если позиция потока вывода сдвинулась."
+      },
+      "impact": {
+        "en": "Delphi/FPC downloaders receive a failure instead of an automatic retry that could append invalid output. Existing partial bytes are not rolled back.",
+        "fr": "Les téléchargeurs Delphi/FPC reçoivent un échec au lieu d’une relance susceptible de corrompre le flux. Les octets déjà écrits restent présents.",
+        "zh": "Delphi/FPC 下载器返回失败，不会自动重试而污染输出；已写入的字节不会回滚。",
+        "ru": "Загрузчики Delphi/FPC получают ошибку вместо повторной записи; уже записанные байты не откатываются."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.client"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpClientSocket.Request",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "bc1c1f06e2521d0a126f232572e4d96f7465cdfd",
+      "headline": {
+        "en": "Early async replies wait for a busy request lock",
+        "fr": "Les réponses async précoces attendent le verrou de requête",
+        "zh": "提前异步回复等待请求锁",
+        "ru": "Ранний async-ответ ждёт занятый замок"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpAsyncServer.AsyncResponse retries 40 ms lock attempts while the connection still exists, with a roughly five-second retry window and an explicit timeout exception.",
+        "fr": "THttpAsyncServer.AsyncResponse retente le verrou par tranches de 40 ms tant que la connexion existe, pendant environ cinq secondes avant exception.",
+        "zh": "连接仍存在时，THttpAsyncServer.AsyncResponse 每次尝试加锁 40 毫秒，约五秒后抛出超时异常。",
+        "ru": "THttpAsyncServer.AsyncResponse повторяет попытки по 40 мс, пока соединение существует, и сообщает исключением о таймауте примерно через пять секунд."
+      },
+      "impact": {
+        "en": "Delphi/FPC workers can answer before the request callback releases its lock without silently dropping the reply after one attempt.",
+        "fr": "Les workers Delphi/FPC peuvent répondre avant que le callback libère son verrou, sans perdre la réponse après un seul essai.",
+        "zh": "Delphi/FPC 工作线程可在回调释放锁之前发起回复，不会因一次加锁失败而静默丢失。",
+        "ru": "Поток Delphi/FPC может ответить до разблокировки callback без потери ответа после первой попытки."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpAsyncServer.AsyncResponse",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e97d75447123792759ae69a86db02d2f2b16a69f",
+      "headline": {
+        "en": "The outer HTTP handler owns closure after failed writes",
+        "fr": "Le traitement HTTP externe ferme la connexion après un échec d’écriture",
+        "zh": "写入失败后由外层 HTTP 处理器关闭连接",
+        "ru": "При ошибке записи соединение закрывает внешний HTTP-обработчик"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "Nested HTTP writes use WriteNoClose and propagate soClose to OnRead or AsyncResponse rather than closing the connection from inside DoResponse.",
+        "fr": "Les écritures HTTP imbriquées utilisent WriteNoClose et remontent soClose à OnRead ou AsyncResponse au lieu de fermer depuis DoResponse.",
+        "zh": "嵌套 HTTP 写入使用 WriteNoClose 并向 OnRead 或 AsyncResponse 返回 soClose，不在 DoResponse 中关闭连接。",
+        "ru": "Вложенные HTTP-записи используют WriteNoClose и передают soClose в OnRead или AsyncResponse вместо закрытия из DoResponse."
+      },
+      "impact": {
+        "en": "The async server keeps one owner for connection closure on failed response writes; ordinary Write retains its close-on-failure path.",
+        "fr": "Le serveur asynchrone garde un seul responsable de la fermeture ; Write conserve sa fermeture sur échec.",
+        "zh": "异步服务器仅由一个路径负责关闭连接；普通 Write 仍在失败时关闭。",
+        "ru": "За закрытие при ошибке ответа отвечает один обработчик; обычный Write по-прежнему закрывает соединение при сбое."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2a686f7463e630209c20554cbffc3cc203a10af3",
+      "headline": {
+        "en": "Failed async client writes ask the poller to close",
+        "fr": "Les échecs d’écriture async demandent la fermeture au poller",
+        "zh": "异步客户端写入失败后通知轮询器关闭",
+        "ru": "При ошибке записи async-клиент просит poller закрыть соединение"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpAsyncClientConnection.AfterWrite returns soClose after hcsFailed. The same commit synchronizes shared test state and adjusts test cleanup.",
+        "fr": "THttpAsyncClientConnection.AfterWrite renvoie soClose après hcsFailed. Le commit synchronise aussi l’état des tests et ajuste leur nettoyage.",
+        "zh": "THttpAsyncClientConnection.AfterWrite 在 hcsFailed 后返回 soClose；同一提交还同步测试状态并调整清理过程。",
+        "ru": "THttpAsyncClientConnection.AfterWrite возвращает soClose после hcsFailed; тесты синхронизируют общее состояние и меняют очистку."
+      },
+      "impact": {
+        "en": "The Delphi/FPC runtime change is small but meaningful: ProcessWrite is now told to close the failed connection.",
+        "fr": "Le changement d’exécution est ciblé : ProcessWrite reçoit l’ordre de fermer la connexion en échec.",
+        "zh": "Delphi/FPC 运行路径得到小幅修复：ProcessWrite 收到关闭失败连接的指示。",
+        "ru": "Изменение в Delphi/FPC точечное: ProcessWrite получает указание закрыть соединение после сбоя."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7b39e9a54f42a0262dcf59e6d82b522334251224",
+      "headline": {
+        "en": "The FastCGI test server closes accepted sockets without blocking linger",
+        "fr": "Le faux serveur FastCGI désactive l’attente à la fermeture",
+        "zh": "FastCGI 测试服务器关闭套接字时不阻塞等待",
+        "ru": "Тестовый FastCGI-сервер отключает блокирующий linger"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The fixture disables SO_LINGER and adds tracing; TCrtSocket.AcceptIncoming also emits a trace when OnLog is assigned.",
+        "fr": "Le serveur de test désactive SO_LINGER et ajoute des traces ; TCrtSocket.AcceptIncoming en écrit aussi si OnLog est défini.",
+        "zh": "测试夹具禁用 SO_LINGER 并增加跟踪；若设置 OnLog，TCrtSocket.AcceptIncoming 也会输出跟踪。",
+        "ru": "Тест отключает SO_LINGER и добавляет трассировку; TCrtSocket.AcceptIncoming пишет её при заданном OnLog."
+      },
+      "impact": {
+        "en": "Production socket behavior is unchanged apart from the additional optional log trace.",
+        "fr": "Le comportement des sockets en production ne change pas, hors trace optionnelle.",
+        "zh": "除可选日志外，生产套接字行为不变。",
+        "ru": "Работа сокетов не меняется, кроме дополнительной необязательной записи журнала."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "ee731ce189611c61369380ba7fe272c34a61bd80",
+      "headline": {
+        "en": "Parallel test mode accepts a short command-line flag",
+        "fr": "Le mode de test parallèle accepte une option courte",
+        "zh": "并行测试模式接受短命令行选项",
+        "ru": "Параллельные тесты получили короткий флаг"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSynTests declares multithrea&d so -d is a shortcut for --multithread.",
+        "fr": "TSynTests déclare multithrea&d afin que -d soit un raccourci de --multithread.",
+        "zh": "TSynTests 声明 multithrea&d，使 -d 成为 --multithread 的简写。",
+        "ru": "TSynTests объявляет multithrea&d: -d становится сокращением для --multithread."
+      },
+      "impact": {
+        "en": "Only test launcher commands change; deployed services do not use this option.",
+        "fr": "Seul le lanceur de tests change ; les services déployés ne sont pas concernés.",
+        "zh": "仅测试启动命令变化，已部署服务不受影响。",
+        "ru": "Меняется только запуск тестов, не развёрнутые службы."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.test"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d07f24e385e36c84cc4837f92579cf2935646c63",
+      "headline": {
+        "en": "Temporary buffers can append decoded hex bytes",
+        "fr": "Les buffers temporaires peuvent ajouter des octets décodés depuis l’hexadécimal",
+        "zh": "临时缓冲区可追加十六进制解码字节",
+        "ru": "Временные буферы могут добавлять байты из hex"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSynTempAdder.AddHex decodes directly into the prepared buffer; empty or odd-length strings are ignored.",
+        "fr": "TSynTempAdder.AddHex décode directement dans le buffer préparé ; les chaînes vides ou de longueur impaire sont ignorées.",
+        "zh": "TSynTempAdder.AddHex 直接解码到预留缓冲区，忽略空字符串或奇数长度字符串。",
+        "ru": "TSynTempAdder.AddHex декодирует прямо в буфер; пустые и нечётные строки игнорируются."
+      },
+      "impact": {
+        "en": "Delphi/FPC code can append bytes from hex without building a separate decoded string.",
+        "fr": "Le code Delphi/FPC ajoute des octets sans chaîne décodée intermédiaire.",
+        "zh": "Delphi/FPC 代码无需创建中间解码字符串即可追加字节。",
+        "ru": "Delphi/FPC добавляет байты без промежуточной декодированной строки."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.base"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSynTempAdder.AddHex",
+          "change": "added"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9283fc1779fc8c30b9966a9336dafe2ca998fd64",
+      "headline": {
+        "en": "The IOCP unsubscribe test runs as a slow-suite task",
+        "fr": "Le test de désabonnement IOCP devient une tâche de la suite lente",
+        "zh": "IOCP 取消订阅测试移入慢速任务套件",
+        "ru": "Тест отписки IOCP перенесён в медленный набор"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "WinIocpUnsubscribe is scheduled separately and opens local test connections without a connect timeout.",
+        "fr": "WinIocpUnsubscribe est planifié séparément et ouvre des connexions de test locales sans délai de connexion explicite.",
+        "zh": "WinIocpUnsubscribe 独立调度，打开本地测试连接时不设置连接超时。",
+        "ru": "WinIocpUnsubscribe запускается отдельно и открывает локальные тестовые соединения без заданного таймаута."
+      },
+      "impact": {
+        "en": "Test scheduling and timing change, not production network behavior.",
+        "fr": "Seuls la planification et le rythme des tests changent, pas le réseau en production.",
+        "zh": "仅改变测试调度和时序，生产网络行为不变。",
+        "ru": "Меняются расписание и время тестов, не рабочее поведение сети."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "df127cf7fdd9281494e6cdf5914ab5ced4cca8c1",
+      "headline": {
+        "en": "Local FastCGI connects use the operating system timeout",
+        "fr": "Les connexions FastCGI locales utilisent le délai du système",
+        "zh": "本地 FastCGI 连接使用系统超时",
+        "ru": "Локальные соединения FastCGI используют таймаут ОС"
+      },
+      "category": "performance",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TFastCgiAsyncConnections.Send passes zero connection and I/O timeout values to NewSocket before switching the socket to async mode.",
+        "fr": "TFastCgiAsyncConnections.Send passe des délais nuls à NewSocket avant de rendre la socket asynchrone.",
+        "zh": "TFastCgiAsyncConnections.Send 向 NewSocket 传入零连接和 I/O 超时，再将套接字切换为异步。",
+        "ru": "TFastCgiAsyncConnections.Send передаёт нулевые таймауты в NewSocket перед переключением сокета в async."
+      },
+      "impact": {
+        "en": "Local FastCGI dials avoid the explicit timeout transition; the FastCGI response idle timeout is still stored separately.",
+        "fr": "La connexion locale évite le chemin de délai explicite ; le délai d’inactivité FastCGI reste distinct.",
+        "zh": "本地 FastCGI 连接避免显式超时切换，响应空闲超时仍独立保存。",
+        "ru": "Локальное подключение минует явный таймаут; таймаут бездействия ответа FastCGI остаётся отдельным."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2977f73b69f87bc97869e59adf1b4ac89b9759fe",
+      "headline": {
+        "en": "Async TCP client construction drops the connect timeout argument",
+        "fr": "Le constructeur du client TCP async perd son argument de délai",
+        "zh": "异步 TCP 客户端构造器移除连接超时参数",
+        "ru": "Конструктор async TCP-клиента лишился аргумента таймаута"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TAsyncClient.Create removes aClientsTimeoutSecs and ThreadClientsConnect calls NewTcpClientSocket with zero timeout before enabling async mode.",
+        "fr": "TAsyncClient.Create retire aClientsTimeoutSecs et ThreadClientsConnect appelle NewTcpClientSocket avec un délai nul avant le mode async.",
+        "zh": "TAsyncClient.Create 移除 aClientsTimeoutSecs，ThreadClientsConnect 在启用异步前用零超时调用 NewTcpClientSocket。",
+        "ru": "TAsyncClient.Create удаляет aClientsTimeoutSecs; ThreadClientsConnect передаёт нулевой таймаут в NewTcpClientSocket перед включением async."
+      },
+      "impact": {
+        "en": "Direct callers and constructor overrides in Delphi/FPC must match the shorter signature; startup sockets use the system connect behavior.",
+        "fr": "Les appels directs et redéfinitions Delphi/FPC doivent suivre la signature raccourcie ; la connexion initiale suit le système.",
+        "zh": "Delphi/FPC 直接调用和构造器重写需匹配较短签名；启动套接字采用系统连接行为。",
+        "ru": "Прямые вызовы и overrides Delphi/FPC должны соответствовать новой сигнатуре; начальное подключение следует поведению ОС."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TAsyncClient.Create",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Remove aClientsTimeoutSecs from TAsyncClient.Create calls and inherited constructor forwarding.",
+        "fr": "Retirez aClientsTimeoutSecs des appels à TAsyncClient.Create et des appels au constructeur hérité.",
+        "zh": "从 TAsyncClient.Create 调用及继承构造器的参数转发中移除 aClientsTimeoutSecs。",
+        "ru": "Удалите aClientsTimeoutSecs из вызовов TAsyncClient.Create и передачи аргументов унаследованному конструктору."
+      }
+    },
+    {
+      "sha": "91b1756e577da8a783eb2130f47c37de7e566d13",
+      "headline": {
+        "en": "Direct test tasks report their elapsed time",
+        "fr": "Les tâches de test directes affichent leur durée",
+        "zh": "直接执行的测试任务报告耗时",
+        "ru": "Тестовые задачи сообщают длительность"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "TSynTestCase.Run times synchronous tasks that report progress and adds a local log scope.",
+        "fr": "TSynTestCase.Run mesure les tâches synchrones qui affichent leur progression et ajoute une portée de journal.",
+        "zh": "TSynTestCase.Run 为报告进度的同步任务计时，并增加局部日志作用域。",
+        "ru": "TSynTestCase.Run измеряет синхронные задачи с выводом прогресса и добавляет область журнала."
+      },
+      "impact": {
+        "en": "Only console and logging output for tests is affected.",
+        "fr": "Seules la console et la journalisation des tests sont touchées.",
+        "zh": "仅影响测试控制台和日志输出。",
+        "ru": "Меняется только вывод и журнал тестов."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.test"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0cf6088e95d2c403d0e54cb1f9698823f81d59d4",
+      "headline": {
+        "en": "IOCP shutdown stops accepting before releasing its queues",
+        "fr": "L’arrêt IOCP cesse les acceptations avant de libérer les files",
+        "zh": "IOCP 停止接受连接后再释放队列",
+        "ru": "Остановка IOCP прекращает приём до освобождения очередей"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The follow-up marks TAsyncServer terminating before closing its listener and revises TWinIocp.Destroy to bound the waiter loop instead of draining posted completions there.",
+        "fr": "Le suivi marque TAsyncServer en arrêt avant de fermer l’écoute et borne l’attente dans TWinIocp.Destroy au lieu d’y vider les complétions postées.",
+        "zh": "该后续修复在关闭监听器前标记 TAsyncServer 正在终止，并限制 TWinIocp.Destroy 的等待循环，不再在其中排空已提交完成事件。",
+        "ru": "Правка отмечает остановку TAsyncServer до закрытия слушателя и ограничивает ожидание в TWinIocp.Destroy вместо опустошения очереди."
+      },
+      "impact": {
+        "en": "Windows Delphi/FPC services using IOCP should verify shutdown with live sockets against the final sequence, not assume the earlier drain strategy is retained.",
+        "fr": "Les services Windows Delphi/FPC utilisant IOCP doivent vérifier l’arrêt avec des sockets actives sur la séquence finale ; la stratégie précédente a changé.",
+        "zh": "使用 IOCP 的 Windows Delphi/FPC 服务应测试最终序列中带活动套接字的关闭，不能假定仍采用先前排空策略。",
+        "ru": "Службам Windows Delphi/FPC с IOCP следует проверить остановку с активными сокетами на итоговой версии: прежняя схема изменилась."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "149c0304736d19bed0367761dee22bbda29b6705",
+      "headline": {
+        "en": "Windows module handles are cached for later lookup",
+        "fr": "Les handles de modules Windows sont mis en cache",
+        "zh": "缓存 Windows 模块句柄以供查找",
+        "ru": "Дескрипторы модулей Windows кэшируются"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "mormot.core.os publishes kernelHandle and ntHandle, and Windows helpers reuse them when resolving optional system functions.",
+        "fr": "mormot.core.os expose kernelHandle et ntHandle ; les fonctions Windows les réutilisent pour résoudre des API optionnelles.",
+        "zh": "mormot.core.os 公开 kernelHandle 和 ntHandle；Windows 辅助函数用它们查找可选系统 API。",
+        "ru": "mormot.core.os экспортирует kernelHandle и ntHandle; функции Windows используют их для поиска необязательных API."
+      },
+      "impact": {
+        "en": "Windows Delphi/FPC code can reuse the cached handles. No platform feature is enabled by this change alone.",
+        "fr": "Le code Windows Delphi/FPC peut réutiliser ces handles ; aucune fonction de plateforme n’est activée par ce seul changement.",
+        "zh": "Windows Delphi/FPC 代码可复用缓存句柄；此改动本身不启用平台功能。",
+        "ru": "Код Windows Delphi/FPC может использовать эти дескрипторы; сама правка не включает новых возможностей ОС."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.security"
+      ],
+      "api_changes": [
+        {
+          "symbol": "kernelHandle",
+          "change": "added"
+        },
+        {
+          "symbol": "ntHandle",
+          "change": "added"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "5f4992a19061acc2dd56ba7584b68136cc7b6b2e",
+      "headline": {
+        "en": "The IOCP shutdown rewrite coordinates listener and completion owners",
+        "fr": "La refonte de l’arrêt IOCP coordonne l’écoute et les files",
+        "zh": "IOCP 关闭重构协调监听器与完成事件所有者",
+        "ru": "Переработка остановки IOCP согласует владельцев очередей"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TAsyncConnections frees the accept queue before the receive/send owner, stops rearming AcceptEx during shutdown, and introduces explicit completion draining in TWinIocp.Destroy.",
+        "fr": "TAsyncConnections libère la file d’acceptation avant son propriétaire d’E/S, arrête le réarmement d’AcceptEx et introduit un drainage dans TWinIocp.Destroy.",
+        "zh": "TAsyncConnections 在收发所有者之前释放接受队列，关闭时停止重新挂载 AcceptEx，并在 TWinIocp.Destroy 中引入排空。",
+        "ru": "TAsyncConnections освобождает очередь приёма до владельца ввода-вывода, не перезапускает AcceptEx при остановке и добавляет очистку в TWinIocp.Destroy."
+      },
+      "impact": {
+        "en": "This is an intermediate Windows shutdown implementation. The same-day follow-up replaces the destructor drain, so do not adopt the rewrite alone.",
+        "fr": "C’est une étape intermédiaire sous Windows ; le suivi du même jour remplace le drainage du destructeur.",
+        "zh": "这是 Windows 关闭的中间实现；同日后续提交替换析构中的排空路径，不宜单独采用。",
+        "ru": "Это промежуточный вариант остановки Windows; последующая правка того же дня заменяет очистку в деструкторе."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async",
+        "mormot.net.sock"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2e275a98ae05a8f6f877abf8dc2bc971f2d29fa2",
+      "headline": {
+        "en": "Async clients send their request after connect completion",
+        "fr": "Les clients async envoient la requête une fois connectés",
+        "zh": "异步客户端在连接完成后发送请求",
+        "ru": "Async-клиент отправляет запрос после подключения"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "StartRequest sets ifWriteWait on the non-IOCP path too; ProcessWrite calls AfterWrite on connect completion even when no bytes are queued yet.",
+        "fr": "StartRequest définit ifWriteWait hors IOCP ; ProcessWrite appelle AfterWrite à la fin de la connexion même si la file est vide.",
+        "zh": "StartRequest 在非 IOCP 路径也设置 ifWriteWait；连接完成时，即使输出队列为空，ProcessWrite 也会调用 AfterWrite。",
+        "ru": "StartRequest ставит ifWriteWait и вне IOCP; ProcessWrite вызывает AfterWrite после подключения даже при пустой очереди."
+      },
+      "impact": {
+        "en": "Delphi/FPC async HTTP clients can start writing without a prefilled send buffer; failed completion can reach request error handling.",
+        "fr": "Les clients HTTP async Delphi/FPC peuvent écrire sans buffer prérempli ; l’échec peut atteindre le traitement d’erreur de la requête.",
+        "zh": "Delphi/FPC 异步 HTTP 客户端不需预填发送缓冲区即可开始写入；连接失败可进入请求错误处理。",
+        "ru": "Async HTTP-клиенты Delphi/FPC начинают отправку без заранее заполненного буфера; ошибка подключения передаётся обработчику."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4ffac49a383434d936b06080e492a68f981263cb",
+      "headline": {
+        "en": "Server preview labels omit an unconfirmed feature release",
+        "fr": "Le libellé serveur preview omet une version non confirmée",
+        "zh": "服务器预览版标签不再附加未确认的功能版本",
+        "ru": "Метка серверной preview не содержит неподтверждённый выпуск"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "AppendOsBuild skips the feature-release suffix lookup for wServer2028_64, leaving the server version classification intact.",
+        "fr": "AppendOsBuild n’ajoute plus de suffixe de version pour wServer2028_64 ; le classement serveur reste intact.",
+        "zh": "AppendOsBuild 跳过 wServer2028_64 的功能版本后缀查找，服务器分类保持不变。",
+        "ru": "AppendOsBuild не добавляет суффикс выпуска для wServer2028_64, сохраняя классификацию сервера."
+      },
+      "impact": {
+        "en": "The displayed OS description changes; no backend execution policy is altered.",
+        "fr": "Le libellé affiché change ; aucune politique d’exécution ne change.",
+        "zh": "仅改变显示的系统说明，不改变后端执行策略。",
+        "ru": "Меняется описание ОС, не рабочая политика."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "559f2dae098434cdb3a50dd295d3cf6c7a8e3303",
+      "headline": {
+        "en": "UTF-8 validation simplifies several early exits",
+        "fr": "La validation UTF-8 simplifie plusieurs sorties anticipées",
+        "zh": "UTF-8 校验简化多处提前退出",
+        "ru": "Проверка UTF-8 упрощает ранние выходы"
+      },
+      "category": "chore",
+      "severity": "low",
+      "what_changed": {
+        "en": "IsValidUtf8Pas replaces several jumps to its final result with loop breaks in the lead-byte checks.",
+        "fr": "IsValidUtf8Pas remplace, dans les contrôles d’octet initial, plusieurs sauts vers le résultat final par des sorties de boucle.",
+        "zh": "IsValidUtf8Pas 在首字节检查中将多处跳转到最终结果改为退出循环。",
+        "ru": "IsValidUtf8Pas заменяет несколько переходов к результату на выходы из цикла в проверках ведущего байта."
+      },
+      "impact": {
+        "en": "No intended application behavior or API change beyond the earlier UTF-8 correctness fix.",
+        "fr": "Aucun changement fonctionnel ou d’API n’est visé au-delà du correctif UTF-8 précédent.",
+        "zh": "除先前 UTF-8 正确性修复外，无意改变应用行为或 API。",
+        "ru": "Помимо предыдущего исправления UTF-8 изменений поведения или API не предполагается."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "2e74779805fa264363718afb29017be1a70471ee",
+      "headline": {
+        "en": "Windows version reporting recognizes newer build families",
+        "fr": "La détection Windows reconnaît des familles de builds plus récentes",
+        "zh": "Windows 版本报告识别更新的构建系列",
+        "ru": "Определение версий Windows различает новые семейства сборок"
+      },
+      "category": "feature",
+      "severity": "low",
+      "what_changed": {
+        "en": "The Windows matcher adds wServer2028_64 and the desktop build table maps 28000 to 26H1.",
+        "fr": "La détection Windows ajoute wServer2028_64 ; la table desktop associe 28000 à 26H1.",
+        "zh": "Windows 检测新增 wServer2028_64，桌面版构建表将 28000 映射为 26H1。",
+        "ru": "В определение Windows добавлен wServer2028_64, а настольная сборка 28000 обозначена как 26H1."
+      },
+      "impact": {
+        "en": "Delphi/FPC diagnostics may report a more specific version; exhaustive application mappings should allow the new enum value.",
+        "fr": "Les diagnostics peuvent préciser la version ; les tables exhaustives doivent accepter la nouvelle valeur d’énumération.",
+        "zh": "Delphi/FPC 诊断可报告更具体的版本；穷举映射应允许新增枚举值。",
+        "ru": "Диагностика Delphi/FPC точнее сообщает версию; исчерпывающие таблицы должны учитывать новый элемент."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "api_changes": [
+        {
+          "symbol": "wServer2028_64",
+          "change": "added"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "05f7339bf7dfb207e8f8f14281a6ca292be88936",
+      "headline": {
+        "en": "IOCP completions now carry a reference the caller must release",
+        "fr": "L’appelant doit désormais libérer la référence de chaque complétion IOCP",
+        "zh": "调用方现须释放 IOCP 完成事件引用",
+        "ru": "Ссылку завершения IOCP теперь освобождает вызывающий код"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "Each non-nil TWinIocp.GetNext result owns a subscription reference until FinishNext. Posted, forwarded and dispatched work hold references; retired subscriptions are not dispatched again.",
+        "fr": "Chaque résultat non nil de TWinIocp.GetNext possède une référence jusqu’à FinishNext. Les travaux soumis, relayés ou distribués gardent une référence ; les abonnements retirés ne sont plus distribués.",
+        "zh": "每个非 nil 的 TWinIocp.GetNext 结果持有订阅引用直至 FinishNext；提交、转发及分派任务持有引用，已撤销的订阅不再分派。",
+        "ru": "Каждый ненулевой результат TWinIocp.GetNext удерживает ссылку до FinishNext. Работа в очередях и обработчиках удерживает ссылки; снятые подписки не выдаются повторно."
+      },
+      "impact": {
+        "en": "Framework handlers release these references in finally. Custom Windows Delphi/FPC IOCP loops must do the same or retain subscriptions.",
+        "fr": "Les handlers du framework libèrent les références dans finally. Les boucles IOCP personnalisées doivent faire de même pour ne pas retenir les abonnements.",
+        "zh": "框架处理器在 finally 中释放引用；Windows Delphi/FPC 自定义 IOCP 循环亦须如此，否则会保留订阅。",
+        "ru": "Фреймворк освобождает ссылки в finally. Пользовательские циклы IOCP Windows Delphi/FPC должны сделать то же, иначе подписки останутся."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.sock",
+        "mormot.net.async"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TWinIocp.FinishNext",
+          "change": "added"
+        },
+        {
+          "symbol": "TWinIocp.GetNext",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Wrap processing of each non-nil TWinIocp.GetNext result in try/finally and call FinishNext exactly once in finally.",
+        "fr": "Pour chaque résultat non nil de TWinIocp.GetNext, encadrez le traitement par try/finally et appelez FinishNext exactement une fois dans finally.",
+        "zh": "对每个非 nil 的 TWinIocp.GetNext 结果使用 try/finally，并在 finally 中恰好调用一次 FinishNext。",
+        "ru": "Обрабатывайте каждый ненулевой результат TWinIocp.GetNext в try/finally и вызывайте FinishNext ровно один раз в finally."
+      }
+    },
+    {
+      "sha": "06c573a9ff9eb07db0e620150e4fc1596f74d6d2",
+      "headline": {
+        "en": "The Pascal UTF-8 validator combines two rejection checks",
+        "fr": "Le validateur UTF-8 Pascal regroupe deux contrôles",
+        "zh": "Pascal UTF-8 校验器合并两项拒绝检查",
+        "ru": "Проверка UTF-8 на Pascal объединяет два условия"
+      },
+      "category": "chore",
+      "severity": "low",
+      "what_changed": {
+        "en": "IsValidUtf8Pas combines the invalid lead class and truncated sequence length checks into one branch.",
+        "fr": "IsValidUtf8Pas regroupe le contrôle de classe de tête invalide et celui de longueur tronquée.",
+        "zh": "IsValidUtf8Pas 将无效首字节类别和序列截断的检查合并到同一分支。",
+        "ru": "IsValidUtf8Pas объединяет проверки недопустимого ведущего байта и неполной длины."
+      },
+      "impact": {
+        "en": "The accepted input set is intended to stay the same as in the preceding fix.",
+        "fr": "Le jeu d’entrées acceptées doit rester celui du correctif précédent.",
+        "zh": "预期可接受的输入范围与先前修复相同。",
+        "ru": "Набор допустимых входов должен остаться таким же, как после предыдущей правки."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "698a5e94165816275d5fa3bc6948dd23f05bf6c6",
+      "headline": {
+        "en": "Pooled connections with active transactions do not expire for idleness",
+        "fr": "Le pool n’expire pas une connexion en transaction pour inactivité",
+        "zh": "连接池不会因空闲而使活动事务连接过期",
+        "ru": "Соединение с активной транзакцией не устаревает из-за простоя"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TSqlDBConnection.IsOutdated checks GetInTransaction before applying idle expiry. Explicitly invalidated connections still count as outdated.",
+        "fr": "TSqlDBConnection.IsOutdated consulte GetInTransaction avant l’expiration ; une invalidation explicite reste prioritaire.",
+        "zh": "TSqlDBConnection.IsOutdated 应用空闲过期前检查 GetInTransaction；显式失效的连接仍然过期。",
+        "ru": "TSqlDBConnection.IsOutdated проверяет GetInTransaction перед истечением простоя; явно сброшенное соединение остаётся устаревшим."
+      },
+      "impact": {
+        "en": "Idle pool recycling no longer selects a connection whose Delphi/FPC adapter reports an active transaction.",
+        "fr": "Le recyclage du pool ne sélectionne plus une connexion dont l’adaptateur Delphi/FPC signale une transaction active.",
+        "zh": "空闲池回收不再选择 Delphi/FPC 适配器报告有活动事务的连接。",
+        "ru": "Пул не выбирает для замены соединение, чей адаптер Delphi/FPC сообщает об активной транзакции."
+      },
+      "action": "review",
+      "units": [
+        "mormot.db.sql"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "65d30d1ea01f345eb081ece4b1c7389b8d4b552a",
+      "headline": {
+        "en": "UTF-8 tests separate text and buffer rules",
+        "fr": "Les tests UTF-8 distinguent texte et buffers",
+        "zh": "UTF-8 测试区分文本与缓冲区规则",
+        "ru": "Тесты UTF-8 разделяют правила текста и буфера"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The Unicode tests compare documented expectations for valid and invalid UTF-8 input, including embedded zero bytes.",
+        "fr": "Les tests Unicode comparent les règles documentées pour les entrées UTF-8, dont les octets nuls intégrés.",
+        "zh": "Unicode 测试比较文档中的有效及无效 UTF-8 输入规则，包括内嵌零字节。",
+        "ru": "Тесты Unicode сверяют документированные правила для UTF-8, включая нулевые байты внутри данных."
+      },
+      "impact": {
+        "en": "The new assertions add coverage without changing application behavior.",
+        "fr": "Les nouvelles assertions étendent la couverture sans effet applicatif.",
+        "zh": "新增断言扩大覆盖范围，不改变应用行为。",
+        "ru": "Проверки расширяют покрытие без изменения поведения приложений."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6770fe3669d03712aa0501a23c5216b54b01bea4",
+      "headline": {
+        "en": "The Pascal UTF-8 path rejects invalid sequences consistently",
+        "fr": "Le chemin UTF-8 Pascal rejette correctement les séquences invalides",
+        "zh": "Pascal UTF-8 路径一致拒绝无效序列",
+        "ru": "Путь UTF-8 на Pascal отклоняет ошибочные последовательности"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "IsValidUtf8Pas checks limits before reading continuation bytes and applies RFC 3629 range checks for overlong sequences, surrogates and out-of-range values.",
+        "fr": "IsValidUtf8Pas vérifie les bornes avant de lire la suite et applique les règles RFC 3629 aux séquences trop longues, substituts et valeurs hors plage.",
+        "zh": "IsValidUtf8Pas 在读取后续字节前检查边界，并按 RFC 3629 拒绝过长编码、代理项及越界值。",
+        "ru": "IsValidUtf8Pas проверяет границы до чтения байтов продолжения и соблюдает RFC 3629 для избыточных кодировок, суррогатов и значений вне диапазона."
+      },
+      "impact": {
+        "en": "Backends exercising the Pascal text validator can reject input previously accepted by that path. Binary-buffer validation is a separate contract.",
+        "fr": "Les backends utilisant la validation Pascal peuvent rejeter des entrées auparavant acceptées. La validation de buffers binaires suit un contrat distinct.",
+        "zh": "使用 Pascal 文本校验的后端可能拒绝先前接受的输入；二进制缓冲区校验另有约定。",
+        "ru": "Серверы с текстовой проверкой на Pascal могут отклонять ранее принятый ввод; для двоичных буферов контракт отдельный."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.unicode"
+      ],
+      "api_changes": [
+        {
+          "symbol": "IsValidUtf8Pas",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "62968036999c0069b10afcf30ca83431012f82dd",
+      "headline": {
+        "en": "Overlapped receives no longer race to close a Windows socket twice",
+        "fr": "Les réceptions concurrentes ne ferment plus deux fois une socket Windows",
+        "zh": "重叠接收不再竞相两次关闭 Windows 套接字",
+        "ru": "Перекрывающиеся операции больше не закрывают сокет Windows дважды"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TWinIocp tracks pending operations and defers subscription release until the final completion, recording whether Unsubscribe already closed the socket.",
+        "fr": "TWinIocp compte les opérations en attente et diffère la libération jusqu’à la dernière complétion, en mémorisant une éventuelle fermeture par Unsubscribe.",
+        "zh": "TWinIocp 跟踪待完成操作，在最后一次完成后释放订阅，并记录 Unsubscribe 是否已关闭套接字。",
+        "ru": "TWinIocp считает незавершённые операции, откладывает освобождение до последнего завершения и отмечает закрытие в Unsubscribe."
+      },
+      "impact": {
+        "en": "Windows IOCP avoids the reported closure of an unrelated connection through a reused socket handle. Take the subsequent reference-lifetime fixes too.",
+        "fr": "IOCP Windows évite la fermeture signalée d’une connexion sans rapport sur un handle réutilisé. Prenez aussi les correctifs de durée de vie suivants.",
+        "zh": "Windows IOCP 避免通过复用套接字句柄误关其他连接的问题；也需采用后续引用生命周期修复。",
+        "ru": "IOCP Windows устраняет описанное закрытие постороннего соединения через переиспользованный дескриптор; нужны и последующие правки."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d1e9ab32bf9879053971a0f641f5ef99f7ac00d6",
+      "headline": {
+        "en": "SQL preparation preserves the original exception subclass",
+        "fr": "La préparation SQL préserve la sous-classe d’exception d’origine",
+        "zh": "SQL 预处理保留原异常子类",
+        "ru": "Подготовка SQL сохраняет исходный подкласс исключения"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "NewStatementPrepared raises the recorded ESynException subclass instead of replacing it with ECoreDBException on this propagation path.",
+        "fr": "NewStatementPrepared lève la sous-classe ESynException mémorisée au lieu de la remplacer par ECoreDBException.",
+        "zh": "NewStatementPrepared 在这一传播路径抛出记录的 ESynException 子类，不再统一改为 ECoreDBException。",
+        "ru": "NewStatementPrepared повторно возбуждает сохранённый подкласс ESynException вместо ECoreDBException."
+      },
+      "impact": {
+        "en": "Delphi/FPC exception handlers can distinguish adapter-specific statement errors after propagation.",
+        "fr": "Les gestionnaires Delphi/FPC peuvent à nouveau distinguer les erreurs propres à l’adaptateur.",
+        "zh": "Delphi/FPC 异常处理器可在传播后区分适配器特定的语句错误。",
+        "ru": "Обработчики Delphi/FPC снова различают ошибки конкретного адаптера."
+      },
+      "action": "review",
+      "units": [
+        "mormot.db.sql"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TSqlDBConnection.NewStatementPrepared",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "865966d1d939cbfd9c9d71e0f541a8879f6c9822",
+      "headline": {
+        "en": "External ORM BLOB updates release statement rows",
+        "fr": "Les mises à jour BLOB de l’ORM externe libèrent les lignes",
+        "zh": "外部 ORM BLOB 更新释放语句行结果",
+        "ru": "Обновление BLOB во внешнем ORM освобождает результаты"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TRestStorageExternal.EngineUpdateBlob calls ReleaseRows after ExecutePrepared and before processing change notifications.",
+        "fr": "TRestStorageExternal.EngineUpdateBlob appelle ReleaseRows après ExecutePrepared et avant les notifications.",
+        "zh": "TRestStorageExternal.EngineUpdateBlob 在 ExecutePrepared 后、处理变更通知前调用 ReleaseRows。",
+        "ru": "TRestStorageExternal.EngineUpdateBlob вызывает ReleaseRows после ExecutePrepared и перед уведомлениями."
+      },
+      "impact": {
+        "en": "External SQL backends release the statement result on this successful update path before notifying ORM listeners.",
+        "fr": "Les backends SQL externes libèrent le résultat avant de notifier les abonnés ORM.",
+        "zh": "外部 SQL 后端在成功更新路径上先释放语句结果，再通知 ORM 监听器。",
+        "ru": "Внешний SQL-бэкенд освобождает результат до уведомления слушателей ORM."
+      },
+      "action": "review",
+      "units": [
+        "mormot.orm.sql"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "e07bbc6debc69953ade93a7dcf2c456768c8c44d",
+      "headline": {
+        "en": "Async readers deliver bytes received just before EOF",
+        "fr": "Les lecteurs async livrent les octets reçus juste avant la fin de flux",
+        "zh": "异步读取器传递 EOF 前收到的字节",
+        "ru": "Async-чтение выдаёт данные, полученные перед EOF"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPollAsyncSockets.ProcessRead processes bytes accumulated before an orderly close, then closes the connection instead of discarding those bytes.",
+        "fr": "TPollAsyncSockets.ProcessRead traite les octets accumulés avant une fermeture ordonnée, puis ferme la connexion au lieu de les perdre.",
+        "zh": "TPollAsyncSockets.ProcessRead 先处理正常关闭前积累的字节，再关闭连接，不再丢弃这些字节。",
+        "ru": "TPollAsyncSockets.ProcessRead обрабатывает полученные до штатного закрытия байты, затем закрывает соединение."
+      },
+      "impact": {
+        "en": "Delphi/FPC async protocol handlers can receive a final buffered response fragment from a peer that closes immediately after sending.",
+        "fr": "Les handlers Delphi/FPC peuvent recevoir le dernier fragment d’un pair qui ferme aussitôt après l’envoi.",
+        "zh": "Delphi/FPC 异步协议处理器可收到对端发送后立即关闭前的最后一段响应。",
+        "ru": "Async-обработчики Delphi/FPC получают последний фрагмент ответа от узла, который сразу закрывается."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d0e3974519d04715cd260e4aed1ac7995a3d9a0e",
+      "headline": {
+        "en": "The Linux fallback actually signals eventfd",
+        "fr": "Le chemin de secours Linux signale effectivement eventfd",
+        "zh": "Linux 备用实现现在会通知 eventfd",
+        "ru": "Резервный путь Linux теперь сигнализирует eventfd"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The fallback LinuxEventFDWrite writes the QWord counter through FpWrite for positive file descriptors instead of doing nothing.",
+        "fr": "Le repli LinuxEventFDWrite écrit le compteur QWord avec FpWrite pour un descripteur positif.",
+        "zh": "LinuxEventFDWrite 备用实现对正文件描述符通过 FpWrite 写入 QWord 计数，不再为空操作。",
+        "ru": "Резервный LinuxEventFDWrite записывает счётчик QWord через FpWrite при положительном дескрипторе."
+      },
+      "impact": {
+        "en": "Linux builds on the fallback path can signal polling waiters; this commit also appears in the previous edition’s raw payload.",
+        "fr": "Les builds Linux concernés peuvent réveiller le poller ; le commit figure aussi dans les données brutes de l’édition précédente.",
+        "zh": "使用备用路径的 Linux 构建可唤醒轮询等待者；该提交也出现在前一期原始数据中。",
+        "ru": "Сборки Linux с резервным путём пробуждают poller; коммит также есть в исходных данных предыдущего выпуска."
+      },
+      "action": "none",
+      "units": [
+        "mormot.core.os"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a16690fc29df44deceaf7b8455c1e57045addfc5",
+      "headline": {
+        "en": "The file-write constructor uses a signed share-mode parameter",
+        "fr": "Le constructeur d’écriture utilise un mode de partage signé",
+        "zh": "文件写入构造器使用有符号共享模式参数",
+        "ru": "Конструктор записи файла принимает знаковый режим доступа"
+      },
+      "category": "compat",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TFileStreamEx.CreateWrite changes aShareMode from cardinal to integer, distinguishing it from Create and keeping fmShareRead as default.",
+        "fr": "TFileStreamEx.CreateWrite remplace cardinal par integer pour aShareMode, se distingue de Create et conserve fmShareRead par défaut.",
+        "zh": "TFileStreamEx.CreateWrite 将 aShareMode 从 cardinal 改为 integer，与 Create 区分，并保留 fmShareRead 默认值。",
+        "ru": "TFileStreamEx.CreateWrite меняет aShareMode с cardinal на integer, отличаясь от Create, и сохраняет fmShareRead по умолчанию."
+      },
+      "impact": {
+        "en": "Delphi packages and C++Builder bindings avoid the remaining duplicate signature; ordinary fmShare constants keep their meaning.",
+        "fr": "Les packages Delphi et les bindings C++Builder évitent la signature dupliquée restante ; les constantes fmShare gardent leur sens.",
+        "zh": "Delphi 包与 C++Builder 绑定不再遇到剩余的签名重复；常见 fmShare 常量含义不变。",
+        "ru": "Пакеты Delphi и привязки C++Builder избегают оставшегося конфликта сигнатур; константы fmShare не меняются."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.os"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TFileStreamEx.CreateWrite",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "077621bb2fb222343f44fd5305f27e7cb89efda4",
+      "headline": {
+        "en": "Delphi POSIX process pipes ignore SIGPIPE",
+        "fr": "Les pipes de processus Delphi POSIX ignorent SIGPIPE",
+        "zh": "Delphi POSIX 进程管道忽略 SIGPIPE",
+        "ru": "Каналы процессов Delphi POSIX игнорируют SIGPIPE"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "SigPipeIntercept calls the new fpsigignore helper once successfully on Delphi POSIX, setting SIGPIPE to SIG_IGN for the process.",
+        "fr": "SigPipeIntercept utilise le nouveau fpsigignore sous Delphi POSIX ; après succès, SIGPIPE est ignoré pour tout le processus.",
+        "zh": "Delphi POSIX 的 SigPipeIntercept 调用新 fpsigignore，成功后为整个进程忽略 SIGPIPE。",
+        "ru": "SigPipeIntercept использует новый fpsigignore в Delphi POSIX; при успехе SIGPIPE игнорируется во всём процессе."
+      },
+      "impact": {
+        "en": "A TExternalProcess.Write to a closed child stdin can return false instead of terminating the Delphi host through SIGPIPE. The FPC branch is unchanged.",
+        "fr": "TExternalProcess.Write sur une entrée enfant fermée peut renvoyer false plutôt que terminer l’hôte Delphi via SIGPIPE. La branche FPC ne change pas.",
+        "zh": "向已关闭的子进程标准输入执行 TExternalProcess.Write 时可返回 false，而非因 SIGPIPE 终止 Delphi 宿主。FPC 分支不变。",
+        "ru": "TExternalProcess.Write в закрытый stdin потомка может вернуть false вместо завершения Delphi-хоста по SIGPIPE; путь FPC не меняется."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.os",
+        "mormot.core.os.delphi"
+      ],
+      "api_changes": [
+        {
+          "symbol": "fpsigignore",
+          "change": "added"
+        },
+        {
+          "symbol": "TExternalProcess.Write",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    }
+  ],
+  "themes": [
+    {
+      "title": {
+        "en": "Async connection and response lifetime",
+        "fr": "Durée de vie des connexions et réponses async",
+        "zh": "异步连接与响应生命周期",
+        "ru": "Время жизни async-соединений и ответов"
+      },
+      "summary": {
+        "en": "Socket ownership, reply locking and partial stream retry are separate fixes; test them together on the deployed backend.",
+        "fr": "La propriété des sockets, le verrouillage des réponses et la reprise partielle sont distincts ; testez-les ensemble sur le backend cible.",
+        "zh": "套接字所有权、回复加锁及部分流重试是不同问题，应在目标后端一起验证。",
+        "ru": "Владение сокетами, блокировки ответов и повтор после частичной записи — разные исправления; проверяйте их вместе на целевом сервере."
+      },
+      "shas": [
+        "62968036999c0069b10afcf30ca83431012f82dd",
+        "05f7339bf7dfb207e8f8f14281a6ca292be88936",
+        "5f4992a19061acc2dd56ba7584b68136cc7b6b2e",
+        "0cf6088e95d2c403d0e54cb1f9698823f81d59d4",
+        "b6b3ce97011b8e9d13663b382e186828a8ee1583",
+        "bc1c1f06e2521d0a126f232572e4d96f7465cdfd",
+        "e97d75447123792759ae69a86db02d2f2b16a69f"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "still_moving": [],
+    "order": [
+      {
+        "shas": [
+          "62968036999c0069b10afcf30ca83431012f82dd",
+          "05f7339bf7dfb207e8f8f14281a6ca292be88936",
+          "5f4992a19061acc2dd56ba7584b68136cc7b6b2e",
+          "0cf6088e95d2c403d0e54cb1f9698823f81d59d4"
+        ],
+        "why": "Evaluate the complete Windows IOCP lifetime and shutdown sequence together."
+      }
+    ]
+  }
+}
