@@ -1,0 +1,936 @@
+{
+  "schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-19",
+  "edition_title": {
+    "en": "HTTP decompression gains output limits and clearer rejection responses",
+    "fr": "La décompression HTTP gagne des plafonds et des rejets plus précis",
+    "zh": "HTTP 解压新增输出上限并细化拒绝响应",
+    "ru": "Распаковка HTTP получила лимиты и более точные ответы об отказе"
+  },
+  "intro": {
+    "en": "HTTP decoders receive an output limit and the socket servers distinguish malformed bodies, oversized payloads and spool write errors. FastCGI gains an optional front controller, while high-level web server types move into mormot.net.proxy. Custom decoder callbacks and imports may need source changes.",
+    "fr": "Les décodeurs HTTP reçoivent un plafond de sortie ; les serveurs distinguent corps invalides, dépassements et erreurs d’écriture temporaire. FastCGI gagne un contrôleur frontal optionnel et les types web de haut niveau passent dans mormot.net.proxy. Les callbacks personnalisés et les imports peuvent nécessiter des adaptations.",
+    "zh": "HTTP 解码器接收输出上限，套接字服务器区分畸形正文、超限负载及临时文件写入错误。FastCGI 新增可选前端控制器，高层 Web 服务器类型移入 mormot.net.proxy。自定义解码回调和导入可能需要修改源代码。",
+    "ru": "Декодеры HTTP получают предел вывода; серверы различают повреждённое тело, превышение размера и ошибку временного файла. FastCGI получает необязательный фронт-контроллер, а высокоуровневые типы переезжают в mormot.net.proxy. Пользовательские callback и импорты могут потребовать правок."
+  },
+  "tldr": {
+    "en": [
+      "THttpSocketCompress callbacks must accept MaxSize and enforce it during decompression.",
+      "Take the zlib flush fix with the initial stream output-cap change.",
+      "High-level TWebServer types now come from mormot.net.proxy.",
+      "FastCgiIndex opts a FastCGI route into static-file serving and index fallback."
+    ],
+    "fr": [
+      "Les callbacks THttpSocketCompress doivent accepter MaxSize et le respecter pendant la décompression.",
+      "Prenez le correctif de vidage zlib avec l’ajout initial du plafond de sortie.",
+      "Les types TWebServer de haut niveau sont désormais dans mormot.net.proxy.",
+      "FastCgiIndex active les fichiers statiques et le script index de repli sur une route FastCGI."
+    ],
+    "zh": [
+      "THttpSocketCompress 回调必须接收 MaxSize 并在解压过程中执行限制。",
+      "首次加入流输出上限的改动应与 zlib 写出修复一并采用。",
+      "高层 TWebServer 类型现来自 mormot.net.proxy。",
+      "FastCgiIndex 为 FastCGI 路由启用静态文件服务及索引回退。"
+    ],
+    "ru": [
+      "Callback THttpSocketCompress должен принимать MaxSize и соблюдать его при распаковке.",
+      "Берите исправление сброса zlib вместе с исходным ограничением вывода.",
+      "Высокоуровневые типы TWebServer теперь находятся в mormot.net.proxy.",
+      "FastCgiIndex включает статику и резервный индексный скрипт для маршрута FastCGI."
+    ]
+  },
+  "risk_level": "act-now",
+  "upgrade_advice": {
+    "en": "Evaluate the complete historical 2.4.18198 batch rather than the first MaxSize commit alone. Update custom THttpSocketCompress callbacks, replace EHttpSocketOverflow catches and import mormot.net.proxy for moved types. The payload lists no superseded_by links; this build identifies the day's snapshot, not a guarantee against later fixes.",
+    "fr": "Évaluez le lot historique complet 2.4.18198 plutôt que le premier MaxSize seul. Adaptez les callbacks THttpSocketCompress, remplacez les interceptions de EHttpSocketOverflow et importez mormot.net.proxy pour les types déplacés. Aucun superseded_by ne figure dans les données ; ce build identifie l’instantané du jour.",
+    "zh": "请评估完整的历史批次 2.4.18198，不要只采用首个 MaxSize 提交。更新自定义 THttpSocketCompress 回调，替换 EHttpSocketOverflow 捕获，并为迁移后的类型导入 mormot.net.proxy。原始数据无 superseded_by；此构建号仅标识当天快照。",
+    "ru": "Проверяйте весь исторический набор 2.4.18198, а не только первый MaxSize. Обновите callback THttpSocketCompress, замените перехваты EHttpSocketOverflow и подключите mormot.net.proxy для перенесённых типов. В исходных данных нет superseded_by; номер описывает срез дня."
+  },
+  "entries": [
+    {
+      "sha": "a422572849c4b4217f1111d2be77ed6586959249",
+      "headline": {
+        "en": "Quoted include paths keep their hash character",
+        "fr": "Les chemins d’inclusion entre guillemets gardent leur dièse",
+        "zh": "带引号的包含路径保留井号",
+        "ru": "Пути include в кавычках сохраняют решётку"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPreproc.DoInclude recognizes comment markers only for unquoted paths; DoRegister checks the character before a marker when registering values.",
+        "fr": "TPreproc.DoInclude ne traite les marqueurs de commentaire que hors guillemets ; DoRegister regarde le caractère précédent lors de l’enregistrement.",
+        "zh": "TPreproc.DoInclude 仅在路径未加引号时识别注释标记；DoRegister 注册值时检查标记前的字符。",
+        "ru": "TPreproc.DoInclude распознаёт комментарии только вне кавычек; DoRegister учитывает символ перед маркером."
+      },
+      "impact": {
+        "en": "Delphi/FPC configuration tooling can include filenames containing a quoted hash, and the regression cases preserve markers joined to macro values.",
+        "fr": "Les outils Delphi/FPC peuvent inclure un nom entre guillemets contenant un dièse ; les tests préservent les marqueurs accolés aux valeurs de macros.",
+        "zh": "Delphi/FPC 配置工具可包含带引号且含井号的文件名；回归测试也验证紧接宏值的标记会保留。",
+        "ru": "Средства настройки Delphi/FPC могут включать имена с решёткой в кавычках; тесты сохраняют маркеры, примыкающие к значению макроса."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.fmt"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8c9329507d225e614d24acbc86a890057c731339",
+      "headline": {
+        "en": "Network slow-test names follow a consistent convention",
+        "fr": "Les tests réseau lents suivent une convention de nommage",
+        "zh": "慢速网络测试统一命名",
+        "ru": "Имена медленных сетевых тестов приведены к одному виду"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "The suite renames the IOCP unsubscribe test, adjusts slow-test scheduling and clarifies a queue-count comment.",
+        "fr": "La suite renomme le test de désabonnement IOCP, ajuste la planification et précise un commentaire sur la file.",
+        "zh": "测试套件重命名 IOCP 取消订阅测试，调整慢速任务调度，并澄清队列计数注释。",
+        "ru": "Набор переименовывает тест отписки IOCP, меняет расписание и уточняет комментарий о счётчике очереди."
+      },
+      "impact": {
+        "en": "This changes tests and comments, not runtime accept behavior.",
+        "fr": "Seuls les tests et commentaires changent, pas l’acceptation des connexions en production.",
+        "zh": "仅修改测试与注释，不改变运行时接受连接的行为。",
+        "ru": "Меняются тесты и комментарии, не приём соединений во время работы."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "f4f43caaf324b7e229ed4f604c739008ac972053",
+      "headline": {
+        "en": "Async HTTP rejections share exception handling",
+        "fr": "Les rejets HTTP async centralisent le traitement des exceptions",
+        "zh": "异步 HTTP 拒绝统一处理异常",
+        "ru": "Отказы async HTTP централизуют обработку исключений"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpAsyncServerConnection.DoReject accepts an exception and passes it to ComputeRejectBody; decompression errors now use that common route.",
+        "fr": "THttpAsyncServerConnection.DoReject reçoit une exception et la transmet à ComputeRejectBody ; les erreurs de décompression suivent cette voie.",
+        "zh": "THttpAsyncServerConnection.DoReject 接收异常并传给 ComputeRejectBody；解压错误统一走此路径。",
+        "ru": "THttpAsyncServerConnection.DoReject передаёт исключение в ComputeRejectBody; ошибки распаковки идут тем же путём."
+      },
+      "impact": {
+        "en": "Async servers use the same rejection formatting and overflow classification as other socket HTTP paths.",
+        "fr": "Les serveurs async partagent le format de rejet et le classement des dépassements avec les autres chemins HTTP sur socket.",
+        "zh": "异步服务器与其他套接字 HTTP 路径使用相同的拒绝格式和溢出分类。",
+        "ru": "Async-серверы используют общий формат отказа и классификацию превышения размера."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "8f3571e78f882fd070ddbe836ec03d416a497caa",
+      "headline": {
+        "en": "The common HTTP rejection body recognizes size overflow",
+        "fr": "La réponse HTTP de rejet reconnaît les dépassements de taille",
+        "zh": "通用 HTTP 拒绝响应识别大小溢出",
+        "ru": "Общий ответ HTTP распознаёт превышение размера"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "ComputeRejectBody takes an optional Exception, maps exact ESizeOverflow to 413 and includes exception-class context for other failures.",
+        "fr": "ComputeRejectBody accepte une Exception optionnelle, mappe ESizeOverflow exact sur 413 et indique la classe des autres exceptions.",
+        "zh": "ComputeRejectBody 接收可选 Exception，将确切的 ESizeOverflow 映射为 413，其他失败的响应中包含异常类。",
+        "ru": "ComputeRejectBody принимает необязательный Exception, преобразует точный ESizeOverflow в 413 и указывает класс других исключений."
+      },
+      "impact": {
+        "en": "Clients may see a more specific rejection status or a different HTML body; tests that match the exact body should account for it.",
+        "fr": "Les clients peuvent recevoir un statut plus précis ou un HTML différent ; adaptez les tests qui comparent le corps exact.",
+        "zh": "客户端可能收到更具体的拒绝状态或不同的 HTML；精确匹配正文的测试应考虑这一变化。",
+        "ru": "Клиенты могут увидеть более точный статус или другое HTML-тело; это важно для тестов с точным сравнением."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.server",
+        "mormot.net.proxy"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "3d9eaad2b582a051c028b707bd446fb0ae7ff4a5",
+      "headline": {
+        "en": "Blocking HTTP body failures clean up temporary streams",
+        "fr": "Les échecs de lecture HTTP bloquante nettoient les flux temporaires",
+        "zh": "阻塞 HTTP 正文读取失败时清理临时流",
+        "ru": "Ошибка чтения тела HTTP очищает временные потоки"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "THttpServerSocket.DownloadBody consolidates memory and stream retrieval, calls ProcessDone on failure and reports a stream write failure as 507.",
+        "fr": "THttpServerSocket.DownloadBody unifie la lecture en mémoire et en flux, appelle ProcessDone sur échec et signale une écriture en échec par 507.",
+        "zh": "THttpServerSocket.DownloadBody 统一内存和流读取，失败时调用 ProcessDone，并将流写入错误报告为 507。",
+        "ru": "THttpServerSocket.DownloadBody объединяет чтение в память и поток, вызывает ProcessDone при сбое и сообщает об ошибке записи кодом 507."
+      },
+      "impact": {
+        "en": "Blocking Delphi/FPC servers clean up failed body spools rather than keeping them through request processing.",
+        "fr": "Les serveurs bloquants Delphi/FPC nettoient les fichiers temporaires dont la réception a échoué.",
+        "zh": "阻塞式 Delphi/FPC 服务器会清理正文接收失败留下的临时文件。",
+        "ru": "Блокирующие серверы Delphi/FPC очищают временные файлы после ошибки приёма тела."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.server"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "11be5249a55591892813737ff1a2ab0c81bcd3f9",
+      "headline": {
+        "en": "Invalid SynLZ data gets a dedicated exception class",
+        "fr": "Les données SynLZ invalides ont une exception dédiée",
+        "zh": "无效 SynLZ 数据使用专用异常类",
+        "ru": "Для неверных данных SynLZ введён отдельный класс исключения"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "CompressSynLZ now raises ESynLZ, an ExceptionWithProps subclass, for invalid input or output; ESizeOverflow still identifies a size limit.",
+        "fr": "CompressSynLZ lève ESynLZ, dérivée de ExceptionWithProps, pour une entrée ou sortie invalide ; ESizeOverflow garde son rôle.",
+        "zh": "CompressSynLZ 对无效输入或输出抛出 ExceptionWithProps 子类 ESynLZ；大小超限仍为 ESizeOverflow。",
+        "ru": "CompressSynLZ выдаёт ESynLZ, подкласс ExceptionWithProps, при неверном вводе или выводе; лимит по-прежнему обозначает ESizeOverflow."
+      },
+      "impact": {
+        "en": "Delphi/FPC code catching EReadError specifically for CompressSynLZ must account for ESynLZ instead.",
+        "fr": "Les gestionnaires qui capturaient spécifiquement EReadError pour CompressSynLZ doivent prendre en compte ESynLZ.",
+        "zh": "专门捕获 CompressSynLZ 的 EReadError 的 Delphi/FPC 代码需要改为处理 ESynLZ。",
+        "ru": "Код Delphi/FPC, ловивший EReadError от CompressSynLZ, должен учитывать ESynLZ."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.base",
+        "mormot.net.proxy"
+      ],
+      "api_changes": [
+        {
+          "symbol": "ESynLZ",
+          "change": "added"
+        },
+        {
+          "symbol": "CompressSynLZ",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "4488f0d672365f15620fa51939887a88e04c0401",
+      "headline": {
+        "en": "Async HTTP reports decompression and storage failures separately",
+        "fr": "HTTP async distingue les erreurs de décompression et de stockage",
+        "zh": "异步 HTTP 区分解压和存储错误",
+        "ru": "Async HTTP различает ошибки распаковки и хранения"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "The async request path rejects size overflows with 413, malformed compression with 400 and spool write failures with 507; the change also centralizes payload counters.",
+        "fr": "Le chemin async renvoie 413 pour un dépassement, 400 pour une compression invalide et 507 pour un échec d’écriture temporaire ; les compteurs sont regroupés.",
+        "zh": "异步请求路径分别对超限、无效压缩和临时文件写入错误返回 413、400 和 507，并统一统计计数。",
+        "ru": "Async HTTP возвращает 413 при превышении размера, 400 при неверном сжатии и 507 при сбое записи временного файла; счётчики сведены вместе."
+      },
+      "impact": {
+        "en": "Delphi/FPC backends can distinguish bad input from local storage trouble without routing a malformed body to the application handler.",
+        "fr": "Les backends Delphi/FPC distinguent une entrée invalide d’un souci de stockage sans transmettre un corps malformé au handler applicatif.",
+        "zh": "Delphi/FPC 后端可区分无效输入与本地存储问题，不会将畸形正文交给应用处理器。",
+        "ru": "Серверы Delphi/FPC различают неверный ввод и сбой диска, не передавая повреждённое тело приложению."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async",
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "beb1f0fd0f864eed192115da91808297a5592946",
+      "headline": {
+        "en": "The zlib stream limit is checked before output is written",
+        "fr": "La limite du flux zlib est vérifiée avant l’écriture",
+        "zh": "zlib 在写入输出前检查流限制",
+        "ru": "Лимит потока zlib проверяется до записи"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "TZLib.DoFlush counts actual emitted bytes and raises ESizeOverflow before writing a chunk that would exceed MaxSize, including the final flush.",
+        "fr": "TZLib.DoFlush compte les octets réellement produits et lève ESizeOverflow avant d’écrire un bloc dépassant MaxSize, y compris au dernier vidage.",
+        "zh": "TZLib.DoFlush 统计实际产生的字节，在写入会超出 MaxSize 的数据块前抛出 ESizeOverflow，包括最后一次写出。",
+        "ru": "TZLib.DoFlush считает полученные байты и выдаёт ESizeOverflow до записи блока сверх MaxSize, включая последний сброс."
+      },
+      "impact": {
+        "en": "Bounded decompression in Delphi/FPC no longer relies on the earlier zlib counter calculation; already written bytes are not rolled back.",
+        "fr": "La décompression bornée Delphi/FPC ne dépend plus du calcul zlib précédent ; les octets déjà écrits ne sont pas annulés.",
+        "zh": "Delphi/FPC 有界解压不再依赖早期 zlib 计数计算；已经写出的字节不会回滚。",
+        "ru": "Ограниченная распаковка Delphi/FPC больше не опирается на прежний расчёт zlib; записанные байты не откатываются."
+      },
+      "action": "review",
+      "units": [
+        "mormot.lib.z"
+      ],
+      "api_changes": [
+        {
+          "symbol": "TZLib.DoFlush",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "cb118a65ab67e508a56a8e56ee232da2121f6e3a",
+      "headline": {
+        "en": "Accept throttling counts only work still queued",
+        "fr": "Le frein à l’acceptation ne compte que le travail en attente",
+        "zh": "接受连接限流仅统计仍排队的任务",
+        "ru": "Ограничение приёма учитывает только необработанную очередь"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TAsyncServer.DoExecute uses Pending rather than PendingCount for its accept throttle, excluding events that read workers already consumed.",
+        "fr": "TAsyncServer.DoExecute utilise Pending plutôt que PendingCount pour réguler l’acceptation, sans compter les événements déjà consommés.",
+        "zh": "TAsyncServer.DoExecute 用 Pending 而非 PendingCount 进行接受限流，排除读取线程已消费的事件。",
+        "ru": "TAsyncServer.DoExecute использует Pending вместо PendingCount и не считает уже обработанные события."
+      },
+      "impact": {
+        "en": "The non-IOCP server avoids throttling new connections based on events that are no longer waiting.",
+        "fr": "Le serveur hors IOCP n’étrangle plus les nouvelles connexions à cause d’événements déjà traités.",
+        "zh": "非 IOCP 服务器不会再因已处理的事件而限制新连接。",
+        "ru": "Сервер вне IOCP не ограничивает новые соединения из-за уже обработанных событий."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "7e1d8f436d65aa7c978773a60837739c8dc54bcc",
+      "headline": {
+        "en": "HTTP overflow handling switches to the shared size exception",
+        "fr": "Le dépassement HTTP utilise l’exception de taille commune",
+        "zh": "HTTP 溢出处理改用共享大小异常",
+        "ru": "Переполнение HTTP использует общее исключение размера"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "The HTTP unit removes EHttpSocketOverflow and raises ESizeOverflow for chunked size limits; server paths use it to identify oversized requests.",
+        "fr": "L’unité HTTP retire EHttpSocketOverflow et lève ESizeOverflow pour les limites chunked ; le serveur s’en sert pour reconnaître un corps trop grand.",
+        "zh": "HTTP 单元移除 EHttpSocketOverflow，在分块大小超限时抛出 ESizeOverflow；服务器据此识别超大请求。",
+        "ru": "HTTP-модуль удаляет EHttpSocketOverflow и выдаёт ESizeOverflow при превышении лимита chunked; сервер так распознаёт слишком большой запрос."
+      },
+      "impact": {
+        "en": "Custom Delphi/FPC handlers naming the old class must update their catches; the server reports these request failures as HTTP 413.",
+        "fr": "Les handlers Delphi/FPC qui nomment l’ancienne classe doivent adapter leurs interceptions ; le serveur renvoie HTTP 413 dans ces cas.",
+        "zh": "引用旧类的 Delphi/FPC 自定义处理器必须更新捕获逻辑；服务器对这些请求失败返回 HTTP 413。",
+        "ru": "Пользовательские обработчики Delphi/FPC должны заменить старый класс; сервер сообщает об этих отказах кодом HTTP 413."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.http",
+        "mormot.net.server"
+      ],
+      "api_changes": [
+        {
+          "symbol": "EHttpSocketOverflow",
+          "change": "removed"
+        },
+        {
+          "symbol": "THttpSocket.GetBody",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Replace catches of EHttpSocketOverflow with ESizeOverflow from mormot.core.base and verify your HTTP 413 handling.",
+        "fr": "Remplacez les interceptions de EHttpSocketOverflow par ESizeOverflow de mormot.core.base et vérifiez le traitement de HTTP 413.",
+        "zh": "将 EHttpSocketOverflow 捕获替换为 mormot.core.base 的 ESizeOverflow，并验证 HTTP 413 处理。",
+        "ru": "Замените перехваты EHttpSocketOverflow на ESizeOverflow из mormot.core.base и проверьте обработку HTTP 413."
+      }
+    },
+    {
+      "sha": "22b53335510022892036272d6a6dc2d1d84316fc",
+      "headline": {
+        "en": "HTTP compression callbacks must accept an output limit",
+        "fr": "Les callbacks de compression HTTP doivent accepter une limite de sortie",
+        "zh": "HTTP 压缩回调必须接收输出限制",
+        "ru": "Callback сжатия HTTP должен принимать лимит вывода"
+      },
+      "category": "breaking",
+      "severity": "high",
+      "what_changed": {
+        "en": "THttpSocketCompress gains MaxSize: PtrUInt; THttpRequestContext.UncompressData passes an in-memory limit to the registered decoder and checks the returned length too.",
+        "fr": "THttpSocketCompress reçoit MaxSize: PtrUInt ; THttpRequestContext.UncompressData transmet une limite mémoire au décodeur et vérifie aussi la longueur résultante.",
+        "zh": "THttpSocketCompress 增加 MaxSize: PtrUInt；THttpRequestContext.UncompressData 向解码器传递内存上限，并检查返回长度。",
+        "ru": "THttpSocketCompress получает MaxSize: PtrUInt; THttpRequestContext.UncompressData передаёт лимит декодеру и проверяет итоговую длину."
+      },
+      "impact": {
+        "en": "Custom Delphi/FPC callbacks must match the new type and honor the bound during decompression; a check after decoding cannot prevent peak allocation.",
+        "fr": "Les callbacks Delphi/FPC doivent suivre le type et appliquer la limite pendant la décompression ; un contrôle après coup n’évite pas le pic mémoire.",
+        "zh": "Delphi/FPC 自定义回调必须匹配新类型并在解压期间执行限制；解压后的检查不能防止峰值内存分配。",
+        "ru": "Callback Delphi/FPC должен соответствовать типу и соблюдать предел при распаковке; проверка после неё не ограничивает пиковую память."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.http",
+        "mormot.crypt.core"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpSocketCompress",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "CompressShaAes",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "THttpRequestContext.UncompressData",
+          "change": "behaviour-changed"
+        }
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Find custom THttpSocketCompress implementations and add MaxSize: PtrUInt; enforce nonzero limits in the decoder and test HTTP 413.",
+        "fr": "Repérez les implémentations THttpSocketCompress, ajoutez MaxSize: PtrUInt, appliquez les limites non nulles dans le décodeur et testez HTTP 413.",
+        "zh": "找到自定义 THttpSocketCompress 实现，增加 MaxSize: PtrUInt，在解码器中执行非零限制并测试 HTTP 413。",
+        "ru": "Найдите реализации THttpSocketCompress, добавьте MaxSize: PtrUInt, применяйте ненулевой предел в декодере и проверьте HTTP 413."
+      }
+    },
+    {
+      "sha": "d1463a9ea14cc0efa747000b4934d69a40e95cd4",
+      "headline": {
+        "en": "Gzip, deflate and zlib wrappers accept bounded decoding",
+        "fr": "Les wrappers gzip, deflate et zlib acceptent un décodage borné",
+        "zh": "gzip、deflate 和 zlib 包装器支持有界解压",
+        "ru": "Обёртки gzip, deflate и zlib ограничивают распаковку"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "CompressGZip, CompressDeflate and CompressZLib add optional MaxSize; gzip checks the declared size and TGZRead.ToMem can raise a caller-selected exception on invalid output.",
+        "fr": "CompressGZip, CompressDeflate et CompressZLib ajoutent MaxSize ; gzip contrôle la taille déclarée et TGZRead.ToMem peut lever une exception choisie par l’appelant.",
+        "zh": "CompressGZip、CompressDeflate 和 CompressZLib 增加可选 MaxSize；gzip 检查声明大小，TGZRead.ToMem 可在输出无效时抛出调用方指定的异常。",
+        "ru": "CompressGZip, CompressDeflate и CompressZLib получают MaxSize; gzip сверяет заявленный размер, а TGZRead.ToMem может выдать выбранное исключение."
+      },
+      "impact": {
+        "en": "Delphi/FPC services can cap decoder output and should handle decoding exceptions for bad input rather than relying on the former failure result.",
+        "fr": "Les services Delphi/FPC peuvent limiter la sortie et doivent traiter les exceptions de décodage, au lieu de compter sur l’ancien résultat d’échec.",
+        "zh": "Delphi/FPC 服务可限制解压输出；无效输入应处理解码异常，不应依赖旧的失败结果。",
+        "ru": "Сервисы Delphi/FPC могут ограничить вывод и должны обрабатывать исключения неверного ввода вместо прежнего результата ошибки."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.zip"
+      ],
+      "api_changes": [
+        {
+          "symbol": "CompressGZip",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "CompressDeflate",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "CompressZLib",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "TGZRead.ToMem",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "318bbaf8bff1547228fc9e0adba6f410fb74b0d4",
+      "headline": {
+        "en": "Stream and string zlib decompression gain an optional size cap",
+        "fr": "La décompression zlib en flux et chaîne gagne un plafond optionnel",
+        "zh": "zlib 流与字符串解压增加可选输出上限",
+        "ru": "Распаковка zlib в поток и строку получает необязательный предел"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "UncompressStream and the pointer overload of UncompressZipString add MaxSize; the POSIX caller separately clears invalid compressed info data on exception.",
+        "fr": "UncompressStream et la surcharge pointeur de UncompressZipString ajoutent MaxSize ; un appelant POSIX vide les données compressées invalides sur exception.",
+        "zh": "UncompressStream 与 UncompressZipString 的指针重载增加 MaxSize；POSIX 调用方在异常时清除无效压缩信息。",
+        "ru": "UncompressStream и указательная перегрузка UncompressZipString получают MaxSize; код POSIX очищает неверные сжатые данные при исключении."
+      },
+      "impact": {
+        "en": "Use the later TZLib.DoFlush correction with this new API so the bound is based on bytes actually produced.",
+        "fr": "Prenez aussi le correctif TZLib.DoFlush pour que la limite s’applique aux octets réellement produits.",
+        "zh": "使用此新 API 时应包含后续 TZLib.DoFlush 修复，使限制基于实际产生的字节。",
+        "ru": "Используйте и последующую правку TZLib.DoFlush, чтобы лимит считался по фактически полученным байтам."
+      },
+      "action": "review",
+      "units": [
+        "mormot.lib.z",
+        "mormot.core.os"
+      ],
+      "api_changes": [
+        {
+          "symbol": "UncompressStream",
+          "change": "signature-changed"
+        },
+        {
+          "symbol": "UncompressZipString",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "6dc27f25a250c898c17d24e52f2e72fab9e224bc",
+      "headline": {
+        "en": "Checked SynLZ decoding verifies data before returning it",
+        "fr": "Le décodage SynLZ contrôlé vérifie les données avant retour",
+        "zh": "受检 SynLZ 解码在返回前验证数据",
+        "ru": "Проверяемая распаковка SynLZ сверяет данные перед возвратом"
+      },
+      "category": "fix",
+      "severity": "high",
+      "what_changed": {
+        "en": "CompressSynLZ validates encoded input, checks the decoded size against MaxSize before allocation and uses a bounded decode plus an output hash check.",
+        "fr": "CompressSynLZ valide l’entrée, contrôle la taille contre MaxSize avant allocation et combine un décodage borné avec la vérification de l’empreinte de sortie.",
+        "zh": "CompressSynLZ 验证编码输入，分配前将解压大小与 MaxSize 比较，并采用有界解码和输出哈希检查。",
+        "ru": "CompressSynLZ проверяет вход, сравнивает размер с MaxSize до выделения памяти и применяет ограниченную распаковку с проверкой хеша."
+      },
+      "impact": {
+        "en": "Delphi/FPC callers gain controlled failure on invalid data or size overflow. The later ESynLZ commit changes the class used for malformed data.",
+        "fr": "Les appels Delphi/FPC échouent de manière contrôlée si les données sont invalides ou trop grandes ; le commit ESynLZ change ensuite la classe d’erreur des données invalides.",
+        "zh": "Delphi/FPC 调用可受控处理无效数据或大小溢出；后续 ESynLZ 提交改变畸形数据所用的异常类。",
+        "ru": "Код Delphi/FPC получает контролируемый отказ при неверных данных или превышении размера; дальнейшая правка ESynLZ меняет класс ошибки формата."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.base"
+      ],
+      "api_changes": [
+        {
+          "symbol": "ESizeOverflow",
+          "change": "added"
+        },
+        {
+          "symbol": "CompressSynLZ",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "c3c8d04fa724b2afc277602bcc77ad6b021b3ef4",
+      "headline": {
+        "en": "NCrypt length errors use correctly formatted diagnostics",
+        "fr": "Les erreurs de taille NCrypt utilisent des diagnostics correctement formatés",
+        "zh": "NCrypt 长度错误使用正确格式的诊断",
+        "ru": "Ошибки длины NCrypt получают корректный формат сообщения"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TNCrypt.GetCardinal, GetBuffer and KeySign use integer format placeholders for unexpected lengths.",
+        "fr": "TNCrypt.GetCardinal, GetBuffer et KeySign utilisent des marqueurs d’entiers pour les tailles inattendues.",
+        "zh": "TNCrypt.GetCardinal、GetBuffer 和 KeySign 对异常长度使用整数格式占位符。",
+        "ru": "TNCrypt.GetCardinal, GetBuffer и KeySign используют целочисленный формат для неожиданных длин."
+      },
+      "impact": {
+        "en": "Windows Delphi/FPC applications receive corrected failure messages; successful cryptographic operations are unchanged.",
+        "fr": "Les applications Windows Delphi/FPC reçoivent des messages corrigés ; les opérations réussies ne changent pas.",
+        "zh": "Windows Delphi/FPC 应用收到修正后的失败消息；成功的加密操作不变。",
+        "ru": "Приложения Windows Delphi/FPC получают исправленные сообщения; успешные операции не меняются."
+      },
+      "action": "none",
+      "units": [
+        "mormot.lib.sspi"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "0bbba74d226d8fd3e5e967c3d44ed99a67107505",
+      "headline": {
+        "en": "Report pages use the lightweight in-memory SynLZ path",
+        "fr": "Les pages de rapport utilisent le chemin SynLZ mémoire allégé",
+        "zh": "报表页面使用轻量内存 SynLZ 路径",
+        "ru": "Страницы отчётов используют облегчённый SynLZ в памяти"
+      },
+      "category": "performance",
+      "severity": "low",
+      "what_changed": {
+        "en": "TGdiPages uses SynLZComp and SynLZDecomp for internal metafile storage rather than the hash-bearing wrapper.",
+        "fr": "TGdiPages utilise SynLZComp et SynLZDecomp pour stocker ses métafichiers internes, sans le wrapper avec empreinte.",
+        "zh": "TGdiPages 使用 SynLZComp 和 SynLZDecomp 存储内部图元文件，不再使用带哈希的包装器。",
+        "ru": "TGdiPages хранит внутренние метафайлы через SynLZComp и SynLZDecomp вместо обёртки с хешем."
+      },
+      "impact": {
+        "en": "This removes hash work for trusted report pages in memory; it does not change HTTP or database compression.",
+        "fr": "Le calcul de l’empreinte disparaît pour les pages internes de confiance ; HTTP et SQL ne sont pas concernés.",
+        "zh": "可信内存报表页不再计算哈希；HTTP 或数据库压缩不因此改变。",
+        "ru": "Для доверенных страниц в памяти больше не считается хеш; сжатие HTTP и БД не затронуто."
+      },
+      "action": "none",
+      "units": [
+        "mormot.ui.report"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d27778176da64d21fd37551cda280f124aa2e57d",
+      "headline": {
+        "en": "Trusted in-process buffers get separate SynLZ helpers",
+        "fr": "Des helpers SynLZ distincts traitent les buffers internes de confiance",
+        "zh": "可信进程内缓冲区可用独立 SynLZ 函数",
+        "ru": "Для доверенных буферов добавлены отдельные функции SynLZ"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "SynLZComp and SynLZDecomp expose raw compression and decompression using the internal SynLZ representation without the wrapper hashes.",
+        "fr": "SynLZComp et SynLZDecomp exposent le format SynLZ brut sans les empreintes du wrapper.",
+        "zh": "SynLZComp 和 SynLZDecomp 提供内部 SynLZ 格式的原始压缩和解压，不带包装器哈希。",
+        "ru": "SynLZComp и SynLZDecomp работают с сырым внутренним форматом без хешей обёртки."
+      },
+      "impact": {
+        "en": "Delphi/FPC code can use this pair for its own trusted buffers; SynLZDecomp does not validate hostile input and is not a replacement for checked decoding.",
+        "fr": "Le code Delphi/FPC peut utiliser cette paire pour ses buffers de confiance ; SynLZDecomp ne valide pas les données non fiables et ne remplace pas le décodage contrôlé.",
+        "zh": "Delphi/FPC 可对自身可信缓冲区使用这对函数；SynLZDecomp 不验证不可信输入，不能替代受检解码。",
+        "ru": "Код Delphi/FPC может применять пару к собственным доверенным буферам; SynLZDecomp не проверяет недоверенный ввод и не заменяет проверяемую распаковку."
+      },
+      "action": "review",
+      "units": [
+        "mormot.core.base"
+      ],
+      "api_changes": [
+        {
+          "symbol": "SynLZComp",
+          "change": "added"
+        },
+        {
+          "symbol": "SynLZDecomp",
+          "change": "added"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "a667f74ef94a57459012c481b35437d6032a0cb0",
+      "headline": {
+        "en": "FastCGI and local routes share static-file response logic",
+        "fr": "FastCGI et les routes locales partagent le traitement des fichiers",
+        "zh": "FastCGI 与本地路由共用静态文件响应逻辑",
+        "ru": "FastCGI и локальные маршруты делят выдачу статических файлов"
+      },
+      "category": "refactor",
+      "severity": "low",
+      "what_changed": {
+        "en": "The front controller decodes paths in TSynTempAdder and uses ReturnLocalFile, shared with OnGetHeadLocalFolder, to build the filename and cache key.",
+        "fr": "Le contrôleur frontal décode dans TSynTempAdder et partage ReturnLocalFile avec OnGetHeadLocalFolder pour le nom et la clé de cache.",
+        "zh": "前端控制器在 TSynTempAdder 中解码路径，并与 OnGetHeadLocalFolder 共用 ReturnLocalFile 生成文件名和缓存键。",
+        "ru": "Контроллер декодирует путь в TSynTempAdder и использует общий с OnGetHeadLocalFolder ReturnLocalFile для имени и ключа кеша."
+      },
+      "impact": {
+        "en": "Pascal proxy deployments gain shared static-file handling without changing the FastCgiIndex setting introduced earlier.",
+        "fr": "Les proxys Pascal partagent le traitement statique ; le réglage FastCgiIndex introduit plus tôt ne change pas.",
+        "zh": "Pascal 代理统一静态文件处理；先前引入的 FastCgiIndex 配置不变。",
+        "ru": "Прокси на Pascal получают общий путь выдачи файлов без изменения настройки FastCgiIndex."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "99870a6cc4b3d2f4b33388d9cc340d1441dbd656",
+      "headline": {
+        "en": "Closing a FastCGI connection records its closed state",
+        "fr": "La fermeture FastCGI enregistre l’état fermé",
+        "zh": "FastCGI 连接关闭时记录已关闭状态",
+        "ru": "Закрытие FastCGI отмечает состояние соединения"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TFastCgiAsyncConnection.OnClose calls the inherited method before attempting its fallback HTTP error response.",
+        "fr": "TFastCgiAsyncConnection.OnClose appelle la méthode héritée avant sa réponse HTTP d’erreur de secours.",
+        "zh": "TFastCgiAsyncConnection.OnClose 在尝试发送备用 HTTP 错误响应前调用继承方法。",
+        "ru": "TFastCgiAsyncConnection.OnClose вызывает унаследованный метод перед резервным ответом HTTP об ошибке."
+      },
+      "impact": {
+        "en": "The inherited close marks the connection so destruction no longer invokes OnClose a second time on that path.",
+        "fr": "La fermeture héritée marque la connexion pour éviter un deuxième OnClose lors de la destruction.",
+        "zh": "继承关闭方法会标记连接，避免析构时在这条路径第二次调用 OnClose。",
+        "ru": "Унаследованное закрытие отмечает соединение, чтобы уничтожение не вызывало OnClose повторно."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "9d39b3669753bd1e7b7ef018662ab1d8ac91beb6",
+      "headline": {
+        "en": "macOS async reads keep data reported with a close event",
+        "fr": "Les lectures async macOS gardent les données signalées avec la fermeture",
+        "zh": "macOS 异步读取保留与关闭事件同时报告的数据",
+        "ru": "Async-чтение macOS сохраняет данные при одновременном закрытии"
+      },
+      "category": "fix",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TPollAsyncSockets.ProcessRead takes the immediate close branch only when pseClosed is present without pseRead.",
+        "fr": "TPollAsyncSockets.ProcessRead ne ferme immédiatement que si pseClosed est signalé sans pseRead.",
+        "zh": "TPollAsyncSockets.ProcessRead 仅在有 pseClosed 而没有 pseRead 时立即关闭。",
+        "ru": "TPollAsyncSockets.ProcessRead закрывает сразу, только когда есть pseClosed без pseRead."
+      },
+      "impact": {
+        "en": "macOS async servers can process readable bytes when the poller reports both readability and closure in one notification.",
+        "fr": "Les serveurs async macOS peuvent traiter les octets lisibles lorsqu’une notification signale aussi la fermeture.",
+        "zh": "macOS 异步服务器能处理轮询器在同一通知中报告可读且关闭时的数据。",
+        "ru": "Async-серверы macOS могут прочитать данные, если poller сообщает о чтении и закрытии одновременно."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.async"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "29820f93fa0c8bdcf3da1e37369280ffd1f8fe7a",
+      "headline": {
+        "en": "FastCGI routes gain an optional front controller",
+        "fr": "Les routes FastCGI gagnent un contrôleur frontal optionnel",
+        "zh": "FastCGI 路由新增可选前端控制器",
+        "ru": "Маршруты FastCGI получают необязательный фронт-контроллер"
+      },
+      "category": "feature",
+      "severity": "medium",
+      "what_changed": {
+        "en": "FastCgiIndex adds index-script fallback and static files for GET/HEAD. FastCgiAppendParams also accepts ScriptExt for matching script paths.",
+        "fr": "FastCgiIndex ajoute le repli vers un script index et les fichiers statiques en GET/HEAD. FastCgiAppendParams accepte ScriptExt pour reconnaître les scripts.",
+        "zh": "FastCgiIndex 增加索引脚本回退和 GET/HEAD 静态文件服务。FastCgiAppendParams 增加 ScriptExt 以匹配脚本路径。",
+        "ru": "FastCgiIndex добавляет резервный индексный скрипт и статические файлы для GET/HEAD. FastCgiAppendParams получает ScriptExt."
+      },
+      "impact": {
+        "en": "Opt-in Delphi/FPC proxies can serve static assets or forward dynamic paths. The source directory must also be accessible to the proxy at the configured path.",
+        "fr": "Les proxys Delphi/FPC qui activent l’option servent les fichiers ou relaient les routes dynamiques ; le répertoire Source doit aussi être accessible au proxy.",
+        "zh": "显式启用后，Delphi/FPC 代理可提供静态文件或转发动态路径；代理也必须能访问配置路径下的源目录。",
+        "ru": "Прокси Delphi/FPC с этой опцией выдаёт статику или передаёт динамические пути; настроенный каталог должен быть доступен и прокси."
+      },
+      "action": "review",
+      "units": [
+        "mormot.net.proxy"
+      ],
+      "api_changes": [
+        {
+          "symbol": "THttpProxyUrlSettings.FastCgiIndex",
+          "change": "added"
+        },
+        {
+          "symbol": "FastCgiAppendParams",
+          "change": "signature-changed"
+        }
+      ],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "19300ad5a97ba503c2419b720a3669d9df65ceb7",
+      "headline": {
+        "en": "High-level web server types move into the proxy unit",
+        "fr": "Les types de serveur web de haut niveau passent dans l’unité proxy",
+        "zh": "高层 Web 服务器类型迁移到代理单元",
+        "ru": "Высокоуровневые типы веб-сервера переезжают в модуль proxy"
+      },
+      "category": "breaking",
+      "severity": "medium",
+      "what_changed": {
+        "en": "TWebServerGlobal, TWebServerLocal, their configuration types and associated declarations move from mormot.net.http to mormot.net.proxy.",
+        "fr": "TWebServerGlobal, TWebServerLocal, leurs types de configuration et les déclarations associées passent de mormot.net.http à mormot.net.proxy.",
+        "zh": "TWebServerGlobal、TWebServerLocal、其配置类型及相关声明从 mormot.net.http 移入 mormot.net.proxy。",
+        "ru": "TWebServerGlobal, TWebServerLocal и связанные типы конфигурации перенесены из mormot.net.http в mormot.net.proxy."
+      },
+      "impact": {
+        "en": "Delphi/FPC units that depended on the old import for these types must add mormot.net.proxy; lower-level HTTP types remain in mormot.net.http.",
+        "fr": "Les unités Delphi/FPC dépendant de l’ancien import pour ces types doivent ajouter mormot.net.proxy ; les types HTTP bas niveau restent dans mormot.net.http.",
+        "zh": "依赖旧导入的 Delphi/FPC 单元需增加 mormot.net.proxy；低层 HTTP 类型仍在 mormot.net.http。",
+        "ru": "Модулям Delphi/FPC, получавшим эти типы через старый импорт, нужно добавить mormot.net.proxy; низкоуровневые HTTP-типы остаются в mormot.net.http."
+      },
+      "action": "migration-required",
+      "units": [
+        "mormot.net.http",
+        "mormot.net.proxy"
+      ],
+      "api_changes": [
+        {
+          "symbol": "mormot.net.http.TWebServerGlobal",
+          "change": "removed"
+        },
+        {
+          "symbol": "mormot.net.proxy.TWebServerGlobal",
+          "change": "added"
+        },
+        {
+          "symbol": "mormot.net.http.TWebServerLocal",
+          "change": "removed"
+        },
+        {
+          "symbol": "mormot.net.proxy.TWebServerLocal",
+          "change": "added"
+        },
+        {
+          "symbol": "mormot.net.http.TWebServerBehavior",
+          "change": "removed"
+        },
+        {
+          "symbol": "mormot.net.proxy.TWebServerBehavior",
+          "change": "added"
+        }
+      ],
+      "confidence": "confirmed",
+      "action_detail": {
+        "en": "Add mormot.net.proxy to uses where you reference TWebServerGlobal, TWebServerLocal or their configuration types, and update any unit-qualified references.",
+        "fr": "Ajoutez mormot.net.proxy à uses pour TWebServerGlobal, TWebServerLocal ou leurs types de configuration, et mettez à jour les noms qualifiés.",
+        "zh": "在引用 TWebServerGlobal、TWebServerLocal 或其配置类型的 uses 中加入 mormot.net.proxy，并更新带单元限定的引用。",
+        "ru": "Добавьте mormot.net.proxy в uses для TWebServerGlobal, TWebServerLocal и их типов конфигурации, обновите имена с префиксом модуля."
+      }
+    },
+    {
+      "sha": "b9be94ee2cb27e1c0c213ce5847d507643da45ec",
+      "headline": {
+        "en": "Async response tests wait for cleanup once per group",
+        "fr": "Les tests de réponse async attendent le nettoyage une fois par groupe",
+        "zh": "异步响应测试按组等待清理",
+        "ru": "Тесты async-ответов ждут очистку один раз за группу"
+      },
+      "category": "tests",
+      "severity": "low",
+      "what_changed": {
+        "en": "DoHttpAsyncResponses shortens the test delay and waits for the GC grace period once during the reset iterations rather than on every iteration.",
+        "fr": "DoHttpAsyncResponses réduit le délai et attend la période de grâce du GC une fois pendant les itérations de réinitialisation.",
+        "zh": "DoHttpAsyncResponses 缩短测试延迟，在重置循环中只等待一次 GC 宽限期，而不是每次都等。",
+        "ru": "DoHttpAsyncResponses сокращает задержку и ждёт период GC один раз за серию, а не на каждой итерации."
+      },
+      "impact": {
+        "en": "Only test timing changes, not the production async connection lifetime.",
+        "fr": "Seul le rythme des tests change, pas la durée de vie des connexions en production.",
+        "zh": "只改变测试时序，不影响生产异步连接的生命周期。",
+        "ru": "Меняется только время тестов, не жизнь рабочих соединений."
+      },
+      "action": "none",
+      "units": [],
+      "api_changes": [],
+      "confidence": "confirmed"
+    },
+    {
+      "sha": "d394166018c83dab61ebe01c774b69a958ffdca3",
+      "headline": {
+        "en": "Windows socket peeking no longer overwrites the pending-byte count",
+        "fr": "Le peek Windows n’écrase plus le compteur d’octets en attente",
+        "zh": "Windows 套接字探测不再覆盖待接收字节计数",
+        "ru": "Проверка сокета Windows не перезаписывает счётчик ожидающих байтов"
+      },
+      "category": "fix",
+      "severity": "low",
+      "what_changed": {
+        "en": "TCrtSocket.SockReceivePending passes a dedicated byte to recv with MSG_PEEK instead of passing the address of the count variable.",
+        "fr": "TCrtSocket.SockReceivePending fournit à recv avec MSG_PEEK un octet dédié au lieu de l’adresse du compteur.",
+        "zh": "TCrtSocket.SockReceivePending 调用带 MSG_PEEK 的 recv 时使用独立字节，不再传入计数变量地址。",
+        "ru": "TCrtSocket.SockReceivePending передаёт recv с MSG_PEEK отдельный байт вместо адреса счётчика."
+      },
+      "impact": {
+        "en": "On the Windows path the probe no longer writes into the byte-count variable it uses to report pending data.",
+        "fr": "Sous Windows, la sonde n’écrit plus dans la variable de comptage utilisée pour signaler les données en attente.",
+        "zh": "在 Windows 路径中，探测不再写入用于报告待接收数据的计数变量。",
+        "ru": "В Windows проверка больше не пишет в счётчик данных, ожидающих чтения."
+      },
+      "action": "none",
+      "units": [
+        "mormot.net.sock"
+      ],
+      "api_changes": [],
+      "confidence": "confirmed"
+    }
+  ],
+  "themes": [
+    {
+      "title": {
+        "en": "Bounded HTTP decompression",
+        "fr": "Décompression HTTP bornée",
+        "zh": "有界 HTTP 解压",
+        "ru": "Ограниченная распаковка HTTP"
+      },
+      "summary": {
+        "en": "The decoders enforce output caps; the server maps failures to HTTP responses, and custom callbacks need the new signature.",
+        "fr": "Les décodeurs appliquent les plafonds ; le serveur traduit les échecs en réponses HTTP, et les callbacks personnalisés changent de signature.",
+        "zh": "解码器执行输出上限，服务器将失败映射为 HTTP 响应，自定义回调须适配新签名。",
+        "ru": "Декодеры соблюдают лимиты; сервер преобразует сбои в ответы HTTP, а пользовательские callback требуют новой сигнатуры."
+      },
+      "shas": [
+        "318bbaf8bff1547228fc9e0adba6f410fb74b0d4",
+        "d1463a9ea14cc0efa747000b4934d69a40e95cd4",
+        "22b53335510022892036272d6a6dc2d1d84316fc",
+        "7e1d8f436d65aa7c978773a60837739c8dc54bcc",
+        "beb1f0fd0f864eed192115da91808297a5592946",
+        "4488f0d672365f15620fa51939887a88e04c0401",
+        "8f3571e78f882fd070ddbe836ec03d416a497caa",
+        "f4f43caaf324b7e229ed4f604c739008ac972053"
+      ]
+    }
+  ],
+  "upgrade": {
+    "avoid": [],
+    "still_moving": [],
+    "order": [
+      {
+        "shas": [
+          "318bbaf8bff1547228fc9e0adba6f410fb74b0d4",
+          "d1463a9ea14cc0efa747000b4934d69a40e95cd4",
+          "22b53335510022892036272d6a6dc2d1d84316fc",
+          "7e1d8f436d65aa7c978773a60837739c8dc54bcc",
+          "beb1f0fd0f864eed192115da91808297a5592946",
+          "4488f0d672365f15620fa51939887a88e04c0401",
+          "8f3571e78f882fd070ddbe836ec03d416a497caa",
+          "f4f43caaf324b7e229ed4f604c739008ac972053"
+        ],
+        "why": "Keep the output-cap implementation, zlib flush correction and HTTP rejection changes together."
+      },
+      {
+        "shas": [
+          "29820f93fa0c8bdcf3da1e37369280ffd1f8fe7a",
+          "a667f74ef94a57459012c481b35437d6032a0cb0",
+          "99870a6cc4b3d2f4b33388d9cc340d1441dbd656"
+        ],
+        "why": "Evaluate FastCGI routing and close behavior after the same-day follow-ups."
+      }
+    ]
+  }
+}
