@@ -1,0 +1,315 @@
+{
+  "schema": "mormot2-monitor/raw@1",
+  "analysis_schema": "mormot2-monitor/analysis@1",
+  "edition": "2026-11-24",
+  "repo": "synopse/mORMot2",
+  "generated_at": "2026-11-25T03:33:37Z",
+  "range": {
+    "since": "2026-11-23T23:00:00Z",
+    "until": "2026-11-24T23:00:00Z",
+    "base_sha": "542d96d42365d3b21714fd564badbf5a507a0b9e",
+    "head_sha": "ead6470c0c4abba78c11ca8bc157e5cfee804972"
+  },
+  "version": {
+    "after": null,
+    "before": null
+  },
+  "totals": {
+    "commits": 6,
+    "additions": 370,
+    "deletions": 28
+  },
+  "commits": [
+    {
+      "sha": "ead6470c0c4abba78c11ca8bc157e5cfee804972",
+      "short_sha": "ead6470c",
+      "subject": "Merge pull request #824 from zen010101/net-http-chunk-trailers",
+      "body": "net: consume chunk trailers before completing HTTP bodies",
+      "author": "ab",
+      "date": "2026-11-24T08:05:42Z",
+      "url": "https://github.com/synopse/mORMot2/commit/ead6470c0c4abba78c11ca8bc157e5cfee804972",
+      "parents": [
+        "c062ab0f7b359df1e166f28a1769472e7bc2ff77",
+        "028f7deccff2338dcd3a7a70d296951991934e0d"
+      ],
+      "stats": {
+        "additions": 141,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 7,
+          "patch": "@@ -635,6 +635,7 @@   THttpRequestContext = record\n      hrsGetBodyChunkedHexNext,\r\n      hrsGetBodyChunkedData,\r\n      hrsGetBodyChunkedDataVoidLine,\r\n+     hrsGetBodyChunkedDataLastLine,\r\n      hrsGetBodyContentLengthFirst,\r\n      hrsGetBodyContentLengthNext,\r\n      hrsConnect];\r\n@@ -3839,15 +3840,27 @@ function THttpRequestContext.ProcessRead(\n             exit; // not enough input\r\n         end;\r\n       hrsGetBodyChunkedDataVoidLine:\r\n-        if ProcessParseLine(st) then // chunks end with a void line\r\n-          State := hrsGetBodyChunkedHexNext\r\n+        if ProcessParseLine(st) then\r\n+          if st.LineLen = 0 then\r\n+            State := hrsGetBodyChunkedHexNext\r\n+          else\r\n+            State := hrsErrorRejected\r\n         else if State = hrsErrorRejected then\r\n           break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyChunkedDataLastLine:\r\n-        if ProcessParseLine(st) then // last chunk void line\r\n-          State := hrsWaitProcessing // notice: st.Len<>0 if pipelining\r\n+        if ProcessParseLine(st) then\r\n+          if st.LineLen = 0 then\r\n+            State := hrsWaitProcessing\r\n+          else\r\n+          begin\r\n+            // The last chunk set fContentLeft to zero. Bound all trailer fields\r\n+            // and their delimiters to one header line's budget on both paths.\r\n+            inc(fContentLeft, st.LineLen + 2);\r\n+            if fContentLeft > MaxHttpHeaderLineSize then\r\n+              State := hrsErrorPayloadTooLarge;\r\n+          end\r\n         else if State = hrsErrorRejected then\r\n           break // notify the rejection now, not on the next input\r\n         else\r\n@@ -4383,8 +4396,16 @@ procedure THttpSocket.GetBody(DestStream: TStream);\n       len := ParseHex0x(chunksize, {noOx=}true); // hexa chunk length\r\n       if len = 0 then\r\n       begin\r\n-        SockRecvLn; // ignore next line (normally void)\r\n-        break;      // reached the end of input stream\r\n+        bytes := 0;\r\n+        repeat\r\n+          SockRecvLn(chunk);\r\n+          if chunk = '' then\r\n+            break;\r\n+          inc(bytes, length(chunk) + 2);\r\n+          if bytes > MaxHttpHeaderLineSize then\r\n+            ESizeOverflow.RaiseFmt(self, 'GetBody: chunk trailers', []);\r\n+        until false;\r\n+        break;\r\n       end;\r\n       if len > MaxHttpChunkSize then // allow up to 256 MB chunk\r\n         ESizeOverflow.RaiseFmt(self, 'GetBody: chunk len=%d', [len]);\r\n@@ -4407,7 +4428,8 @@ procedure THttpSocket.GetBody(DestStream: TStream);\n         SockInRead(@PByteArray(Http.Content)[Http.ContentLength], len); // append\r\n       end;\r\n       inc(Http.ContentLength, len);\r\n-      SockRecvLn; // ignore next #13#10\r\n+      if SockInReadLn(@chunksize, SizeOf(chunksize)) <> 0 then\r\n+        EHttpSocket.RaiseUtf8('%.GetBody: invalid chunk delimiter', [self]);\r\n     until false;\r\n   end\r\n   else if Http.ContentLength > 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 112,
+          "deletions": 0,
+          "patch": "@@ -180,6 +180,8 @@   TNetworkProtocols = class(TSynTestCase)\n     {$endif OSPOSIX}\r\n     /// validate THttpServerGeneric.OnBodyDownload streamed body upload\r\n     procedure DoHttpBodyDownload(Sender: TObject);\r\n+    /// validate chunked bodies with trailer fields and pipelined requests\r\n+    procedure DoHttpChunkTrailers(Sender: TObject);\r\n     /// validate THttpAsyncServer \"Expect: 100-continue\" interim response\r\n     procedure DoHttpExpect100(Sender: TObject);\r\n     function DoExpectRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n@@ -670,6 +672,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoHttpProxyServer, self, 'HttpProxyServer', true, false);\r\n   Run(DoHttpFastCgi, self, 'HttpFastCgi', true, false);\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n+  Run(DoHttpChunkTrailers, self, 'HttpChunkTrailers', true, false);\r\n   Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n   Run(DoHttpOutStream, self, 'HttpOutStream', true, false);\r\n@@ -8291,6 +8294,115 @@ procedure TNetworkProtocols.DoHttpReadMaxBytes(Sender: TObject);\n   end;\r\n end;\r\n \r\n+procedure TNetworkProtocols.DoHttpChunkTrailers(Sender: TObject);\r\n+const\r\n+  FIRST = 'POST /first HTTP/1.1'#13#10'Host: localhost'#13#10 +\r\n+          'Transfer-Encoding: chunked'#13#10#13#10'3'#13#10'abc';\r\n+  LAST = #13#10'0'#13#10;\r\n+  SECOND = 'GET /second HTTP/1.1'#13#10'Host: localhost'#13#10#13#10;\r\n+  FIELD = 'X-One: 1'#13#10;\r\n+  SERVERS: array[0..2] of THttpServerSocketGenericClass =\r\n+    (THttpServer, THttpAsyncServer, THttpAsyncServer);\r\n+var\r\n+  ctx: THttpRequestContext;\r\n+  st: TProcessParseLine;\r\n+  srv: THttpServerSocketGeneric;\r\n+  sock: THttpSocket;\r\n+  mode, sample, reply: integer;\r\n+  options: THttpServerOptions;\r\n+  input, line, expected: RawUtf8;\r\n+begin\r\n+  FillCharFast(ctx, SizeOf(ctx), 0);\r\n+  ctx.ResetZero;\r\n+  ctx.State := hrsGetCommand;\r\n+  input := FIRST + LAST + FIELD + #13#10 + SECOND;\r\n+  st.P := UniqueRawUtf8(input); // ProcessRead replaces each consumed CR in place.\r\n+  st.Len := length(input) - length(SECOND) - 1;\r\n+  Check(ctx.ProcessRead(st, false) and (ctx.State = hrsGetBodyChunkedHexFirst),\r\n+    'trailer headers');\r\n+  if Check(not ctx.ProcessRead(st, false) and\r\n+           (ctx.State = hrsGetBodyChunkedDataLastLine) and (st.Len = 1),\r\n+           'trailer waits for LF') then\r\n+  begin\r\n+    inc(st.Len, length(SECOND) + 1);\r\n+    Check(ctx.ProcessRead(st, false) and (ctx.State = hrsWaitProcessing),\r\n+      'trailer complete');\r\n+    CheckEqual(CompareBuf(SECOND, st.P, st.Len), 0, 'trailer remainder');\r\n+    ctx.ParseHeaderFinalize;\r\n+    Check(not ctx.HeaderHasValue('X-ONE:'), 'trailer not in headers');\r\n+  end;\r\n+  for mode := 0 to high(SERVERS) do\r\n+  begin\r\n+    options := [];\r\n+    if mode = 2 then\r\n+      include(options, hsoEnablePipelining);\r\n+    srv := SERVERS[mode].Create('19281', nil, nil, 'trailers', 2, 30000, options);\r\n+    try\r\n+      srv.OnRequest := DoExpectRequest;\r\n+      srv.WaitStarted(10);\r\n+      for sample := 0 to 5 do\r\n+      begin\r\n+        if (mode = 2) and (sample <> 2) then\r\n+          continue;\r\n+        input := FIRST + LAST;\r\n+        case sample of\r\n+          1: input := input + FIELD;\r\n+          2: input := input + FIELD + 'X-Two: 2'#13#10;\r\n+          3: input := FIRST + 'bad' + LAST;\r\n+          4, 5:\r\n+            begin\r\n+              line := 'X: ' + RawUtf8OfChar('a', MaxHttpHeaderLineSize div 2 - 5);\r\n+              input := input + line + #13#10 + line;\r\n+              if sample = 5 then\r\n+                input := input + 'a';\r\n+              input := input + #13#10;\r\n+            end;\r\n+        end;\r\n+        input := input + #13#10;\r\n+        if mode = 2 then\r\n+          input := input + SECOND;\r\n+        sock := THttpSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 2000);\r\n+        try\r\n+          sock.CreateSockIn;\r\n+          sock.SndLow(input);\r\n+          for reply := 1 to 2 do\r\n+          begin\r\n+  \n... [truncated, 1251 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": 824,
+      "is_merge": true
+    },
+    {
+      "sha": "c062ab0f7b359df1e166f28a1769472e7bc2ff77",
+      "short_sha": "c062ab0f",
+      "subject": "Merge pull request #825 from zen010101/net-http-parse-informational",
+      "body": "net: allow informational status codes in THttpRequestContext.ParseResponse",
+      "author": "ab",
+      "date": "2026-11-24T08:04:07Z",
+      "url": "https://github.com/synopse/mORMot2/commit/c062ab0f7b359df1e166f28a1769472e7bc2ff77",
+      "parents": [
+        "80f533a671e2bcbaa826017bc67a0690eb6f81f4",
+        "b0266a64588d5ff2066c1c53517d0a6d784af40c"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 4,
+          "patch": "@@ -526,8 +526,11 @@   THttpRequestContext = record\n     function ParseCommand: boolean;\r\n     /// parse CommandUri into result fields on client side\r\n     // - e.g. from CommandUri = 'HTTP/1.1 200 OK'\r\n-    // - returns 0 on parsing error, or the HTTP status (e.g. 200)\r\n-    function ParseResponse(out RespStatus: integer): boolean;\r\n+    // - returns true and the HTTP status (e.g. 200) within 200..599, or within\r\n+    // 100..599 if AllowInformational is set, e.g. to forward 1xx responses\r\n+    // - RespStatus is not meaningful when false is returned\r\n+    function ParseResponse(out RespStatus: integer;\r\n+      AllowInformational: boolean = false): boolean;\r\n     /// parse a HTTP header text line into Header and fill internal properties\r\n     // - with default HeadersUnFiltered=false, only relevant headers are retrieved:\r\n     // use directly the ContentLength/ContentType/ServerInternalState/Upgrade\r\n@@ -3572,7 +3575,10 @@ function THttpRequestContext.ParseCommand: boolean;\n   result := true;\r\n end;\r\n \r\n-function THttpRequestContext.ParseResponse(out RespStatus: integer): boolean;\r\n+function THttpRequestContext.ParseResponse(out RespStatus: integer;\r\n+  AllowInformational: boolean): boolean;\r\n+const\r\n+  MinStatus: array[boolean] of integer = (200, 100);\r\n var\r\n   P: PUtf8Char;\r\n begin\r\n@@ -3584,7 +3590,7 @@ function THttpRequestContext.ParseResponse(out RespStatus: integer): boolean;\n      (P[8] = ' ') then\r\n   begin\r\n     RespStatus := GetCardinal(P + 9);\r\n-    result := (RespStatus >= 200) and\r\n+    result := (RespStatus >= MinStatus[AllowInformational]) and\r\n               (RespStatus <= 599); // the HTTP standard requires 3 digits\r\n   end\r\n   else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 0,
+          "patch": "@@ -5984,6 +5984,20 @@ procedure TNetworkProtocols.HTTP;\n   ms: TRawByteStringStream;\r\n   req: THttpServerRequest;\r\n \r\n+  procedure CheckResponse(Code: integer; DefaultOk, InformationalOk: boolean);\r\n+  var\r\n+    status: integer;\r\n+  begin\r\n+    ctx.CommandUri := FormatUtf8('HTTP/1.1 % Test', [Code]);\r\n+    CheckUtf8(ctx.ParseResponse(status) = DefaultOk, ctx.CommandUri);\r\n+    if DefaultOk then\r\n+      CheckEqual(status, Code, ctx.CommandUri);\r\n+    status := 0;\r\n+    CheckUtf8(ctx.ParseResponse(status, true) = InformationalOk, ctx.CommandUri);\r\n+    if InformationalOk then\r\n+      CheckEqual(status, Code, ctx.CommandUri);\r\n+  end;\r\n+\r\n   procedure CheckBadLocation(const Location: RawUtf8);\r\n   begin\r\n     s := '/unchanged';\r\n@@ -6768,6 +6782,13 @@ procedure TNetworkProtocols.HTTP;\n   Check(ctx.ValidateRange, 'huge end offset'); // RangeOffset + RangeLength would\r\n   CheckEqual(ctx.ContentLength, 900, 'huge end tosend'); // overflow to negative\r\n   CheckEqual(ctx.RangeLength, 1000, 'huge end total');\r\n+  CheckResponse(99, false, false);\r\n+  CheckResponse(100, false, true);\r\n+  CheckResponse(101, false, true);\r\n+  CheckResponse(103, false, true);\r\n+  CheckResponse(200, true, true);\r\n+  CheckResponse(599, true, true);\r\n+  CheckResponse(600, false, false);\r\n   // validate OutContentStreamToBuffer() for the non-streaming servers\r\n   req := THttpServerRequest.Create(nil, 0, nil, 0, [], nil);\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": 825,
+      "is_merge": true
+    },
+    {
+      "sha": "80f533a671e2bcbaa826017bc67a0690eb6f81f4",
+      "short_sha": "80f533a6",
+      "subject": "Merge pull request #826 from zen010101/net-async-public-writenoclose",
+      "body": "net: make TAsyncConnectionsSockets.WriteNoClose public",
+      "author": "ab",
+      "date": "2026-11-24T08:02:50Z",
+      "url": "https://github.com/synopse/mORMot2/commit/80f533a671e2bcbaa826017bc67a0690eb6f81f4",
+      "parents": [
+        "542d96d42365d3b21714fd564badbf5a507a0b9e",
+        "4cf3de92aedbf9c8ed0944ac8314d5cb8ad40d45"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 3,
+          "patch": "@@ -486,15 +486,20 @@   TAsyncConnectionsSockets = class(TPollAsyncSockets)\n     function OnError(connection: TPollAsyncConnection;\r\n       events: TPollSocketEvents): boolean; override;\r\n     procedure OnClosed(connection: TPollAsyncConnection); override;\r\n-    // caller (OnRead/AsyncResponse) owns closing on failure\r\n-    function WriteNoClose(connection: TPollAsyncConnection;\r\n-      data: pointer; datalen: integer; timeout: integer): boolean;\r\n   public\r\n     /// add some data to the asynchronous output buffer of a given connection\r\n     // - this overriden method will also log the write operation if needed\r\n     // - can be executed from an TAsyncConnection.OnRead method\r\n     function Write(connection: TPollAsyncConnection;\r\n       data: pointer; datalen: integer; timeout: integer = 5000): boolean; override;\r\n+    /// add some data to the asynchronous output buffer of a given connection\r\n+    // - won't close the connection on failure, unlike Write(): the caller owns\r\n+    // closing, e.g. from the OnRead method of another connection\r\n+    // - acquires the connection write lock, and may call AfterWrite() within\r\n+    // this lock if all data could be sent immediately\r\n+    // - returns true if the data was sent or queued\r\n+    function WriteNoClose(connection: TPollAsyncConnection;\r\n+      data: pointer; datalen: integer; timeout: integer): boolean;\r\n   published\r\n     /// how many connections have been handled by the poll, from the beginning\r\n     property Total: integer\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -1272,6 +1272,8 @@ procedure TWebSocketBroadcastTask.WebSocketConnect(\n end;\r\n \r\n procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\r\n+const\r\n+  EMPTY_PONG: array[0..1] of byte = ($8a, 0);\r\n var\r\n   server: TWebSocketAsyncServerRest;\r\n   bcast: TWebSocketBroadcastTask;\r\n@@ -1364,6 +1366,9 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n         if not Check(client.SockReceivePending(1000) = cspDataAvailable,\r\n             'broadcast received') then\r\n           break;\r\n+        if i = 1 then\r\n+          Check(server.Async.Sockets.WriteNoClose(server.Async.ConnectionFind(\r\n+            bcast.ConnHandle), @EMPTY_PONG, SizeOf(EMPTY_PONG), 1000), 'write pong');\r\n         // Leave the WebSocket frame unread and force a RST. The next\r\n         // WebSocketBroadcast() should survive an eventual failed Write().\r\n         client.Sock.SetLinger(0); // 0 = abortive close (TCP RST)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": 826,
+      "is_merge": true
+    },
+    {
+      "sha": "4cf3de92aedbf9c8ed0944ac8314d5cb8ad40d45",
+      "short_sha": "4cf3de92",
+      "subject": "net: make TAsyncConnectionsSockets.WriteNoClose public",
+      "body": "- Expose the existing write operation so callers can handle failure without an automatic close.\n- Document write locking and synchronous callbacks, and exercise the public method on a live connection.",
+      "author": "zen010101",
+      "date": "2026-11-24T06:35:41Z",
+      "url": "https://github.com/synopse/mORMot2/commit/4cf3de92aedbf9c8ed0944ac8314d5cb8ad40d45",
+      "parents": [
+        "542d96d42365d3b21714fd564badbf5a507a0b9e"
+      ],
+      "stats": {
+        "additions": 13,
+        "deletions": 3,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.async.pas",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 3,
+          "patch": "@@ -486,15 +486,20 @@   TAsyncConnectionsSockets = class(TPollAsyncSockets)\n     function OnError(connection: TPollAsyncConnection;\r\n       events: TPollSocketEvents): boolean; override;\r\n     procedure OnClosed(connection: TPollAsyncConnection); override;\r\n-    // caller (OnRead/AsyncResponse) owns closing on failure\r\n-    function WriteNoClose(connection: TPollAsyncConnection;\r\n-      data: pointer; datalen: integer; timeout: integer): boolean;\r\n   public\r\n     /// add some data to the asynchronous output buffer of a given connection\r\n     // - this overriden method will also log the write operation if needed\r\n     // - can be executed from an TAsyncConnection.OnRead method\r\n     function Write(connection: TPollAsyncConnection;\r\n       data: pointer; datalen: integer; timeout: integer = 5000): boolean; override;\r\n+    /// add some data to the asynchronous output buffer of a given connection\r\n+    // - won't close the connection on failure, unlike Write(): the caller owns\r\n+    // closing, e.g. from the OnRead method of another connection\r\n+    // - acquires the connection write lock, and may call AfterWrite() within\r\n+    // this lock if all data could be sent immediately\r\n+    // - returns true if the data was sent or queued\r\n+    function WriteNoClose(connection: TPollAsyncConnection;\r\n+      data: pointer; datalen: integer; timeout: integer): boolean;\r\n   published\r\n     /// how many connections have been handled by the poll, from the beginning\r\n     property Total: integer\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 5,
+          "deletions": 0,
+          "patch": "@@ -1272,6 +1272,8 @@ procedure TWebSocketBroadcastTask.WebSocketConnect(\n end;\r\n \r\n procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\r\n+const\r\n+  EMPTY_PONG: array[0..1] of byte = ($8a, 0);\r\n var\r\n   server: TWebSocketAsyncServerRest;\r\n   bcast: TWebSocketBroadcastTask;\r\n@@ -1364,6 +1366,9 @@ procedure TNetworkProtocols.DoTWebSocketAsyncServer(Sender: TObject);\n         if not Check(client.SockReceivePending(1000) = cspDataAvailable,\r\n             'broadcast received') then\r\n           break;\r\n+        if i = 1 then\r\n+          Check(server.Async.Sockets.WriteNoClose(server.Async.ConnectionFind(\r\n+            bcast.ConnHandle), @EMPTY_PONG, SizeOf(EMPTY_PONG), 1000), 'write pong');\r\n         // Leave the WebSocket frame unread and force a RST. The next\r\n         // WebSocketBroadcast() should survive an eventual failed Write().\r\n         client.Sock.SetLinger(0); // 0 = abortive close (TCP RST)\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.async"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "b0266a64588d5ff2066c1c53517d0a6d784af40c",
+      "short_sha": "b0266a64",
+      "subject": "net: allow informational status codes in THttpRequestContext.ParseResponse",
+      "body": "- Accept status codes 100 through 199 only when the caller opts in.\n- Document when the output status is valid and test both modes at their boundaries.",
+      "author": "zen010101",
+      "date": "2026-11-24T06:32:22Z",
+      "url": "https://github.com/synopse/mORMot2/commit/b0266a64588d5ff2066c1c53517d0a6d784af40c",
+      "parents": [
+        "542d96d42365d3b21714fd564badbf5a507a0b9e"
+      ],
+      "stats": {
+        "additions": 31,
+        "deletions": 4,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 10,
+          "deletions": 4,
+          "patch": "@@ -526,8 +526,11 @@   THttpRequestContext = record\n     function ParseCommand: boolean;\r\n     /// parse CommandUri into result fields on client side\r\n     // - e.g. from CommandUri = 'HTTP/1.1 200 OK'\r\n-    // - returns 0 on parsing error, or the HTTP status (e.g. 200)\r\n-    function ParseResponse(out RespStatus: integer): boolean;\r\n+    // - returns true and the HTTP status (e.g. 200) within 200..599, or within\r\n+    // 100..599 if AllowInformational is set, e.g. to forward 1xx responses\r\n+    // - RespStatus is not meaningful when false is returned\r\n+    function ParseResponse(out RespStatus: integer;\r\n+      AllowInformational: boolean = false): boolean;\r\n     /// parse a HTTP header text line into Header and fill internal properties\r\n     // - with default HeadersUnFiltered=false, only relevant headers are retrieved:\r\n     // use directly the ContentLength/ContentType/ServerInternalState/Upgrade\r\n@@ -3572,7 +3575,10 @@ function THttpRequestContext.ParseCommand: boolean;\n   result := true;\r\n end;\r\n \r\n-function THttpRequestContext.ParseResponse(out RespStatus: integer): boolean;\r\n+function THttpRequestContext.ParseResponse(out RespStatus: integer;\r\n+  AllowInformational: boolean): boolean;\r\n+const\r\n+  MinStatus: array[boolean] of integer = (200, 100);\r\n var\r\n   P: PUtf8Char;\r\n begin\r\n@@ -3584,7 +3590,7 @@ function THttpRequestContext.ParseResponse(out RespStatus: integer): boolean;\n      (P[8] = ' ') then\r\n   begin\r\n     RespStatus := GetCardinal(P + 9);\r\n-    result := (RespStatus >= 200) and\r\n+    result := (RespStatus >= MinStatus[AllowInformational]) and\r\n               (RespStatus <= 599); // the HTTP standard requires 3 digits\r\n   end\r\n   else\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 21,
+          "deletions": 0,
+          "patch": "@@ -5979,6 +5979,20 @@ procedure TNetworkProtocols.HTTP;\n   ms: TRawByteStringStream;\r\n   req: THttpServerRequest;\r\n \r\n+  procedure CheckResponse(Code: integer; DefaultOk, InformationalOk: boolean);\r\n+  var\r\n+    status: integer;\r\n+  begin\r\n+    ctx.CommandUri := FormatUtf8('HTTP/1.1 % Test', [Code]);\r\n+    CheckUtf8(ctx.ParseResponse(status) = DefaultOk, ctx.CommandUri);\r\n+    if DefaultOk then\r\n+      CheckEqual(status, Code, ctx.CommandUri);\r\n+    status := 0;\r\n+    CheckUtf8(ctx.ParseResponse(status, true) = InformationalOk, ctx.CommandUri);\r\n+    if InformationalOk then\r\n+      CheckEqual(status, Code, ctx.CommandUri);\r\n+  end;\r\n+\r\n   procedure CheckBadLocation(const Location: RawUtf8);\r\n   begin\r\n     s := '/unchanged';\r\n@@ -6763,6 +6777,13 @@ procedure TNetworkProtocols.HTTP;\n   Check(ctx.ValidateRange, 'huge end offset'); // RangeOffset + RangeLength would\r\n   CheckEqual(ctx.ContentLength, 900, 'huge end tosend'); // overflow to negative\r\n   CheckEqual(ctx.RangeLength, 1000, 'huge end total');\r\n+  CheckResponse(99, false, false);\r\n+  CheckResponse(100, false, true);\r\n+  CheckResponse(101, false, true);\r\n+  CheckResponse(103, false, true);\r\n+  CheckResponse(200, true, true);\r\n+  CheckResponse(599, true, true);\r\n+  CheckResponse(600, false, false);\r\n   // validate OutContentStreamToBuffer() for the non-streaming servers\r\n   req := THttpServerRequest.Create(nil, 0, nil, 0, [], nil);\r\n   try\r",
+          "patch_truncated": false
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": false
+    },
+    {
+      "sha": "028f7deccff2338dcd3a7a70d296951991934e0d",
+      "short_sha": "028f7dec",
+      "subject": "net: consume chunk trailers before completing HTTP bodies",
+      "body": "- Both readers previously mistook the first trailer field for the end of the body and ignored nonempty chunk delimiters.\n- Keep ProcessRead in the trailer state until the empty line so partial lines can resume and pipelined input stays intact.\n- Make GetBody consume every trailer field and reject nonempty data delimiters in both readers.\n- Count each discarded field and its CRLF against MaxHttpHeaderLineSize without adding it to the headers or body.\n- Test both server families on keep-alive connections, async pipelining, split CRLF, malformed delimiters, and the trailer budget boundary.",
+      "author": "zen010101",
+      "date": "2026-11-24T05:52:05Z",
+      "url": "https://github.com/synopse/mORMot2/commit/028f7deccff2338dcd3a7a70d296951991934e0d",
+      "parents": [
+        "542d96d42365d3b21714fd564badbf5a507a0b9e"
+      ],
+      "stats": {
+        "additions": 141,
+        "deletions": 7,
+        "files": 2
+      },
+      "files": [
+        {
+          "path": "src/net/mormot.net.http.pas",
+          "status": "modified",
+          "additions": 29,
+          "deletions": 7,
+          "patch": "@@ -632,6 +632,7 @@   THttpRequestContext = record\n      hrsGetBodyChunkedHexNext,\r\n      hrsGetBodyChunkedData,\r\n      hrsGetBodyChunkedDataVoidLine,\r\n+     hrsGetBodyChunkedDataLastLine,\r\n      hrsGetBodyContentLengthFirst,\r\n      hrsGetBodyContentLengthNext,\r\n      hrsConnect];\r\n@@ -3833,15 +3834,27 @@ function THttpRequestContext.ProcessRead(\n             exit; // not enough input\r\n         end;\r\n       hrsGetBodyChunkedDataVoidLine:\r\n-        if ProcessParseLine(st) then // chunks end with a void line\r\n-          State := hrsGetBodyChunkedHexNext\r\n+        if ProcessParseLine(st) then\r\n+          if st.LineLen = 0 then\r\n+            State := hrsGetBodyChunkedHexNext\r\n+          else\r\n+            State := hrsErrorRejected\r\n         else if State = hrsErrorRejected then\r\n           break // notify the rejection now, not on the next input\r\n         else\r\n           exit; // not enough input\r\n       hrsGetBodyChunkedDataLastLine:\r\n-        if ProcessParseLine(st) then // last chunk void line\r\n-          State := hrsWaitProcessing // notice: st.Len<>0 if pipelining\r\n+        if ProcessParseLine(st) then\r\n+          if st.LineLen = 0 then\r\n+            State := hrsWaitProcessing\r\n+          else\r\n+          begin\r\n+            // The last chunk set fContentLeft to zero. Bound all trailer fields\r\n+            // and their delimiters to one header line's budget on both paths.\r\n+            inc(fContentLeft, st.LineLen + 2);\r\n+            if fContentLeft > MaxHttpHeaderLineSize then\r\n+              State := hrsErrorPayloadTooLarge;\r\n+          end\r\n         else if State = hrsErrorRejected then\r\n           break // notify the rejection now, not on the next input\r\n         else\r\n@@ -4377,8 +4390,16 @@ procedure THttpSocket.GetBody(DestStream: TStream);\n       len := ParseHex0x(chunksize, {noOx=}true); // hexa chunk length\r\n       if len = 0 then\r\n       begin\r\n-        SockRecvLn; // ignore next line (normally void)\r\n-        break;      // reached the end of input stream\r\n+        bytes := 0;\r\n+        repeat\r\n+          SockRecvLn(chunk);\r\n+          if chunk = '' then\r\n+            break;\r\n+          inc(bytes, length(chunk) + 2);\r\n+          if bytes > MaxHttpHeaderLineSize then\r\n+            ESizeOverflow.RaiseFmt(self, 'GetBody: chunk trailers', []);\r\n+        until false;\r\n+        break;\r\n       end;\r\n       if len > MaxHttpChunkSize then // allow up to 256 MB chunk\r\n         ESizeOverflow.RaiseFmt(self, 'GetBody: chunk len=%d', [len]);\r\n@@ -4401,7 +4422,8 @@ procedure THttpSocket.GetBody(DestStream: TStream);\n         SockInRead(@PByteArray(Http.Content)[Http.ContentLength], len); // append\r\n       end;\r\n       inc(Http.ContentLength, len);\r\n-      SockRecvLn; // ignore next #13#10\r\n+      if SockInReadLn(@chunksize, SizeOf(chunksize)) <> 0 then\r\n+        EHttpSocket.RaiseUtf8('%.GetBody: invalid chunk delimiter', [self]);\r\n     until false;\r\n   end\r\n   else if Http.ContentLength > 0 then\r",
+          "patch_truncated": false
+        },
+        {
+          "path": "test/test.net.proto.pas",
+          "status": "modified",
+          "additions": 112,
+          "deletions": 0,
+          "patch": "@@ -180,6 +180,8 @@   TNetworkProtocols = class(TSynTestCase)\n     {$endif OSPOSIX}\r\n     /// validate THttpServerGeneric.OnBodyDownload streamed body upload\r\n     procedure DoHttpBodyDownload(Sender: TObject);\r\n+    /// validate chunked bodies with trailer fields and pipelined requests\r\n+    procedure DoHttpChunkTrailers(Sender: TObject);\r\n     /// validate THttpAsyncServer \"Expect: 100-continue\" interim response\r\n     procedure DoHttpExpect100(Sender: TObject);\r\n     function DoExpectRequest(Ctxt: THttpServerRequestAbstract): cardinal;\r\n@@ -670,6 +672,7 @@ procedure TNetworkProtocols.SlowTests;\n   Run(DoHttpProxyServer, self, 'HttpProxyServer', true, false);\r\n   Run(DoHttpFastCgi, self, 'HttpFastCgi', true, false);\r\n   Run(DoHttpBodyDownload, self, 'HttpBodyDownload', true, false);\r\n+  Run(DoHttpChunkTrailers, self, 'HttpChunkTrailers', true, false);\r\n   Run(DoHttpExpect100, self, 'HttpExpect100', true, false);\r\n   Run(DoHttpFileRange, self, 'HttpFileRange', true, false);\r\n   Run(DoHttpOutStream, self, 'HttpOutStream', true, false);\r\n@@ -8265,6 +8268,115 @@ procedure TNetworkProtocols.DoHttpReadMaxBytes(Sender: TObject);\n   end;\r\n end;\r\n \r\n+procedure TNetworkProtocols.DoHttpChunkTrailers(Sender: TObject);\r\n+const\r\n+  FIRST = 'POST /first HTTP/1.1'#13#10'Host: localhost'#13#10 +\r\n+          'Transfer-Encoding: chunked'#13#10#13#10'3'#13#10'abc';\r\n+  LAST = #13#10'0'#13#10;\r\n+  SECOND = 'GET /second HTTP/1.1'#13#10'Host: localhost'#13#10#13#10;\r\n+  FIELD = 'X-One: 1'#13#10;\r\n+  SERVERS: array[0..2] of THttpServerSocketGenericClass =\r\n+    (THttpServer, THttpAsyncServer, THttpAsyncServer);\r\n+var\r\n+  ctx: THttpRequestContext;\r\n+  st: TProcessParseLine;\r\n+  srv: THttpServerSocketGeneric;\r\n+  sock: THttpSocket;\r\n+  mode, sample, reply: integer;\r\n+  options: THttpServerOptions;\r\n+  input, line, expected: RawUtf8;\r\n+begin\r\n+  FillCharFast(ctx, SizeOf(ctx), 0);\r\n+  ctx.ResetZero;\r\n+  ctx.State := hrsGetCommand;\r\n+  input := FIRST + LAST + FIELD + #13#10 + SECOND;\r\n+  st.P := UniqueRawUtf8(input); // ProcessRead replaces each consumed CR in place.\r\n+  st.Len := length(input) - length(SECOND) - 1;\r\n+  Check(ctx.ProcessRead(st, false) and (ctx.State = hrsGetBodyChunkedHexFirst),\r\n+    'trailer headers');\r\n+  if Check(not ctx.ProcessRead(st, false) and\r\n+           (ctx.State = hrsGetBodyChunkedDataLastLine) and (st.Len = 1),\r\n+           'trailer waits for LF') then\r\n+  begin\r\n+    inc(st.Len, length(SECOND) + 1);\r\n+    Check(ctx.ProcessRead(st, false) and (ctx.State = hrsWaitProcessing),\r\n+      'trailer complete');\r\n+    CheckEqual(CompareBuf(SECOND, st.P, st.Len), 0, 'trailer remainder');\r\n+    ctx.ParseHeaderFinalize;\r\n+    Check(not ctx.HeaderHasValue('X-ONE:'), 'trailer not in headers');\r\n+  end;\r\n+  for mode := 0 to high(SERVERS) do\r\n+  begin\r\n+    options := [];\r\n+    if mode = 2 then\r\n+      include(options, hsoEnablePipelining);\r\n+    srv := SERVERS[mode].Create('19281', nil, nil, 'trailers', 2, 30000, options);\r\n+    try\r\n+      srv.OnRequest := DoExpectRequest;\r\n+      srv.WaitStarted(10);\r\n+      for sample := 0 to 5 do\r\n+      begin\r\n+        if (mode = 2) and (sample <> 2) then\r\n+          continue;\r\n+        input := FIRST + LAST;\r\n+        case sample of\r\n+          1: input := input + FIELD;\r\n+          2: input := input + FIELD + 'X-Two: 2'#13#10;\r\n+          3: input := FIRST + 'bad' + LAST;\r\n+          4, 5:\r\n+            begin\r\n+              line := 'X: ' + RawUtf8OfChar('a', MaxHttpHeaderLineSize div 2 - 5);\r\n+              input := input + line + #13#10 + line;\r\n+              if sample = 5 then\r\n+                input := input + 'a';\r\n+              input := input + #13#10;\r\n+            end;\r\n+        end;\r\n+        input := input + #13#10;\r\n+        if mode = 2 then\r\n+          input := input + SECOND;\r\n+        sock := THttpSocket.Open('127.0.0.1', srv.SockPort, nlTcp, 2000);\r\n+        try\r\n+          sock.CreateSockIn;\r\n+          sock.SndLow(input);\r\n+          for reply := 1 to 2 do\r\n+          begin\r\n+  \n... [truncated, 1251 more chars]",
+          "patch_truncated": true
+        }
+      ],
+      "guess": {
+        "category": "chore",
+        "severity": "low"
+      },
+      "areas": [
+        "Network",
+        "Tests"
+      ],
+      "units": [
+        "mormot.net.http"
+      ],
+      "pr": null,
+      "is_merge": false
+    }
+  ]
+}
